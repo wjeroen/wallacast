@@ -8,13 +8,20 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization - only create OpenAI client when needed
+function getOpenAIClient(): OpenAI | null {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 export async function transcribeAudio(audioUrl: string): Promise<string> {
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    const openai = getOpenAIClient();
+    if (!openai) {
       console.warn('OpenAI API key not set, returning dummy transcript');
       return 'Transcript not available. Please set OPENAI_API_KEY environment variable.';
     }
@@ -56,7 +63,8 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
   words: Array<{ word: string; start: number; end: number }>;
 }> {
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    const openai = getOpenAIClient();
+    if (!openai) {
       throw new Error('OpenAI API key not set');
     }
 
