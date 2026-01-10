@@ -36,22 +36,24 @@ This guide will help you deploy Readcast to Railway.app so you can access it fro
 2. Railway will try to deploy but fail (this is expected!)
 3. Click on the service → Go to "Settings"
 4. Set **Root Directory** to: `backend`
-5. Go to "Variables" tab and add these environment variables:
-   - `DB_HOST` = (copy from your PostgreSQL service)
-   - `DB_PORT` = (copy from your PostgreSQL service)
-   - `DB_NAME` = (copy from your PostgreSQL service)
-   - `DB_USER` = (copy from your PostgreSQL service)
-   - `DB_PASSWORD` = (copy from your PostgreSQL service)
-   - `PORT` = `3001`
-   - `OPENAI_API_KEY` = (optional, your OpenAI key)
-   - `ELEVENLABS_API_KEY` = (optional, your ElevenLabs key)
+5. **Connect the Database** (Most Important Step!):
+   - Go to "Variables" tab
+   - Railway usually auto-connects services, so you should already see variables like:
+     - `DATABASE_URL` or `POSTGRES_URL` (full connection string)
+     - OR individual variables: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+   - **If you DON'T see these**, you need to connect the services:
+     - Option A: Look for a "Reference" or "Connect" button near "+ New Variable"
+     - Option B: Go to your PostgreSQL service, copy the DATABASE_URL, and add it to backend variables
+   - **Good news**: The backend automatically detects Railway's database variables! No manual copying needed.
 
-6. **Important**: Railway provides these database variables automatically! Look for variables like:
-   - `DATABASE_URL` or `POSTGRES_URL`
-   - Or individual `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+6. Add these additional environment variables:
+   - `PORT` = `3001`
+   - `OPENAI_API_KEY` = (optional, your OpenAI key for transcription)
+   - `ELEVENLABS_API_KEY` = (optional, your ElevenLabs key for TTS)
 
 7. Click "Deploy" or wait for automatic redeployment
-8. Once deployed, go to "Settings" → Copy the **public domain URL** (e.g., `backend-production-xxxx.up.railway.app`)
+8. Once deployed, go to "Settings" → "Networking" → Click "Generate Domain" if not already created
+9. Copy the **public domain URL** (e.g., `backend-production-xxxx.up.railway.app`)
 
 ### 5. Deploy the Frontend
 
@@ -85,15 +87,25 @@ Now the backend knows to accept requests from your frontend!
 
 ### Backend Variables
 ```
+# Database connection (Railway auto-provides these)
+DATABASE_URL=(auto-provided by Railway when you connect the PostgreSQL service)
+# OR individual variables:
+PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD=(auto-provided by Railway)
+
+# Manual configuration (only needed if Railway doesn't auto-connect)
 DB_HOST=(from PostgreSQL service)
 DB_PORT=(from PostgreSQL service)
 DB_NAME=(from PostgreSQL service)
 DB_USER=(from PostgreSQL service)
 DB_PASSWORD=(from PostgreSQL service)
+
+# Required
 PORT=3001
-OPENAI_API_KEY=(optional)
-ELEVENLABS_API_KEY=(optional)
 FRONTEND_URL=https://your-frontend-url.up.railway.app
+
+# Optional (for AI features)
+OPENAI_API_KEY=(optional, for podcast transcription)
+ELEVENLABS_API_KEY=(optional, for article TTS)
 ```
 
 ### Frontend Variables
@@ -103,10 +115,14 @@ VITE_API_URL=https://your-backend-url.up.railway.app/api
 
 ## Troubleshooting
 
-### "Cannot connect to database"
-- Make sure all database environment variables are set correctly
-- Check that the PostgreSQL service is running
-- Railway usually auto-connects services - look for `DATABASE_URL`
+### "Cannot connect to database" or "ECONNREFUSED 127.0.0.1:5432"
+This means the backend can't find the PostgreSQL service. Fix it:
+- **Check Variables tab** in your backend service - you should see `DATABASE_URL` or `PG*` variables
+- If you DON'T see them, the services aren't connected:
+  - Go to backend Variables tab → look for "Add Reference" or "Connect" option
+  - OR go to PostgreSQL service → copy DATABASE_URL → paste it in backend Variables
+- **After adding variables**, click "Redeploy" on the backend service
+- The backend now auto-detects Railway's standard PostgreSQL variables, so once they're present it should work!
 
 ### "API requests failing"
 - Check that `VITE_API_URL` in frontend points to your backend URL

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Filter, Star, Archive, Trash2, Volume2, FileText } from 'lucide-react';
+import { Star, Archive, Trash2, Volume2, FileText } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
