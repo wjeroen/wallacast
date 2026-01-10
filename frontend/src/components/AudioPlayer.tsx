@@ -7,7 +7,6 @@ import {
   Volume2,
   Clock,
   Gauge,
-  List,
   X,
 } from 'lucide-react';
 import type { ContentItem } from '../types';
@@ -32,7 +31,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [showTranscript, setShowTranscript] = useState(true);
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const sleepTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!content) return;

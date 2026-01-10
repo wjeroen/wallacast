@@ -8,13 +8,27 @@ const { Pool } = pg;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'readcast',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-});
+// Railway provides DATABASE_URL or individual PG* variables
+// Support both Railway's standard variables and custom DB_* variables
+const getDatabaseConfig = () => {
+  // If DATABASE_URL is provided (Railway default), use it
+  if (process.env.DATABASE_URL) {
+    return {
+      connectionString: process.env.DATABASE_URL,
+    };
+  }
+
+  // Otherwise use individual variables (Railway also provides these)
+  return {
+    host: process.env.PGHOST || process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.PGPORT || process.env.DB_PORT || '5432'),
+    database: process.env.PGDATABASE || process.env.DB_NAME || 'readcast',
+    user: process.env.PGUSER || process.env.DB_USER || 'postgres',
+    password: process.env.PGPASSWORD || process.env.DB_PASSWORD || 'postgres',
+  };
+};
+
+export const pool = new Pool(getDatabaseConfig());
 
 export async function initializeDatabase() {
   try {
