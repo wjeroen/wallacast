@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -34,7 +35,7 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
 
     // Transcribe using OpenAI Whisper
     const transcription = await openai.audio.transcriptions.create({
-      file: await fs.open(audioPath, 'r'),
+      file: createReadStream(audioPath),
       model: 'whisper-1',
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],
@@ -70,7 +71,7 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
     await fs.writeFile(audioPath, Buffer.from(buffer));
 
     const transcription = await openai.audio.transcriptions.create({
-      file: await fs.open(audioPath, 'r'),
+      file: createReadStream(audioPath),
       model: 'whisper-1',
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],
