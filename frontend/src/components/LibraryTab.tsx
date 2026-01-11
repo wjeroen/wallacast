@@ -244,13 +244,13 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                   {item.type === 'article' && !item.audio_url && (
-                  <button
-                    onClick={() => handleGenerateAudio(item.id)}
-                    title="Generate audio"
-                  >
-                    <Volume2 size={16} />
-                  </button>
-                )}
+                    <button
+                      onClick={() => handleGenerateAudio(item.id)}
+                      title="Generate audio"
+                    >
+                      <Volume2 size={16} />
+                    </button>
+                  )}
                 <button
                   onClick={() => handleToggleFavorite(item.id, item.is_favorite)}
                   className={item.is_favorite ? 'active' : ''}
