@@ -43,10 +43,21 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
 
     if (generatingItems.length === 0) return;
 
-    const pollInterval = setInterval(() => {
-      // Refresh content to get latest generation status
-      loadContent();
-    }, 2000); // Poll every 2 seconds
+    // Only poll every 10 seconds to avoid constant list refreshing
+    const pollInterval = setInterval(async () => {
+      // Fetch only the generating items, not the entire list
+      for (const item of generatingItems) {
+        try {
+          const response = await contentAPI.getById(item.id);
+          // Update just this item in the state without full re-render
+          setContent(prevContent =>
+            prevContent.map(c => c.id === item.id ? response.data : c)
+          );
+        } catch (error) {
+          console.error('Failed to fetch item status:', error);
+        }
+      }
+    }, 10000); // Poll every 10 seconds instead of 2
 
     return () => clearInterval(pollInterval);
   }, [content]);
@@ -202,16 +213,11 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     }
 
     // Generating
-    const operation = item.current_operation === 'audio' ? 'Audio' : 'Transcript';
-    const progress = item.generation_progress || 0;
+    const operation = item.current_operation === 'audio' ? 'audio' : 'transcript';
 
     return (
       <div className="generation-status generating">
         <span>🔄 Generating {operation}...</span>
-        <div className="progress-bar-container">
-          <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
-          <span className="progress-text">{progress}%</span>
-        </div>
       </div>
     );
   };
