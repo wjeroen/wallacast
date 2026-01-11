@@ -36,17 +36,43 @@ export async function extractArticleContent(htmlContent: string): Promise<string
       return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    // Use GPT-4o-mini to extract clean article content
+    // Use GPT-4o-mini to extract and format article content for audio reading
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: 'You are a content extraction assistant. Extract only the main article text from HTML content, removing navigation, ads, footers, headers, and other non-content elements. Return only the clean article text.',
+          content: `You are a content extraction assistant that formats web content for text-to-speech reading.
+
+Extract and format content following these rules:
+1. Extract the main article text, removing navigation, ads, footers, headers
+2. CRITICALLY IMPORTANT: NEVER extract or include actual URL strings from href/src attributes
+   - If you see <a href="https://example.com">click here</a>, only output "click here"
+   - NEVER output the URL itself like "https://example.com"
+   - Keep link anchor text, but completely ignore the href URL
+   - Same for iframes, embeds - ignore the src URLs
+3. Keep the word "link" when used naturally in text
+4. KEEP comment sections - they are VERY IMPORTANT
+5. For EA Forum posts specifically:
+   - Post format is usually "by [Author] [Date]" followed by karma/votes
+   - Look for patterns like "by Username Date" to extract post metadata
+   - Look for karma numbers (often appears as standalone numbers after author/date)
+6. For comments, extract and format naturally:
+   - EA Forum format: "Username Date [karma] [agree] [disagree]"
+   - Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
+   - Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
+   - Include ALL comments, even nested replies
+7. After the main article, add "Comments section:" before listing comments
+8. Format lists and structure naturally for speaking
+9. Replace special characters (&#x27; → apostrophe, etc.) with proper characters
+10. Remove "Share", "Tweet", "Like" buttons text
+11. Remove newsletter signup prompts
+
+Return the article body, then clearly marked comments section with ALL comments formatted for natural speech.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content from this HTML:\n\n${htmlContent.slice(0, 50000)}`,
+          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlContent.slice(0, 50000)}`,
         },
       ],
       temperature: 0.3,
@@ -309,12 +335,46 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    const originalLength = textToConvert.length;
+    // Add intro with title, author, date, and karma (if available)
+    let intro = '';
+    if (content.title) {
+      intro = `This article is titled: ${content.title}.`;
+
+      if (content.author) {
+        intro += ` Written by ${content.author}.`;
+      }
+
+      // Extract date from published_at or HTML content
+      if (content.published_at) {
+        const date = new Date(content.published_at);
+        const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+        intro += ` Published on ${formattedDate}.`;
+      }
+
+      // Try to extract karma from HTML for EA Forum posts
+      // EA Forum format often has "by Author Date" followed by karma numbers
+      // or karma/votes in the HTML structure
+      const htmlText = content.html_content || content.content || '';
+
+      // Try to find karma in various EA Forum formats
+      const karmaMatch = htmlText.match(/(\d+)\s+(?:karma|points)/i) ||
+                        htmlText.match(/by\s+[\w\s]+\w+\s+\d+\s+\d{4}\s+(\d+)/); // "by Author Date karma"
+
+      if (karmaMatch) {
+        intro += ` This post has ${karmaMatch[1]} karma.`;
+      }
+
+      intro += '\n\n';
+    }
+
+    // Prepend intro to content
+    const fullText = intro + textToConvert;
+    const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
-    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(textToConvert, {
+    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
       instructions:
-        'Read this article clearly and naturally, focusing only on the main article text. Use appropriate pacing and emphasis.',
+        'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, read the username and karma/votes naturally before reading the comment text. Use appropriate pacing and natural emphasis.',
       contentId: contentId, // Pass contentId for progress tracking
     });
 
