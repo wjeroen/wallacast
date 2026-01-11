@@ -27,7 +27,8 @@ router.get('/:key', async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Setting not found' });
+      // Return empty value instead of 404
+      return res.json({ key: req.params.key, value: '' });
     }
 
     res.json({ key: req.params.key, value: result.rows[0].value });

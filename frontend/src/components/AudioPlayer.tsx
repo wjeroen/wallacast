@@ -17,6 +17,25 @@ interface AudioPlayerProps {
   onClose: () => void;
 }
 
+function cleanHtml(text: string): string {
+  if (!text) return '';
+  // Remove CDATA wrapper
+  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  // Remove HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+  // Decode HTML entities
+  cleaned = cleaned
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+  // Clean up whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  return cleaned;
+}
+
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -37,10 +56,23 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!content) return;
 
     if (audioRef.current) {
-      audioRef.current.src = content.audio_url || '';
-      audioRef.current.currentTime = content.playback_position || 0;
-      audioRef.current.playbackRate = content.playback_speed || 1;
+      const audio = audioRef.current;
+      const startPosition = content.playback_position || 0;
+
+      audio.src = content.audio_url || '';
+      audio.playbackRate = content.playback_speed || 1;
       setPlaybackSpeed(content.playback_speed || 1);
+
+      // Wait for metadata to load before setting position
+      const handleLoadedMetadata = () => {
+        if (startPosition > 0) {
+          audio.currentTime = startPosition;
+          setCurrentTime(startPosition);
+        }
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      };
+
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     }
 
     if (content.transcript) {
@@ -288,7 +320,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       {content.description && (
         <div className="description">
           <h4>Description</h4>
-          <p>{content.description}</p>
+          <p>{cleanHtml(content.description)}</p>
         </div>
       )}
 
@@ -308,7 +340,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
                 <p>Loading transcript...</p>
               ) : (
                 <p>
-                  {(transcript || content.content || '').split(/\s+/).map((word, index) => (
+                  {cleanHtml(transcript || content.content || '').split(/\s+/).map((word, index) => (
                     <span
                       key={index}
                       className="transcript-word"

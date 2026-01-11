@@ -133,7 +133,11 @@ export async function generateAudioForContent(contentId: number): Promise<string
     const audioPath = path.join(audioDir, audioFilename);
     await fs.writeFile(audioPath, audioBuffer);
 
-    const audioUrl = `/audio/${audioFilename}`;
+    // Construct full URL for audio file
+    const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : 'http://localhost:3001';
+    const audioUrl = `${backendUrl}/audio/${audioFilename}`;
 
     // Update content item with audio URL
     await query('UPDATE content_items SET audio_url = $1 WHERE id = $2', [audioUrl, contentId]);

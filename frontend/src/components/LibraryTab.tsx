@@ -1,14 +1,35 @@
 import { useState, useEffect } from 'react';
-import { Star, Archive, Trash2, Volume2, FileText } from 'lucide-react';
+import { Star, Archive, Trash2, Volume2, FileText, CheckSquare, Square } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
 type FilterType = 'all' | 'articles' | 'podcasts' | 'favorites' | 'archived';
 
+function cleanHtml(text: string): string {
+  if (!text) return '';
+  // Remove CDATA wrapper
+  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  // Remove HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+  // Decode HTML entities
+  cleaned = cleaned
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+  // Clean up whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  return cleaned;
+}
+
 export function LibraryTab({ onPlayContent }: { onPlayContent: (content: ContentItem) => void }) {
   const [content, setContent] = useState<ContentItem[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [loading, setLoading] = useState(true);
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
 
   useEffect(() => {
     loadContent();
@@ -66,13 +87,59 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
-
     try {
       await contentAPI.delete(id);
       loadContent();
     } catch (error) {
       console.error('Failed to delete content:', error);
+    }
+  };
+
+  const toggleSelection = (id: number) => {
+    const newSelected = new Set(selectedItems);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedItems(newSelected);
+  };
+
+  const selectAll = () => {
+    setSelectedItems(new Set(content.map(item => item.id)));
+  };
+
+  const deselectAll = () => {
+    setSelectedItems(new Set());
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      await Promise.all(Array.from(selectedItems).map(id => contentAPI.delete(id)));
+      setSelectedItems(new Set());
+      loadContent();
+    } catch (error) {
+      console.error('Failed to bulk delete:', error);
+    }
+  };
+
+  const handleBulkArchive = async () => {
+    try {
+      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_archived: true })));
+      setSelectedItems(new Set());
+      loadContent();
+    } catch (error) {
+      console.error('Failed to bulk archive:', error);
+    }
+  };
+
+  const handleBulkFavorite = async () => {
+    try {
+      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_favorite: true })));
+      setSelectedItems(new Set());
+      loadContent();
+    } catch (error) {
+      console.error('Failed to bulk favorite:', error);
     }
   };
 
@@ -89,6 +156,19 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     <div className="library-tab">
       <div className="library-header">
         <h2>Library</h2>
+        <button onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }} className="bulk-mode-btn">
+          {bulkMode ? 'Cancel' : 'Select'}
+        </button>
+        {bulkMode && selectedItems.size > 0 && (
+          <div className="bulk-actions">
+            <span>{selectedItems.size} selected</span>
+            <button onClick={selectAll}>All</button>
+            <button onClick={deselectAll}>None</button>
+            <button onClick={handleBulkFavorite}><Star size={16} /></button>
+            <button onClick={handleBulkArchive}><Archive size={16} /></button>
+            <button onClick={handleBulkDelete}><Trash2 size={16} /></button>
+          </div>
+        )}
         <div className="filter-buttons">
           <button
             className={filter === 'all' ? 'active' : ''}
@@ -134,9 +214,14 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
           {content.map((item) => (
             <div
               key={item.id}
-              className={`content-card ${item.is_read ? 'read' : ''}`}
-              onClick={() => onPlayContent(item)}
+              className={`content-card ${item.is_read ? 'read' : ''} ${selectedItems.has(item.id) ? 'selected' : ''}`}
+              onClick={() => bulkMode ? toggleSelection(item.id) : onPlayContent(item)}
             >
+              {bulkMode && (
+                <div className="checkbox">
+                  {selectedItems.has(item.id) ? <CheckSquare size={20} /> : <Square size={20} />}
+                </div>
+              )}
               {item.thumbnail_url && (
                 <img src={item.thumbnail_url} alt={item.title} className="thumbnail" />
               )}
@@ -144,7 +229,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                 <h3>{item.title}</h3>
                 {item.author && <p className="author">{item.author}</p>}
                 {item.description && (
-                  <p className="description">{item.description.slice(0, 150)}...</p>
+                  <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}
                 <div className="metadata">
                   <span className="type">{item.type}</span>
@@ -156,8 +241,9 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                   )}
                 </div>
               </div>
-              <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-                {item.type === 'article' && !item.audio_url && (
+              {!bulkMode && (
+                <div className="content-actions" onClick={(e) => e.stopPropagation()}>
+                  {item.type === 'article' && !item.audio_url && (
                   <button
                     onClick={() => handleGenerateAudio(item.id)}
                     title="Generate audio"
@@ -191,6 +277,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                   <Trash2 size={16} />
                 </button>
               </div>
+              )}
             </div>
           ))}
         </div>
