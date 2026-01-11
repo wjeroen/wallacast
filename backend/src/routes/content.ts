@@ -129,8 +129,9 @@ router.post('/', async (req, res) => {
 
       // Extract formatted content with comments for display in player
       // This uses GPT to format the content properly, including comments
+      // Pass comments HTML separately for better extraction
       try {
-        processedContent = await extractArticleContent(htmlContent);
+        processedContent = await extractArticleContent(htmlContent, articleData.comments_html);
         console.log('Extracted formatted content with comments for display');
       } catch (error) {
         console.error('Failed to extract formatted content, falling back to plain text:', error);

@@ -269,6 +269,13 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
             <div>
               <h3>{content.title}</h3>
               {content.author && <p className="author">{content.author}</p>}
+              {content.url && (
+                <p className="source-link">
+                  <a href={content.url} target="_blank" rel="noopener noreferrer">
+                    View original source →
+                  </a>
+                </p>
+              )}
             </div>
           </div>
           <button onClick={onClose} className="close-btn">
