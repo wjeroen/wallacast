@@ -3,11 +3,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import basicAuth from 'express-basic-auth';
 import { initializeDatabase } from './database/db.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
-import settingsRouter from './routes/settings.js';
 import transcriptionRouter from './routes/transcription.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,11 +27,20 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
+// HTTP Basic Auth middleware
+const authMiddleware = basicAuth({
+  users: {
+    [process.env.AUTH_USERNAME || 'admin']: process.env.AUTH_PASSWORD || 'changeme'
+  },
+  challenge: true,
+  realm: 'Readcast API',
+});
+
 // Serve static files (audio, images, etc.)
 app.use('/audio', express.static(path.join(process.cwd(), 'public', 'audio')));
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
-// Routes
+// Public routes (no auth required)
 app.get('/', (req, res) => {
   res.json({
     name: 'Readcast API',
@@ -44,11 +53,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.use('/api/content', contentRouter);
-app.use('/api/podcasts', podcastRouter);
-app.use('/api/queue', queueRouter);
-app.use('/api/settings', settingsRouter);
-app.use('/api/transcription', transcriptionRouter);
+// Protected API routes (auth required)
+app.use('/api/content', authMiddleware, contentRouter);
+app.use('/api/podcasts', authMiddleware, podcastRouter);
+app.use('/api/queue', authMiddleware, queueRouter);
+app.use('/api/transcription', authMiddleware, transcriptionRouter);
 
 // Initialize database and start server
 async function start() {

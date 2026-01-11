@@ -10,25 +10,12 @@ import { query } from '../database/db.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Lazy initialization - only create OpenAI client when needed
+// Get OpenAI client from environment variable only (for security)
 async function getOpenAIClient(): Promise<OpenAI | null> {
-  // First try environment variable
   if (process.env.OPENAI_API_KEY) {
     return new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-  }
-
-  // Then try settings table
-  try {
-    const result = await query('SELECT value FROM settings WHERE key = $1', ['OPENAI_API_KEY']);
-    if (result.rows.length > 0 && result.rows[0].value) {
-      return new OpenAI({
-        apiKey: result.rows[0].value,
-      });
-    }
-  } catch (error) {
-    console.error('Error fetching API key from settings:', error);
   }
 
   return null;
