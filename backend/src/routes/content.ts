@@ -174,13 +174,14 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Generate TTS for an article
+// Generate TTS for an article (async)
 router.post('/:id/generate-audio', async (req, res) => {
   try {
     const { id } = req.params;
+    const { regenerate } = req.body;
 
     const contentResult = await query(
-      'SELECT content, type FROM content_items WHERE id = $1',
+      'SELECT * FROM content_items WHERE id = $1',
       [id]
     );
 
@@ -194,16 +195,48 @@ router.post('/:id/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
     }
 
-    // Use new OpenAI TTS with content extraction
-    const result = await generateAudioForContent(parseInt(id));
+    // Check if already generating (unless regenerating)
+    if (!regenerate && contentItem.generation_status === 'generating_audio') {
+      return res.status(409).json({
+        error: 'Audio generation already in progress',
+        generation_status: contentItem.generation_status,
+        generation_progress: contentItem.generation_progress
+      });
+    }
 
+    // Set status to generating
+    await query(
+      'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
+      ['generating_audio', 0, 'audio', id]
+    );
+
+    // Start generation in background (don't await)
+    generateAudioForContent(parseInt(id))
+      .then(async (result) => {
+        // Update status to completed
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+          ['completed', 100, id]
+        );
+      })
+      .catch(async (error) => {
+        console.error('Background audio generation error:', error);
+        // Update status to failed
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+          ['failed', error.message || 'Failed to generate audio', 0, id]
+        );
+      });
+
+    // Return immediately with status
     res.json({
-      audio_url: result.audioUrl,
-      warning: result.warning
+      message: 'Audio generation started',
+      generation_status: 'generating_audio',
+      generation_progress: 0
     });
   } catch (error) {
-    console.error('Error generating TTS:', error);
-    res.status(500).json({ error: 'Failed to generate audio' });
+    console.error('Error starting TTS generation:', error);
+    res.status(500).json({ error: 'Failed to start audio generation' });
   }
 });
 

@@ -24,7 +24,8 @@ export const contentAPI = {
 
   delete: (id: number) => api.delete(`/content/${id}`),
 
-  generateAudio: (id: number) => api.post<{ audio_url: string; warning?: string }>(`/content/${id}/generate-audio`),
+  generateAudio: (id: number, regenerate: boolean = false) =>
+    api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate }),
 };
 
 export const podcastAPI = {

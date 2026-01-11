@@ -35,6 +35,22 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     loadContent();
   }, [filter]);
 
+  // Poll for progress updates on items that are generating
+  useEffect(() => {
+    const generatingItems = content.filter(
+      item => item.generation_status === 'generating_audio' || item.generation_status === 'generating_transcript'
+    );
+
+    if (generatingItems.length === 0) return;
+
+    const pollInterval = setInterval(() => {
+      // Refresh content to get latest generation status
+      loadContent();
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [content]);
+
   const loadContent = async () => {
     setLoading(true);
     try {
@@ -155,18 +171,49 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     }
   };
 
-  const handleGenerateAudio = async (id: number) => {
+  const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     try {
-      const response = await contentAPI.generateAudio(id);
-      if (response.data.warning) {
-        alert(response.data.warning);
-      }
+      const response = await contentAPI.generateAudio(id, regenerate);
+      // Generation started in background, polling will update status
       loadContent();
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
       alert(errorMsg);
     }
+  };
+
+  const getGenerationStatusDisplay = (item: ContentItem) => {
+    if (!item.generation_status || item.generation_status === 'idle') {
+      return null;
+    }
+
+    if (item.generation_status === 'completed') {
+      return null; // Don't show anything for completed
+    }
+
+    if (item.generation_status === 'failed') {
+      return (
+        <div className="generation-status error">
+          <span>❌ Generation failed</span>
+          {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
+        </div>
+      );
+    }
+
+    // Generating
+    const operation = item.current_operation === 'audio' ? 'Audio' : 'Transcript';
+    const progress = item.generation_progress || 0;
+
+    return (
+      <div className="generation-status generating">
+        <span>🔄 Generating {operation}...</span>
+        <div className="progress-bar-container">
+          <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+          <span className="progress-text">{progress}%</span>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -250,6 +297,8 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                 )}
                 <div className="metadata">
                   <span className="type">{item.type}</span>
+                  {item.audio_url && <span className="badge">🔊 Audio</span>}
+                  {item.transcript && <span className="badge">📝 Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
                   {item.playback_position > 0 && (
                     <span className="progress">
@@ -257,15 +306,18 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                     </span>
                   )}
                 </div>
+                {getGenerationStatusDisplay(item)}
               </div>
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-                  {item.type === 'article' && !item.audio_url && (
+                  {item.type === 'article' && (
                     <button
-                      onClick={() => handleGenerateAudio(item.id)}
-                      title="Generate audio"
+                      onClick={() => handleGenerateAudio(item.id, !!item.audio_url)}
+                      title={item.audio_url ? 'Regenerate audio' : 'Generate audio'}
+                      disabled={item.generation_status === 'generating_audio'}
                     >
                       <Volume2 size={16} />
+                      {item.audio_url && <span className="regenerate-indicator">🔄</span>}
                     </button>
                   )}
                 <button
