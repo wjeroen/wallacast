@@ -212,8 +212,11 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   const handleTranscriptClick = (wordIndex: number) => {
-    const words = transcript.split(/\s+/);
+    // Use the same cleaned text that's displayed to ensure word indices match
+    const displayedText = cleanHtml(transcript || content.content || '');
+    const words = displayedText.split(/\s+/);
     const estimatedPosition = (wordIndex / words.length) * duration;
+    console.log('Transcript click:', { wordIndex, totalWords: words.length, duration, estimatedPosition });
     handleSeek(estimatedPosition);
   };
 

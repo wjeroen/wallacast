@@ -116,7 +116,7 @@ export async function generateArticleAudio(
   }
 }
 
-export async function generateAudioForContent(contentId: number): Promise<string> {
+export async function generateAudioForContent(contentId: number): Promise<{ audioUrl: string; warning?: string }> {
   try {
     // Get content item
     const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
@@ -139,6 +139,16 @@ export async function generateAudioForContent(contentId: number): Promise<string
 
     if (!textToConvert) {
       throw new Error('No content to convert to audio');
+    }
+
+    const originalLength = textToConvert.length;
+    let warning: string | undefined;
+
+    // Check if content will be truncated (4090 char limit)
+    if (originalLength > 4090) {
+      const estimatedMinutes = Math.round(originalLength / 1000); // rough estimate: 1000 chars = 1 minute
+      warning = `This article is very long (${estimatedMinutes}+ min). Only the first ~3-4 minutes will be generated due to OpenAI TTS limits.`;
+      console.log(`Warning: Article is ${originalLength} chars, will be truncated to 4090`);
     }
 
     // Generate audio
@@ -164,7 +174,7 @@ export async function generateAudioForContent(contentId: number): Promise<string
     // Update content item with audio URL
     await query('UPDATE content_items SET audio_url = $1 WHERE id = $2', [audioUrl, contentId]);
 
-    return audioUrl;
+    return { audioUrl, warning };
   } catch (error) {
     console.error('Error generating audio for content:', error);
     throw error;

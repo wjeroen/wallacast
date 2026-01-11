@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import fs from 'fs/promises';
-import { createReadStream } from 'fs';
+import { createReadStream, createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { query } from '../database/db.js';
@@ -50,8 +51,27 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
 
     console.log('Downloading audio from:', audioUrl);
     const response = await fetch(audioUrl);
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(audioPath, Buffer.from(buffer));
+
+    if (!response.ok) {
+      throw new Error(`Failed to download audio: ${response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body from audio URL');
+    }
+
+    // Stream download to disk instead of loading into memory
+    await pipeline(response.body, createWriteStream(audioPath));
+
+    const fileStats = await fs.stat(audioPath);
+    const fileSizeMB = fileStats.size / (1024 * 1024);
+    console.log('Audio downloaded, file size:', fileSizeMB.toFixed(2), 'MB');
+
+    // OpenAI Whisper API has a 25 MB file size limit
+    if (fileSizeMB > 25) {
+      await fs.unlink(audioPath).catch(console.error);
+      throw new Error(`Audio file is too large (${fileSizeMB.toFixed(1)} MB). OpenAI Whisper API has a 25 MB limit. Please try a shorter episode.`);
+    }
 
     console.log('Transcribing audio...');
 
@@ -90,8 +110,17 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
     const audioPath = path.join(tempDir, audioFilename);
 
     const response = await fetch(audioUrl);
-    const buffer = await response.arrayBuffer();
-    await fs.writeFile(audioPath, Buffer.from(buffer));
+
+    if (!response.ok) {
+      throw new Error(`Failed to download audio: ${response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('No response body from audio URL');
+    }
+
+    // Stream download to disk instead of loading into memory
+    await pipeline(response.body, createWriteStream(audioPath));
 
     const transcription = await openai.audio.transcriptions.create({
       file: createReadStream(audioPath),
