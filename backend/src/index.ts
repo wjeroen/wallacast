@@ -46,8 +46,8 @@ app.get('/health', (req, res) => {
 async function start() {
   try {
     await initializeDatabase();
-    app.listen(PORT, () => {
-      console.log(`🚀 Readcast API server running on http://localhost:${PORT}`);
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Readcast API server running on http://0.0.0.0:${PORT}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
