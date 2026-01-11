@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { transcribeAudio } from '../services/transcription.js';
+import { transcribeWithTimestamps } from '../services/transcription.js';
 
 const router = express.Router();
 
@@ -25,20 +25,26 @@ router.post('/content/:id', async (req, res) => {
     }
 
     if (content.transcript) {
-      return res.json({ transcript: content.transcript });
+      return res.json({
+        transcript: content.transcript,
+        words: content.transcript_words || null
+      });
     }
 
     console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
-    const transcript = await transcribeAudio(content.audio_url);
+    const result = await transcribeWithTimestamps(content.audio_url);
 
-    console.log('Transcription complete, length:', transcript.length);
+    console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
     await query(
-      'UPDATE content_items SET transcript = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [transcript, id]
+      'UPDATE content_items SET transcript = $1, transcript_words = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      [result.text, JSON.stringify(result.words), id]
     );
 
-    res.json({ transcript });
+    res.json({
+      transcript: result.text,
+      words: result.words
+    });
   } catch (error) {
     console.error('Error transcribing content:', error);
     if (error instanceof Error) {

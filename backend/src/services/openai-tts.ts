@@ -4,6 +4,19 @@ import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 
+// Get audio duration in seconds
+async function getAudioDuration(filePath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(metadata.format.duration || 0);
+      }
+    });
+  });
+}
+
 async function getOpenAIClient(): Promise<OpenAI | null> {
   // Use environment variable only for security
   if (process.env.OPENAI_API_KEY) {
@@ -117,13 +130,21 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
   });
 }
 
+interface ChunkMetadata {
+  text: string;
+  startWord: number;
+  endWord: number;
+  duration: number;
+  startTime: number;
+}
+
 export async function generateArticleAudio(
   articleText: string,
   options: {
     voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral';
     instructions?: string;
   } = {}
-): Promise<{ buffer: Buffer; chunks: number }> {
+): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -136,21 +157,41 @@ export async function generateArticleAudio(
       'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
     // Split text into chunks that fit within OpenAI's 4096 character limit
-    const chunks = splitTextIntoChunks(articleText, 4090);
-    console.log(`Generating TTS audio with gpt-4o-mini-tts for ${chunks.length} chunk(s)...`);
+    const textChunks = splitTextIntoChunks(articleText, 4090);
+    console.log(`Generating TTS audio with gpt-4o-mini-tts for ${textChunks.length} chunk(s)...`);
 
-    if (chunks.length === 1) {
+    // Calculate word positions for the full text
+    const allWords = articleText.split(/\s+/);
+
+    if (textChunks.length === 1) {
       // Single chunk - simple case
-      console.log(`Single chunk (${chunks[0].length} chars)`);
+      console.log(`Single chunk (${textChunks[0].length} chars)`);
       const response = await openai.audio.speech.create({
         model: 'gpt-4o-mini-tts',
         voice: voice,
-        input: chunks[0],
+        input: textChunks[0],
         instructions: instructions,
       });
 
       const buffer = Buffer.from(await response.arrayBuffer());
-      return { buffer, chunks: 1 };
+
+      // Save temp file to get duration
+      const tempDir = path.join(process.cwd(), 'temp');
+      await fs.mkdir(tempDir, { recursive: true });
+      const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
+      await fs.writeFile(tempFile, buffer);
+      const duration = await getAudioDuration(tempFile);
+      await fs.unlink(tempFile).catch(console.error);
+
+      const chunkMetadata: ChunkMetadata[] = [{
+        text: textChunks[0],
+        startWord: 0,
+        endWord: allWords.length - 1,
+        duration: duration,
+        startTime: 0
+      }];
+
+      return { buffer, chunks: 1, chunkMetadata };
     }
 
     // Multiple chunks - generate and concatenate
@@ -158,17 +199,20 @@ export async function generateArticleAudio(
     await fs.mkdir(tempDir, { recursive: true });
 
     const chunkFiles: string[] = [];
+    const chunkMetadata: ChunkMetadata[] = [];
     const timestamp = Date.now();
+    let currentWordIndex = 0;
+    let currentTime = 0;
 
     try {
       // Generate audio for each chunk
-      for (let i = 0; i < chunks.length; i++) {
-        console.log(`Generating chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)...`);
+      for (let i = 0; i < textChunks.length; i++) {
+        console.log(`Generating chunk ${i + 1}/${textChunks.length} (${textChunks[i].length} chars)...`);
 
         const response = await openai.audio.speech.create({
           model: 'gpt-4o-mini-tts',
           voice: voice,
-          input: chunks[i],
+          input: textChunks[i],
           instructions: instructions,
         });
 
@@ -176,6 +220,21 @@ export async function generateArticleAudio(
         const chunkBuffer = Buffer.from(await response.arrayBuffer());
         await fs.writeFile(chunkFile, chunkBuffer);
         chunkFiles.push(chunkFile);
+
+        // Get duration and calculate word positions
+        const duration = await getAudioDuration(chunkFile);
+        const chunkWords = textChunks[i].split(/\s+/).length;
+
+        chunkMetadata.push({
+          text: textChunks[i],
+          startWord: currentWordIndex,
+          endWord: currentWordIndex + chunkWords - 1,
+          duration: duration,
+          startTime: currentTime
+        });
+
+        currentWordIndex += chunkWords;
+        currentTime += duration;
       }
 
       // Concatenate all chunks
@@ -192,7 +251,7 @@ export async function generateArticleAudio(
         await fs.unlink(chunkFile).catch(console.error);
       }
 
-      return { buffer: finalBuffer, chunks: chunks.length };
+      return { buffer: finalBuffer, chunks: textChunks.length, chunkMetadata };
     } catch (error) {
       // Clean up on error
       for (const chunkFile of chunkFiles) {
@@ -234,7 +293,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const originalLength = textToConvert.length;
 
     // Generate audio (with chunking for long articles)
-    const { buffer: audioBuffer, chunks } = await generateArticleAudio(textToConvert, {
+    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(textToConvert, {
       instructions:
         'Read this article clearly and naturally, focusing only on the main article text. Use appropriate pacing and emphasis.',
     });
@@ -261,8 +320,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       : 'http://localhost:3001';
     const audioUrl = `${backendUrl}/audio/${audioFilename}`;
 
-    // Update content item with audio URL
-    await query('UPDATE content_items SET audio_url = $1 WHERE id = $2', [audioUrl, contentId]);
+    // Update content item with audio URL and chunk metadata
+    await query(
+      'UPDATE content_items SET audio_url = $1, tts_chunks = $2 WHERE id = $3',
+      [audioUrl, JSON.stringify(chunkMetadata), contentId]
+    );
 
     return { audioUrl, warning };
   } catch (error) {

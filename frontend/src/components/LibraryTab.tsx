@@ -59,6 +59,18 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     }
   };
 
+  const handlePlayContent = async (item: ContentItem) => {
+    try {
+      // Fetch latest content data to get current playback position
+      const response = await contentAPI.getById(item.id);
+      onPlayContent(response.data);
+    } catch (error) {
+      console.error('Failed to load content details:', error);
+      // Fall back to using the list item if fetch fails
+      onPlayContent(item);
+    }
+  };
+
   const handleToggleFavorite = async (id: number, isFavorite: boolean) => {
     try {
       await contentAPI.update(id, { is_favorite: !isFavorite });
@@ -220,7 +232,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
             <div
               key={item.id}
               className={`content-card ${item.is_read ? 'read' : ''} ${selectedItems.has(item.id) ? 'selected' : ''}`}
-              onClick={() => bulkMode ? toggleSelection(item.id) : onPlayContent(item)}
+              onClick={() => bulkMode ? toggleSelection(item.id) : handlePlayContent(item)}
             >
               {bulkMode && (
                 <div className="checkbox">
