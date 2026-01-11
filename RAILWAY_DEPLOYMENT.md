@@ -46,10 +46,13 @@ This guide will help you deploy Readcast to Railway.app so you can access it fro
      - Option B: Go to your PostgreSQL service, copy the DATABASE_URL, and add it to backend variables
    - **Good news**: The backend automatically detects Railway's database variables! No manual copying needed.
 
-6. Add these additional environment variables:
+6. Add these **required** environment variables:
    - `PORT` = `3001`
-   - `OPENAI_API_KEY` = (optional, your OpenAI key for transcription)
-   - `ELEVENLABS_API_KEY` = (optional, your ElevenLabs key for TTS)
+   - `AUTH_USERNAME` = (your choice, e.g., "admin")
+   - `AUTH_PASSWORD` = (your choice, use a strong password)
+   - `OPENAI_API_KEY` = (required for transcription and TTS)
+
+   **Important**: The app now uses HTTP Basic Auth to protect your API. Your browser will prompt you for these credentials.
 
 7. Click "Deploy" or wait for automatic redeployment
 8. Once deployed, go to "Settings" → "Networking" → Click "Generate Domain" if not already created
@@ -102,11 +105,12 @@ DB_PASSWORD=(from PostgreSQL service)
 # Required
 PORT=3001
 FRONTEND_URL=https://your-frontend-url.up.railway.app
-
-# Optional (for AI features)
-OPENAI_API_KEY=(optional, for podcast transcription)
-ELEVENLABS_API_KEY=(optional, for article TTS)
+AUTH_USERNAME=admin (or your choice)
+AUTH_PASSWORD=your-secure-password
+OPENAI_API_KEY=sk-proj-... (required for transcription and TTS)
 ```
+
+**Note**: The backend automatically installs ffmpeg via `nixpacks.toml` for audio processing. This is required for podcast transcription and article TTS to work correctly.
 
 ### Frontend Variables
 ```
@@ -138,6 +142,12 @@ This means the backend can't find the PostgreSQL service. Fix it:
 - Check that database connection is working
 - Railway free tier databases might sleep - wait a minute and retry
 - Check environment variables are all set
+
+### "Cannot find ffprobe" or ffmpeg errors
+- Make sure the backend service Root Directory is set to `backend` (Settings → Root Directory)
+- The `nixpacks.toml` file in the backend directory automatically installs ffmpeg
+- If Railway skipped the nixpacks.toml, redeploy the backend service after confirming Root Directory is `backend`
+- Check the build logs - you should see ffmpeg being installed during the build phase
 
 ## Using Railway CLI (Advanced)
 
