@@ -45,20 +45,28 @@ export async function extractArticleContent(htmlContent: string): Promise<string
           content: `You are a content extraction assistant that formats web content for text-to-speech reading.
 
 Extract and format content following these rules:
-1. Extract only the main article text, removing navigation, ads, footers, headers
-2. REMOVE all URLs and hyperlinks - don't say "link" or read out URLs
-3. Keep the article body clean and readable
-4. SKIP comment sections entirely - do not include any comments
-5. Format lists and structure naturally for speaking
-6. Replace special characters and symbols with spoken equivalents
-7. Remove any "Share", "Tweet", "Like" buttons or social media text
-8. Remove newsletter signup prompts and calls to action
+1. Extract the main article text, removing navigation, ads, footers, headers
+2. REMOVE actual URL strings (like "https://example.com") - don't read them out loud
+3. Keep the word "link" when it's used naturally in text - only remove URL strings
+4. KEEP comment sections - they are VERY IMPORTANT
+5. For comments, extract and format naturally for speaking:
+   - Include the username/author of each comment
+   - Include karma/vote counts (e.g., "+42 karma", "23 karma", "15 agree, 3 disagree")
+   - For EA Forum: look for karma numbers and agree/disagree votes
+   - Format like: "Username wrote a comment with 42 karma: [comment text]"
+   - Or: "Username commented with 15 agree and 3 disagree votes: [comment text]"
+   - Include ALL comments, even nested replies
+6. After the main article, add a clear section break like "Comments section:" before listing comments
+7. Format lists and structure naturally for speaking
+8. Replace special characters and symbols with spoken equivalents
+9. Remove "Share", "Tweet", "Like" buttons text
+10. Remove newsletter signup prompts
 
-Return only the clean, speakable article text without any metadata.`,
+Return the article body, then clearly marked comments section with ALL comments formatted for natural speech.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content from this HTML for audio reading:\n\n${htmlContent.slice(0, 50000)}`,
+          content: `Extract the main article content and comments from this HTML for audio reading:\n\n${htmlContent.slice(0, 50000)}`,
         },
       ],
       temperature: 0.3,
@@ -321,13 +329,20 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Add intro with title and author
+    // Add intro with title, author, and karma (if available)
     let intro = '';
     if (content.title) {
       intro = `This article is titled: ${content.title}.`;
 
       if (content.author) {
         intro += ` Written by ${content.author}.`;
+      }
+
+      // Try to extract karma from description or content if it's an EA Forum post
+      // EA Forum often includes karma in metadata
+      const karmaMatch = (content.description || content.html_content || '').match(/(\d+)\s*karma/i);
+      if (karmaMatch) {
+        intro += ` This post has ${karmaMatch[1]} karma.`;
       }
 
       intro += '\n\n';
@@ -340,7 +355,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     // Generate audio (with chunking for long articles)
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
       instructions:
-        'You are reading an article aloud. Start with the title and author introduction if present, then read the article body clearly and naturally. Do not read out URLs or say the word "link". Use appropriate pacing and natural emphasis for readability.',
+        'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, read the username and karma/votes naturally before reading the comment text. Use appropriate pacing and natural emphasis.',
       contentId: contentId, // Pass contentId for progress tracking
     });
 
