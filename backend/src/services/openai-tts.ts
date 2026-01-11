@@ -1,26 +1,15 @@
 import OpenAI from 'openai';
 import fs from 'fs/promises';
 import path from 'path';
+import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 
 async function getOpenAIClient(): Promise<OpenAI | null> {
-  // First try environment variable
+  // Use environment variable only for security
   if (process.env.OPENAI_API_KEY) {
     return new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-  }
-
-  // Then try settings table
-  try {
-    const result = await query('SELECT value FROM settings WHERE key = $1', ['OPENAI_API_KEY']);
-    if (result.rows.length > 0 && result.rows[0].value) {
-      return new OpenAI({
-        apiKey: result.rows[0].value,
-      });
-    }
-  } catch (error) {
-    console.error('Error fetching API key from settings:', error);
   }
 
   return null;
@@ -59,23 +48,73 @@ export async function extractArticleContent(htmlContent: string): Promise<string
   }
 }
 
-function truncateAtSentence(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
+function splitTextIntoChunks(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
 
-  // Truncate at last sentence boundary within maxLength
-  const truncated = text.slice(0, maxLength);
-  const lastSentenceEnd = Math.max(
-    truncated.lastIndexOf('. '),
-    truncated.lastIndexOf('! '),
-    truncated.lastIndexOf('? ')
-  );
+  const chunks: string[] = [];
+  let currentPos = 0;
 
-  if (lastSentenceEnd > maxLength * 0.7) {
-    // Only truncate at sentence if we keep at least 70% of content
-    return truncated.slice(0, lastSentenceEnd + 1);
+  while (currentPos < text.length) {
+    let chunkEnd = currentPos + maxLength;
+
+    // If this is the last chunk, take everything
+    if (chunkEnd >= text.length) {
+      chunks.push(text.slice(currentPos));
+      break;
+    }
+
+    // Find the last sentence boundary within the chunk
+    const chunk = text.slice(currentPos, chunkEnd);
+    const lastSentenceEnd = Math.max(
+      chunk.lastIndexOf('. '),
+      chunk.lastIndexOf('! '),
+      chunk.lastIndexOf('? ')
+    );
+
+    if (lastSentenceEnd > maxLength * 0.6) {
+      // Good sentence boundary found
+      chunkEnd = currentPos + lastSentenceEnd + 1;
+    } else {
+      // No good boundary, try to break at word boundary
+      const lastSpace = chunk.lastIndexOf(' ');
+      if (lastSpace > maxLength * 0.8) {
+        chunkEnd = currentPos + lastSpace;
+      }
+    }
+
+    chunks.push(text.slice(currentPos, chunkEnd).trim());
+    currentPos = chunkEnd;
   }
 
-  return truncated;
+  return chunks;
+}
+
+async function concatenateAudioFiles(inputFiles: string[], outputFile: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Create a temporary concat list file
+    const concatListPath = outputFile + '.txt';
+    const concatList = inputFiles.map(f => `file '${f}'`).join('\n');
+
+    fs.writeFile(concatListPath, concatList)
+      .then(() => {
+        ffmpeg()
+          .input(concatListPath)
+          .inputOptions(['-f concat', '-safe 0'])
+          .outputOptions(['-c copy'])
+          .output(outputFile)
+          .on('end', () => {
+            // Clean up concat list file
+            fs.unlink(concatListPath).catch(console.error);
+            resolve();
+          })
+          .on('error', (err) => {
+            fs.unlink(concatListPath).catch(console.error);
+            reject(err);
+          })
+          .run();
+      })
+      .catch(reject);
+  });
 }
 
 export async function generateArticleAudio(
@@ -84,7 +123,7 @@ export async function generateArticleAudio(
     voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral';
     instructions?: string;
   } = {}
-): Promise<Buffer> {
+): Promise<{ buffer: Buffer; chunks: number }> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -96,20 +135,71 @@ export async function generateArticleAudio(
       options.instructions ||
       'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
-    // OpenAI TTS has a 4096 character limit, truncate at sentence boundary
-    const textToConvert = truncateAtSentence(articleText, 4090);
+    // Split text into chunks that fit within OpenAI's 4096 character limit
+    const chunks = splitTextIntoChunks(articleText, 4090);
+    console.log(`Generating TTS audio with gpt-4o-mini-tts for ${chunks.length} chunk(s)...`);
 
-    console.log(`Generating TTS audio with gpt-4o-mini-tts (${textToConvert.length} chars)...`);
+    if (chunks.length === 1) {
+      // Single chunk - simple case
+      console.log(`Single chunk (${chunks[0].length} chars)`);
+      const response = await openai.audio.speech.create({
+        model: 'gpt-4o-mini-tts',
+        voice: voice,
+        input: chunks[0],
+        instructions: instructions,
+      });
 
-    const response = await openai.audio.speech.create({
-      model: 'gpt-4o-mini-tts',
-      voice: voice,
-      input: textToConvert,
-      instructions: instructions,
-    });
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return { buffer, chunks: 1 };
+    }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return buffer;
+    // Multiple chunks - generate and concatenate
+    const tempDir = path.join(process.cwd(), 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+
+    const chunkFiles: string[] = [];
+    const timestamp = Date.now();
+
+    try {
+      // Generate audio for each chunk
+      for (let i = 0; i < chunks.length; i++) {
+        console.log(`Generating chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)...`);
+
+        const response = await openai.audio.speech.create({
+          model: 'gpt-4o-mini-tts',
+          voice: voice,
+          input: chunks[i],
+          instructions: instructions,
+        });
+
+        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
+        const chunkBuffer = Buffer.from(await response.arrayBuffer());
+        await fs.writeFile(chunkFile, chunkBuffer);
+        chunkFiles.push(chunkFile);
+      }
+
+      // Concatenate all chunks
+      const outputFile = path.join(tempDir, `concatenated_${timestamp}.mp3`);
+      console.log(`Concatenating ${chunkFiles.length} audio files...`);
+      await concatenateAudioFiles(chunkFiles, outputFile);
+
+      // Read the final file
+      const finalBuffer = await fs.readFile(outputFile);
+
+      // Clean up temporary files
+      await fs.unlink(outputFile).catch(console.error);
+      for (const chunkFile of chunkFiles) {
+        await fs.unlink(chunkFile).catch(console.error);
+      }
+
+      return { buffer: finalBuffer, chunks: chunks.length };
+    } catch (error) {
+      // Clean up on error
+      for (const chunkFile of chunkFiles) {
+        await fs.unlink(chunkFile).catch(console.error);
+      }
+      throw error;
+    }
   } catch (error) {
     console.error('Error generating audio:', error);
     throw new Error('Failed to generate audio. Please check your OpenAI API key and try again.');
@@ -142,20 +232,20 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     }
 
     const originalLength = textToConvert.length;
-    let warning: string | undefined;
 
-    // Check if content will be truncated (4090 char limit)
-    if (originalLength > 4090) {
-      const estimatedMinutes = Math.round(originalLength / 1000); // rough estimate: 1000 chars = 1 minute
-      warning = `This article is very long (${estimatedMinutes}+ min). Only the first ~3-4 minutes will be generated due to OpenAI TTS limits.`;
-      console.log(`Warning: Article is ${originalLength} chars, will be truncated to 4090`);
-    }
-
-    // Generate audio
-    const audioBuffer = await generateArticleAudio(textToConvert, {
+    // Generate audio (with chunking for long articles)
+    const { buffer: audioBuffer, chunks } = await generateArticleAudio(textToConvert, {
       instructions:
         'Read this article clearly and naturally, focusing only on the main article text. Use appropriate pacing and emphasis.',
     });
+
+    // Generate info message about chunks if multiple were used
+    let warning: string | undefined;
+    if (chunks > 1) {
+      const estimatedMinutes = Math.round(originalLength / 900); // ~900 chars/minute for TTS
+      warning = `Generated complete audio in ${chunks} parts (~${estimatedMinutes} minutes). The full article has been converted to audio.`;
+      console.log(`Generated audio from ${originalLength} chars using ${chunks} chunks`);
+    }
 
     // Save audio file
     const audioDir = path.join(process.cwd(), 'public', 'audio');

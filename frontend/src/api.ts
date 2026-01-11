@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ContentItem, Podcast, QueueItem, Settings } from './types';
+import type { ContentItem, Podcast, QueueItem } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -8,6 +8,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Include credentials for HTTP Basic Auth
 });
 
 export const contentAPI = {
@@ -61,13 +62,4 @@ export const queueAPI = {
 export const transcriptionAPI = {
   transcribe: (contentId: number) =>
     api.post<{ transcript: string }>(`/transcription/content/${contentId}`),
-};
-
-export const settingsAPI = {
-  getAll: () => api.get<Settings>('/settings'),
-
-  get: (key: string) => api.get<{ key: string; value: string }>(`/settings/${key}`),
-
-  update: (key: string, value: string) =>
-    api.put<{ key: string; value: string }>(`/settings/${key}`, { value }),
 };
