@@ -44,7 +44,6 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [volume, setVolume] = useState(1);
   const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
-  const [showSpeed, setShowSpeed] = useState(false);
   const [transcript, setTranscript] = useState<string>('');
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
@@ -170,11 +169,17 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!audioRef.current) return;
     audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
-    setShowSpeed(false);
 
     if (content) {
       contentAPI.update(content.id, { playback_speed: speed });
     }
+  };
+
+  const toggleSpeed = () => {
+    const speeds = [1, 1.25, 1.5, 2];
+    const currentIndex = speeds.indexOf(playbackSpeed);
+    const nextIndex = (currentIndex + 1) % speeds.length;
+    handleSpeedChange(speeds[nextIndex]);
   };
 
   const handleVolumeChange = (vol: number) => {
@@ -255,25 +260,10 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </div>
 
           <div className="player-options">
-            <div className="option-group">
-              <button onClick={() => setShowSpeed(!showSpeed)}>
-                <Gauge size={20} />
-                <span>{playbackSpeed}x</span>
-              </button>
-              {showSpeed && (
-                <div className="speed-menu">
-                  {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
-                    <button
-                      key={speed}
-                      onClick={() => handleSpeedChange(speed)}
-                      className={playbackSpeed === speed ? 'active' : ''}
-                    >
-                      {speed}x
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button onClick={toggleSpeed} className="speed-toggle">
+              <Gauge size={20} />
+              <span>{playbackSpeed}x</span>
+            </button>
 
             <div className="option-group">
               <button onClick={() => setShowSleepTimer(!showSleepTimer)}>
