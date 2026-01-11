@@ -28,7 +28,7 @@ async function getOpenAIClient(): Promise<OpenAI | null> {
   return null;
 }
 
-export async function extractArticleContent(htmlContent: string): Promise<string> {
+export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<string> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -40,6 +40,15 @@ export async function extractArticleContent(htmlContent: string): Promise<string
     // Increase limit to 100k characters to avoid cutting off comments
     const htmlToSend = htmlContent.slice(0, 100000);
 
+    // Build the user prompt with separate sections for better extraction
+    let userPrompt = `Extract the main article content from this HTML for reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes.\n\nMain HTML:\n\n${htmlToSend}`;
+
+    // Add comments HTML separately if provided (better for extraction)
+    if (commentsHtml) {
+      const commentsToSend = commentsHtml.slice(0, 50000);
+      userPrompt += `\n\nComments Section HTML:\n\n${commentsToSend}`;
+    }
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -49,40 +58,34 @@ export async function extractArticleContent(htmlContent: string): Promise<string
 
 Extract and format content following these rules:
 
-**Post Metadata Extraction:**
-1. Extract post title, author, publication date, karma, agree/disagree votes
-2. For EA Forum posts, look for:
-   - Karma: numbers near vote buttons or post metadata
-   - Agree/disagree votes: often shown as "X agree • Y disagree" or in voting UI
-   - Format intro as: "This post is titled [title], written by [author], posted on the EA Forum on [date]. It has [X] karma, [Y] agree votes, and [Z] disagree votes."
-3. For other sources: Include available metadata (title, author, date) but skip karma/votes if not present
+**IMPORTANT: Do NOT include post metadata intro (title, author, date, karma) - that will be added separately. Start directly with the main article content.**
 
 **Main Content:**
-4. Extract article body, removing navigation, ads, footers, headers, "Share" buttons, newsletter prompts
-5. NEVER extract actual URL strings from href/src attributes
+1. Extract article body, removing navigation, ads, footers, headers, "Share" buttons, newsletter prompts
+2. NEVER extract actual URL strings from href/src attributes
    - For links: keep anchor text only (e.g., "click here" but not "https://example.com")
    - Don't say URLs aloud, but you can say "link" when it appears naturally in text
-6. For visual elements:
+3. For visual elements:
    - Images: Say "The article shows an image here" or describe if alt text exists
    - Tables: Say "The article contains a table" then describe headers/key data if readable
    - Videos/embeds: Say "The article links to a video here" (don't read the URL)
-7. Replace HTML entities (&#x27; → apostrophe, etc.) with proper characters
-8. Format lists and structure naturally for speaking
+4. Replace HTML entities (&#x27; → apostrophe, etc.) with proper characters
+5. Format lists and structure naturally for speaking
 
 **Comments Section:**
-9. After main article, say "Comments section:"
-10. For EACH comment (including nested replies), extract:
-    - Username, date, karma, agree/disagree votes
-    - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
-    - For replies: "A reply to this comment by [username] has [X] karma: [comment text]"
-11. Include ALL comments and nested replies in conversation order
-12. For non-EA sources: Include available comment metadata (author, date) but skip karma/votes if not present
+6. After main article, say "Comments section:"
+7. For EACH comment (including nested replies), extract:
+   - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
+   - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+   - For replies: "A reply to this comment by [username] on [date] with [X] karma: [comment text]"
+8. Include ALL comments and nested replies in conversation order
+9. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
 
-Return: Post metadata intro, then article body with visual elements described, then complete comments section with all metadata.`,
+Return: Main article body, then complete comments section with all available metadata.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlToSend}`,
+          content: userPrompt,
         },
       ],
       temperature: 0.3,
