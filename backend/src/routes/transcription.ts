@@ -28,8 +28,10 @@ router.post('/content/:id', async (req, res) => {
       return res.json({ transcript: content.transcript });
     }
 
-    console.log('Starting transcription for content:', id);
+    console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
     const transcript = await transcribeAudio(content.audio_url);
+
+    console.log('Transcription complete, length:', transcript.length);
 
     await query(
       'UPDATE content_items SET transcript = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
@@ -39,7 +41,14 @@ router.post('/content/:id', async (req, res) => {
     res.json({ transcript });
   } catch (error) {
     console.error('Error transcribing content:', error);
-    res.status(500).json({ error: 'Failed to transcribe content' });
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
+    res.status(500).json({
+      error: 'Failed to transcribe content',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 });
 

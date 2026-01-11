@@ -59,6 +59,25 @@ export async function extractArticleContent(htmlContent: string): Promise<string
   }
 }
 
+function truncateAtSentence(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+
+  // Truncate at last sentence boundary within maxLength
+  const truncated = text.slice(0, maxLength);
+  const lastSentenceEnd = Math.max(
+    truncated.lastIndexOf('. '),
+    truncated.lastIndexOf('! '),
+    truncated.lastIndexOf('? ')
+  );
+
+  if (lastSentenceEnd > maxLength * 0.7) {
+    // Only truncate at sentence if we keep at least 70% of content
+    return truncated.slice(0, lastSentenceEnd + 1);
+  }
+
+  return truncated;
+}
+
 export async function generateArticleAudio(
   articleText: string,
   options: {
@@ -77,12 +96,15 @@ export async function generateArticleAudio(
       options.instructions ||
       'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
-    console.log('Generating TTS audio with gpt-4o-mini-tts...');
+    // OpenAI TTS has a 4096 character limit, truncate at sentence boundary
+    const textToConvert = truncateAtSentence(articleText, 4090);
+
+    console.log(`Generating TTS audio with gpt-4o-mini-tts (${textToConvert.length} chars)...`);
 
     const response = await openai.audio.speech.create({
       model: 'gpt-4o-mini-tts',
       voice: voice,
-      input: articleText.slice(0, 4096), // OpenAI has a character limit
+      input: textToConvert,
       instructions: instructions,
     });
 

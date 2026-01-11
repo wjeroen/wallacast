@@ -47,6 +47,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [transcript, setTranscript] = useState<string>('');
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
+  const [transcriptError, setTranscriptError] = useState<string>('');
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,8 +77,10 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
     if (content.transcript) {
       setTranscript(content.transcript);
-    } else if (content.type === 'podcast_episode' && content.audio_url) {
-      loadTranscript();
+      setTranscriptError('');
+    } else {
+      setTranscript('');
+      setTranscriptError('');
     }
   }, [content]);
 
@@ -117,11 +120,14 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!content) return;
 
     setLoadingTranscript(true);
+    setTranscriptError('');
     try {
       const response = await transcriptionAPI.transcribe(content.id);
       setTranscript(response.data.transcript);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load transcript:', error);
+      const errorMsg = error?.response?.data?.details || error?.response?.data?.error || 'Failed to generate transcript. Please check your API key.';
+      setTranscriptError(errorMsg);
     } finally {
       setLoadingTranscript(false);
     }
@@ -314,21 +320,28 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
         </div>
       )}
 
-      {(transcript || content.content) && (
+      {(content.type === 'podcast_episode' || content.content) && (
         <div className="transcript-section">
           <div className="transcript-header">
             <h4>
               {content.type === 'podcast_episode' ? 'Transcript' : 'Content'}
             </h4>
-            <button onClick={() => setShowTranscript(!showTranscript)}>
-              {showTranscript ? 'Hide' : 'Show'}
-            </button>
+            {(transcript || content.content) && (
+              <button onClick={() => setShowTranscript(!showTranscript)}>
+                {showTranscript ? 'Hide' : 'Show'}
+              </button>
+            )}
           </div>
           {showTranscript && (
             <div className="transcript-content">
               {loadingTranscript ? (
-                <p>Loading transcript...</p>
-              ) : (
+                <p>Generating transcript...</p>
+              ) : transcriptError ? (
+                <div>
+                  <p className="error-message">{transcriptError}</p>
+                  <button onClick={loadTranscript} className="retry-btn">Retry</button>
+                </div>
+              ) : (transcript || content.content) ? (
                 <p>
                   {cleanHtml(transcript || content.content || '').split(/\s+/).map((word, index) => (
                     <span
@@ -340,6 +353,13 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
                     </span>
                   ))}
                 </p>
+              ) : (
+                <div>
+                  <p>No transcript available.</p>
+                  <button onClick={loadTranscript} className="generate-transcript-btn">
+                    Generate Transcript
+                  </button>
+                </div>
               )}
             </div>
           )}
