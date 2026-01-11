@@ -95,8 +95,8 @@
 
 /* Feed Tab */
 .feed-tab {
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
 }
 
 .search-bar {
@@ -221,8 +221,8 @@
 
 /* Add Tab */
 .add-tab {
-  max-width: 600px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
 }
 
 .add-tab h2 {
@@ -356,8 +356,8 @@
 
 /* Library Tab */
 .library-tab {
-  max-width: 1200px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
 }
 
 .library-header {
