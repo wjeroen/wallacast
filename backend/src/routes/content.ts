@@ -2,7 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateTTS } from '../services/tts.js';
-import { generateAudioForContent } from '../services/openai-tts.js';
+import { generateAudioForContent, extractArticleContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 
 const router = express.Router();
@@ -94,11 +94,10 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
-      processedContent = articleData.content;
       htmlContent = articleData.html;
 
-      // Use fetched title if no title provided
-      if (!finalTitle && articleData.title) {
+      // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
+      if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
       }
 
@@ -127,6 +126,22 @@ router.post('/', async (req, res) => {
       if (articleData.disagree_votes !== undefined) {
         disagreeVotes = articleData.disagree_votes;
       }
+
+      // Extract formatted content with comments for display in player
+      // This uses GPT to format the content properly, including comments
+      try {
+        processedContent = await extractArticleContent(htmlContent);
+        console.log('Extracted formatted content with comments for display');
+      } catch (error) {
+        console.error('Failed to extract formatted content, falling back to plain text:', error);
+        // Fall back to basic text extraction
+        processedContent = articleData.content;
+      }
+    }
+
+    // Ensure we have a title (final fallback)
+    if (!finalTitle || finalTitle === 'Untitled') {
+      finalTitle = 'Untitled Article';
     }
 
     const result = await query(
