@@ -179,7 +179,7 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
       console.log('Transcribing audio...');
       const transcription = await openai.audio.transcriptions.create({
         file: createReadStream(fileToTranscribe),
-        model: 'gpt-4o-mini-transcribe',
+        model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
         response_format: 'verbose_json',
         timestamp_granularities: ['word'],
       });
@@ -250,7 +250,7 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
 
         const transcription = await openai.audio.transcriptions.create({
           file: createReadStream(chunkFiles[i]),
-          model: 'gpt-4o-mini-transcribe',
+          model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
           prompt: previousTranscript.slice(-224),
@@ -285,7 +285,7 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
 
       const transcription = await openai.audio.transcriptions.create({
         file: createReadStream(fileToTranscribe),
-        model: 'gpt-4o-mini-transcribe',
+        model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
         response_format: 'verbose_json',
         timestamp_granularities: ['word'],
       });
