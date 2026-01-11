@@ -110,7 +110,7 @@ AUTH_PASSWORD=your-secure-password
 OPENAI_API_KEY=sk-proj-... (required for transcription and TTS)
 ```
 
-**Note**: The backend automatically installs ffmpeg via `nixpacks.toml` for audio processing. This is required for podcast transcription and article TTS to work correctly.
+**Note**: The backend automatically installs ffmpeg via `Dockerfile` for audio processing. This is required for podcast transcription and article TTS to work correctly. Railway will automatically detect and use the Dockerfile.
 
 ### Frontend Variables
 ```
@@ -145,9 +145,11 @@ This means the backend can't find the PostgreSQL service. Fix it:
 
 ### "Cannot find ffprobe" or ffmpeg errors
 - Make sure the backend service Root Directory is set to `backend` (Settings → Root Directory)
-- The `nixpacks.toml` file in the backend directory automatically installs ffmpeg
-- If Railway skipped the nixpacks.toml, redeploy the backend service after confirming Root Directory is `backend`
-- Check the build logs - you should see ffmpeg being installed during the build phase
+- The `Dockerfile` in the backend directory automatically installs ffmpeg during build
+- Railway should automatically detect and use the Dockerfile
+- Redeploy the backend service to trigger a fresh build with ffmpeg installed
+- Check the build logs - you should see "Installing ffmpeg" during the Docker build phase
+- If Railway is not using the Dockerfile, ensure it's committed to git and pushed
 
 ## Using Railway CLI (Advanced)
 
