@@ -1,5 +1,22 @@
 -- Readcast Database Schema
 
+-- Podcasts (shows/feeds) - Must be created first as content_items references it
+CREATE TABLE IF NOT EXISTS podcasts (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    author VARCHAR(255),
+    description TEXT,
+    feed_url TEXT NOT NULL UNIQUE,
+    website_url TEXT,
+    thumbnail_url TEXT,
+    category VARCHAR(100),
+    language VARCHAR(10),
+    is_subscribed BOOLEAN DEFAULT TRUE,
+    last_fetched_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Content types enum (articles, podcasts, PDFs, etc.)
 CREATE TABLE IF NOT EXISTS content_items (
     id SERIAL PRIMARY KEY,
@@ -31,23 +48,6 @@ CREATE TABLE IF NOT EXISTS content_items (
     playback_speed DECIMAL(3,2) DEFAULT 1.00,
     last_played_at TIMESTAMP,
 
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Podcasts (shows/feeds)
-CREATE TABLE IF NOT EXISTS podcasts (
-    id SERIAL PRIMARY KEY,
-    title VARCHAR(500) NOT NULL,
-    author VARCHAR(255),
-    description TEXT,
-    feed_url TEXT NOT NULL UNIQUE,
-    website_url TEXT,
-    thumbnail_url TEXT,
-    category VARCHAR(100),
-    language VARCHAR(10),
-    is_subscribed BOOLEAN DEFAULT TRUE,
-    last_fetched_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
