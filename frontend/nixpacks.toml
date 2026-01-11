@@ -9,4 +9,4 @@ cmds = ["npm install"]
 cmds = ["npm run build"]
 
 [start]
-cmd = "npx serve -s dist -l 3000"
+cmd = "npx serve -s dist -l ${PORT:-3000}"
