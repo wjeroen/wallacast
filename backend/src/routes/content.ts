@@ -195,9 +195,12 @@ router.post('/:id/generate-audio', async (req, res) => {
     }
 
     // Use new OpenAI TTS with content extraction
-    const audioUrl = await generateAudioForContent(parseInt(id));
+    const result = await generateAudioForContent(parseInt(id));
 
-    res.json({ audio_url: audioUrl });
+    res.json({
+      audio_url: result.audioUrl,
+      warning: result.warning
+    });
   } catch (error) {
     console.error('Error generating TTS:', error);
     res.status(500).json({ error: 'Failed to generate audio' });
