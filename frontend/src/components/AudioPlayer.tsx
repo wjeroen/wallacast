@@ -212,6 +212,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   const handleTranscriptClick = (wordIndex: number) => {
+    if (!content) return;
+
     // Use the same cleaned text that's displayed to ensure word indices match
     const displayedText = cleanHtml(transcript || content.content || '');
     const words = displayedText.split(/\s+/);
