@@ -143,6 +143,7 @@ export async function generateArticleAudio(
   options: {
     voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral';
     instructions?: string;
+    contentId?: number;
   } = {}
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
   try {
