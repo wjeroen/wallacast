@@ -36,50 +36,9 @@ export async function extractArticleContent(htmlContent: string): Promise<string
       return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    // Pre-clean HTML using jsdom to remove navigation, headers, etc.
-    let cleanedHtml = htmlContent;
-    try {
-      const { JSDOM } = await import('jsdom');
-      const dom = new JSDOM(htmlContent);
-      const doc = dom.window.document;
-
-      // Remove unwanted elements
-      const unwantedSelectors = [
-        'nav', 'header', 'footer',
-        '[class*="nav"]', '[class*="Nav"]', '[class*="menu"]', '[class*="Menu"]',
-        '[class*="sidebar"]', '[class*="Sidebar"]',
-        '[class*="header"]', '[class*="Header"]',
-        '[class*="footer"]', '[class*="Footer"]',
-        'script', 'style', 'noscript',
-        '[class*="popup"]', '[class*="modal"]', '[class*="Modal"]',
-        '[class*="cookie"]', '[class*="Cookie"]',
-        'button:not([class*="comment"])', // Keep comment buttons but remove others
-        '[aria-label*="Share"]', '[aria-label*="Tweet"]',
-        '[class*="advertisement"]', '[class*="ad-"]',
-        '.js-required-message', // EA Forum's "requires javascript" message
-      ];
-
-      unwantedSelectors.forEach(selector => {
-        doc.querySelectorAll(selector).forEach(el => el.remove());
-      });
-
-      // Try to find main content container
-      const mainContent = doc.querySelector('.PostsPage-postContent') ||
-                         doc.querySelector('[class*="PostsPage"]') ||
-                         doc.querySelector('article') ||
-                         doc.querySelector('main') ||
-                         doc.body;
-
-      if (mainContent) {
-        cleanedHtml = mainContent.innerHTML || htmlContent;
-      }
-    } catch (e) {
-      console.warn('Failed to pre-clean HTML with jsdom:', e);
-    }
-
     // Use GPT-4o-mini to extract and format article content for audio reading
     // Increase limit to 100k characters to avoid cutting off comments
-    const htmlToSend = cleanedHtml.slice(0, 100000);
+    const htmlToSend = htmlContent.slice(0, 100000);
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -90,28 +49,24 @@ export async function extractArticleContent(htmlContent: string): Promise<string
 
 Extract and format content following these rules:
 
-**CRITICAL - What to REMOVE:**
-- NEVER include: "Login", "Sign up", "Hide table of contents", "This website requires javascript"
-- NEVER include navigation text, menus, or UI elements
-- NEVER include "Share", "Tweet", "Like", "Subscribe", "Copy link" button text
-- NEVER include "Click to highlight new comments" or similar UI instructions
-- NEVER include "Sorted by", "New & upvoted" or other sorting controls
-- NEVER include "Mentioned in X posts" or similar metadata boxes
-- NEVER include "Reactions", "Frontpage" tags or category badges
-- NEVER include actual URL strings from href/src attributes
+**CRITICAL - URL Handling:**
+- NEVER extract or include actual URL strings from href/src attributes
 - If you see <a href="https://example.com">click here</a>, only output "click here"
-- Keep the word "link" when used naturally in text
+- NEVER output the URL itself like "https://example.com"
+- Keep link anchor text, but completely ignore href/src URLs
+- Keep the word "link" when used naturally in text (e.g., "see the link above")
 
 **Content Structure:**
-1. Start with ONLY the main article body text
+1. Extract the main article text, removing navigation, ads, footers, headers
 2. KEEP comment sections - they are VERY IMPORTANT
 3. Format lists and structure naturally for speaking
 4. Replace special characters (&#x27; → apostrophe, &quot; → quote, etc.)
-5. Remove newsletter signup prompts and ads
+5. Remove "Share", "Tweet", "Like", "Subscribe" button text
+6. Remove newsletter signup prompts
 
 **Visual Elements:**
 - For images: say "There is an image showing [alt text or caption]"
-- For tables: format as natural speech
+- For tables: format as natural speech like "The table shows X rows with columns A, B, C"
 - For embedded videos: say "There is a video titled [title]" (ignore the URL)
 
 **EA Forum Posts (most common):**
@@ -123,22 +78,19 @@ Extract and format content following these rules:
 - EA Forum format: "Username Date Karma Agree Disagree"
 - Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
 - Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
-- Include ALL comments - do NOT stop early, even if there are many
+- Include ALL comments, even nested replies
 - After the main article, add clear section break: "Comments section:"
-- Process all comments in the HTML, not just the first few
 
 **Non-EA Forum Sources:**
 - For other websites, extract similarly but focus on author, date, main text
 - Keep any engagement metrics if visible (likes, shares, etc.)
 - Format naturally without forcing EA Forum structure
 
-IMPORTANT: Extract ALL content including ALL comments. Do not stop in the middle.
-
 Return: Article body → "Comments section:" → All comments formatted for natural speech.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content and comments from this HTML for audio reading. CRITICAL: Remove ALL UI elements like "Login", "Sign up", "Hide table of contents", navigation, buttons. Keep ONLY the article body and comments:\n\n${htmlToSend}`,
+          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlToSend}`,
         },
       ],
       temperature: 0.3,
