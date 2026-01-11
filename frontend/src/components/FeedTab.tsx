@@ -195,6 +195,14 @@ export function FeedTab() {
 
       <div className="episodes-list">
         <h3>{selectedPodcast ? 'Episodes' : 'Latest Episodes'}</h3>
+        {selectedPodcast && podcasts.find(p => p.id === selectedPodcast) && (
+          <div className="podcast-details">
+            <h4>{podcasts.find(p => p.id === selectedPodcast)?.title}</h4>
+            {podcasts.find(p => p.id === selectedPodcast)?.description && (
+              <p className="podcast-description">{podcasts.find(p => p.id === selectedPodcast)?.description}</p>
+            )}
+          </div>
+        )}
         {episodes.map((episode, index) => (
           <div key={episode.audio_url || index} className="episode-card">
             {episode.thumbnail_url && (
