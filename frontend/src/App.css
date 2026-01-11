@@ -146,6 +146,7 @@
 .podcast-list,
 .episodes-list,
 .search-results {
+  width: 100%;
   margin-bottom: 2rem;
 }
 
@@ -365,6 +366,7 @@
 }
 
 .library-header {
+  width: 100%;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -404,12 +406,14 @@
 
 .loading,
 .empty-state {
+  width: 100%;
   text-align: center;
   padding: 3rem;
   color: #94a3b8;
 }
 
 .content-list {
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
