@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateTTS } from '../services/tts.js';
+import { generateAudioForContent } from '../services/openai-tts.js';
 
 const router = express.Router();
 
@@ -193,12 +194,8 @@ router.post('/:id/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
     }
 
-    const audioUrl = await generateTTS(contentItem.content);
-
-    await query(
-      'UPDATE content_items SET audio_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [audioUrl, id]
-    );
+    // Use new OpenAI TTS with content extraction
+    const audioUrl = await generateAudioForContent(parseInt(id));
 
     res.json({ audio_url: audioUrl });
   } catch (error) {

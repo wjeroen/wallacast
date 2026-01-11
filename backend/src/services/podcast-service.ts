@@ -191,8 +191,8 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       if (!title || !audioUrl) continue;
 
       episodes.push({
-        title,
-        description,
+        title: cleanHtmlEntities(title),
+        description: cleanDescription(description),
         audio_url: audioUrl,
         published_at: pubDate ? new Date(pubDate) : new Date(),
         duration: parseDuration(duration),
@@ -233,4 +233,32 @@ function parseDuration(duration: string): number | null {
   }
 
   return null;
+}
+
+function cleanDescription(description: string): string {
+  if (!description) return '';
+
+  // Remove CDATA wrapper
+  let cleaned = description.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+
+  // Remove HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+
+  // Decode common HTML entities
+  cleaned = cleanHtmlEntities(cleaned);
+
+  // Clean up whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+  return cleaned;
+}
+
+function cleanHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
 }
