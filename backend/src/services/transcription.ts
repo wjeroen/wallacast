@@ -42,6 +42,62 @@ async function compressAudio(inputPath: string, outputPath: string): Promise<voi
   });
 }
 
+// Get audio duration in seconds
+async function getAudioDuration(filePath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(metadata.format.duration || 0);
+      }
+    });
+  });
+}
+
+// Split audio file into chunks of specified duration
+async function splitAudioIntoChunks(
+  inputPath: string,
+  chunkDurationMinutes: number
+): Promise<string[]> {
+  const duration = await getAudioDuration(inputPath);
+  const chunkDurationSeconds = chunkDurationMinutes * 60;
+  const numChunks = Math.ceil(duration / chunkDurationSeconds);
+
+  console.log(`Audio duration: ${(duration / 60).toFixed(1)} minutes, splitting into ${numChunks} chunks`);
+
+  const chunkFiles: string[] = [];
+  const tempDir = path.dirname(inputPath);
+
+  for (let i = 0; i < numChunks; i++) {
+    const startTime = i * chunkDurationSeconds;
+    const chunkPath = inputPath.replace('.mp3', `_chunk_${i}.mp3`);
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(inputPath)
+        .setStartTime(startTime)
+        .setDuration(chunkDurationSeconds)
+        .audioChannels(1) // Compress while splitting
+        .audioBitrate('64k')
+        .audioFrequency(16000)
+        .format('mp3')
+        .on('end', () => {
+          console.log(`Chunk ${i + 1}/${numChunks} created`);
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error(`Error creating chunk ${i}:`, err);
+          reject(err);
+        })
+        .save(chunkPath);
+    });
+
+    chunkFiles.push(chunkPath);
+  }
+
+  return chunkFiles;
+}
+
 export async function transcribeAudio(audioUrl: string): Promise<string> {
   try {
     const openai = await getOpenAIClient();
@@ -75,46 +131,68 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
     const fileSizeMB = fileStats.size / (1024 * 1024);
     console.log('Audio downloaded, file size:', fileSizeMB.toFixed(2), 'MB');
 
-    let fileToTranscribe = audioPath;
-    let compressedPath: string | null = null;
+    let transcriptText = '';
+    const tempFiles: string[] = [audioPath];
 
-    // OpenAI Whisper API has a 25 MB file size limit - compress if needed
+    // OpenAI Whisper API has a 25 MB file size limit
     if (fileSizeMB > 25) {
-      console.log(`File exceeds 25 MB limit, compressing audio...`);
-      compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
-      await compressAudio(audioPath, compressedPath);
+      console.log(`File exceeds 25 MB limit, splitting into chunks...`);
 
-      const compressedStats = await fs.stat(compressedPath);
-      const compressedSizeMB = compressedStats.size / (1024 * 1024);
-      console.log('Compressed file size:', compressedSizeMB.toFixed(2), 'MB');
+      // Split into 15-minute chunks (should be well under 25 MB after compression)
+      const chunkFiles = await splitAudioIntoChunks(audioPath, 15);
+      tempFiles.push(...chunkFiles);
 
-      if (compressedSizeMB > 25) {
-        // Still too large even after compression - this is a very long episode
-        await fs.unlink(audioPath).catch(console.error);
-        await fs.unlink(compressedPath).catch(console.error);
-        throw new Error(`Audio file is too large even after compression (${compressedSizeMB.toFixed(1)} MB). This episode is too long to transcribe.`);
+      // Transcribe each chunk with context from previous chunk
+      let previousTranscript = '';
+      for (let i = 0; i < chunkFiles.length; i++) {
+        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
+
+        const chunkStats = await fs.stat(chunkFiles[i]);
+        const chunkSizeMB = chunkStats.size / (1024 * 1024);
+        console.log(`Chunk ${i + 1} size: ${chunkSizeMB.toFixed(2)} MB`);
+
+        // Use previous transcript as context for continuity
+        const transcription = await openai.audio.transcriptions.create({
+          file: createReadStream(chunkFiles[i]),
+          model: 'gpt-4o-mini-transcribe',
+          prompt: previousTranscript.slice(-224), // Last 224 chars for context (Whisper limit)
+        });
+
+        transcriptText += (i > 0 ? ' ' : '') + transcription.text;
+        previousTranscript = transcription.text;
       }
 
-      fileToTranscribe = compressedPath;
+      console.log(`Transcription complete: ${chunkFiles.length} chunks, ${transcriptText.length} chars`);
+    } else {
+      // File is small enough - transcribe directly (with compression if needed)
+      let fileToTranscribe = audioPath;
+
+      if (fileSizeMB > 20) {
+        // Close to limit, compress just in case
+        console.log('File close to 25 MB limit, compressing as precaution...');
+        const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
+        await compressAudio(audioPath, compressedPath);
+        fileToTranscribe = compressedPath;
+        tempFiles.push(compressedPath);
+      }
+
+      console.log('Transcribing audio...');
+      const transcription = await openai.audio.transcriptions.create({
+        file: createReadStream(fileToTranscribe),
+        model: 'gpt-4o-mini-transcribe',
+        response_format: 'verbose_json',
+        timestamp_granularities: ['word'],
+      });
+
+      transcriptText = transcription.text;
     }
 
-    console.log('Transcribing audio...');
-
-    // Transcribe using OpenAI Whisper
-    const transcription = await openai.audio.transcriptions.create({
-      file: createReadStream(fileToTranscribe),
-      model: 'gpt-4o-mini-transcribe',
-      response_format: 'verbose_json',
-      timestamp_granularities: ['word'],
-    });
-
-    // Clean up temp files
-    await fs.unlink(audioPath).catch(console.error);
-    if (compressedPath) {
-      await fs.unlink(compressedPath).catch(console.error);
+    // Clean up all temp files
+    for (const tempFile of tempFiles) {
+      await fs.unlink(tempFile).catch(console.error);
     }
 
-    return transcription.text;
+    return transcriptText;
   } catch (error) {
     console.error('Error transcribing audio:', error);
     throw new Error('Failed to transcribe audio');
@@ -152,44 +230,78 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
 
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
+    const tempFiles: string[] = [audioPath];
 
-    let fileToTranscribe = audioPath;
-    let compressedPath: string | null = null;
+    let transcriptText = '';
+    let allWords: any[] = [];
 
-    // Compress if file exceeds 25 MB limit
+    // Handle large files with splitting
     if (fileSizeMB > 25) {
-      console.log(`File exceeds 25 MB limit (${fileSizeMB.toFixed(2)} MB), compressing...`);
-      compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
-      await compressAudio(audioPath, compressedPath);
+      console.log(`File exceeds 25 MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
 
-      const compressedStats = await fs.stat(compressedPath);
-      const compressedSizeMB = compressedStats.size / (1024 * 1024);
-      console.log('Compressed file size:', compressedSizeMB.toFixed(2), 'MB');
+      const chunkFiles = await splitAudioIntoChunks(audioPath, 15);
+      tempFiles.push(...chunkFiles);
 
-      if (compressedSizeMB > 25) {
-        await fs.unlink(audioPath).catch(console.error);
-        await fs.unlink(compressedPath).catch(console.error);
-        throw new Error(`Audio file is too large even after compression (${compressedSizeMB.toFixed(1)} MB).`);
+      let previousTranscript = '';
+      let timeOffset = 0;
+
+      for (let i = 0; i < chunkFiles.length; i++) {
+        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
+
+        const transcription = await openai.audio.transcriptions.create({
+          file: createReadStream(chunkFiles[i]),
+          model: 'gpt-4o-mini-transcribe',
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: previousTranscript.slice(-224),
+        });
+
+        transcriptText += (i > 0 ? ' ' : '') + transcription.text;
+        previousTranscript = transcription.text;
+
+        // Adjust word timestamps to account for chunk offset
+        const chunkWords = (transcription as any).words || [];
+        const adjustedWords = chunkWords.map((word: any) => ({
+          ...word,
+          start: word.start + timeOffset,
+          end: word.end + timeOffset,
+        }));
+        allWords.push(...adjustedWords);
+
+        // Update time offset for next chunk (15 minutes = 900 seconds)
+        timeOffset += 900;
+      }
+    } else {
+      // File is small enough - transcribe directly (with compression if needed)
+      let fileToTranscribe = audioPath;
+
+      if (fileSizeMB > 20) {
+        console.log('File close to 25 MB limit, compressing as precaution...');
+        const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
+        await compressAudio(audioPath, compressedPath);
+        fileToTranscribe = compressedPath;
+        tempFiles.push(compressedPath);
       }
 
-      fileToTranscribe = compressedPath;
+      const transcription = await openai.audio.transcriptions.create({
+        file: createReadStream(fileToTranscribe),
+        model: 'gpt-4o-mini-transcribe',
+        response_format: 'verbose_json',
+        timestamp_granularities: ['word'],
+      });
+
+      transcriptText = transcription.text;
+      allWords = (transcription as any).words || [];
     }
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: createReadStream(fileToTranscribe),
-      model: 'gpt-4o-mini-transcribe',
-      response_format: 'verbose_json',
-      timestamp_granularities: ['word'],
-    });
-
-    await fs.unlink(audioPath).catch(console.error);
-    if (compressedPath) {
-      await fs.unlink(compressedPath).catch(console.error);
+    // Clean up all temp files
+    for (const tempFile of tempFiles) {
+      await fs.unlink(tempFile).catch(console.error);
     }
 
     return {
-      text: transcription.text,
-      words: (transcription as any).words || [],
+      text: transcriptText,
+      words: allWords,
     };
   } catch (error) {
     console.error('Error transcribing with timestamps:', error);
