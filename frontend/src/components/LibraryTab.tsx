@@ -173,7 +173,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
 
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     try {
-      const response = await contentAPI.generateAudio(id, regenerate);
+      await contentAPI.generateAudio(id, regenerate);
       // Generation started in background, polling will update status
       loadContent();
     } catch (error: any) {
