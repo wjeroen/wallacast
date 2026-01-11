@@ -45,6 +45,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [transcript, setTranscript] = useState<string>('');
+  const [transcriptWords, setTranscriptWords] = useState<Array<{ word: string; start: number; end: number }> | null>(null);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
   const [transcriptError, setTranscriptError] = useState<string>('');
@@ -124,6 +125,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     try {
       const response = await transcriptionAPI.transcribe(content.id);
       setTranscript(response.data.transcript);
+      setTranscriptWords(response.data.words || null);
     } catch (error: any) {
       console.error('Failed to load transcript:', error);
       const errorMsg = error?.response?.data?.details || error?.response?.data?.error || 'Failed to generate transcript. Please check your API key.';
@@ -214,11 +216,41 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
-    // Use the same cleaned text that's displayed to ensure word indices match
+    // Method 1: Use word-level timestamps from Whisper (most accurate)
+    if (transcriptWords && transcriptWords.length > 0 && wordIndex < transcriptWords.length) {
+      const timestamp = transcriptWords[wordIndex].start;
+      console.log('Using word timestamp:', { wordIndex, timestamp });
+      handleSeek(timestamp);
+      return;
+    }
+
+    // Method 2: Use TTS chunk metadata for articles (accurate per-chunk)
+    if (content.tts_chunks) {
+      try {
+        const chunks = JSON.parse(content.tts_chunks as any);
+        // Find which chunk contains this word
+        for (const chunk of chunks) {
+          if (wordIndex >= chunk.startWord && wordIndex <= chunk.endWord) {
+            // Interpolate within this chunk
+            const wordPosInChunk = wordIndex - chunk.startWord;
+            const wordsInChunk = chunk.endWord - chunk.startWord + 1;
+            const positionInChunk = (wordPosInChunk / wordsInChunk) * chunk.duration;
+            const timestamp = chunk.startTime + positionInChunk;
+            console.log('Using TTS chunk interpolation:', { wordIndex, chunk: chunks.indexOf(chunk), timestamp });
+            handleSeek(timestamp);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('Failed to parse TTS chunks:', error);
+      }
+    }
+
+    // Method 3: Fall back to linear interpolation (least accurate)
     const displayedText = cleanHtml(transcript || content.content || '');
     const words = displayedText.split(/\s+/);
     const estimatedPosition = (wordIndex / words.length) * duration;
-    console.log('Transcript click:', { wordIndex, totalWords: words.length, duration, estimatedPosition });
+    console.log('Using linear interpolation:', { wordIndex, totalWords: words.length, duration, estimatedPosition });
     handleSeek(estimatedPosition);
   };
 

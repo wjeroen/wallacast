@@ -61,5 +61,5 @@ export const queueAPI = {
 
 export const transcriptionAPI = {
   transcribe: (contentId: number) =>
-    api.post<{ transcript: string }>(`/transcription/content/${contentId}`),
+    api.post<{ transcript: string; words?: Array<{ word: string; start: number; end: number }> }>(`/transcription/content/${contentId}`),
 };

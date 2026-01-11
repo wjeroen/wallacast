@@ -44,9 +44,16 @@ export const pool = new Pool(getDatabaseConfig());
 
 export async function initializeDatabase() {
   try {
+    // Run main schema
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = await fs.readFile(schemaPath, 'utf-8');
     await pool.query(schema);
+
+    // Run migration for word timestamps
+    const migrationPath = path.join(__dirname, 'add_word_timestamps.sql');
+    const migration = await fs.readFile(migrationPath, 'utf-8');
+    await pool.query(migration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);

@@ -10,6 +10,8 @@ export interface ContentItem {
   thumbnail_url?: string;
   audio_url?: string;
   transcript?: string;
+  transcript_words?: string; // JSON string of word timestamps
+  tts_chunks?: string; // JSON string of TTS chunk metadata
   duration?: number;
   file_size?: number;
   podcast_id?: number;
