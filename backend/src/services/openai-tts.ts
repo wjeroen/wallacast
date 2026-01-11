@@ -36,17 +36,29 @@ export async function extractArticleContent(htmlContent: string): Promise<string
       return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    // Use GPT-4o-mini to extract clean article content
+    // Use GPT-4o-mini to extract and format article content for audio reading
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: 'You are a content extraction assistant. Extract only the main article text from HTML content, removing navigation, ads, footers, headers, and other non-content elements. Return only the clean article text.',
+          content: `You are a content extraction assistant that formats web content for text-to-speech reading.
+
+Extract and format content following these rules:
+1. Extract only the main article text, removing navigation, ads, footers, headers
+2. REMOVE all URLs and hyperlinks - don't say "link" or read out URLs
+3. Keep the article body clean and readable
+4. SKIP comment sections entirely - do not include any comments
+5. Format lists and structure naturally for speaking
+6. Replace special characters and symbols with spoken equivalents
+7. Remove any "Share", "Tweet", "Like" buttons or social media text
+8. Remove newsletter signup prompts and calls to action
+
+Return only the clean, speakable article text without any metadata.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content from this HTML:\n\n${htmlContent.slice(0, 50000)}`,
+          content: `Extract the main article content from this HTML for audio reading:\n\n${htmlContent.slice(0, 50000)}`,
         },
       ],
       temperature: 0.3,
@@ -309,12 +321,26 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    const originalLength = textToConvert.length;
+    // Add intro with title and author
+    let intro = '';
+    if (content.title) {
+      intro = `This article is titled: ${content.title}.`;
+
+      if (content.author) {
+        intro += ` Written by ${content.author}.`;
+      }
+
+      intro += '\n\n';
+    }
+
+    // Prepend intro to content
+    const fullText = intro + textToConvert;
+    const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
-    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(textToConvert, {
+    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
       instructions:
-        'Read this article clearly and naturally, focusing only on the main article text. Use appropriate pacing and emphasis.',
+        'You are reading an article aloud. Start with the title and author introduction if present, then read the article body clearly and naturally. Do not read out URLs or say the word "link". Use appropriate pacing and natural emphasis for readability.',
       contentId: contentId, // Pass contentId for progress tracking
     });
 
