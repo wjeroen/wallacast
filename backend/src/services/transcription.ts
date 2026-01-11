@@ -4,26 +4,41 @@ import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { query } from '../database/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Lazy initialization - only create OpenAI client when needed
-function getOpenAIClient(): OpenAI | null {
-  if (!process.env.OPENAI_API_KEY) {
-    return null;
+async function getOpenAIClient(): Promise<OpenAI | null> {
+  // First try environment variable
+  if (process.env.OPENAI_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
   }
-  return new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+
+  // Then try settings table
+  try {
+    const result = await query('SELECT value FROM settings WHERE key = $1', ['OPENAI_API_KEY']);
+    if (result.rows.length > 0 && result.rows[0].value) {
+      return new OpenAI({
+        apiKey: result.rows[0].value,
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching API key from settings:', error);
+  }
+
+  return null;
 }
 
 export async function transcribeAudio(audioUrl: string): Promise<string> {
   try {
-    const openai = getOpenAIClient();
+    const openai = await getOpenAIClient();
     if (!openai) {
       console.warn('OpenAI API key not set, returning dummy transcript');
-      return 'Transcript not available. Please set OPENAI_API_KEY environment variable.';
+      return 'Transcript not available. Please set your OpenAI API key in Settings.';
     }
 
     // Download audio file
@@ -43,7 +58,7 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
     // Transcribe using OpenAI Whisper
     const transcription = await openai.audio.transcriptions.create({
       file: createReadStream(audioPath),
-      model: 'whisper-1',
+      model: 'gpt-4o-mini-transcribe',
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],
     });
@@ -63,9 +78,9 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
   words: Array<{ word: string; start: number; end: number }>;
 }> {
   try {
-    const openai = getOpenAIClient();
+    const openai = await getOpenAIClient();
     if (!openai) {
-      throw new Error('OpenAI API key not set');
+      throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
     }
 
     const tempDir = path.join(process.cwd(), 'temp');
@@ -80,7 +95,7 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
 
     const transcription = await openai.audio.transcriptions.create({
       file: createReadStream(audioPath),
-      model: 'whisper-1',
+      model: 'gpt-4o-mini-transcribe',
       response_format: 'verbose_json',
       timestamp_granularities: ['word'],
     });

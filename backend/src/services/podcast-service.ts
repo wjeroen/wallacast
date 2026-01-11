@@ -79,9 +79,6 @@ export async function subscribeToPodcast(feedUrl: string) {
 
     const podcast = result.rows[0];
 
-    // Fetch initial episodes
-    await fetchPodcastEpisodes(feedUrl, podcast.id);
-
     return podcast;
   } catch (error) {
     console.error('Error subscribing to podcast:', error);
@@ -173,6 +170,42 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number): 
   }
 }
 
+export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
+  try {
+    const response = await fetch(feedUrl);
+    const xml = await response.text();
+
+    // Extract episodes from RSS feed
+    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+
+    const episodes = [];
+
+    for (const itemXml of itemMatches.slice(0, 20)) {
+      // Limit to 20 most recent
+      const title = extractXMLTag(itemXml, 'title');
+      const description = extractXMLTag(itemXml, 'description');
+      const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+      const pubDate = extractXMLTag(itemXml, 'pubDate');
+      const duration = extractXMLTag(itemXml, 'itunes:duration');
+
+      if (!title || !audioUrl) continue;
+
+      episodes.push({
+        title: cleanHtmlEntities(title),
+        description: cleanDescription(description),
+        audio_url: audioUrl,
+        published_at: pubDate ? new Date(pubDate) : new Date(),
+        duration: parseDuration(duration),
+      });
+    }
+
+    return episodes;
+  } catch (error) {
+    console.error('Error fetching preview episodes:', error);
+    throw error;
+  }
+}
+
 function extractXMLTag(xml: string, tag: string): string {
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = xml.match(regex);
@@ -200,4 +233,32 @@ function parseDuration(duration: string): number | null {
   }
 
   return null;
+}
+
+function cleanDescription(description: string): string {
+  if (!description) return '';
+
+  // Remove CDATA wrapper
+  let cleaned = description.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+
+  // Remove HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+
+  // Decode common HTML entities
+  cleaned = cleanHtmlEntities(cleaned);
+
+  // Clean up whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+  return cleaned;
+}
+
+function cleanHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
 }
