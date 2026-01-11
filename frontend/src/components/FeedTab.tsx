@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, RefreshCw, Plus } from 'lucide-react';
+import { Search, RefreshCw, Plus, X } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast } from '../types';
 
@@ -85,6 +85,23 @@ export function FeedTab() {
       loadLatestEpisodes();
     } catch (error) {
       console.error('Failed to refresh:', error);
+    }
+  };
+
+  const handleUnsubscribe = async (podcastId: number) => {
+    if (!confirm('Are you sure you want to unsubscribe from this podcast?')) {
+      return;
+    }
+
+    try {
+      await podcastAPI.unsubscribe(podcastId);
+      loadPodcasts();
+      if (selectedPodcast === podcastId) {
+        setSelectedPodcast(null);
+        loadLatestEpisodes();
+      }
+    } catch (error) {
+      console.error('Failed to unsubscribe:', error);
     }
   };
 
@@ -180,14 +197,27 @@ export function FeedTab() {
                 <h4>{podcast.title}</h4>
                 <p className="author">{podcast.author}</p>
               </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRefresh(podcast.id);
-                }}
-              >
-                <RefreshCw size={16} />
-              </button>
+              <div className="podcast-actions">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRefresh(podcast.id);
+                  }}
+                  title="Refresh episodes"
+                >
+                  <RefreshCw size={16} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleUnsubscribe(podcast.id);
+                  }}
+                  className="unsubscribe-btn"
+                  title="Unsubscribe"
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </div>
           ))}
         </div>

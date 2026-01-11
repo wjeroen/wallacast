@@ -25,8 +25,20 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // Extract title
-    const title = doc.querySelector('title')?.textContent?.replace(/ — EA Forum$/, '').trim() || 'Untitled';
+    // Extract title - try multiple sources
+    let title = 'Untitled';
+
+    // First try og:title meta tag (most reliable)
+    const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
+    if (ogTitle) {
+      title = ogTitle.replace(/ — EA Forum$/, '').trim();
+    } else {
+      // Fallback to <title> tag
+      const titleTag = doc.querySelector('title')?.textContent;
+      if (titleTag) {
+        title = titleTag.replace(/ — EA Forum$/, '').trim();
+      }
+    }
 
     // Try to extract EA Forum metadata using DOM selectors
     let karma: number | undefined;
@@ -67,34 +79,66 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       commentsHtml = commentsSection.outerHTML;
     }
 
-    // Try to extract author from EA Forum metadata
+    // Try to extract author from multiple sources
     let author: string | undefined;
-    const authorElement = doc.querySelector('.PostsAuthors-author');
-    if (authorElement) {
-      author = authorElement.textContent?.trim();
+
+    // Try og:author meta tag first
+    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
+                    doc.querySelector('meta[name="author"]')?.getAttribute('content');
+    if (ogAuthor) {
+      author = ogAuthor.trim();
+    } else {
+      // Fallback to class selector
+      const authorElement = doc.querySelector('.PostsAuthors-author');
+      if (authorElement) {
+        author = authorElement.textContent?.trim();
+      }
     }
 
     // Try to extract published date
     let publishedDate: string | undefined;
-    const dateElement = doc.querySelector('[class*="PostsItemDate"]');
-    if (dateElement) {
-      const dateText = dateElement.textContent?.trim();
-      if (dateText) {
-        try {
-          const date = new Date(dateText);
-          if (!isNaN(date.getTime())) {
-            publishedDate = date.toISOString();
+
+    // Try og:published_time or article:published_time meta tags
+    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') ||
+                       doc.querySelector('meta[property="og:published_time"]')?.getAttribute('content');
+    if (ogPublished) {
+      publishedDate = ogPublished;
+    } else {
+      // Fallback to date element
+      const dateElement = doc.querySelector('[class*="PostsItemDate"]');
+      if (dateElement) {
+        const dateText = dateElement.textContent?.trim();
+        if (dateText) {
+          try {
+            const date = new Date(dateText);
+            if (!isNaN(date.getTime())) {
+              publishedDate = date.toISOString();
+            }
+          } catch (e) {
+            console.warn('Failed to parse date:', dateText);
           }
-        } catch (e) {
-          console.warn('Failed to parse date:', dateText);
         }
       }
     }
 
+    // Extract main content only - try to find the main article container
+    let cleanedHtml = html;
+    const mainContent = doc.querySelector('.PostsPage-postContent') ||
+                       doc.querySelector('[class*="PostsPage-post"]') ||
+                       doc.querySelector('article') ||
+                       doc.querySelector('main');
+
+    if (mainContent) {
+      cleanedHtml = mainContent.outerHTML;
+      console.log('Found main content container, using cleaned HTML');
+    } else {
+      console.log('Could not find main content container, using full HTML');
+    }
+
     return {
       title,
-      content: extractTextFromHTML(html),
-      html: html,
+      content: extractTextFromHTML(cleanedHtml),
+      html: html, // Keep full HTML for GPT extraction
       author: author,
       byline: author,
       published_date: publishedDate,

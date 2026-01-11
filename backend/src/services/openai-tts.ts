@@ -37,6 +37,9 @@ export async function extractArticleContent(htmlContent: string): Promise<string
     }
 
     // Use GPT-4o-mini to extract and format article content for audio reading
+    // Increase limit to 100k characters to avoid cutting off comments
+    const htmlToSend = htmlContent.slice(0, 100000);
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -87,10 +90,11 @@ Return: Article body → "Comments section:" → All comments formatted for natu
         },
         {
           role: 'user',
-          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlContent.slice(0, 50000)}`,
+          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlToSend}`,
         },
       ],
       temperature: 0.3,
+      max_tokens: 16000, // Increase token limit to avoid cutoff
     });
 
     const cleanContent = response.choices[0]?.message?.content || '';
