@@ -52,14 +52,28 @@ app.use('/api/transcription', transcriptionRouter);
 
 // Initialize database and start server
 async function start() {
-  try {
-    await initializeDatabase();
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Readcast API server running on http://0.0.0.0:${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+  // Start HTTP server FIRST so Railway sees it as healthy
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Readcast API server running on http://0.0.0.0:${PORT}`);
+  });
+
+  // Then initialize database with retries
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await initializeDatabase();
+      console.log('✅ Database connection established');
+      break;
+    } catch (error) {
+      retries--;
+      console.error(`Database connection failed (${5 - retries}/5), retrying in 2s...`, error);
+      if (retries === 0) {
+        console.error('Failed to connect to database after 5 attempts');
+        // Don't exit - server stays running for health checks
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
   }
 }
 
