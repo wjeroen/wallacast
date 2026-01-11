@@ -8,6 +8,7 @@ export interface ArticleContent {
   excerpt?: string;
   byline?: string;
   site_name?: string;
+  published_date?: string;
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -21,7 +22,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Basic extraction - in production, use proper parsing library
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const title = titleMatch ? titleMatch[1] : 'Untitled';
+    const title = titleMatch ? titleMatch[1].replace(/ — EA Forum$/, '').trim() : 'Untitled';
+
+    // Try to extract author from EA Forum format: "by [Author]"
+    const authorMatch = html.match(/by\s+([A-Za-z0-9_\-\s]+?)(?:\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)|\s+\d{4}|<)/);
+    const author = authorMatch ? authorMatch[1].trim() : undefined;
+
+    // Try to extract date from EA Forum format: "Oct 5 2025" or similar
+    const dateMatch = html.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{4}/);
+    let publishedDate: string | undefined;
+    if (dateMatch) {
+      const date = new Date(dateMatch[0]);
+      publishedDate = date.toISOString();
+    }
 
     // For a real implementation, you'd want to use:
     // - @mozilla/readability for content extraction
@@ -32,6 +45,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       title,
       content: extractTextFromHTML(html),
       html: html,
+      author: author,
+      byline: author,
+      published_date: publishedDate,
     };
   } catch (error) {
     console.error('Error fetching article:', error);
