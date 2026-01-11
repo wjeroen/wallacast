@@ -20,8 +20,12 @@ export function AddTab() {
     try {
       const data: any = {
         type: contentType,
-        title: title || 'Untitled',
       };
+
+      // Only send title if user provided one (allow backend to auto-detect)
+      if (title) {
+        data.title = title;
+      }
 
       if (contentType === 'article') {
         if (!url) {
