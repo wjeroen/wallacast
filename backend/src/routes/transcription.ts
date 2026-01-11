@@ -4,10 +4,11 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 
 const router = express.Router();
 
-// Transcribe a podcast episode
+// Transcribe a podcast episode (async)
 router.post('/content/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const { regenerate } = req.body;
 
     const contentResult = await query(
       'SELECT * FROM content_items WHERE id = $1',
@@ -24,35 +25,59 @@ router.post('/content/:id', async (req, res) => {
       return res.status(400).json({ error: 'Content has no audio URL' });
     }
 
-    if (content.transcript) {
+    // If already has transcript and not regenerating, return it
+    if (content.transcript && !regenerate) {
       return res.json({
         transcript: content.transcript,
-        words: content.transcript_words || null
+        words: content.transcript_words ? JSON.parse(content.transcript_words) : null
       });
     }
 
-    console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
-    const result = await transcribeWithTimestamps(content.audio_url);
+    // Check if already generating
+    if (!regenerate && content.generation_status === 'generating_transcript') {
+      return res.status(409).json({
+        error: 'Transcription already in progress',
+        generation_status: content.generation_status,
+        generation_progress: content.generation_progress
+      });
+    }
 
-    console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
-
+    // Set status to generating
     await query(
-      'UPDATE content_items SET transcript = $1, transcript_words = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [result.text, JSON.stringify(result.words), id]
+      'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
+      ['generating_transcript', 0, 'transcript', id]
     );
 
+    console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
+
+    // Start transcription in background (don't await)
+    transcribeWithTimestamps(content.audio_url)
+      .then(async (result) => {
+        console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
+
+        await query(
+          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
+          [result.text, JSON.stringify(result.words), 'completed', 100, id]
+        );
+      })
+      .catch(async (error) => {
+        console.error('Background transcription error:', error);
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+          ['failed', error.message || 'Failed to transcribe', 0, id]
+        );
+      });
+
+    // Return immediately with status
     res.json({
-      transcript: result.text,
-      words: result.words
+      message: 'Transcription started',
+      generation_status: 'generating_transcript',
+      generation_progress: 0
     });
   } catch (error) {
-    console.error('Error transcribing content:', error);
-    if (error instanceof Error) {
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    }
+    console.error('Error starting transcription:', error);
     res.status(500).json({
-      error: 'Failed to transcribe content',
+      error: 'Failed to start transcription',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
