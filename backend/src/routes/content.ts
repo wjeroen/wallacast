@@ -86,6 +86,7 @@ router.post('/', async (req, res) => {
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    let finalPublishedAt = published_at;
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
@@ -107,6 +108,11 @@ router.post('/', async (req, res) => {
       if (!finalDescription && articleData.excerpt) {
         finalDescription = articleData.excerpt;
       }
+
+      // Use fetched published date if available
+      if (!finalPublishedAt && articleData.published_date) {
+        finalPublishedAt = articleData.published_date;
+      }
     }
 
     const result = await query(
@@ -114,7 +120,7 @@ router.post('/', async (req, res) => {
        (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, published_at || null, duration || null]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null]
     );
 
     const createdItem = result.rows[0];
