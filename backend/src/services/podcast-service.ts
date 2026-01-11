@@ -79,9 +79,6 @@ export async function subscribeToPodcast(feedUrl: string) {
 
     const podcast = result.rows[0];
 
-    // Fetch initial episodes
-    await fetchPodcastEpisodes(feedUrl, podcast.id);
-
     return podcast;
   } catch (error) {
     console.error('Error subscribing to podcast:', error);
@@ -169,6 +166,42 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number): 
     return episodes;
   } catch (error) {
     console.error('Error fetching podcast episodes:', error);
+    throw error;
+  }
+}
+
+export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
+  try {
+    const response = await fetch(feedUrl);
+    const xml = await response.text();
+
+    // Extract episodes from RSS feed
+    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+
+    const episodes = [];
+
+    for (const itemXml of itemMatches.slice(0, 20)) {
+      // Limit to 20 most recent
+      const title = extractXMLTag(itemXml, 'title');
+      const description = extractXMLTag(itemXml, 'description');
+      const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+      const pubDate = extractXMLTag(itemXml, 'pubDate');
+      const duration = extractXMLTag(itemXml, 'itunes:duration');
+
+      if (!title || !audioUrl) continue;
+
+      episodes.push({
+        title,
+        description,
+        audio_url: audioUrl,
+        published_at: pubDate ? new Date(pubDate) : new Date(),
+        duration: parseDuration(duration),
+      });
+    }
+
+    return episodes;
+  } catch (error) {
+    console.error('Error fetching preview episodes:', error);
     throw error;
   }
 }

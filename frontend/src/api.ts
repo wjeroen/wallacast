@@ -40,6 +40,8 @@ export const podcastAPI = {
   refresh: (id: number) => api.post(`/podcasts/${id}/refresh`),
 
   getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
+
+  getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
 };
 
 export const queueAPI = {

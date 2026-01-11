@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, subscribeToPodcast, fetchPodcastEpisodes } from '../services/podcast-service.js';
+import { searchPodcasts, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes } from '../services/podcast-service.js';
 
 const router = express.Router();
 
@@ -97,7 +97,29 @@ router.post('/:id/refresh', async (req, res) => {
   }
 });
 
-// Get episodes for a podcast
+// Get preview episodes from feed (without saving)
+router.get('/:id/preview-episodes', async (req, res) => {
+  try {
+    const podcastResult = await query(
+      'SELECT feed_url FROM podcasts WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (podcastResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Podcast not found' });
+    }
+
+    const podcast = podcastResult.rows[0];
+    const episodes = await getPreviewEpisodes(podcast.feed_url);
+
+    res.json(episodes);
+  } catch (error) {
+    console.error('Error fetching preview episodes:', error);
+    res.status(500).json({ error: 'Failed to fetch preview episodes' });
+  }
+});
+
+// Get episodes for a podcast (saved in library)
 router.get('/:id/episodes', async (req, res) => {
   try {
     const result = await query(
