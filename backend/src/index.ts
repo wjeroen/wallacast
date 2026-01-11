@@ -32,15 +32,23 @@ app.use('/audio', express.static(path.join(process.cwd(), 'public', 'audio')));
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Routes
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Readcast API',
+    version: '1.0.0',
+    status: 'ok'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.use('/api/content', contentRouter);
 app.use('/api/podcasts', podcastRouter);
 app.use('/api/queue', queueRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/transcription', transcriptionRouter);
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
 
 // Initialize database and start server
 async function start() {
