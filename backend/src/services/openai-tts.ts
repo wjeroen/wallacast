@@ -46,27 +46,33 @@ export async function extractArticleContent(htmlContent: string): Promise<string
 
 Extract and format content following these rules:
 1. Extract the main article text, removing navigation, ads, footers, headers
-2. REMOVE actual URL strings (like "https://example.com") - don't read them out loud
-3. Keep the word "link" when it's used naturally in text - only remove URL strings
+2. CRITICALLY IMPORTANT: NEVER extract or include actual URL strings from href/src attributes
+   - If you see <a href="https://example.com">click here</a>, only output "click here"
+   - NEVER output the URL itself like "https://example.com"
+   - Keep link anchor text, but completely ignore the href URL
+   - Same for iframes, embeds - ignore the src URLs
+3. Keep the word "link" when used naturally in text
 4. KEEP comment sections - they are VERY IMPORTANT
-5. For comments, extract and format naturally for speaking:
-   - Include the username/author of each comment
-   - Include karma/vote counts (e.g., "+42 karma", "23 karma", "15 agree, 3 disagree")
-   - For EA Forum: look for karma numbers and agree/disagree votes
-   - Format like: "Username wrote a comment with 42 karma: [comment text]"
-   - Or: "Username commented with 15 agree and 3 disagree votes: [comment text]"
+5. For EA Forum posts specifically:
+   - Post format is usually "by [Author] [Date]" followed by karma/votes
+   - Look for patterns like "by Username Date" to extract post metadata
+   - Look for karma numbers (often appears as standalone numbers after author/date)
+6. For comments, extract and format naturally:
+   - EA Forum format: "Username Date [karma] [agree] [disagree]"
+   - Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
+   - Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
    - Include ALL comments, even nested replies
-6. After the main article, add a clear section break like "Comments section:" before listing comments
-7. Format lists and structure naturally for speaking
-8. Replace special characters and symbols with spoken equivalents
-9. Remove "Share", "Tweet", "Like" buttons text
-10. Remove newsletter signup prompts
+7. After the main article, add "Comments section:" before listing comments
+8. Format lists and structure naturally for speaking
+9. Replace special characters (&#x27; → apostrophe, etc.) with proper characters
+10. Remove "Share", "Tweet", "Like" buttons text
+11. Remove newsletter signup prompts
 
 Return the article body, then clearly marked comments section with ALL comments formatted for natural speech.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content and comments from this HTML for audio reading:\n\n${htmlContent.slice(0, 50000)}`,
+          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlContent.slice(0, 50000)}`,
         },
       ],
       temperature: 0.3,
@@ -329,7 +335,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Add intro with title, author, and karma (if available)
+    // Add intro with title, author, date, and karma (if available)
     let intro = '';
     if (content.title) {
       intro = `This article is titled: ${content.title}.`;
@@ -338,9 +344,22 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         intro += ` Written by ${content.author}.`;
       }
 
-      // Try to extract karma from description or content if it's an EA Forum post
-      // EA Forum often includes karma in metadata
-      const karmaMatch = (content.description || content.html_content || '').match(/(\d+)\s*karma/i);
+      // Extract date from published_at or HTML content
+      if (content.published_at) {
+        const date = new Date(content.published_at);
+        const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+        intro += ` Published on ${formattedDate}.`;
+      }
+
+      // Try to extract karma from HTML for EA Forum posts
+      // EA Forum format often has "by Author Date" followed by karma numbers
+      // or karma/votes in the HTML structure
+      const htmlText = content.html_content || content.content || '';
+
+      // Try to find karma in various EA Forum formats
+      const karmaMatch = htmlText.match(/(\d+)\s+(?:karma|points)/i) ||
+                        htmlText.match(/by\s+[\w\s]+\w+\s+\d+\s+\d{4}\s+(\d+)/); // "by Author Date karma"
+
       if (karmaMatch) {
         intro += ` This post has ${karmaMatch[1]} karma.`;
       }
