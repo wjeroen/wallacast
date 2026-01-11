@@ -45,30 +45,45 @@ export async function extractArticleContent(htmlContent: string): Promise<string
           content: `You are a content extraction assistant that formats web content for text-to-speech reading.
 
 Extract and format content following these rules:
-1. Extract the main article text, removing navigation, ads, footers, headers
-2. CRITICALLY IMPORTANT: NEVER extract or include actual URL strings from href/src attributes
-   - If you see <a href="https://example.com">click here</a>, only output "click here"
-   - NEVER output the URL itself like "https://example.com"
-   - Keep link anchor text, but completely ignore the href URL
-   - Same for iframes, embeds - ignore the src URLs
-3. Keep the word "link" when used naturally in text
-4. KEEP comment sections - they are VERY IMPORTANT
-5. For EA Forum posts specifically:
-   - Post format is usually "by [Author] [Date]" followed by karma/votes
-   - Look for patterns like "by Username Date" to extract post metadata
-   - Look for karma numbers (often appears as standalone numbers after author/date)
-6. For comments, extract and format naturally:
-   - EA Forum format: "Username Date [karma] [agree] [disagree]"
-   - Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
-   - Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
-   - Include ALL comments, even nested replies
-7. After the main article, add "Comments section:" before listing comments
-8. Format lists and structure naturally for speaking
-9. Replace special characters (&#x27; → apostrophe, etc.) with proper characters
-10. Remove "Share", "Tweet", "Like" buttons text
-11. Remove newsletter signup prompts
 
-Return the article body, then clearly marked comments section with ALL comments formatted for natural speech.`,
+**CRITICAL - URL Handling:**
+- NEVER extract or include actual URL strings from href/src attributes
+- If you see <a href="https://example.com">click here</a>, only output "click here"
+- NEVER output the URL itself like "https://example.com"
+- Keep link anchor text, but completely ignore href/src URLs
+- Keep the word "link" when used naturally in text (e.g., "see the link above")
+
+**Content Structure:**
+1. Extract the main article text, removing navigation, ads, footers, headers
+2. KEEP comment sections - they are VERY IMPORTANT
+3. Format lists and structure naturally for speaking
+4. Replace special characters (&#x27; → apostrophe, &quot; → quote, etc.)
+5. Remove "Share", "Tweet", "Like", "Subscribe" button text
+6. Remove newsletter signup prompts
+
+**Visual Elements:**
+- For images: say "There is an image showing [alt text or caption]"
+- For tables: format as natural speech like "The table shows X rows with columns A, B, C"
+- For embedded videos: say "There is a video titled [title]" (ignore the URL)
+
+**EA Forum Posts (most common):**
+- Post metadata is usually: Author, Date, Karma, Agree votes, Disagree votes
+- If you see patterns like "Username Oct 6 2025 15 3 1", that's: 15 karma, 3 agrees, 1 disagree
+- Additional numbers beyond the first 3 are other emoji reactions - ignore these
+
+**Comments Formatting:**
+- EA Forum format: "Username Date Karma Agree Disagree"
+- Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
+- Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
+- Include ALL comments, even nested replies
+- After the main article, add clear section break: "Comments section:"
+
+**Non-EA Forum Sources:**
+- For other websites, extract similarly but focus on author, date, main text
+- Keep any engagement metrics if visible (likes, shares, etc.)
+- Format naturally without forcing EA Forum structure
+
+Return: Article body → "Comments section:" → All comments formatted for natural speech.`,
         },
         {
           role: 'user',
@@ -335,7 +350,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Add intro with title, author, date, and karma (if available)
+    // Add intro with title, author, date, and EA Forum metadata (if available)
     let intro = '';
     if (content.title) {
       intro = `This article is titled: ${content.title}.`;
@@ -344,24 +359,23 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         intro += ` Written by ${content.author}.`;
       }
 
-      // Extract date from published_at or HTML content
+      // Add published date if available
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         intro += ` Published on ${formattedDate}.`;
       }
 
-      // Try to extract karma from HTML for EA Forum posts
-      // EA Forum format often has "by Author Date" followed by karma numbers
-      // or karma/votes in the HTML structure
-      const htmlText = content.html_content || content.content || '';
+      // Add EA Forum metadata if available (from stored fields)
+      if (content.karma !== undefined && content.karma !== null) {
+        intro += ` This post has ${content.karma} karma`;
 
-      // Try to find karma in various EA Forum formats
-      const karmaMatch = htmlText.match(/(\d+)\s+(?:karma|points)/i) ||
-                        htmlText.match(/by\s+[\w\s]+\w+\s+\d+\s+\d{4}\s+(\d+)/); // "by Author Date karma"
+        // Add agree/disagree votes if available
+        if (content.agree_votes !== undefined && content.disagree_votes !== undefined) {
+          intro += `, with ${content.agree_votes} agree votes and ${content.disagree_votes} disagree votes`;
+        }
 
-      if (karmaMatch) {
-        intro += ` This post has ${karmaMatch[1]} karma.`;
+        intro += '.';
       }
 
       intro += '\n\n';

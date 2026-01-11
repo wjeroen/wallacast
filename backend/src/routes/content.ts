@@ -87,6 +87,9 @@ router.post('/', async (req, res) => {
     let finalAuthor = author;
     let finalDescription = description;
     let finalPublishedAt = published_at;
+    let karma: number | null = null;
+    let agreeVotes: number | null = null;
+    let disagreeVotes: number | null = null;
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
@@ -113,14 +116,25 @@ router.post('/', async (req, res) => {
       if (!finalPublishedAt && articleData.published_date) {
         finalPublishedAt = articleData.published_date;
       }
+
+      // Store EA Forum metadata if available
+      if (articleData.karma !== undefined) {
+        karma = articleData.karma;
+      }
+      if (articleData.agree_votes !== undefined) {
+        agreeVotes = articleData.agree_votes;
+      }
+      if (articleData.disagree_votes !== undefined) {
+        disagreeVotes = articleData.disagree_votes;
+      }
     }
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes]
     );
 
     const createdItem = result.rows[0];
