@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateTTS } from '../services/tts.js';
+import { generateAudioForContent } from '../services/openai-tts.js';
 
 const router = express.Router();
 
@@ -72,11 +73,15 @@ router.post('/', async (req, res) => {
       author,
       description,
       thumbnail_url,
+      podcast_id,
+      audio_url,
+      published_at,
+      duration,
     } = req.body;
 
     let processedContent = content;
     let htmlContent = null;
-    let audioUrl = null;
+    let audioUrlValue = audio_url || null;
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
@@ -87,10 +92,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
-      [type, title, url, processedContent, htmlContent, author, description, thumbnail_url, audioUrl]
+      [type, title, url, processedContent, htmlContent, author, description, thumbnail_url, audioUrlValue, podcast_id || null, published_at || null, duration || null]
     );
 
     res.status(201).json(result.rows[0]);
@@ -189,12 +194,8 @@ router.post('/:id/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
     }
 
-    const audioUrl = await generateTTS(contentItem.content);
-
-    await query(
-      'UPDATE content_items SET audio_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [audioUrl, id]
-    );
+    // Use new OpenAI TTS with content extraction
+    const audioUrl = await generateAudioForContent(parseInt(id));
 
     res.json({ audio_url: audioUrl });
   } catch (error) {

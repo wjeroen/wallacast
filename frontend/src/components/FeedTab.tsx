@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import { Search, RefreshCw, Plus } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
-import type { Podcast, ContentItem } from '../types';
+import type { Podcast } from '../types';
 
 export function FeedTab() {
   const [podcasts, setPodcasts] = useState<Podcast[]>([]);
-  const [episodes, setEpisodes] = useState<ContentItem[]>([]);
+  const [episodes, setEpisodes] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedPodcast, setSelectedPodcast] = useState<number | null>(null);
+  const [addingToLibrary, setAddingToLibrary] = useState<string | null>(null);
 
   useEffect(() => {
     loadPodcasts();
@@ -27,8 +28,27 @@ export function FeedTab() {
 
   const loadLatestEpisodes = async () => {
     try {
-      const response = await contentAPI.getAll({ type: 'podcast_episode' });
-      setEpisodes(response.data.slice(0, 20));
+      // Load episodes from all subscribed podcasts
+      const podcastsResponse = await podcastAPI.getAll();
+      const allEpisodes: any[] = [];
+
+      for (const podcast of podcastsResponse.data) {
+        try {
+          const episodesResponse = await podcastAPI.getPreviewEpisodes(podcast.id);
+          const episodesWithPodcast = episodesResponse.data.map((ep: any) => ({
+            ...ep,
+            podcast_id: podcast.id,
+            podcast_title: podcast.title,
+          }));
+          allEpisodes.push(...episodesWithPodcast);
+        } catch (error) {
+          console.error(`Failed to load episodes for podcast ${podcast.id}:`, error);
+        }
+      }
+
+      // Sort by published date and take the 20 most recent
+      allEpisodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+      setEpisodes(allEpisodes.slice(0, 20));
     } catch (error) {
       console.error('Failed to load episodes:', error);
     }
@@ -70,11 +90,36 @@ export function FeedTab() {
 
   const loadPodcastEpisodes = async (podcastId: number) => {
     try {
-      const response = await podcastAPI.getEpisodes(podcastId);
-      setEpisodes(response.data);
+      const response = await podcastAPI.getPreviewEpisodes(podcastId);
+      const podcast = podcasts.find(p => p.id === podcastId);
+      const episodesWithPodcast = response.data.map((ep: any) => ({
+        ...ep,
+        podcast_id: podcastId,
+        podcast_title: podcast?.title,
+      }));
+      setEpisodes(episodesWithPodcast);
       setSelectedPodcast(podcastId);
     } catch (error) {
       console.error('Failed to load podcast episodes:', error);
+    }
+  };
+
+  const handleAddToLibrary = async (episode: any) => {
+    try {
+      setAddingToLibrary(episode.audio_url);
+      await contentAPI.create({
+        type: 'podcast_episode',
+        title: episode.title,
+        description: episode.description,
+        audio_url: episode.audio_url,
+        podcast_id: episode.podcast_id,
+        published_at: episode.published_at,
+        duration: episode.duration,
+      });
+      setAddingToLibrary(null);
+    } catch (error) {
+      console.error('Failed to add to library:', error);
+      setAddingToLibrary(null);
     }
   };
 
@@ -150,23 +195,44 @@ export function FeedTab() {
 
       <div className="episodes-list">
         <h3>{selectedPodcast ? 'Episodes' : 'Latest Episodes'}</h3>
-        {episodes.map((episode) => (
-          <div key={episode.id} className="episode-card">
+        {selectedPodcast && podcasts.find(p => p.id === selectedPodcast) && (
+          <div className="podcast-details">
+            <h4>{podcasts.find(p => p.id === selectedPodcast)?.title}</h4>
+            {podcasts.find(p => p.id === selectedPodcast)?.description && (
+              <p className="podcast-description">{podcasts.find(p => p.id === selectedPodcast)?.description}</p>
+            )}
+          </div>
+        )}
+        {episodes.map((episode, index) => (
+          <div key={episode.audio_url || index} className="episode-card">
             {episode.thumbnail_url && (
               <img src={episode.thumbnail_url} alt={episode.title} />
             )}
             <div className="episode-info">
               <h4>{episode.title}</h4>
+              {episode.podcast_title && (
+                <p className="podcast-name">{episode.podcast_title}</p>
+              )}
               {episode.description && (
                 <p className="description">{episode.description.slice(0, 200)}...</p>
               )}
-              {episode.duration && (
-                <span className="duration">{formatDuration(episode.duration)}</span>
-              )}
-              {episode.published_at && (
-                <span className="date">{new Date(episode.published_at).toLocaleDateString()}</span>
-              )}
+              <div className="episode-meta">
+                {episode.duration && (
+                  <span className="duration">{formatDuration(episode.duration)}</span>
+                )}
+                {episode.published_at && (
+                  <span className="date">{new Date(episode.published_at).toLocaleDateString()}</span>
+                )}
+              </div>
             </div>
+            <button
+              className="add-to-library-btn"
+              onClick={() => handleAddToLibrary(episode)}
+              disabled={addingToLibrary === episode.audio_url}
+            >
+              <Plus size={16} />
+              {addingToLibrary === episode.audio_url ? 'Adding...' : 'Add to Library'}
+            </button>
           </div>
         ))}
       </div>
