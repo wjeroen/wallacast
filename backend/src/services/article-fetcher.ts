@@ -26,6 +26,88 @@ export interface ArticleContent {
   comments?: CommentData[];
 }
 
+// Site-specific extractors
+function isEAForum(url: string): boolean {
+  return url.includes('forum.effectivealtruism.org');
+}
+
+function isLessWrong(url: string): boolean {
+  return url.includes('lesswrong.com');
+}
+
+function extractEAForumMetadata(doc: Document): Partial<ArticleContent> {
+  // Extract EA Forum-specific metadata
+  const karma = doc.querySelector('.PostsVoteDefault-voteScore')?.textContent?.trim();
+  const agreeEl = doc.querySelector('[class*="agree"]');
+  const disagreeEl = doc.querySelector('[class*="disagree"]');
+  const agreeMatch = agreeEl?.textContent?.match(/\d+/);
+  const disagreeMatch = disagreeEl?.textContent?.match(/\d+/);
+
+  return {
+    karma: karma ? parseInt(karma) : undefined,
+    agree_votes: agreeMatch ? parseInt(agreeMatch[0]) : undefined,
+    disagree_votes: disagreeMatch ? parseInt(disagreeMatch[0]) : undefined,
+  };
+}
+
+function extractEAForumComments(doc: Document): CommentData[] {
+  const comments: CommentData[] = [];
+  const commentElements = doc.querySelectorAll('.CommentsNode-root, .CommentFrame-root, [class*="CommentNode"]');
+
+  commentElements.forEach((commentEl) => {
+    try {
+      const authorEl = commentEl.querySelector('.UsersNameDisplay-noColor, .CommentUserName-author, [class*="author"]');
+      const commentAuthor = authorEl?.textContent?.trim();
+
+      const timeEl = commentEl.querySelector('time');
+      const commentDate = timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim();
+
+      const karmaEl = commentEl.querySelector('.CommentsVote-voteScore, .VoteScore, [class*="voteScore"]');
+      const commentKarmaText = karmaEl?.textContent?.trim();
+      const commentKarma = commentKarmaText ? parseInt(commentKarmaText) : undefined;
+
+      const contentEl = commentEl.querySelector('.ContentStyles-commentBody, .CommentBody-root, [class*="commentBody"]');
+      const commentContent = contentEl?.textContent?.trim();
+
+      const agreeEl = commentEl.querySelector('[class*="agree"]');
+      const disagreeEl = commentEl.querySelector('[class*="disagree"]');
+      const agreeMatch = agreeEl?.textContent?.match(/(\d+)/);
+      const disagreeMatch = disagreeEl?.textContent?.match(/(\d+)/);
+      const agreeVotes = agreeMatch ? parseInt(agreeMatch[1]) : undefined;
+      const disagreeVotes = disagreeMatch ? parseInt(disagreeMatch[1]) : undefined;
+
+      if (commentAuthor && commentContent) {
+        comments.push({
+          author: commentAuthor,
+          date: commentDate,
+          karma: commentKarma,
+          agree_votes: agreeVotes,
+          disagree_votes: disagreeVotes,
+          content: commentContent,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to extract EA Forum comment:', error);
+    }
+  });
+
+  return comments;
+}
+
+function extractLessWrongMetadata(doc: Document): Partial<ArticleContent> {
+  // LessWrong has similar structure to EA Forum
+  const karma = doc.querySelector('.PostsVoteDefault-voteScore')?.textContent?.trim();
+
+  return {
+    karma: karma ? parseInt(karma) : undefined,
+  };
+}
+
+function extractLessWrongComments(doc: Document): CommentData[] {
+  // LessWrong uses similar comment structure to EA Forum
+  return extractEAForumComments(doc);
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   try {
     const response = await fetch(url);
@@ -35,140 +117,88 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // Extract title - try multiple sources
+    // Extract title - try multiple sources (works for all sites)
     let title = 'Untitled';
-
-    // First try og:title meta tag (most reliable)
     const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
-    if (ogTitle) {
-      title = ogTitle.replace(/ — EA Forum$/, '').trim();
-    } else {
-      // Fallback to <title> tag
-      const titleTag = doc.querySelector('title')?.textContent;
-      if (titleTag) {
-        title = titleTag.replace(/ — EA Forum$/, '').trim();
-      }
+    const citationTitle = doc.querySelector('meta[name="citation_title"]')?.getAttribute('content');
+    const h1Title = doc.querySelector('h1')?.textContent;
+    const titleTag = doc.querySelector('title')?.textContent;
+
+    if (citationTitle) {
+      title = citationTitle.trim();
+    } else if (ogTitle) {
+      title = ogTitle.replace(/ — EA Forum$/, '').replace(/ - LessWrong$/, '').trim();
+    } else if (h1Title) {
+      title = h1Title.trim();
+    } else if (titleTag) {
+      title = titleTag.replace(/ — EA Forum$/, '').replace(/ - LessWrong$/, '').trim();
     }
 
-    // Try to extract EA Forum metadata using DOM selectors
+    // Site-specific extraction
     let karma: number | undefined;
     let agreeVotes: number | undefined;
     let disagreeVotes: number | undefined;
+    let comments: CommentData[] = [];
     let commentsHtml: string | undefined;
 
-    // Extract karma from EA Forum's vote component
-    const karmaElement = doc.querySelector('.PostsVoteDefault-voteScore');
-    if (karmaElement) {
-      const karmaText = karmaElement.textContent?.trim();
-      if (karmaText) {
-        karma = parseInt(karmaText);
+    if (isEAForum(url)) {
+      console.log('Extracting EA Forum metadata...');
+      const eaMetadata = extractEAForumMetadata(doc);
+      karma = eaMetadata.karma;
+      agreeVotes = eaMetadata.agree_votes;
+      disagreeVotes = eaMetadata.disagree_votes;
+      comments = extractEAForumComments(doc);
+
+      const commentsSection = doc.querySelector('.CommentsListSection-root');
+      if (commentsSection) {
+        commentsHtml = commentsSection.outerHTML;
       }
-    }
 
-    // Extract agree votes
-    const agreeElement = doc.querySelector('[class*="agree"]');
-    if (agreeElement) {
-      const agreeMatch = agreeElement.textContent?.match(/\d+/);
-      if (agreeMatch) {
-        agreeVotes = parseInt(agreeMatch[0]);
-      }
-    }
-
-    // Extract disagree votes
-    const disagreeElement = doc.querySelector('[class*="disagree"]');
-    if (disagreeElement) {
-      const disagreeMatch = disagreeElement.textContent?.match(/\d+/);
-      if (disagreeMatch) {
-        disagreeVotes = parseInt(disagreeMatch[0]);
-      }
-    }
-
-    // Extract comments section HTML
-    const commentsSection = doc.querySelector('.CommentsListSection-root');
-    if (commentsSection) {
-      commentsHtml = commentsSection.outerHTML;
-    }
-
-    // Extract ALL comments with metadata using DOM parsing
-    const comments: CommentData[] = [];
-
-    // EA Forum comment selectors - try multiple patterns
-    const commentElements = doc.querySelectorAll('.CommentsNode-root, .CommentFrame-root, [class*="CommentNode"]');
-
-    commentElements.forEach((commentEl) => {
-      try {
-        // Extract comment author
-        const authorEl = commentEl.querySelector('.UsersNameDisplay-noColor, .CommentUserName-author, [class*="author"]');
-        const commentAuthor = authorEl?.textContent?.trim();
-
-        // Extract comment date
-        const timeEl = commentEl.querySelector('time');
-        const commentDate = timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim();
-
-        // Extract comment karma
-        const karmaEl = commentEl.querySelector('.CommentsVote-voteScore, .VoteScore, [class*="voteScore"]');
-        const commentKarmaText = karmaEl?.textContent?.trim();
-        const commentKarma = commentKarmaText ? parseInt(commentKarmaText) : undefined;
-
-        // Extract comment content (the actual text)
-        const contentEl = commentEl.querySelector('.ContentStyles-commentBody, .CommentBody-root, [class*="commentBody"]');
-        const commentContent = contentEl?.textContent?.trim();
-
-        // Try to find agree/disagree votes
-        const agreeEl = commentEl.querySelector('[class*="agree"]');
-        const disagreeEl = commentEl.querySelector('[class*="disagree"]');
-        const agreeMatch = agreeEl?.textContent?.match(/(\d+)/);
-        const disagreeMatch = disagreeEl?.textContent?.match(/(\d+)/);
-        const agreeVotes = agreeMatch ? parseInt(agreeMatch[1]) : undefined;
-        const disagreeVotes = disagreeMatch ? parseInt(disagreeMatch[1]) : undefined;
-
-        // Only add comment if we have author and content
-        if (commentAuthor && commentContent) {
-          comments.push({
-            author: commentAuthor,
-            date: commentDate,
-            karma: commentKarma,
-            agree_votes: agreeVotes,
-            disagree_votes: disagreeVotes,
-            content: commentContent,
-          });
-        }
-      } catch (error) {
-        console.error('Failed to extract comment:', error);
-      }
-    });
-
-    console.log(`Extracted ${comments.length} comments with metadata`);
-
-    // Try to extract author from multiple sources
-    let author: string | undefined;
-
-    // Try og:author meta tag first
-    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                    doc.querySelector('meta[name="author"]')?.getAttribute('content');
-    if (ogAuthor) {
-      author = ogAuthor.trim();
+      console.log(`Extracted ${comments.length} EA Forum comments with metadata`);
+    } else if (isLessWrong(url)) {
+      console.log('Extracting LessWrong metadata...');
+      const lwMetadata = extractLessWrongMetadata(doc);
+      karma = lwMetadata.karma;
+      comments = extractLessWrongComments(doc);
+      console.log(`Extracted ${comments.length} LessWrong comments with metadata`);
     } else {
-      // Fallback to class selector
-      const authorElement = doc.querySelector('.PostsAuthors-author');
-      if (authorElement) {
-        author = authorElement.textContent?.trim();
-      }
+      console.log('Using generic extraction for unknown site');
+      // Generic sites: no karma/votes, comments will be handled by GPT if present
+      comments = [];
     }
 
-    // Try to extract published date
-    let publishedDate: string | undefined;
+    // Extract author - works for all sites
+    let author: string | undefined;
+    const citationAuthor = doc.querySelector('meta[name="citation_author"]')?.getAttribute('content');
+    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
+                     doc.querySelector('meta[name="author"]')?.getAttribute('content');
+    const authorLink = doc.querySelector('[rel="author"]')?.textContent;
+    const authorClass = doc.querySelector('.PostsAuthors-author, .author, [class*="author"]')?.textContent;
 
-    // Try og:published_time or article:published_time meta tags
+    if (citationAuthor) {
+      author = citationAuthor.trim();
+    } else if (ogAuthor) {
+      author = ogAuthor.trim();
+    } else if (authorLink) {
+      author = authorLink.trim();
+    } else if (authorClass) {
+      author = authorClass.trim();
+    }
+
+    // Extract published date - works for all sites
+    let publishedDate: string | undefined;
     const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') ||
                        doc.querySelector('meta[property="og:published_time"]')?.getAttribute('content');
+    const timeElement = doc.querySelector('time');
+
     if (ogPublished) {
       publishedDate = ogPublished;
-    } else {
-      // Fallback to date element
-      const dateElement = doc.querySelector('[class*="PostsItemDate"]');
-      if (dateElement) {
-        const dateText = dateElement.textContent?.trim();
+    } else if (timeElement) {
+      const datetime = timeElement.getAttribute('datetime');
+      if (datetime) {
+        publishedDate = datetime;
+      } else {
+        const dateText = timeElement.textContent?.trim();
         if (dateText) {
           try {
             const date = new Date(dateText);

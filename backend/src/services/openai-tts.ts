@@ -327,33 +327,53 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Add intro with title, author, date, and EA Forum metadata (if available)
+    // Build dynamic intro based on available metadata (adapts to any source)
     let intro = '';
     if (content.title) {
-      intro = `This post is titled: ${content.title}`;
+      // Determine content type based on metadata
+      const isForumPost = (content.karma !== undefined && content.karma !== null);
+      const sourceType = isForumPost ? 'post' : 'article';
 
+      intro = `This ${sourceType} is titled: ${content.title}`;
+
+      // Add author if available
       if (content.author) {
         intro += `, written by ${content.author}`;
       }
 
-      // Add published date if available
+      // Add published date with source-specific wording
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        intro += `, posted on the EA Forum on ${formattedDate}`;
+
+        // Determine source label from URL
+        let sourceLabel = '';
+        if (content.url) {
+          if (content.url.includes('forum.effectivealtruism.org')) {
+            sourceLabel = ' on the EA Forum';
+          } else if (content.url.includes('lesswrong.com')) {
+            sourceLabel = ' on LessWrong';
+          }
+        }
+
+        intro += `, posted${sourceLabel} on ${formattedDate}`;
       }
 
-      // Add EA Forum metadata if available (from stored fields)
+      // Add forum-specific metadata (karma/votes) only if present
       if (content.karma !== undefined && content.karma !== null) {
         intro += `. It has ${content.karma} karma`;
 
-        // Add agree/disagree votes if available
+        // Build vote metadata list
+        const voteMetadata: string[] = [];
         if (content.agree_votes !== undefined && content.agree_votes !== null) {
-          intro += `, ${content.agree_votes} agree votes`;
+          voteMetadata.push(`${content.agree_votes} agree votes`);
+        }
+        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
+          voteMetadata.push(`${content.disagree_votes} disagree votes`);
         }
 
-        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
-          intro += `, and ${content.disagree_votes} disagree votes`;
+        if (voteMetadata.length > 0) {
+          intro += `, ${voteMetadata.join(', and ')}`;
         }
 
         intro += '.';
