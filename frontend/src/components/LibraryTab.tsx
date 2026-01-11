@@ -145,10 +145,15 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
 
   const handleGenerateAudio = async (id: number) => {
     try {
-      await contentAPI.generateAudio(id);
+      const response = await contentAPI.generateAudio(id);
+      if (response.data.warning) {
+        alert(response.data.warning);
+      }
       loadContent();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to generate audio:', error);
+      const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
+      alert(errorMsg);
     }
   };
 

@@ -153,9 +153,15 @@
 .podcast-list h3,
 .episodes-list h3,
 .search-results h3 {
+  width: 100%;
   margin-bottom: 1rem;
   font-size: 1.25rem;
   color: #cbd5e1;
+}
+
+.podcast-details,
+.subscribed-podcasts {
+  width: 100%;
 }
 
 .podcast-card,
