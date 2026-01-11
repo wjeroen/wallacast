@@ -1,12 +1,2 @@
-# Nixpacks configuration for backend
 [phases.setup]
-nixPkgs = ["nodejs_20", "postgresql"]
-
-[phases.install]
-cmds = ["npm install"]
-
-[phases.build]
-cmds = ["npm run build"]
-
-[start]
-cmd = "npm start"
+aptPkgs = ["ffmpeg"]
