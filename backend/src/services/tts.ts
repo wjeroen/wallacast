@@ -69,7 +69,11 @@ async function generateTTSChunk(text: string, index: number): Promise<string> {
   const buffer = await response.arrayBuffer();
   await fs.writeFile(filepath, Buffer.from(buffer));
 
-  return `/audio/${filename}`;
+  // Construct full URL for audio file
+  const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : 'http://localhost:3001';
+  return `${backendUrl}/audio/${filename}`;
 }
 
 function splitTextIntoChunks(text: string, maxLength: number): string[] {
