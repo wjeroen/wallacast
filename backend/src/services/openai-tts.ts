@@ -209,6 +209,15 @@ export async function generateArticleAudio(
       for (let i = 0; i < textChunks.length; i++) {
         console.log(`Generating chunk ${i + 1}/${textChunks.length} (${textChunks[i].length} chars)...`);
 
+        // Update progress (90% for chunk generation, 10% for concatenation)
+        const chunkProgress = Math.round(((i + 1) / textChunks.length) * 90);
+        if (options.contentId) {
+          await query(
+            'UPDATE content_items SET generation_progress = $1 WHERE id = $2',
+            [chunkProgress, options.contentId]
+          );
+        }
+
         const response = await openai.audio.speech.create({
           model: 'gpt-4o-mini-tts',
           voice: voice,
@@ -240,6 +249,15 @@ export async function generateArticleAudio(
       // Concatenate all chunks
       const outputFile = path.join(tempDir, `concatenated_${timestamp}.mp3`);
       console.log(`Concatenating ${chunkFiles.length} audio files...`);
+
+      // Update progress to 95% before concatenation
+      if (options.contentId) {
+        await query(
+          'UPDATE content_items SET generation_progress = $1 WHERE id = $2',
+          [95, options.contentId]
+        );
+      }
+
       await concatenateAudioFiles(chunkFiles, outputFile);
 
       // Read the final file
@@ -296,6 +314,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(textToConvert, {
       instructions:
         'Read this article clearly and naturally, focusing only on the main article text. Use appropriate pacing and emphasis.',
+      contentId: contentId, // Pass contentId for progress tracking
     });
 
     // Generate info message about chunks if multiple were used

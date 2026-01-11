@@ -54,6 +54,11 @@ export async function initializeDatabase() {
     const migration = await fs.readFile(migrationPath, 'utf-8');
     await pool.query(migration);
 
+    // Run migration for generation status tracking
+    const statusMigrationPath = path.join(__dirname, 'add_generation_status.sql');
+    const statusMigration = await fs.readFile(statusMigrationPath, 'utf-8');
+    await pool.query(statusMigration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
