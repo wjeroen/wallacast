@@ -1,6 +1,15 @@
 import fetch from 'node-fetch';
 import { JSDOM } from 'jsdom';
 
+export interface CommentData {
+  author: string;
+  date?: string;
+  karma?: number;
+  agree_votes?: number;
+  disagree_votes?: number;
+  content: string;
+}
+
 export interface ArticleContent {
   title: string;
   content: string;
@@ -14,6 +23,7 @@ export interface ArticleContent {
   agree_votes?: number;
   disagree_votes?: number;
   comments_html?: string;
+  comments?: CommentData[];
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -78,6 +88,57 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (commentsSection) {
       commentsHtml = commentsSection.outerHTML;
     }
+
+    // Extract ALL comments with metadata using DOM parsing
+    const comments: CommentData[] = [];
+
+    // EA Forum comment selectors - try multiple patterns
+    const commentElements = doc.querySelectorAll('.CommentsNode-root, .CommentFrame-root, [class*="CommentNode"]');
+
+    commentElements.forEach((commentEl) => {
+      try {
+        // Extract comment author
+        const authorEl = commentEl.querySelector('.UsersNameDisplay-noColor, .CommentUserName-author, [class*="author"]');
+        const commentAuthor = authorEl?.textContent?.trim();
+
+        // Extract comment date
+        const timeEl = commentEl.querySelector('time');
+        const commentDate = timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim();
+
+        // Extract comment karma
+        const karmaEl = commentEl.querySelector('.CommentsVote-voteScore, .VoteScore, [class*="voteScore"]');
+        const commentKarmaText = karmaEl?.textContent?.trim();
+        const commentKarma = commentKarmaText ? parseInt(commentKarmaText) : undefined;
+
+        // Extract comment content (the actual text)
+        const contentEl = commentEl.querySelector('.ContentStyles-commentBody, .CommentBody-root, [class*="commentBody"]');
+        const commentContent = contentEl?.textContent?.trim();
+
+        // Try to find agree/disagree votes
+        const agreeEl = commentEl.querySelector('[class*="agree"]');
+        const disagreeEl = commentEl.querySelector('[class*="disagree"]');
+        const agreeMatch = agreeEl?.textContent?.match(/(\d+)/);
+        const disagreeMatch = disagreeEl?.textContent?.match(/(\d+)/);
+        const agreeVotes = agreeMatch ? parseInt(agreeMatch[1]) : undefined;
+        const disagreeVotes = disagreeMatch ? parseInt(disagreeMatch[1]) : undefined;
+
+        // Only add comment if we have author and content
+        if (commentAuthor && commentContent) {
+          comments.push({
+            author: commentAuthor,
+            date: commentDate,
+            karma: commentKarma,
+            agree_votes: agreeVotes,
+            disagree_votes: disagreeVotes,
+            content: commentContent,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to extract comment:', error);
+      }
+    });
+
+    console.log(`Extracted ${comments.length} comments with metadata`);
 
     // Try to extract author from multiple sources
     let author: string | undefined;
@@ -146,6 +207,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       agree_votes: agreeVotes,
       disagree_votes: disagreeVotes,
       comments_html: commentsHtml,
+      comments: comments, // Include extracted comments with metadata
     };
   } catch (error) {
     console.error('Error fetching article:', error);
