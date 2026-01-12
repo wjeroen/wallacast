@@ -18,12 +18,16 @@ interface AudioPlayerProps {
 }
 
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
-  console.log('AudioPlayer render:', {
-    hasContent: !!content,
-    contentId: content?.id,
-    hasAudioUrl: !!content?.audio_url,
-    title: content?.title
-  });
+  const [debugInfo, setDebugInfo] = useState<string[]>([]);
+
+  const addDebug = (msg: string) => {
+    console.log('[DEBUG]', msg);
+    setDebugInfo(prev => [...prev.slice(-20), `${new Date().toISOString().split('T')[1].split('.')[0]} - ${msg}`]);
+  };
+
+  useEffect(() => {
+    addDebug(`AudioPlayer mounted - hasContent: ${!!content}, id: ${content?.id}, hasAudio: ${!!content?.audio_url}, title: ${content?.title}`);
+  }, []);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -55,16 +59,23 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   // Initialize audio when content changes
   useEffect(() => {
-    if (!content || !audioRef.current) return;
+    addDebug('Audio init useEffect triggered');
+
+    if (!content || !audioRef.current) {
+      addDebug('Audio init skipped - no content or audio ref');
+      return;
+    }
 
     const audio = audioRef.current;
     const contentId = content.id;
 
     // Skip if this is the same content
     if (currentContentIdRef.current === contentId && isAudioReady) {
+      addDebug('Audio init skipped - same content already ready');
       return;
     }
 
+    addDebug(`Setting up audio for content ${contentId}`);
     currentContentIdRef.current = contentId;
     setIsAudioReady(false);
     setIsPlaying(false);
@@ -75,12 +86,13 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
     // Check if audio URL exists
     if (!content.audio_url) {
-      console.warn('No audio URL available for content:', content.id);
+      addDebug('⚠️ No audio URL - stopping audio setup');
       setDuration(0);
       setIsAudioReady(false);
       return; // Don't set up audio if no URL
     }
 
+    addDebug(`Setting audio src: ${content.audio_url.substring(0, 50)}...`);
     // Set up new audio
     audio.src = content.audio_url;
     audio.playbackRate = content.playback_speed || 1;
@@ -88,25 +100,32 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
     // Wait for metadata to load, then restore position
     const handleLoadedMetadata = () => {
+      addDebug(`Metadata loaded - duration: ${audio.duration}s`);
       setDuration(audio.duration);
       const startPosition = content.playback_position || 0;
 
       // Fix corrupted duration in database if detected
       if (content.duration && Math.abs(content.duration - audio.duration) > 1) {
-        console.warn(`⚠️ Fixing corrupted duration for "${content.title}": DB has ${content.duration}s, actual is ${audio.duration}s`);
+        addDebug(`⚠️ Fixing corrupted duration: DB=${content.duration}s, actual=${audio.duration}s`);
         contentAPI.update(content.id, { duration: Math.floor(audio.duration) }).catch(console.error);
       }
 
       if (startPosition > 0 && startPosition < audio.duration) {
         audio.currentTime = startPosition;
         setCurrentTime(startPosition);
-        console.log('✓ Restored position:', startPosition);
+        addDebug(`✓ Restored position: ${startPosition}s`);
       }
 
       setIsAudioReady(true);
+      addDebug('✓ Audio ready');
+    };
+
+    const handleError = (e: Event) => {
+      addDebug(`❌ Audio error: ${(e as any).message || 'Unknown error'}`);
     };
 
     audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+    audio.addEventListener('error', handleError);
 
     // Transcript setup
     if (content.transcript) {
@@ -426,16 +445,20 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   if (!content) {
-    console.error('AudioPlayer: content is null or undefined');
     return (
       <div className="audio-player">
         <div className="player-header">
-          <h2>Error</h2>
+          <h2>Error: No Content</h2>
           <button onClick={onClose} className="close-btn">
             <X size={24} />
           </button>
         </div>
-        <p style={{ padding: '1rem', color: '#ef4444' }}>Failed to load content</p>
+        <div style={{ padding: '1rem', background: '#991b1b', color: '#fecaca', borderRadius: '0.5rem', margin: '1rem' }}>
+          <p style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>❌ Content is null or undefined</p>
+          <pre style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap' }}>
+            {JSON.stringify({ hasContent: !!content, debugInfo }, null, 2)}
+          </pre>
+        </div>
       </div>
     );
   }
@@ -452,16 +475,41 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     }
   }
 
-  return (
-    <div className="audio-player">
-      <div className="player-header">
-        <h2>{content.title}</h2>
-        <button onClick={onClose} className="close-btn">
-          <X size={24} />
-        </button>
-      </div>
+  // Wrap everything in try-catch
+  try {
+    addDebug('Rendering main UI');
 
-      <audio ref={audioRef} />
+    return (
+      <div className="audio-player">
+        <div className="player-header">
+          <h2>{content.title}</h2>
+          <button onClick={onClose} className="close-btn">
+            <X size={24} />
+          </button>
+        </div>
+
+        {/* Debug Panel - Visible */}
+        <div style={{
+          background: '#1e3a5f',
+          color: '#e2e8f0',
+          padding: '0.5rem',
+          fontSize: '0.7rem',
+          maxHeight: '150px',
+          overflow: 'auto',
+          borderBottom: '1px solid #334155'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong>🔍 DEBUG INFO</strong>
+            <small>Content ID: {content.id} | Audio: {content.audio_url ? '✓' : '✗'}</small>
+          </div>
+          <div style={{ marginTop: '0.25rem' }}>
+            {debugInfo.slice(-5).map((info, i) => (
+              <div key={i} style={{ fontSize: '0.65rem', opacity: 0.8 }}>{info}</div>
+            ))}
+          </div>
+        </div>
+
+        <audio ref={audioRef} />
 
       <div className="player-controls">
         <div className="progress-bar">
@@ -628,4 +676,29 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       )}
     </div>
   );
+  } catch (error: any) {
+    addDebug(`RENDER ERROR: ${error.message}`);
+    return (
+      <div className="audio-player">
+        <div className="player-header">
+          <h2>💥 Render Error</h2>
+          <button onClick={onClose} className="close-btn">
+            <X size={24} />
+          </button>
+        </div>
+        <div style={{ padding: '1rem', background: '#991b1b', color: '#fecaca', borderRadius: '0.5rem', margin: '1rem' }}>
+          <p style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>❌ Component crashed during render</p>
+          <pre style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap', background: '#7f1d1d', padding: '0.5rem', borderRadius: '0.25rem' }}>
+            {error.message}\n\n{error.stack}
+          </pre>
+          <div style={{ marginTop: '1rem' }}>
+            <strong>Debug Log:</strong>
+            {debugInfo.map((info, i) => (
+              <div key={i} style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.25rem' }}>{info}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
