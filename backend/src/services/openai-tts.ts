@@ -121,16 +121,29 @@ Return: Main article body, then complete comments section with ALL comments and 
 For EACH comment (including nested replies), extract:
 - username: The comment author's username (required)
 - date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
-- karma: The comment's karma/upvote count (if available, as a number - look for numbers near vote buttons or user info)
-- agree_votes: Number of agree votes (if available, as a number - often shown as "+X" or "X agree")
-- disagree_votes: Number of disagree votes (if available, as a number - often shown as "-X" or "X disagree")
+- karma: The comment's karma/upvote count (if available, as a number - look for:
+  * Numbers in spans/divs with classes like "karma", "vote", "points", "score"
+  * Numbers near up/down arrow buttons
+  * Patterns like "15 points" or "+15" near the username
+  * Data attributes like data-karma or data-score
+- agree_votes: Number of agree votes (if available, as a number - look for:
+  * Green checkmark/agree buttons with numbers
+  * Text like "5 agree", "+5", or "✓ 5"
+  * Spans with classes like "agree", "agreement-count"
+  * May be in a vote breakdown section
+- disagree_votes: Number of disagree votes (if available, as a number - look for:
+  * Red X/disagree buttons with numbers
+  * Text like "2 disagree", "-2", or "✗ 2"
+  * Spans with classes like "disagree", "disagreement-count"
+  * May be in a vote breakdown section
 - content: The comment text (clean, no HTML, preserve paragraph breaks)
 - replies: Array of nested reply comments with the same structure
 
 IMPORTANT:
 - Extract ALL comments from the HTML, don't stop early
-- Look carefully for karma/vote numbers - they're often in spans, divs, or near voting buttons
-- If you can't find a metadata field, omit it (don't use null or 0)
+- EA Forum often shows agree/disagree votes separately from karma - look thoroughly
+- Check for vote data in: buttons, spans, data attributes, adjacent to usernames
+- If you can't find a metadata field after thorough searching, omit it (don't use null or 0)
 - Preserve the hierarchical structure of replies
 
 Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
@@ -433,17 +446,31 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
-      // Extract clean content from HTML
+      // Extract clean content from HTML (with comments for audio)
       const extracted = await extractArticleContent(content.html_content || content.content);
       textToConvert = extracted.content;
 
-      // Store structured comments if extracted
+      // Update the content field with extracted content and store structured comments
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramCount = 1;
+
+      updates.push(`content = $${paramCount}`);
+      values.push(extracted.content);
+      paramCount++;
+
       if (extracted.comments && extracted.comments.length > 0) {
-        await query(
-          'UPDATE content_items SET comments = $1 WHERE id = $2',
-          [JSON.stringify(extracted.comments), contentId]
-        );
+        updates.push(`comments = $${paramCount}`);
+        values.push(JSON.stringify(extracted.comments));
+        paramCount++;
+        console.log(`Storing ${extracted.comments.length} structured comments`);
       }
+
+      values.push(contentId);
+      await query(
+        `UPDATE content_items SET ${updates.join(', ')} WHERE id = $${paramCount}`,
+        values
+      );
     } else {
       textToConvert = content.content || '';
     }
