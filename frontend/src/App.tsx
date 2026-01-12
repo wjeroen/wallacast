@@ -32,7 +32,7 @@ function App() {
     );
 
     // Check if already authenticated by trying to fetch content
-    api.get('/api/content')
+    api.get('/content')
       .then(() => setIsAuthenticated(true))
       .catch(() => setShowLoginModal(true));
 
@@ -47,7 +47,7 @@ function App() {
     api.defaults.headers.common['Authorization'] = `Basic ${credentials}`;
 
     // Test authentication
-    await api.get('/api/content');
+    await api.get('/content');
     setIsAuthenticated(true);
   };
 
