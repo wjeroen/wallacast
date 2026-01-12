@@ -474,6 +474,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
                   <p className="error-message">{transcriptError}</p>
                   <button onClick={loadTranscript} className="retry-btn">Retry</button>
                 </div>
+              ) : content.generation_status === 'starting' || content.generation_status === 'extracting_content' ? (
+                <p className="status-message">⏳ Content is being extracted and formatted for reading...</p>
               ) : (transcript || content.content) ? (
                 <p>
                   {cleanHtml(transcript || content.content || '').split(/\s+/).map((word, index) => (

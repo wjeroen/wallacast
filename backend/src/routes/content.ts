@@ -97,8 +97,8 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
-      // Use plain text for now (will be extracted in background)
-      processedContent = articleData.content;
+      // Use placeholder text - will be extracted properly in background
+      processedContent = '⏳ Content is being extracted and formatted for reading...';
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
@@ -151,10 +151,10 @@ router.post('/', async (req, res) => {
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
-      // Set status to generating
+      // Set status to starting (will update to extracting_content immediately)
       await query(
         'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-        ['generating_audio', 0, 'audio', createdItem.id]
+        ['starting', 0, 'initialization', createdItem.id]
       );
 
       // Start generation in background (don't await)
