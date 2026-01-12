@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import basicAuth from 'express-basic-auth';
 import { initializeDatabase, closePool } from './database/db.js';
+import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -36,8 +37,8 @@ const authMiddleware = basicAuth({
   realm: 'Readcast API',
 });
 
-// Serve static files (audio, images, etc.)
-app.use('/audio', express.static(path.join(process.cwd(), 'public', 'audio')));
+// Serve static files (audio, images, etc.) from persistent storage
+app.use('/audio', express.static(getAudioDir()));
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Public routes (no auth required)
@@ -105,6 +106,9 @@ async function start() {
     try {
       await initializeDatabase();
       console.log('✅ Database connection established');
+
+      // Initialize storage directories
+      await ensureStorageDirectories();
       break;
     } catch (error) {
       retries--;
