@@ -195,13 +195,34 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       console.log('✓ Removed comments section from article body to prevent duplication');
     }
 
+    // Remove common non-article elements before Readability
+    const selectorsToRemove = [
+      '.sidebar', '.related-posts', '.newsletter-signup', '.social-share',
+      '.article-footer', '.post-footer', '.author-bio', '.recommended-articles',
+      'nav', 'footer', '.nav', '.footer', '[role="navigation"]', '[role="complementary"]'
+    ];
+
+    selectorsToRemove.forEach(selector => {
+      doc.querySelectorAll(selector).forEach(el => el.remove());
+    });
+
     // Use Mozilla Readability to extract clean article content
-    const reader = new Readability(doc);
+    const reader = new Readability(doc, {
+      // Readability options to be more strict
+      charThreshold: 100, // Minimum text length
+    });
     const article = reader.parse();
 
     let articleText = '';
     if (article && article.textContent) {
       articleText = article.textContent;
+
+      // Clean up extra whitespace and formatting issues
+      articleText = articleText
+        .replace(/\n{3,}/g, '\n\n') // Max 2 newlines
+        .replace(/[ \t]+/g, ' ') // Normalize spaces
+        .trim();
+
       console.log('✓ Readability extracted article content');
     } else {
       // Fallback to basic text extraction

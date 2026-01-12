@@ -125,9 +125,31 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
-      // Use the textContent (clean Readability extraction + formatted comments)
-      // This will be used directly for TTS, no GPT chat model needed
-      processedContent = articleData.textContent || articleData.content;
+      // Build display content with title and metadata
+      let displayContent = '';
+      if (articleData.title) {
+        displayContent += `# ${articleData.title}\n\n`;
+      }
+
+      // Add metadata line
+      const metadataParts: string[] = [];
+      if (articleData.author) metadataParts.push(`By ${articleData.author}`);
+      if (articleData.published_date) {
+        const date = new Date(articleData.published_date);
+        metadataParts.push(date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
+      }
+      if (articleData.karma !== undefined) metadataParts.push(`${articleData.karma} karma`);
+      if (articleData.agree_votes !== undefined) metadataParts.push(`${articleData.agree_votes} agree`);
+      if (articleData.disagree_votes !== undefined) metadataParts.push(`${articleData.disagree_votes} disagree`);
+
+      if (metadataParts.length > 0) {
+        displayContent += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
+      }
+
+      // Add article body (just the Readability text, no comments for display)
+      displayContent += articleData.textContent.split('\n\nComments section:')[0];
+
+      processedContent = displayContent;
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {

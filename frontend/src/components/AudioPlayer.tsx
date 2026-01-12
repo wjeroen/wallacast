@@ -460,7 +460,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
           <button onClick={toggleSpeed} className="speed-button">
             <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
+            <span>{playbackSpeed === 1 ? '1' : playbackSpeed}x</span>
           </button>
 
           <div className="sleep-timer">

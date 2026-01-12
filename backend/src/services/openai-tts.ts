@@ -39,6 +39,41 @@ interface Comment {
   replies?: Comment[];
 }
 
+function formatCommentsForTTS(comments: Comment[], depth: number = 0): string {
+  let text = '';
+  const indent = '  '.repeat(depth);
+
+  for (const comment of comments) {
+    // Format comment header with metadata
+    let header = `${indent}${comment.username}`;
+
+    if (comment.date) {
+      header += ` on ${comment.date}`;
+    }
+
+    const metadata: string[] = [];
+    if (comment.karma !== undefined) metadata.push(`${comment.karma} karma`);
+    if (comment.agree_votes !== undefined) metadata.push(`${comment.agree_votes} agree votes`);
+    if (comment.disagree_votes !== undefined) metadata.push(`${comment.disagree_votes} disagree votes`);
+
+    if (metadata.length > 0) {
+      header += ` with ${metadata.join(', ')}`;
+    }
+
+    header += ':\n';
+
+    // Add comment content
+    text += header + `${indent}${comment.content}\n\n`;
+
+    // Recursively format replies
+    if (comment.replies && comment.replies.length > 0) {
+      text += formatCommentsForTTS(comment.replies, depth + 1);
+    }
+  }
+
+  return text;
+}
+
 export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number, preExtractedComments?: Comment[]): Promise<{ content: string; comments?: Comment[] }> {
   // Handle overloaded parameters
   let commentsHtml: string | undefined;
@@ -472,9 +507,26 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
-      // Content is already clean and ready from Readability + formatted comments
-      // No GPT chat model extraction needed!
-      textToConvert = content.content || '';
+      // Content has title/metadata + article body (no comments for display)
+      // Get the article body text only
+      const contentParts = (content.content || '').split('---\n\n');
+      textToConvert = contentParts.length > 1 ? contentParts.slice(1).join('---\n\n') : (contentParts[0] || '');
+
+      // Add formatted comments from structured data if available
+      if (content.comments) {
+        try {
+          const structuredComments = typeof content.comments === 'string'
+            ? JSON.parse(content.comments)
+            : content.comments;
+
+          if (structuredComments && structuredComments.length > 0) {
+            textToConvert += '\n\nComments section:\n\n' + formatCommentsForTTS(structuredComments);
+            console.log(`✓ Added ${structuredComments.length} comments to TTS`);
+          }
+        } catch (error) {
+          console.error('Failed to parse comments for TTS:', error);
+        }
+      }
 
       // Update status to show content is ready for audio generation
       await query(
