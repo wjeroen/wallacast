@@ -38,7 +38,17 @@ interface Comment {
   replies?: Comment[];
 }
 
-export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<{ content: string; comments?: Comment[] }> {
+export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number): Promise<{ content: string; comments?: Comment[] }> {
+  // Handle overloaded parameters
+  let commentsHtml: string | undefined;
+  let actualContentId: number | undefined;
+
+  if (typeof commentsHtmlOrContentId === 'number') {
+    actualContentId = commentsHtmlOrContentId;
+  } else {
+    commentsHtml = commentsHtmlOrContentId;
+    actualContentId = contentId;
+  }
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -128,6 +138,14 @@ Return: Main article body, then complete comments section with ALL comments and 
     }
 
     const cleanContent = response.choices[0]?.message?.content || '';
+
+    // Update progress after main content extraction
+    if (actualContentId) {
+      await query(
+        'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+        [30, 'extracting_comments', actualContentId]
+      );
+    }
 
     // Extract structured comments if comments HTML was provided
     let structuredComments: Comment[] | undefined;
@@ -560,17 +578,26 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     const content = contentResult.rows[0];
 
+    console.log('=== Content metadata debug ===');
+    console.log('Title:', content.title);
+    console.log('Author:', content.author);
+    console.log('Published:', content.published_at);
+    console.log('Karma:', content.karma);
+    console.log('Agree votes:', content.agree_votes);
+    console.log('Disagree votes:', content.disagree_votes);
+    console.log('==============================');
+
     let textToConvert = '';
 
     if (content.type === 'article') {
       // Update status to show content extraction is in progress
       await query(
-        'UPDATE content_items SET generation_status = $1, current_operation = $2 WHERE id = $3',
-        ['extracting_content', 'content_extraction', contentId]
+        'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
+        ['extracting_content', 'extracting_article_text', 10, contentId]
       );
 
       // Extract clean content from HTML (with comments for audio)
-      const extracted = await extractArticleContent(content.html_content || content.content);
+      const extracted = await extractArticleContent(content.html_content || content.content, contentId);
       textToConvert = extracted.content;
 
       // Build intro for display (shown at top of content)
@@ -601,6 +628,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
           displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
         }
       }
+
+      console.log('=== Display Intro ===');
+      console.log(displayIntro);
+      console.log('=====================');
 
       // Update the content field with intro + extracted content and store structured comments
       const updates: string[] = [];
@@ -651,11 +682,17 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       const introParts: string[] = [];
       if (content.author) {
         introParts.push(`written by ${content.author}`);
+        console.log('✓ Including author in TTS:', content.author);
+      } else {
+        console.log('⚠ No author found in content object');
       }
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         introParts.push(`posted on ${formattedDate}`);
+        console.log('✓ Including date in TTS:', formattedDate);
+      } else {
+        console.log('⚠ No published_at found in content object');
       }
       if (introParts.length > 0) {
         intro += `, ${introParts.join(', ')}`;
@@ -668,10 +705,16 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         // Add agree/disagree votes if available
         if (content.agree_votes !== undefined && content.agree_votes !== null) {
           intro += `, ${content.agree_votes} agree votes`;
+          console.log('✓ Including agree votes in TTS:', content.agree_votes);
+        } else {
+          console.log('⚠ No agree_votes found');
         }
 
         if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
           intro += `, and ${content.disagree_votes} disagree votes`;
+          console.log('✓ Including disagree votes in TTS:', content.disagree_votes);
+        } else {
+          console.log('⚠ No disagree_votes found');
         }
 
         intro += '.';
@@ -681,6 +724,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
       intro += '\n\n';
     }
+
+    console.log('=== Final TTS Intro ===');
+    console.log(intro);
+    console.log('=======================');
 
     // Prepend intro to content
     const fullText = intro + textToConvert;
