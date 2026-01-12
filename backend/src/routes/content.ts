@@ -225,6 +225,78 @@ router.patch('/:id', async (req, res) => {
       'description',
     ];
 
+    // Special handling for archiving: delete audio file to save space
+    if (updates.is_archived === true) {
+      const contentResult = await query(
+        'SELECT audio_url, type FROM content_items WHERE id = $1',
+        [id]
+      );
+
+      if (contentResult.rows.length > 0) {
+        const { audio_url, type } = contentResult.rows[0];
+
+        // Only delete audio for articles (not podcasts)
+        if (audio_url && (type === 'article' || type === 'text')) {
+          try {
+            // Extract filename from URL
+            const filename = audio_url.split('/').pop();
+            if (filename) {
+              const { getAudioDir } = await import('../config/storage.js');
+              const audioPath = path.join(getAudioDir(), filename);
+              const fs = await import('fs/promises');
+              await fs.unlink(audioPath);
+              console.log(`Archived: Deleted audio file ${filename} to save space`);
+            }
+          } catch (error) {
+            console.warn('Failed to delete audio file on archive:', error);
+          }
+
+          // Clear audio_url from database
+          updates.audio_url = null;
+          allowedFields.push('audio_url');
+        }
+      }
+    }
+
+    // Special handling for un-archiving: regenerate audio if it's missing
+    if (updates.is_archived === false) {
+      const contentResult = await query(
+        'SELECT audio_url, type, html_content FROM content_items WHERE id = $1',
+        [id]
+      );
+
+      if (contentResult.rows.length > 0) {
+        const { audio_url, type, html_content } = contentResult.rows[0];
+
+        // If un-archiving and audio is missing, trigger regeneration
+        if (!audio_url && (type === 'article' || type === 'text') && html_content) {
+          console.log(`Un-archiving article ${id}: triggering audio regeneration`);
+
+          // Start generation in background (don't await)
+          generateAudioForContent(parseInt(id))
+            .then(async () => {
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+                ['completed', 100, id]
+              );
+              console.log(`Audio regenerated for un-archived article ${id}`);
+            })
+            .catch(async (error) => {
+              console.error('Auto audio regeneration error on un-archive:', error);
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                ['failed', error.message || 'Failed to regenerate audio', 0, id]
+              );
+            });
+
+          // Set status to show generation started
+          updates.generation_status = 'starting';
+          updates.generation_progress = 0;
+          allowedFields.push('generation_status', 'generation_progress');
+        }
+      }
+    }
+
     const setClause = [];
     const values = [];
     let paramCount = 1;
@@ -261,13 +333,40 @@ router.patch('/:id', async (req, res) => {
 // Delete content item
 router.delete('/:id', async (req, res) => {
   try {
+    // First get the content item to extract the audio URL
+    const contentResult = await query(
+      'SELECT audio_url FROM content_items WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const audioUrl = contentResult.rows[0].audio_url;
+
+    // Delete the database record
     const result = await query(
       'DELETE FROM content_items WHERE id = $1 RETURNING id',
       [req.params.id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Content not found' });
+    // Delete the audio file if it exists
+    if (audioUrl) {
+      try {
+        // Extract filename from URL (e.g., "article_123_1234567890.mp3")
+        const filename = audioUrl.split('/').pop();
+        if (filename) {
+          const { getAudioDir } = await import('../config/storage.js');
+          const audioPath = path.join(getAudioDir(), filename);
+          const fs = await import('fs/promises');
+          await fs.unlink(audioPath);
+          console.log(`Deleted audio file: ${filename}`);
+        }
+      } catch (error) {
+        console.warn('Failed to delete audio file:', error);
+        // Don't fail the delete operation if file deletion fails
+      }
     }
 
     res.json({ message: 'Content deleted successfully' });
@@ -305,6 +404,22 @@ router.post('/:id/generate-audio', async (req, res) => {
         generation_status: contentItem.generation_status,
         generation_progress: contentItem.generation_progress
       });
+    }
+
+    // If regenerating and old audio exists, delete it first
+    if (regenerate && contentItem.audio_url) {
+      try {
+        const filename = contentItem.audio_url.split('/').pop();
+        if (filename) {
+          const { getAudioDir } = await import('../config/storage.js');
+          const audioPath = path.join(getAudioDir(), filename);
+          const fs = await import('fs/promises');
+          await fs.unlink(audioPath);
+          console.log(`Regenerating: Deleted old audio file ${filename}`);
+        }
+      } catch (error) {
+        console.warn('Failed to delete old audio file on regenerate:', error);
+      }
     }
 
     // Set status to generating
