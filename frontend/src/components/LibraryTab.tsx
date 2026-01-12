@@ -222,11 +222,14 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     // Generate detailed status message
     let statusMessage = '';
     let progressPercent = item.generation_progress || 0;
+    let showProgressBar = true;
 
     if (item.generation_status === 'starting') {
       statusMessage = '⏳ Starting...';
+      showProgressBar = false; // No progress tracking for initialization
     } else if (item.generation_status === 'extracting_content') {
       statusMessage = '📄 Extracting content...';
+      showProgressBar = false; // Single GPT call - no intermediate progress
     } else if (item.generation_status === 'content_ready') {
       // Parse chunk progress from current_operation
       if (item.current_operation?.startsWith('audio_chunk_')) {
@@ -251,7 +254,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     return (
       <div className="generation-status generating">
         <span>{statusMessage}</span>
-        {progressPercent > 0 && (
+        {showProgressBar && progressPercent > 0 && (
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
           </div>

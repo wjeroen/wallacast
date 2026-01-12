@@ -154,6 +154,10 @@ Return: Main article body, then complete comments section with ALL comments and 
       try {
         console.log('Extracting structured comments data...');
 
+        // Pass the FULL HTML (not just comments section) to access Apollo state
+        // The Apollo state contains accurate vote data in a <script> tag
+        const fullHtmlForComments = htmlContent.slice(0, 150000);
+
         // Retry logic for comments extraction
         let commentRetries = 5;
         let commentDelay = 1000;
@@ -171,33 +175,26 @@ Return: Main article body, then complete comments section with ALL comments and 
 For EACH comment (including nested replies), extract:
 - username: The comment author's username (required)
 - date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
-- karma: The INDIVIDUAL COMMENT's karma/upvote count (if available, as a number - look for:
-  * Small numbers (typically 0-50 for individual comments) near the comment header
-  * Numbers in spans/divs with classes like "karma", "vote", "points", "score" WITHIN the comment container
-  * Numbers near up/down arrow buttons for THAT SPECIFIC comment
-  * Patterns like "15 points" or "+15" near the comment username (not the post author)
-  * Data attributes like data-karma or data-score on the comment element
-  * IMPORTANT: Do NOT use the post's karma (which is much higher, like 300+). Comment karma is usually much smaller.
-- agree_votes: Number of agree votes FOR THIS COMMENT (if available, as a number - look for:
-  * Small numbers (typically 0-20) near green checkmark/agree buttons WITHIN this comment
-  * Text like "5 agree", "+5", or "✓ 5" in the comment's vote section
-  * Spans with classes like "agree", "agreement-count" for THIS comment only
-  * NOT the post's agree votes - look only within this comment's HTML
-- disagree_votes: Number of disagree votes FOR THIS COMMENT (if available, as a number - look for:
-  * Small numbers (typically 0-10) near red X/disagree buttons WITHIN this comment
-  * Text like "2 disagree", "-2", or "✗ 2" in the comment's vote section
-  * Spans with classes like "disagree", "disagreement-count" for THIS comment only
-  * NOT the post's disagree votes - look only within this comment's HTML
+- karma: The INDIVIDUAL COMMENT's karma/upvote count (if available, as a number)
+- agree_votes: Number of agree votes FOR THIS COMMENT (if available, as a number)
+- disagree_votes: Number of disagree votes FOR THIS COMMENT (if available, as a number)
 - content: The comment text (clean, no HTML, preserve paragraph breaks)
 - replies: Array of nested reply comments with the same structure
 
+CRITICAL FOR EA FORUM POSTS:
+The accurate vote data is in the __APOLLO_STATE__ JSON block within a <script> tag in the page. Look for:
+1. Find the <script> tag containing "__APOLLO_STATE__" or "ROOT_QUERY"
+2. Look for Comment entries like: "Comment:xxxxx": {"baseScore":35,"extendedScore":{"agree":11,"disagree":1},...}
+3. Match comment IDs from the HTML (in data-comment-id or similar attributes) to the Apollo state
+4. Use baseScore for karma, extendedScore.agree for agree_votes, extendedScore.disagree for disagree_votes
+
+If the Apollo state JSON is found, ALWAYS prioritize it over HTML elements for vote counts.
+If Apollo state is not found, look for vote counts in the HTML elements within each comment's container.
+
 IMPORTANT:
 - Extract ALL comments from the HTML, don't stop early
-- Each comment has its OWN vote counts - don't reuse the post's votes or other comments' votes
-- Comment karma/votes are typically MUCH SMALLER than post karma (individual comments rarely exceed 50 karma)
-- If you see large numbers like 300+, that's likely the POST karma, not a comment's karma
-- Check for vote data ONLY within each comment's container/div, not at the page level
-- If you can't find a metadata field after thorough searching WITHIN that comment's HTML, omit it (don't use null or 0)
+- Each comment has its OWN vote counts - don't reuse the post's votes
+- If you can't find vote data after checking both Apollo state and HTML, omit those fields
 - Preserve the hierarchical structure of replies
 
 Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
@@ -224,18 +221,19 @@ Example format:
                 },
                 {
                   role: 'user',
-                  content: `Extract ALL comments from this HTML.
+                  content: `Extract ALL comments from this HTML with their vote data.
 
-CRITICAL: The vote data is located in the __APOLLO_STATE__ JSON block within a <script> tag. Look for entries like:
-- Comment IDs: "Comment:xxxxx" containing "baseScore" and "extendedScore":{"agree":X,"disagree":Y}
-- Post data: "Post:xxxxx" containing vote counts
+CRITICAL: Look for the __APOLLO_STATE__ JSON in <script> tags - this contains the accurate vote counts.
 
-Example from the JSON:
-"Comment:tqwACbJGbgXwwrLWg": {"baseScore":35,"extendedScore":{"agree":11,"disagree":1}}
+Example Apollo state structure:
+"Comment:tqwACbJGbgXwwrLWg": {
+  "baseScore": 35,
+  "extendedScore": {"agree": 11, "disagree": 1},
+  "postedAt": "2024-01-15T10:30:00.000Z",
+  "user": {"displayName": "John Doe"}
+}
 
-Use this JSON data to get accurate vote counts. If the JSON is present, prioritize it over HTML elements.
-
-HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
+Full HTML (includes Apollo state and comments section):\n\n${fullHtmlForComments}`,
                 },
               ],
               temperature: 0.2,

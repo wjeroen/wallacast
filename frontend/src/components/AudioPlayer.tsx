@@ -60,20 +60,22 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      audio.src = content.audio_url || '';
-      audio.playbackRate = content.playback_speed || 1;
-      setPlaybackSpeed(content.playback_speed || 1);
-
-      // Wait for metadata to load before setting position
+      // CRITICAL: Add event listener BEFORE setting src to avoid race condition
       const handleLoadedMetadata = () => {
         if (startPosition > 0) {
           audio.currentTime = startPosition;
           setCurrentTime(startPosition);
+          console.log('Restored playback position:', startPosition);
         }
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
 
       audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+      // Set audio source and playback settings
+      audio.src = content.audio_url || '';
+      audio.playbackRate = content.playback_speed || 1;
+      setPlaybackSpeed(content.playback_speed || 1);
     }
 
     if (content.transcript) {

@@ -253,7 +253,7 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
           model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
-          prompt: previousTranscript.slice(-224),
+          prompt: previousTranscript.slice(-224) || 'This is a podcast conversation. Include natural speaker changes and pauses.',
         });
 
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
@@ -270,6 +270,48 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
 
         // Update time offset for next chunk (15 minutes = 900 seconds)
         timeOffset += 900;
+      }
+
+      // Enhance transcript with speaker labels using GPT
+      console.log('Adding speaker labels to transcript...');
+      try {
+        const speakerResponse = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a transcript formatting assistant. Add speaker labels to podcast transcripts.
+
+Analyze the transcript for natural speaker changes based on:
+- Conversation patterns and turn-taking
+- Topic shifts and responses
+- Question-answer patterns
+- Natural dialogue flow
+
+Format the output as:
+Speaker A: [their dialogue]
+Speaker B: [their dialogue]
+Speaker A: [continues...]
+
+Use generic labels (Speaker A, Speaker B, etc.) unless actual names are mentioned multiple times and clearly identifiable.
+Preserve all original text exactly - only add speaker labels at the start of speaking turns.
+Don't add labels mid-sentence - only at natural turn boundaries.`,
+            },
+            {
+              role: 'user',
+              content: `Add speaker labels to this podcast transcript:\n\n${transcriptText}`,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 16384,
+        });
+
+        const labeledText = speakerResponse.choices[0]?.message?.content || transcriptText;
+        transcriptText = labeledText;
+        console.log('✓ Speaker labels added to transcript');
+      } catch (error) {
+        console.error('Failed to add speaker labels:', error);
+        // Continue with original transcript if speaker labeling fails
       }
     } else {
       // File is small enough - transcribe directly (with compression if needed)
@@ -288,10 +330,53 @@ export async function transcribeWithTimestamps(audioUrl: string): Promise<{
         model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
         response_format: 'verbose_json',
         timestamp_granularities: ['word'],
+        prompt: 'This is a podcast conversation. Include natural speaker changes and pauses.',
       });
 
       transcriptText = transcription.text;
       allWords = (transcription as any).words || [];
+
+      // Enhance transcript with speaker labels using GPT
+      console.log('Adding speaker labels to transcript...');
+      try {
+        const speakerResponse = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a transcript formatting assistant. Add speaker labels to podcast transcripts.
+
+Analyze the transcript for natural speaker changes based on:
+- Conversation patterns and turn-taking
+- Topic shifts and responses
+- Question-answer patterns
+- Natural dialogue flow
+
+Format the output as:
+Speaker A: [their dialogue]
+Speaker B: [their dialogue]
+Speaker A: [continues...]
+
+Use generic labels (Speaker A, Speaker B, etc.) unless actual names are mentioned multiple times and clearly identifiable.
+Preserve all original text exactly - only add speaker labels at the start of speaking turns.
+Don't add labels mid-sentence - only at natural turn boundaries.`,
+            },
+            {
+              role: 'user',
+              content: `Add speaker labels to this podcast transcript:\n\n${transcriptText}`,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 16384,
+        });
+
+        const labeledText = speakerResponse.choices[0]?.message?.content || transcriptText;
+        transcriptText = labeledText;
+        console.log('✓ Speaker labels added to transcript');
+      } catch (error) {
+        console.error('Failed to add speaker labels:', error);
+        // Continue with original transcript if speaker labeling fails
+      }
     }
 
     // Clean up all temp files
