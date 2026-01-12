@@ -60,12 +60,19 @@ export async function extractArticleContent(htmlContent: string, commentsHtml?: 
       userPrompt += `\n\nComments Section HTML:\n\n${commentsToSend}`;
     }
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a content extraction assistant that formats web content for text-to-speech reading.
+    // Retry logic for content extraction with exponential backoff
+    let retries = 5;
+    let delay = 1000;
+    let response: any = null;
+
+    while (retries > 0) {
+      try {
+        response = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a content extraction assistant that formats web content for text-to-speech reading.
 
 Extract and format content following these rules:
 
@@ -94,15 +101,31 @@ Extract and format content following these rules:
 10. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
 
 Return: Main article body, then complete comments section with ALL comments and all available metadata.`,
-        },
-        {
-          role: 'user',
-          content: userPrompt,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 16384, // Max tokens for gpt-4o-mini
-    });
+            },
+            {
+              role: 'user',
+              content: userPrompt,
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 16384, // Max tokens for gpt-4o-mini
+        });
+        break;
+      } catch (error: any) {
+        if (error.status === 429 && retries > 1) {
+          console.log(`Rate limit hit on content extraction, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay = Math.min(delay * 2, 30000);
+          retries--;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (!response) {
+      throw new Error('Failed to extract content after retries');
+    }
 
     const cleanContent = response.choices[0]?.message?.content || '';
 
@@ -111,12 +134,20 @@ Return: Main article body, then complete comments section with ALL comments and 
     if (commentsHtml) {
       try {
         console.log('Extracting structured comments data...');
-        const commentsResponse = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
+
+        // Retry logic for comments extraction
+        let commentRetries = 5;
+        let commentDelay = 1000;
+        let commentsResponse: any = null;
+
+        while (commentRetries > 0) {
+          try {
+            commentsResponse = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: [
+                {
+                  role: 'system',
+                  content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
 
 For EACH comment (including nested replies), extract:
 - username: The comment author's username (required)
@@ -167,15 +198,31 @@ Example format:
     ]
   }
 ]`,
-            },
-            {
-              role: 'user',
-              content: `Extract ALL comments from this HTML. Make sure to get every single comment, don't cut off early:\n\n${commentsHtml.slice(0, 100000)}`,
-            },
-          ],
-          temperature: 0.2,
-          max_tokens: 16384, // Max tokens for gpt-4o-mini to capture all comments
-        });
+                },
+                {
+                  role: 'user',
+                  content: `Extract ALL comments from this HTML. Make sure to get every single comment, don't cut off early:\n\n${commentsHtml.slice(0, 100000)}`,
+                },
+              ],
+              temperature: 0.2,
+              max_tokens: 16384, // Max tokens for gpt-4o-mini to capture all comments
+            });
+            break;
+          } catch (error: any) {
+            if (error.status === 429 && commentRetries > 1) {
+              console.log(`Rate limit hit on comments extraction, retrying in ${commentDelay/1000}s... (${commentRetries - 1} retries left)`);
+              await new Promise(resolve => setTimeout(resolve, commentDelay));
+              commentDelay = Math.min(commentDelay * 2, 30000);
+              commentRetries--;
+            } else {
+              throw error;
+            }
+          }
+        }
+
+        if (!commentsResponse) {
+          throw new Error('Failed to extract comments after retries');
+        }
 
         let commentsJson = commentsResponse.choices[0]?.message?.content || '[]';
 
@@ -306,21 +353,45 @@ export async function generateArticleAudio(
       'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
     // Split text into chunks that fit within OpenAI's 4096 character limit
-    const textChunks = splitTextIntoChunks(articleText, 4090);
+    // Using 3500 to leave buffer for any encoding or special characters
+    const textChunks = splitTextIntoChunks(articleText, 3500);
     console.log(`Generating TTS audio with gpt-4o-mini-tts for ${textChunks.length} chunk(s)...`);
 
     // Calculate word positions for the full text
     const allWords = articleText.split(/\s+/);
 
     if (textChunks.length === 1) {
-      // Single chunk - simple case
+      // Single chunk - simple case with retry logic
       console.log(`Single chunk (${textChunks[0].length} chars)`);
-      const response = await openai.audio.speech.create({
-        model: 'gpt-4o-mini-tts',
-        voice: voice,
-        input: textChunks[0],
-        instructions: instructions,
-      });
+
+      let retries = 5;
+      let delay = 1000;
+      let response: any = null;
+
+      while (retries > 0) {
+        try {
+          response = await openai.audio.speech.create({
+            model: 'gpt-4o-mini-tts',
+            voice: voice,
+            input: textChunks[0],
+            instructions: instructions,
+          });
+          break;
+        } catch (error: any) {
+          if (error.status === 429 && retries > 1) {
+            console.log(`Rate limit hit, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay = Math.min(delay * 2, 30000);
+            retries--;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      if (!response) {
+        throw new Error('Failed to generate audio after retries');
+      }
 
       const buffer = Buffer.from(await response.arrayBuffer());
 
@@ -354,7 +425,7 @@ export async function generateArticleAudio(
     let currentTime = 0;
 
     try {
-      // Generate audio for each chunk
+      // Generate audio for each chunk with rate limiting
       for (let i = 0; i < textChunks.length; i++) {
         console.log(`Generating chunk ${i + 1}/${textChunks.length} (${textChunks[i].length} chars)...`);
 
@@ -367,12 +438,37 @@ export async function generateArticleAudio(
           );
         }
 
-        const response = await openai.audio.speech.create({
-          model: 'gpt-4o-mini-tts',
-          voice: voice,
-          input: textChunks[i],
-          instructions: instructions,
-        });
+        // Retry logic with exponential backoff for rate limits
+        let retries = 5;
+        let delay = 1000; // Start with 1 second
+        let response: any = null;
+
+        while (retries > 0) {
+          try {
+            response = await openai.audio.speech.create({
+              model: 'gpt-4o-mini-tts',
+              voice: voice,
+              input: textChunks[i],
+              instructions: instructions,
+            });
+            break; // Success, exit retry loop
+          } catch (error: any) {
+            if (error.status === 429 && retries > 1) {
+              // Rate limit hit, wait and retry
+              console.log(`Rate limit hit on chunk ${i + 1}, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              delay = Math.min(delay * 2, 30000); // Exponential backoff, max 30s
+              retries--;
+            } else {
+              // Other error or out of retries, throw
+              throw error;
+            }
+          }
+        }
+
+        if (!response) {
+          throw new Error(`Failed to generate chunk ${i + 1} after retries`);
+        }
 
         const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
         const chunkBuffer = Buffer.from(await response.arrayBuffer());
@@ -393,6 +489,13 @@ export async function generateArticleAudio(
 
         currentWordIndex += chunkWords;
         currentTime += duration;
+
+        // Add delay between chunks to respect rate limits (except for last chunk)
+        if (i < textChunks.length - 1) {
+          const delayMs = 1000; // 1 second delay between chunks
+          console.log(`Waiting ${delayMs}ms before next chunk to respect rate limits...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
       }
 
       // Concatenate all chunks
