@@ -90,10 +90,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     });
 
-    // Extract comments section HTML
+    // Extract comments section HTML and parse structured comment data
+    let structuredComments: Comment[] | undefined;
     const commentsSection = doc.querySelector('.CommentsListSection-root');
     if (commentsSection) {
       commentsHtml = commentsSection.outerHTML;
+
+      // Parse structured comment data using DOM selectors
+      try {
+        structuredComments = parseCommentsFromDOM(commentsSection);
+        console.log(`Extracted ${structuredComments.length} structured comments from DOM`);
+      } catch (error) {
+        console.error('Error parsing comments from DOM:', error);
+      }
     }
 
     console.log('=== Article Fetcher Metadata Extraction ===');
@@ -188,10 +197,124 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       agree_votes: agreeVotes,
       disagree_votes: disagreeVotes,
       comments_html: commentsHtml,
+      comments: structuredComments,
     };
   } catch (error) {
     console.error('Error fetching article:', error);
     throw new Error('Failed to fetch article content');
+  }
+}
+
+function parseCommentsFromDOM(commentsSection: Element): Comment[] {
+  const comments: Comment[] = [];
+
+  // Find all top-level comment items (not nested in replies)
+  const topLevelComments = commentsSection.querySelectorAll('.CommentsNode-root > .CommentsItem-root');
+
+  topLevelComments.forEach((commentElement) => {
+    const comment = parseCommentElement(commentElement);
+    if (comment) {
+      comments.push(comment);
+    }
+  });
+
+  return comments;
+}
+
+function parseCommentElement(commentElement: Element): Comment | null {
+  try {
+    // Extract username
+    const usernameElement = commentElement.querySelector('.UsersNameDisplay-userName') ||
+                           commentElement.querySelector('.CommentsItem-author a');
+    const username = usernameElement?.textContent?.trim();
+    if (!username) return null;
+
+    // Extract date
+    let date: string | undefined;
+    const timeElement = commentElement.querySelector('time[dateTime]');
+    if (timeElement) {
+      const dateTime = timeElement.getAttribute('dateTime');
+      if (dateTime) {
+        date = new Date(dateTime).toISOString().split('T')[0]; // Format as YYYY-MM-DD
+      }
+    }
+
+    // Extract karma/vote score
+    let karma: number | undefined;
+    const karmaElement = commentElement.querySelector('.OverallVoteAxis-voteScore');
+    if (karmaElement) {
+      const karmaText = karmaElement.textContent?.trim();
+      if (karmaText) {
+        const parsed = parseInt(karmaText);
+        if (!isNaN(parsed)) {
+          karma = parsed;
+        }
+      }
+    }
+
+    // Extract agree and disagree votes from reaction buttons
+    let agreeVotes: number | undefined;
+    let disagreeVotes: number | undefined;
+
+    const reactionButtons = commentElement.querySelectorAll('.EAReactsSection-button');
+    reactionButtons.forEach((button) => {
+      const svg = button.querySelector('svg');
+      if (!svg) return;
+
+      const svgContent = svg.innerHTML;
+      const numberDiv = button.querySelector('.EAReactsSection-emojiPreview + div');
+      if (!numberDiv) return;
+
+      const voteCountText = numberDiv.textContent?.trim();
+      if (!voteCountText) return;
+
+      const voteCount = parseInt(voteCountText);
+      if (isNaN(voteCount)) return;
+
+      // Check if it's an agree vote (checkmark) or disagree vote (X)
+      if (svgContent.includes('Vector (Stroke)') || svgContent.includes('M2.5 7.5L6 11L13.5 3.5')) {
+        agreeVotes = voteCount;
+      } else if (svgContent.includes('Union') || svgContent.includes('M3 3L13 13M13 3L3 13')) {
+        disagreeVotes = voteCount;
+      }
+    });
+
+    // Extract comment content (text only, no HTML)
+    let content = '';
+    const contentElement = commentElement.querySelector('.CommentBody-root') ||
+                          commentElement.querySelector('.CommentsItem-body');
+    if (contentElement) {
+      content = contentElement.textContent?.trim() || '';
+    }
+
+    // Extract nested replies recursively
+    const replies: Comment[] = [];
+    const repliesContainer = commentElement.querySelector('.CommentReplies-root');
+    if (repliesContainer) {
+      const replyElements = repliesContainer.querySelectorAll(':scope > .CommentsNode-root > .CommentsItem-root');
+      replyElements.forEach((replyElement) => {
+        const reply = parseCommentElement(replyElement);
+        if (reply) {
+          replies.push(reply);
+        }
+      });
+    }
+
+    const comment: Comment = {
+      username,
+      content,
+    };
+
+    if (date) comment.date = date;
+    if (karma !== undefined) comment.karma = karma;
+    if (agreeVotes !== undefined) comment.agree_votes = agreeVotes;
+    if (disagreeVotes !== undefined) comment.disagree_votes = disagreeVotes;
+    if (replies.length > 0) comment.replies = replies;
+
+    return comment;
+  } catch (error) {
+    console.error('Error parsing comment element:', error);
+    return null;
   }
 }
 

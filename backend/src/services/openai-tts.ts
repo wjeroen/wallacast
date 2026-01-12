@@ -39,7 +39,7 @@ interface Comment {
   replies?: Comment[];
 }
 
-export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number): Promise<{ content: string; comments?: Comment[] }> {
+export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number, preExtractedComments?: Comment[]): Promise<{ content: string; comments?: Comment[] }> {
   // Handle overloaded parameters
   let commentsHtml: string | undefined;
   let actualContentId: number | undefined;
@@ -148,135 +148,17 @@ Return: Main article body, then complete comments section with ALL comments and 
       );
     }
 
-    // Extract structured comments if comments HTML was provided
-    let structuredComments: Comment[] | undefined;
-    if (commentsHtml) {
-      try {
-        console.log('Extracting structured comments data...');
+    // Use pre-extracted comments if provided, otherwise skip GPT extraction
+    // Comments are now extracted at fetch time using DOM selectors in article-fetcher.ts
+    let structuredComments: Comment[] | undefined = preExtractedComments;
 
-        // Pass the FULL HTML (not just comments section) to access Apollo state
-        // The Apollo state contains accurate vote data in a <script> tag
-        const fullHtmlForComments = htmlContent.slice(0, 150000);
-
-        // Retry logic for comments extraction
-        let commentRetries = 5;
-        let commentDelay = 1000;
-        let commentsResponse: any = null;
-
-        while (commentRetries > 0) {
-          try {
-            commentsResponse = await openai.chat.completions.create({
-              model: 'gpt-4o-mini',
-              messages: [
-                {
-                  role: 'system',
-                  content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
-
-For EACH comment (including nested replies), extract:
-- username: The comment author's username (required)
-- date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
-- karma: The INDIVIDUAL COMMENT's karma/upvote count (if available, as a number)
-- agree_votes: Number of agree votes FOR THIS COMMENT (if available, as a number)
-- disagree_votes: Number of disagree votes FOR THIS COMMENT (if available, as a number)
-- content: The comment text (clean, no HTML, preserve paragraph breaks)
-- replies: Array of nested reply comments with the same structure
-
-CRITICAL FOR EA FORUM POSTS:
-The accurate vote data is in the __APOLLO_STATE__ JSON block within a <script> tag in the page. Look for:
-1. Find the <script> tag containing "__APOLLO_STATE__" or "ROOT_QUERY"
-2. Look for Comment entries like: "Comment:xxxxx": {"baseScore":35,"extendedScore":{"agree":11,"disagree":1},...}
-3. Match comment IDs from the HTML (in data-comment-id or similar attributes) to the Apollo state
-4. Use baseScore for karma, extendedScore.agree for agree_votes, extendedScore.disagree for disagree_votes
-
-If the Apollo state JSON is found, ALWAYS prioritize it over HTML elements for vote counts.
-If Apollo state is not found, look for vote counts in the HTML elements within each comment's container.
-
-IMPORTANT:
-- Extract ALL comments from the HTML, don't stop early
-- Each comment has its OWN vote counts - don't reuse the post's votes
-- If you can't find vote data after checking both Apollo state and HTML, omit those fields
-- Preserve the hierarchical structure of replies
-
-Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
-
-Example format:
-[
-  {
-    "username": "john_doe",
-    "date": "2024-01-15",
-    "karma": 42,
-    "agree_votes": 5,
-    "disagree_votes": 1,
-    "content": "This is a great article!",
-    "replies": [
-      {
-        "username": "jane_smith",
-        "date": "2024-01-16",
-        "karma": 15,
-        "content": "I agree with this point."
+    if (structuredComments && structuredComments.length > 0) {
+      console.log(`Using ${structuredComments.length} pre-extracted comments from DOM parsing`);
+      if (structuredComments[0]) {
+        console.log('Sample comment:', JSON.stringify(structuredComments[0], null, 2));
       }
-    ]
-  }
-]`,
-                },
-                {
-                  role: 'user',
-                  content: `Extract ALL comments from this HTML with their vote data.
-
-CRITICAL: Look for the __APOLLO_STATE__ JSON in <script> tags - this contains the accurate vote counts.
-
-Example Apollo state structure:
-"Comment:tqwACbJGbgXwwrLWg": {
-  "baseScore": 35,
-  "extendedScore": {"agree": 11, "disagree": 1},
-  "postedAt": "2024-01-15T10:30:00.000Z",
-  "user": {"displayName": "John Doe"}
-}
-
-Full HTML (includes Apollo state and comments section):\n\n${fullHtmlForComments}`,
-                },
-              ],
-              temperature: 0.2,
-              max_tokens: 16384, // Max tokens for gpt-4o-mini to capture all comments
-            });
-            break;
-          } catch (error: any) {
-            if (error.status === 429 && commentRetries > 1) {
-              console.log(`Rate limit hit on comments extraction, retrying in ${commentDelay/1000}s... (${commentRetries - 1} retries left)`);
-              await new Promise(resolve => setTimeout(resolve, commentDelay));
-              commentDelay = Math.min(commentDelay * 2, 30000);
-              commentRetries--;
-            } else {
-              throw error;
-            }
-          }
-        }
-
-        if (!commentsResponse) {
-          throw new Error('Failed to extract comments after retries');
-        }
-
-        let commentsJson = commentsResponse.choices[0]?.message?.content || '[]';
-
-        // Remove markdown code blocks if GPT wrapped the JSON
-        commentsJson = commentsJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-        // Parse the JSON response
-        try {
-          structuredComments = JSON.parse(commentsJson);
-          console.log(`Extracted ${structuredComments?.length || 0} structured comments`);
-          if (structuredComments && structuredComments.length > 0) {
-            console.log('Sample comment:', JSON.stringify(structuredComments[0], null, 2));
-          }
-        } catch (parseError) {
-          console.error('Failed to parse comments JSON:', parseError);
-          console.error('Raw JSON:', commentsJson.substring(0, 500));
-          // Continue without structured comments
-        }
-      } catch (error) {
-        console.error('Error extracting structured comments:', error);
-        // Continue without structured comments
-      }
+    } else if (commentsHtml) {
+      console.log('No pre-extracted comments available, comments will only appear in TTS audio');
     }
 
     return { content: cleanContent, comments: structuredComments };
@@ -584,6 +466,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     console.log('Karma:', content.karma);
     console.log('Agree votes:', content.agree_votes);
     console.log('Disagree votes:', content.disagree_votes);
+    console.log('Pre-extracted comments:', content.comments ? 'Yes' : 'No');
     console.log('==============================');
 
     let textToConvert = '';
@@ -595,8 +478,26 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         ['extracting_content', 'extracting_article_text', 10, contentId]
       );
 
+      // Parse pre-extracted comments from database if available
+      let preExtractedComments: Comment[] | undefined;
+      if (content.comments) {
+        try {
+          preExtractedComments = typeof content.comments === 'string'
+            ? JSON.parse(content.comments)
+            : content.comments;
+          console.log(`Found ${preExtractedComments?.length || 0} pre-extracted comments in database`);
+        } catch (error) {
+          console.error('Failed to parse stored comments:', error);
+        }
+      }
+
       // Extract clean content from HTML (with comments for audio)
-      const extracted = await extractArticleContent(content.html_content || content.content, contentId);
+      const extracted = await extractArticleContent(
+        content.html_content || content.content,
+        contentId,
+        undefined, // commentsHtml parameter (unused when we have pre-extracted comments)
+        preExtractedComments
+      );
       textToConvert = extracted.content;
 
       // Build intro for display (shown at top of content)
@@ -650,11 +551,15 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       values.push('audio_generation');
       paramCount++;
 
-      if (extracted.comments && extracted.comments.length > 0) {
+      // Only store comments if they weren't already pre-extracted
+      // (i.e., this is a fallback extraction - shouldn't happen normally)
+      if (extracted.comments && extracted.comments.length > 0 && !preExtractedComments) {
         updates.push(`comments = $${paramCount}`);
         values.push(JSON.stringify(extracted.comments));
         paramCount++;
-        console.log(`Storing ${extracted.comments.length} structured comments`);
+        console.log(`Storing ${extracted.comments.length} fallback-extracted comments`);
+      } else if (preExtractedComments && preExtractedComments.length > 0) {
+        console.log(`Using ${preExtractedComments.length} pre-extracted comments (already in database)`);
       }
 
       values.push(contentId);
