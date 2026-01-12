@@ -40,7 +40,7 @@ export interface ContentItem {
   generation_status?: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed';
   generation_progress?: number;
   generation_error?: string;
-  current_operation?: 'initialization' | 'content_extraction' | 'audio_generation' | 'audio' | 'transcript';
+  current_operation?: 'initialization' | 'content_extraction' | 'audio_generation' | 'concatenating_audio' | 'audio' | 'transcript' | string;
   created_at: string;
   updated_at: string;
 }
