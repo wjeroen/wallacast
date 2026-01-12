@@ -40,34 +40,53 @@ const getDatabaseConfig = () => {
   return config;
 };
 
-export const pool = new Pool(getDatabaseConfig());
+// Create pool lazily to avoid connection attempts at module load time
+let pool: pg.Pool | null = null;
+
+export function getPool(): pg.Pool {
+  if (!pool) {
+    pool = new Pool(getDatabaseConfig());
+  }
+  return pool;
+}
+
+export async function closePool(): Promise<void> {
+  if (pool) {
+    console.log('Closing database connection pool...');
+    await pool.end();
+    pool = null;
+    console.log('Database connection pool closed');
+  }
+}
 
 export async function initializeDatabase() {
   try {
+    const poolInstance = getPool();
+
     // Run main schema
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = await fs.readFile(schemaPath, 'utf-8');
-    await pool.query(schema);
+    await poolInstance.query(schema);
 
     // Run migration for word timestamps
     const migrationPath = path.join(__dirname, 'add_word_timestamps.sql');
     const migration = await fs.readFile(migrationPath, 'utf-8');
-    await pool.query(migration);
+    await poolInstance.query(migration);
 
     // Run migration for generation status tracking
     const statusMigrationPath = path.join(__dirname, 'add_generation_status.sql');
     const statusMigration = await fs.readFile(statusMigrationPath, 'utf-8');
-    await pool.query(statusMigration);
+    await poolInstance.query(statusMigration);
 
     // Run migration for article metadata (karma, votes)
     const articleMetadataMigrationPath = path.join(__dirname, 'add_article_metadata.sql');
     const articleMetadataMigration = await fs.readFile(articleMetadataMigrationPath, 'utf-8');
-    await pool.query(articleMetadataMigration);
+    await poolInstance.query(articleMetadataMigration);
 
     // Run migration for comments field
     const commentsFieldMigrationPath = path.join(__dirname, 'add_comments_field.sql');
     const commentsFieldMigration = await fs.readFile(commentsFieldMigrationPath, 'utf-8');
-    await pool.query(commentsFieldMigration);
+    await poolInstance.query(commentsFieldMigration);
 
     console.log('Database initialized successfully');
   } catch (error) {
@@ -78,7 +97,8 @@ export async function initializeDatabase() {
 
 export async function query(text: string, params?: any[]) {
   const start = Date.now();
-  const res = await pool.query(text, params);
+  const poolInstance = getPool();
+  const res = await poolInstance.query(text, params);
   const duration = Date.now() - start;
   console.log('Executed query', { text, duration, rows: res.rowCount });
   return res;
