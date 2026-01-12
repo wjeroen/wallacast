@@ -64,6 +64,11 @@ export async function initializeDatabase() {
     const articleMetadataMigration = await fs.readFile(articleMetadataMigrationPath, 'utf-8');
     await pool.query(articleMetadataMigration);
 
+    // Run migration for comments field
+    const commentsFieldMigrationPath = path.join(__dirname, 'add_comments_field.sql');
+    const commentsFieldMigration = await fs.readFile(commentsFieldMigrationPath, 'utf-8');
+    await pool.query(commentsFieldMigration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);

@@ -9,7 +9,7 @@ import {
   Gauge,
   X,
 } from 'lucide-react';
-import type { ContentItem } from '../types';
+import type { ContentItem, Comment } from '../types';
 import { contentAPI, transcriptionAPI } from '../api';
 
 interface AudioPlayerProps {
@@ -254,6 +254,42 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     handleSeek(estimatedPosition);
   };
 
+  // Parse comments from JSON string if available
+  const parsedComments: Comment[] = content?.comments
+    ? typeof content.comments === 'string'
+      ? JSON.parse(content.comments)
+      : content.comments
+    : [];
+
+  // Recursive component to render comments with replies
+  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => (
+    <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
+      <div className="comment-header">
+        <span className="comment-username">{comment.username}</span>
+        {comment.date && <span className="comment-date"> • {new Date(comment.date).toLocaleDateString()}</span>}
+      </div>
+      <div className="comment-metadata">
+        {comment.karma !== undefined && comment.karma !== null && (
+          <span className="comment-karma">Karma: {comment.karma}</span>
+        )}
+        {comment.agree_votes !== undefined && comment.agree_votes !== null && (
+          <span className="comment-votes">Agree: {comment.agree_votes}</span>
+        )}
+        {comment.disagree_votes !== undefined && comment.disagree_votes !== null && (
+          <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
+        )}
+      </div>
+      <p className="comment-content">{comment.content}</p>
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="comment-replies">
+          {comment.replies.map((reply, idx) => (
+            <CommentComponent key={idx} comment={reply} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   if (!content) return null;
 
   return (
@@ -269,6 +305,34 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
             <div>
               <h3>{content.title}</h3>
               {content.author && <p className="author">{content.author}</p>}
+              {content.published_at && (
+                <p className="published-date">
+                  Published: {new Date(content.published_at).toLocaleDateString('en-US', {
+                    month: 'long',
+                    day: 'numeric',
+                    year: 'numeric'
+                  })}
+                </p>
+              )}
+              {(content.karma !== undefined || content.agree_votes !== undefined || content.disagree_votes !== undefined) && (
+                <div className="article-metadata">
+                  {content.karma !== undefined && content.karma !== null && (
+                    <span className="metadata-item">
+                      <strong>Karma:</strong> {content.karma}
+                    </span>
+                  )}
+                  {content.agree_votes !== undefined && content.agree_votes !== null && (
+                    <span className="metadata-item">
+                      <strong>Agree votes:</strong> {content.agree_votes}
+                    </span>
+                  )}
+                  {content.disagree_votes !== undefined && content.disagree_votes !== null && (
+                    <span className="metadata-item">
+                      <strong>Disagree votes:</strong> {content.disagree_votes}
+                    </span>
+                  )}
+                </div>
+              )}
               {content.url && (
                 <p className="source-link">
                   <a href={content.url} target="_blank" rel="noopener noreferrer">
@@ -407,6 +471,19 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {parsedComments.length > 0 && (
+        <div className="comments-section">
+          <div className="comments-header">
+            <h4>Comments ({parsedComments.length})</h4>
+          </div>
+          <div className="comments-list">
+            {parsedComments.map((comment, index) => (
+              <CommentComponent key={index} comment={comment} depth={0} />
+            ))}
+          </div>
         </div>
       )}
     </div>
