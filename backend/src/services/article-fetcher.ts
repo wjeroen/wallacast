@@ -66,29 +66,40 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
-    // Extract agree votes
-    const agreeElement = doc.querySelector('[class*="agree"]');
-    if (agreeElement) {
-      const agreeMatch = agreeElement.textContent?.match(/\d+/);
-      if (agreeMatch) {
-        agreeVotes = parseInt(agreeMatch[0]);
-      }
-    }
+    // Extract agree and disagree votes from EA Forum reaction buttons
+    const reactionButtons = doc.querySelectorAll('.EAReactsSection-button');
+    reactionButtons.forEach(button => {
+      // Check if this button contains a checkmark (agree) or X (disagree) SVG
+      const svg = button.querySelector('svg');
+      if (svg) {
+        const svgContent = svg.innerHTML;
+        // Look for the number in the div after the emoji preview
+        const numberDiv = button.querySelector('.EAReactsSection-emojiPreview + div');
+        if (numberDiv) {
+          const voteCount = parseInt(numberDiv.textContent?.trim() || '0');
 
-    // Extract disagree votes
-    const disagreeElement = doc.querySelector('[class*="disagree"]');
-    if (disagreeElement) {
-      const disagreeMatch = disagreeElement.textContent?.match(/\d+/);
-      if (disagreeMatch) {
-        disagreeVotes = parseInt(disagreeMatch[0]);
+          // Check if it's an agree vote (checkmark path)
+          if (svgContent.includes('Vector (Stroke)') || svgContent.includes('M2.5 7.5L6 11L13.5 3.5')) {
+            agreeVotes = voteCount;
+          }
+          // Check if it's a disagree vote (X path)
+          else if (svgContent.includes('Union') || svgContent.includes('M3 3L13 13M13 3L3 13')) {
+            disagreeVotes = voteCount;
+          }
+        }
       }
-    }
+    });
 
     // Extract comments section HTML
     const commentsSection = doc.querySelector('.CommentsListSection-root');
     if (commentsSection) {
       commentsHtml = commentsSection.outerHTML;
     }
+
+    console.log('=== Article Fetcher Metadata Extraction ===');
+    console.log('Karma extracted:', karma);
+    console.log('Agree votes extracted:', agreeVotes);
+    console.log('Disagree votes extracted:', disagreeVotes);
 
     // Try to extract author from multiple sources
     let author: string | undefined;
@@ -99,10 +110,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (ogAuthor) {
       author = ogAuthor.trim();
     } else {
-      // Fallback to class selector
-      const authorElement = doc.querySelector('.PostsAuthors-author');
-      if (authorElement) {
-        author = authorElement.textContent?.trim();
+      // Try the UsersNameDisplay link inside PostsAuthors-authorName
+      const authorLink = doc.querySelector('.PostsAuthors-authorName .UsersNameDisplay-noColor');
+      if (authorLink) {
+        author = authorLink.textContent?.trim();
+      } else {
+        // Fallback to any link in the author section
+        const authorElement = doc.querySelector('.PostsAuthors-authorName a');
+        if (authorElement) {
+          author = authorElement.textContent?.trim();
+        }
       }
     }
 
@@ -115,18 +132,28 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (ogPublished) {
       publishedDate = ogPublished;
     } else {
-      // Fallback to date element
-      const dateElement = doc.querySelector('[class*="PostsItemDate"]');
-      if (dateElement) {
-        const dateText = dateElement.textContent?.trim();
-        if (dateText) {
-          try {
-            const date = new Date(dateText);
-            if (!isNaN(date.getTime())) {
-              publishedDate = date.toISOString();
+      // Try to find <time> element with dateTime attribute
+      const timeElement = doc.querySelector('time[dateTime]');
+      if (timeElement) {
+        const dateTimeAttr = timeElement.getAttribute('dateTime');
+        if (dateTimeAttr) {
+          publishedDate = dateTimeAttr;
+        }
+      } else {
+        // Fallback to PostsPageDate-date or PostsItemDate
+        const dateElement = doc.querySelector('.PostsPageDate-date time') ||
+                           doc.querySelector('[class*="PostsItemDate"]');
+        if (dateElement) {
+          const dateText = dateElement.textContent?.trim();
+          if (dateText) {
+            try {
+              const date = new Date(dateText);
+              if (!isNaN(date.getTime())) {
+                publishedDate = date.toISOString();
+              }
+            } catch (e) {
+              console.warn('Failed to parse date:', dateText);
             }
-          } catch (e) {
-            console.warn('Failed to parse date:', dateText);
           }
         }
       }
@@ -145,6 +172,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     } else {
       console.log('Could not find main content container, using full HTML');
     }
+
+    console.log('Author extracted:', author);
+    console.log('Published date extracted:', publishedDate);
+    console.log('===========================================');
 
     return {
       title,
