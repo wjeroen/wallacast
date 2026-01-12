@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -15,25 +15,6 @@ import { contentAPI, transcriptionAPI } from '../api';
 interface AudioPlayerProps {
   content: ContentItem | null;
   onClose: () => void;
-}
-
-function cleanHtml(text: string): string {
-  if (!text) return '';
-  // Remove CDATA wrapper
-  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Remove HTML tags
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  // Decode HTML entities
-  cleaned = cleaned
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-  // Clean up whitespace
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  return cleaned;
 }
 
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
