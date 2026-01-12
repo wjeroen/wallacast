@@ -339,6 +339,15 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
               <div className="content-info">
                 <h3>{item.title}</h3>
                 {item.author && <p className="author">{item.author}</p>}
+                {item.published_at && (
+                  <p className="published-date">
+                    {new Date(item.published_at).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric'
+                    })}
+                  </p>
+                )}
                 {item.description && (
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}
