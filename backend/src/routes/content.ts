@@ -8,12 +8,12 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 
 const router = express.Router();
 
-// Get all content items
+// Get all content items (excluding audio_data for performance)
 router.get('/', async (req, res) => {
   try {
     const { type, archived, favorite } = req.query;
 
-    let sql = 'SELECT * FROM content_items WHERE 1=1';
+    let sql = 'SELECT id, type, title, url, content, html_content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE 1=1';
     const params: any[] = [];
     let paramCount = 1;
 
@@ -45,11 +45,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get single content item
+// Get single content item (excluding audio_data for performance)
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT * FROM content_items WHERE id = $1',
+      'SELECT id, type, title, url, content, html_content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
       [req.params.id]
     );
 
@@ -61,6 +61,33 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching content item:', error);
     res.status(500).json({ error: 'Failed to fetch content item' });
+  }
+});
+
+// Serve audio from database
+router.get('/:id/audio', async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT audio_data FROM content_items WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].audio_data) {
+      return res.status(404).json({ error: 'Audio not found' });
+    }
+
+    const audioData = result.rows[0].audio_data;
+
+    // Set appropriate headers for audio streaming
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioData.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+
+    res.send(audioData);
+  } catch (error) {
+    console.error('Error serving audio:', error);
+    res.status(500).json({ error: 'Failed to serve audio' });
   }
 });
 
@@ -226,35 +253,25 @@ router.patch('/:id', async (req, res) => {
       'description',
     ];
 
-    // Special handling for archiving: delete audio file to save space
+    // Special handling for archiving: delete audio data to save space
     if (updates.is_archived === true) {
       const contentResult = await query(
-        'SELECT audio_url, type FROM content_items WHERE id = $1',
+        'SELECT audio_data, type FROM content_items WHERE id = $1',
         [id]
       );
 
       if (contentResult.rows.length > 0) {
-        const { audio_url, type } = contentResult.rows[0];
+        const { audio_data, type } = contentResult.rows[0];
 
         // Only delete audio for articles (not podcasts)
-        if (audio_url && (type === 'article' || type === 'text')) {
-          try {
-            // Extract filename from URL
-            const filename = audio_url.split('/').pop();
-            if (filename) {
-              const { getAudioDir } = await import('../config/storage.js');
-              const audioPath = path.join(getAudioDir(), filename);
-              const fs = await import('fs/promises');
-              await fs.unlink(audioPath);
-              console.log(`Archived: Deleted audio file ${filename} to save space`);
-            }
-          } catch (error) {
-            console.warn('Failed to delete audio file on archive:', error);
-          }
+        if (audio_data && (type === 'article' || type === 'text')) {
+          const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
+          console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
 
-          // Clear audio_url from database
+          // Clear audio_data and audio_url from database
+          updates.audio_data = null;
           updates.audio_url = null;
-          allowedFields.push('audio_url');
+          allowedFields.push('audio_data', 'audio_url');
         }
       }
     }
@@ -334,42 +351,17 @@ router.patch('/:id', async (req, res) => {
 // Delete content item
 router.delete('/:id', async (req, res) => {
   try {
-    // First get the content item to extract the audio URL
-    const contentResult = await query(
-      'SELECT audio_url FROM content_items WHERE id = $1',
-      [req.params.id]
-    );
-
-    if (contentResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Content not found' });
-    }
-
-    const audioUrl = contentResult.rows[0].audio_url;
-
-    // Delete the database record
+    // Delete the database record (audio_data is automatically deleted)
     const result = await query(
       'DELETE FROM content_items WHERE id = $1 RETURNING id',
       [req.params.id]
     );
 
-    // Delete the audio file if it exists
-    if (audioUrl) {
-      try {
-        // Extract filename from URL (e.g., "article_123_1234567890.mp3")
-        const filename = audioUrl.split('/').pop();
-        if (filename) {
-          const { getAudioDir } = await import('../config/storage.js');
-          const audioPath = path.join(getAudioDir(), filename);
-          const fs = await import('fs/promises');
-          await fs.unlink(audioPath);
-          console.log(`Deleted audio file: ${filename}`);
-        }
-      } catch (error) {
-        console.warn('Failed to delete audio file:', error);
-        // Don't fail the delete operation if file deletion fails
-      }
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
     }
 
+    console.log(`Deleted content item ${req.params.id} (including audio data if present)`);
     res.json({ message: 'Content deleted successfully' });
   } catch (error) {
     console.error('Error deleting content item:', error);
@@ -407,20 +399,10 @@ router.post('/:id/generate-audio', async (req, res) => {
       });
     }
 
-    // If regenerating and old audio exists, delete it first
-    if (regenerate && contentItem.audio_url) {
-      try {
-        const filename = contentItem.audio_url.split('/').pop();
-        if (filename) {
-          const { getAudioDir } = await import('../config/storage.js');
-          const audioPath = path.join(getAudioDir(), filename);
-          const fs = await import('fs/promises');
-          await fs.unlink(audioPath);
-          console.log(`Regenerating: Deleted old audio file ${filename}`);
-        }
-      } catch (error) {
-        console.warn('Failed to delete old audio file on regenerate:', error);
-      }
+    // If regenerating, old audio data will be automatically overwritten in database
+    if (regenerate && contentItem.audio_data) {
+      const oldAudioSizeMB = (contentItem.audio_data.length / 1024 / 1024).toFixed(2);
+      console.log(`Regenerating: Will replace ${oldAudioSizeMB} MB of existing audio data`);
     }
 
     // Set status to generating

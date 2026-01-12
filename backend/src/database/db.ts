@@ -88,6 +88,11 @@ export async function initializeDatabase() {
     const commentsFieldMigration = await fs.readFile(commentsFieldMigrationPath, 'utf-8');
     await poolInstance.query(commentsFieldMigration);
 
+    // Run migration to add audio_data column for storing audio in database
+    const audioDataMigrationPath = path.join(__dirname, 'migrations', '001_add_audio_data_column.sql');
+    const audioDataMigration = await fs.readFile(audioDataMigrationPath, 'utf-8');
+    await poolInstance.query(audioDataMigration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
