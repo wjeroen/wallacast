@@ -48,15 +48,15 @@ export async function extractArticleContent(htmlContent: string, commentsHtml?: 
     }
 
     // Use GPT-4o-mini to extract and format article content for audio reading
-    // Increase limit to 100k characters to avoid cutting off comments
-    const htmlToSend = htmlContent.slice(0, 100000);
+    // Increase limit to 150k characters to avoid cutting off comments
+    const htmlToSend = htmlContent.slice(0, 150000);
 
     // Build the user prompt with separate sections for better extraction
     let userPrompt = `Extract the main article content from this HTML for reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes.\n\nMain HTML:\n\n${htmlToSend}`;
 
     // Add comments HTML separately if provided (better for extraction)
     if (commentsHtml) {
-      const commentsToSend = commentsHtml.slice(0, 50000);
+      const commentsToSend = commentsHtml.slice(0, 100000);
       userPrompt += `\n\nComments Section HTML:\n\n${commentsToSend}`;
     }
 
@@ -88,11 +88,12 @@ Extract and format content following these rules:
 7. For EACH comment (including nested replies), extract:
    - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
    - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
-   - For replies: "A reply to this comment by [username] on [date] with [X] karma: [comment text]"
-8. Include ALL comments and nested replies in conversation order
-9. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
+   - For replies: "A reply to this comment by [username] on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+8. Include ALL comments and nested replies in conversation order - do not cut off early
+9. IMPORTANT: Look carefully for vote/karma numbers in the HTML - they're usually in spans or divs near the comment header
+10. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
 
-Return: Main article body, then complete comments section with all available metadata.`,
+Return: Main article body, then complete comments section with ALL comments and all available metadata.`,
         },
         {
           role: 'user',
@@ -100,7 +101,7 @@ Return: Main article body, then complete comments section with all available met
         },
       ],
       temperature: 0.3,
-      max_tokens: 16000, // Increase token limit to avoid cutoff
+      max_tokens: 16384, // Max tokens for gpt-4o-mini
     });
 
     const cleanContent = response.choices[0]?.message?.content || '';
@@ -118,13 +119,19 @@ Return: Main article body, then complete comments section with all available met
               content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
 
 For EACH comment (including nested replies), extract:
-- username: The comment author's username
-- date: When the comment was posted (if available)
-- karma: The comment's karma/upvote count (if available, as a number)
-- agree_votes: Number of agree votes (if available, as a number)
-- disagree_votes: Number of disagree votes (if available, as a number)
-- content: The comment text (clean, no HTML)
+- username: The comment author's username (required)
+- date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
+- karma: The comment's karma/upvote count (if available, as a number - look for numbers near vote buttons or user info)
+- agree_votes: Number of agree votes (if available, as a number - often shown as "+X" or "X agree")
+- disagree_votes: Number of disagree votes (if available, as a number - often shown as "-X" or "X disagree")
+- content: The comment text (clean, no HTML, preserve paragraph breaks)
 - replies: Array of nested reply comments with the same structure
+
+IMPORTANT:
+- Extract ALL comments from the HTML, don't stop early
+- Look carefully for karma/vote numbers - they're often in spans, divs, or near voting buttons
+- If you can't find a metadata field, omit it (don't use null or 0)
+- Preserve the hierarchical structure of replies
 
 Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
 
@@ -150,17 +157,30 @@ Example format:
             },
             {
               role: 'user',
-              content: `Extract comments from this HTML:\n\n${commentsHtml.slice(0, 50000)}`,
+              content: `Extract ALL comments from this HTML. Make sure to get every single comment, don't cut off early:\n\n${commentsHtml.slice(0, 100000)}`,
             },
           ],
           temperature: 0.2,
-          max_tokens: 8000,
+          max_tokens: 16384, // Max tokens for gpt-4o-mini to capture all comments
         });
 
-        const commentsJson = commentsResponse.choices[0]?.message?.content || '[]';
+        let commentsJson = commentsResponse.choices[0]?.message?.content || '[]';
+
+        // Remove markdown code blocks if GPT wrapped the JSON
+        commentsJson = commentsJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
         // Parse the JSON response
-        structuredComments = JSON.parse(commentsJson);
-        console.log(`Extracted ${structuredComments?.length || 0} structured comments`);
+        try {
+          structuredComments = JSON.parse(commentsJson);
+          console.log(`Extracted ${structuredComments?.length || 0} structured comments`);
+          if (structuredComments && structuredComments.length > 0) {
+            console.log('Sample comment:', JSON.stringify(structuredComments[0], null, 2));
+          }
+        } catch (parseError) {
+          console.error('Failed to parse comments JSON:', parseError);
+          console.error('Raw JSON:', commentsJson.substring(0, 500));
+          // Continue without structured comments
+        }
       } catch (error) {
         console.error('Error extracting structured comments:', error);
         // Continue without structured comments
@@ -476,7 +496,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     // Generate audio (with chunking for long articles)
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
       instructions:
-        'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, read the username and karma/votes naturally before reading the comment text. Use appropriate pacing and natural emphasis.',
+        'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, ALWAYS read the username, karma/upvotes, agree votes, and disagree votes if they are mentioned in the text - these numbers are important context. Read them naturally like "John Doe commented with 42 karma, 5 agree votes, and 2 disagree votes". Use appropriate pacing and natural emphasis.',
       contentId: contentId, // Pass contentId for progress tracking
     });
 
