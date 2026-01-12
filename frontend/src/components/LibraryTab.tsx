@@ -356,11 +356,17 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                   {item.audio_url && <span className="badge">🔊 Audio</span>}
                   {item.transcript && <span className="badge">📝 Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
-                  {item.playback_position > 0 && item.duration && (
-                    <span className="progress">
-                      {Math.min(100, Math.round((item.playback_position / item.duration) * 100))}% complete
-                    </span>
-                  )}
+                  {item.playback_position > 0 && item.duration && item.duration > 0 && (() => {
+                    const percentage = Math.round((item.playback_position / item.duration) * 100);
+                    if (percentage > 100) {
+                      console.warn(`Invalid progress for item ${item.id}: position=${item.playback_position}, duration=${item.duration}, percentage=${percentage}%`);
+                    }
+                    return (
+                      <span className="progress">
+                        {Math.min(100, percentage)}% complete
+                      </span>
+                    );
+                  })()}
                 </div>
                 {getGenerationStatusDisplay(item)}
               </div>

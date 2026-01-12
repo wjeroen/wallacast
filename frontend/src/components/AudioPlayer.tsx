@@ -162,11 +162,13 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!content) return;
 
     try {
+      // Clamp position to valid range [0, duration]
+      const clampedPosition = Math.max(0, Math.min(Math.floor(position), duration));
       await contentAPI.update(content.id, {
-        playback_position: Math.floor(position),
+        playback_position: clampedPosition,
         last_played_at: new Date().toISOString(),
       });
-      console.log('✓ Saved position:', Math.floor(position));
+      console.log('✓ Saved position:', clampedPosition, '/', duration);
     } catch (error) {
       console.error('Failed to save playback position:', error);
     }
