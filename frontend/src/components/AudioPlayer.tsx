@@ -255,40 +255,65 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   // Parse comments from JSON string if available
-  const parsedComments: Comment[] = content?.comments
-    ? typeof content.comments === 'string'
-      ? JSON.parse(content.comments)
-      : content.comments
-    : [];
+  const parsedComments: Comment[] = React.useMemo(() => {
+    if (!content?.comments) return [];
+    try {
+      const comments = typeof content.comments === 'string'
+        ? JSON.parse(content.comments)
+        : content.comments;
+      console.log('Parsed comments:', comments?.length || 0, 'comments');
+      return comments || [];
+    } catch (error) {
+      console.error('Failed to parse comments:', error);
+      return [];
+    }
+  }, [content?.comments]);
 
   // Recursive component to render comments with replies
-  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => (
-    <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
-      <div className="comment-header">
-        <span className="comment-username">{comment.username}</span>
-        {comment.date && <span className="comment-date"> • {new Date(comment.date).toLocaleDateString()}</span>}
-      </div>
-      <div className="comment-metadata">
-        {comment.karma !== undefined && comment.karma !== null && (
-          <span className="comment-karma">Karma: {comment.karma}</span>
-        )}
-        {comment.agree_votes !== undefined && comment.agree_votes !== null && (
-          <span className="comment-votes">Agree: {comment.agree_votes}</span>
-        )}
-        {comment.disagree_votes !== undefined && comment.disagree_votes !== null && (
-          <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
-        )}
-      </div>
-      <p className="comment-content">{comment.content}</p>
-      {comment.replies && comment.replies.length > 0 && (
-        <div className="comment-replies">
-          {comment.replies.map((reply, idx) => (
-            <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-          ))}
+  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
+    const hasMetadata = comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined;
+
+    return (
+      <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
+        <div className="comment-header">
+          <span className="comment-username">{comment.username}</span>
+          {comment.date && (
+            <span className="comment-date">
+              {' • '}
+              {(() => {
+                try {
+                  return new Date(comment.date).toLocaleDateString();
+                } catch {
+                  return comment.date;
+                }
+              })()}
+            </span>
+          )}
         </div>
-      )}
-    </div>
-  );
+        {hasMetadata && (
+          <div className="comment-metadata">
+            {comment.karma !== undefined && comment.karma !== null && (
+              <span className="comment-karma">Karma: {comment.karma}</span>
+            )}
+            {comment.agree_votes !== undefined && comment.agree_votes !== null && (
+              <span className="comment-votes">Agree: {comment.agree_votes}</span>
+            )}
+            {comment.disagree_votes !== undefined && comment.disagree_votes !== null && (
+              <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
+            )}
+          </div>
+        )}
+        <p className="comment-content">{comment.content}</p>
+        {comment.replies && comment.replies.length > 0 && (
+          <div className="comment-replies">
+            {comment.replies.map((reply, idx) => (
+              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   if (!content) return null;
 
