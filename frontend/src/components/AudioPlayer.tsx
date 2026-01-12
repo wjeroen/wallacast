@@ -475,12 +475,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     }
   }
 
-  // Wrap everything in try-catch
-  try {
-    addDebug('Rendering main UI');
-
-    return (
-      <div className="audio-player">
+  return (
+    <div className="audio-player">
         <div className="player-header">
           <h2>{content.title}</h2>
           <button onClick={onClose} className="close-btn">
@@ -676,29 +672,4 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       )}
     </div>
   );
-  } catch (error: any) {
-    addDebug(`RENDER ERROR: ${error.message}`);
-    return (
-      <div className="audio-player">
-        <div className="player-header">
-          <h2>💥 Render Error</h2>
-          <button onClick={onClose} className="close-btn">
-            <X size={24} />
-          </button>
-        </div>
-        <div style={{ padding: '1rem', background: '#991b1b', color: '#fecaca', borderRadius: '0.5rem', margin: '1rem' }}>
-          <p style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>❌ Component crashed during render</p>
-          <pre style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap', background: '#7f1d1d', padding: '0.5rem', borderRadius: '0.25rem' }}>
-            {error.message}\n\n{error.stack}
-          </pre>
-          <div style={{ marginTop: '1rem' }}>
-            <strong>Debug Log:</strong>
-            {debugInfo.map((info, i) => (
-              <div key={i} style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.25rem' }}>{info}</div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
 }
