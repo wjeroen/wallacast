@@ -472,103 +472,17 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
-      // Update status to show content extraction is in progress
+      // Content is already clean and ready from Readability + formatted comments
+      // No GPT chat model extraction needed!
+      textToConvert = content.content || '';
+
+      // Update status to show content is ready for audio generation
       await query(
         'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
-        ['extracting_content', 'extracting_article_text', 10, contentId]
+        ['content_ready', 'audio_generation', 15, contentId]
       );
 
-      // Parse pre-extracted comments from database if available
-      let preExtractedComments: Comment[] | undefined;
-      if (content.comments) {
-        try {
-          preExtractedComments = typeof content.comments === 'string'
-            ? JSON.parse(content.comments)
-            : content.comments;
-          console.log(`Found ${preExtractedComments?.length || 0} pre-extracted comments in database`);
-        } catch (error) {
-          console.error('Failed to parse stored comments:', error);
-        }
-      }
-
-      // Extract clean content from HTML (with comments for audio)
-      const extracted = await extractArticleContent(
-        content.html_content || content.content,
-        contentId,
-        undefined, // commentsHtml parameter (unused when we have pre-extracted comments)
-        preExtractedComments
-      );
-      textToConvert = extracted.content;
-
-      // Build intro for display (shown at top of content)
-      let displayIntro = '';
-      if (content.title) {
-        displayIntro = `# ${content.title}\n\n`;
-
-        const metadataParts: string[] = [];
-        if (content.author) {
-          metadataParts.push(`By ${content.author}`);
-        }
-        if (content.published_at) {
-          const date = new Date(content.published_at);
-          const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-          metadataParts.push(formattedDate);
-        }
-        if (content.karma !== undefined && content.karma !== null) {
-          metadataParts.push(`${content.karma} karma`);
-        }
-        if (content.agree_votes !== undefined && content.agree_votes !== null) {
-          metadataParts.push(`${content.agree_votes} agree`);
-        }
-        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
-          metadataParts.push(`${content.disagree_votes} disagree`);
-        }
-
-        if (metadataParts.length > 0) {
-          displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
-        }
-      }
-
-      console.log('=== Display Intro ===');
-      console.log(displayIntro);
-      console.log('=====================');
-
-      // Update the content field with intro + extracted content and store structured comments
-      const updates: string[] = [];
-      const values: any[] = [];
-      let paramCount = 1;
-
-      updates.push(`content = $${paramCount}`);
-      values.push(displayIntro + extracted.content);
-      paramCount++;
-
-      // Update status to show content is ready to read
-      updates.push(`generation_status = $${paramCount}`);
-      values.push('content_ready');
-      paramCount++;
-
-      updates.push(`current_operation = $${paramCount}`);
-      values.push('audio_generation');
-      paramCount++;
-
-      // Only store comments if they weren't already pre-extracted
-      // (i.e., this is a fallback extraction - shouldn't happen normally)
-      if (extracted.comments && extracted.comments.length > 0 && !preExtractedComments) {
-        updates.push(`comments = $${paramCount}`);
-        values.push(JSON.stringify(extracted.comments));
-        paramCount++;
-        console.log(`Storing ${extracted.comments.length} fallback-extracted comments`);
-      } else if (preExtractedComments && preExtractedComments.length > 0) {
-        console.log(`Using ${preExtractedComments.length} pre-extracted comments (already in database)`);
-      }
-
-      values.push(contentId);
-      await query(
-        `UPDATE content_items SET ${updates.join(', ')} WHERE id = $${paramCount}`,
-        values
-      );
-
-      console.log(`✓ Content extracted and ready to read for article ${contentId}`);
+      console.log(`✓ Content is ready for TTS (Readability + formatted comments)`);
     } else {
       textToConvert = content.content || '';
     }
@@ -638,9 +552,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
+    // Trust the TTS model to read the pre-formatted content naturally
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
       instructions:
-        'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, ALWAYS read the username, karma/upvotes, agree votes, and disagree votes if they are mentioned in the text - these numbers are important context. Read them naturally like "John Doe commented with 42 karma, 5 agree votes, and 2 disagree votes". Use appropriate pacing and natural emphasis.',
+        'You are a professional narrator reading an article exactly as written. Read all text including titles, metadata, article body, and comments section completely and naturally. When you encounter a username followed by "with X karma, Y agree votes, Z disagree votes:", read the full phrase including all numbers - these are important metadata. Do not skip, summarize, or omit any part of the text. For URLs, say "link" instead of reading the full address. Maintain steady, clear pacing throughout.',
       contentId: contentId, // Pass contentId for progress tracking
     });
 

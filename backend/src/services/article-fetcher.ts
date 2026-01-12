@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
 
 export interface Comment {
   username: string;
@@ -15,6 +16,7 @@ export interface ArticleContent {
   title: string;
   content: string;
   html: string;
+  textContent: string; // Clean text for TTS (includes formatted comments)
   author?: string;
   excerpt?: string;
   byline?: string;
@@ -186,10 +188,35 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('Published date extracted:', publishedDate);
     console.log('===========================================');
 
+    // Use Mozilla Readability to extract clean article content
+    const reader = new Readability(doc);
+    const article = reader.parse();
+
+    let articleText = '';
+    if (article && article.textContent) {
+      articleText = article.textContent;
+      console.log('✓ Readability extracted article content');
+    } else {
+      // Fallback to basic text extraction
+      articleText = extractTextFromHTML(cleanedHtml);
+      console.log('⚠ Readability failed, using fallback extraction');
+    }
+
+    // Format comments as readable text for TTS (if we have structured comments)
+    let commentsText = '';
+    if (structuredComments && structuredComments.length > 0) {
+      commentsText = '\n\nComments section:\n\n' + formatCommentsForTTS(structuredComments);
+      console.log(`✓ Formatted ${structuredComments.length} comments for TTS`);
+    }
+
+    // Combine article text and comments text for TTS
+    const textContent = articleText + commentsText;
+
     return {
       title,
-      content: extractTextFromHTML(cleanedHtml),
-      html: html, // Keep full HTML for GPT extraction
+      content: extractTextFromHTML(cleanedHtml), // Keep for backwards compatibility
+      html: html,
+      textContent: textContent, // Clean text for TTS
       author: author,
       byline: author,
       published_date: publishedDate,
@@ -203,6 +230,41 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.error('Error fetching article:', error);
     throw new Error('Failed to fetch article content');
   }
+}
+
+function formatCommentsForTTS(comments: Comment[], depth: number = 0): string {
+  let text = '';
+  const indent = '  '.repeat(depth);
+
+  for (const comment of comments) {
+    // Format comment header with metadata
+    let header = `${indent}${comment.username}`;
+
+    if (comment.date) {
+      header += ` on ${comment.date}`;
+    }
+
+    const metadata: string[] = [];
+    if (comment.karma !== undefined) metadata.push(`${comment.karma} karma`);
+    if (comment.agree_votes !== undefined) metadata.push(`${comment.agree_votes} agree votes`);
+    if (comment.disagree_votes !== undefined) metadata.push(`${comment.disagree_votes} disagree votes`);
+
+    if (metadata.length > 0) {
+      header += ` with ${metadata.join(', ')}`;
+    }
+
+    header += ':\n';
+
+    // Add comment content
+    text += header + `${indent}${comment.content}\n\n`;
+
+    // Recursively format replies
+    if (comment.replies && comment.replies.length > 0) {
+      text += formatCommentsForTTS(comment.replies, depth + 1);
+    }
+  }
+
+  return text;
 }
 
 function parseCommentsFromDOM(commentsSection: Element): Comment[] {

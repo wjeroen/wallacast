@@ -125,8 +125,9 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
-      // Use placeholder text - will be extracted properly in background
-      processedContent = '⏳ Content is being extracted and formatted for reading...';
+      // Use the textContent (clean Readability extraction + formatted comments)
+      // This will be used directly for TTS, no GPT chat model needed
+      processedContent = articleData.textContent || articleData.content;
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
