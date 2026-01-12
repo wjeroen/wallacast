@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import basicAuth from 'express-basic-auth';
 import { initializeDatabase } from './database/db.js';
+import { runMigrations } from './database/run-migrations.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -72,6 +73,10 @@ async function start() {
     try {
       await initializeDatabase();
       console.log('✅ Database connection established');
+
+      // Run migrations after database is initialized
+      await runMigrations();
+
       break;
     } catch (error) {
       retries--;
