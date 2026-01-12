@@ -359,7 +359,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                   {item.playback_position > 0 && item.duration && item.duration > 0 && (() => {
                     const percentage = Math.round((item.playback_position / item.duration) * 100);
                     if (percentage > 100) {
-                      console.warn(`Invalid progress for item ${item.id}: position=${item.playback_position}, duration=${item.duration}, percentage=${percentage}%`);
+                      console.warn(`⚠️ INVALID DATA - Item "${item.title}" (ID: ${item.id}): position=${item.playback_position}s, duration=${item.duration}s, calculated=${percentage}%. This item has corrupted duration in database.`);
                     }
                     return (
                       <span className="progress">

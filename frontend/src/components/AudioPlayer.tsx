@@ -76,6 +76,12 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       setDuration(audio.duration);
       const startPosition = content.playback_position || 0;
 
+      // Fix corrupted duration in database if detected
+      if (content.duration && Math.abs(content.duration - audio.duration) > 1) {
+        console.warn(`⚠️ Fixing corrupted duration for "${content.title}": DB has ${content.duration}s, actual is ${audio.duration}s`);
+        contentAPI.update(content.id, { duration: Math.floor(audio.duration) }).catch(console.error);
+      }
+
       if (startPosition > 0 && startPosition < audio.duration) {
         audio.currentTime = startPosition;
         setCurrentTime(startPosition);
@@ -162,13 +168,17 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!content) return;
 
     try {
-      // Clamp position to valid range [0, duration]
-      const clampedPosition = Math.max(0, Math.min(Math.floor(position), duration));
+      // Only clamp if we have a valid duration from the loaded audio
+      // If duration is 0 or invalid, save the raw position (don't corrupt data)
+      const clampedPosition = duration > 0
+        ? Math.max(0, Math.min(Math.floor(position), duration))
+        : Math.floor(position);
+
       await contentAPI.update(content.id, {
         playback_position: clampedPosition,
         last_played_at: new Date().toISOString(),
       });
-      console.log('✓ Saved position:', clampedPosition, '/', duration);
+      console.log('✓ Saved position:', clampedPosition, '/ duration:', duration);
     } catch (error) {
       console.error('Failed to save playback position:', error);
     }
