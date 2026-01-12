@@ -549,6 +549,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
+      // Update status to show content extraction is in progress
+      await query(
+        'UPDATE content_items SET generation_status = $1, current_operation = $2 WHERE id = $3',
+        ['extracting_content', 'content_extraction', contentId]
+      );
+
       // Extract clean content from HTML (with comments for audio)
       const extracted = await extractArticleContent(content.html_content || content.content);
       textToConvert = extracted.content;
@@ -560,6 +566,15 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
       updates.push(`content = $${paramCount}`);
       values.push(extracted.content);
+      paramCount++;
+
+      // Update status to show content is ready to read
+      updates.push(`generation_status = $${paramCount}`);
+      values.push('content_ready');
+      paramCount++;
+
+      updates.push(`current_operation = $${paramCount}`);
+      values.push('audio_generation');
       paramCount++;
 
       if (extracted.comments && extracted.comments.length > 0) {
@@ -574,6 +589,8 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         `UPDATE content_items SET ${updates.join(', ')} WHERE id = $${paramCount}`,
         values
       );
+
+      console.log(`✓ Content extracted and ready to read for article ${contentId}`);
     } else {
       textToConvert = content.content || '';
     }

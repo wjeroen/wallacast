@@ -37,10 +37,10 @@ export interface ContentItem {
   playback_position: number;
   playback_speed: number;
   last_played_at?: string;
-  generation_status?: 'idle' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed';
+  generation_status?: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed';
   generation_progress?: number;
   generation_error?: string;
-  current_operation?: 'audio' | 'transcript';
+  current_operation?: 'initialization' | 'content_extraction' | 'audio_generation' | 'audio' | 'transcript';
   created_at: string;
   updated_at: string;
 }
