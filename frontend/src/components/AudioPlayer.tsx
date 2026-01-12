@@ -231,7 +231,13 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   const toggleSpeed = () => {
     const speeds = [1, 1.25, 1.5, 2];
-    const currentIndex = speeds.indexOf(playbackSpeed);
+    // Normalize playbackSpeed to handle floating point comparison
+    const normalizedSpeed = Math.round(playbackSpeed * 100) / 100;
+    let currentIndex = speeds.findIndex(s => Math.abs(s - normalizedSpeed) < 0.01);
+
+    // If current speed not in list, start from beginning
+    if (currentIndex === -1) currentIndex = -1;
+
     const nextIndex = (currentIndex + 1) % speeds.length;
     handleSpeedChange(speeds[nextIndex]);
   };
@@ -317,20 +323,24 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   const renderComments = (comments: Comment[], depth: number = 0) => {
     return comments.map((comment, index) => (
-      <div key={index} style={{ marginLeft: `${depth * 20}px`, marginBottom: '1rem' }}>
-        <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-          {comment.username}
-          {comment.date && ` • ${comment.date}`}
-          {(comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined) && (
-            <span style={{ fontWeight: 'normal', color: '#666', marginLeft: '8px' }}>
-              {comment.karma !== undefined && `${comment.karma} karma`}
-              {comment.agree_votes !== undefined && ` • ${comment.agree_votes} agree`}
-              {comment.disagree_votes !== undefined && ` • ${comment.disagree_votes} disagree`}
-            </span>
-          )}
+      <div key={index} className="comment" style={{ marginLeft: `${depth * 20}px` }}>
+        <div className="comment-header">
+          <span className="comment-username">{comment.username}</span>
+          {comment.date && <span className="comment-date">{comment.date}</span>}
         </div>
-        <div style={{ marginBottom: '0.5rem' }}>{comment.content}</div>
-        {comment.replies && comment.replies.length > 0 && renderComments(comment.replies, depth + 1)}
+        {(comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined) && (
+          <div className="comment-metadata">
+            {comment.karma !== undefined && <span className="comment-karma">{comment.karma} karma</span>}
+            {comment.agree_votes !== undefined && <span className="comment-votes">{comment.agree_votes} agree</span>}
+            {comment.disagree_votes !== undefined && <span className="comment-votes">{comment.disagree_votes} disagree</span>}
+          </div>
+        )}
+        <div className="comment-content">{comment.content}</div>
+        {comment.replies && comment.replies.length > 0 && (
+          <div className="comment-replies">
+            {renderComments(comment.replies, depth + 1)}
+          </div>
+        )}
       </div>
     ));
   };
@@ -404,29 +414,28 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   return (
     <div className="audio-player">
-      <div className="audio-player-header">
+      <div className="player-header">
         <h2>{content.title}</h2>
-        <button onClick={onClose} className="close-button">
+        <button onClick={onClose} className="close-btn">
           <X size={24} />
         </button>
       </div>
 
       <audio ref={audioRef} />
 
-      <div className="audio-controls">
+      <div className="player-controls">
         <div className="progress-bar">
+          <span className="time">{formatTime(currentTime)}</span>
           <input
             type="range"
+            className="progress-slider"
             min="0"
             max={duration || 0}
             value={currentTime}
             onChange={(e) => handleSeek(Number(e.target.value))}
             disabled={!isAudioReady}
           />
-          <div className="time-display">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
+          <span className="time">{formatTime(duration)}</span>
         </div>
 
         <div className="playback-controls">
@@ -435,7 +444,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </button>
           <button
             onClick={togglePlay}
-            className="play-button"
+            className="play-pause-btn"
             disabled={!isAudioReady}
           >
             {isPlaying ? <Pause size={32} /> : <Play size={32} />}
@@ -445,31 +454,35 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </button>
         </div>
 
-        <div className="secondary-controls">
-          <div className="volume-control">
-            <Volume2 size={20} />
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={volume}
-              onChange={(e) => handleVolumeChange(Number(e.target.value))}
-            />
+        <div className="player-options">
+          <div className="option-group">
+            <div className="volume-control">
+              <Volume2 size={20} />
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={volume}
+                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+              />
+            </div>
           </div>
 
-          <button onClick={toggleSpeed} className="speed-button">
-            <Gauge size={20} />
-            <span>{playbackSpeed === 1 ? '1' : playbackSpeed}x</span>
-          </button>
+          <div className="option-group">
+            <button onClick={toggleSpeed}>
+              <Gauge size={20} />
+              <span>{playbackSpeed === 1 ? '1' : playbackSpeed.toFixed(2).replace(/\.?0+$/, '')}x</span>
+            </button>
+          </div>
 
-          <div className="sleep-timer">
+          <div className="option-group">
             <button onClick={() => setShowSleepTimer(!showSleepTimer)}>
               <Clock size={20} />
               {sleepTimer && <span>{sleepTimer}m</span>}
             </button>
             {showSleepTimer && (
-              <div className="sleep-timer-options">
+              <div className="sleep-timer-menu">
                 {[5, 15, 30, 60].map((mins) => (
                   <button key={mins} onClick={() => setSleepTimerMinutes(mins)}>
                     {mins}m
@@ -481,51 +494,65 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
         </div>
       </div>
 
-      <div className="audio-content">
-        <div className="content-tabs">
+      <div className="content-tabs" style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', marginBottom: '0.5rem' }}>
+        <button
+          style={{
+            padding: '0.5rem 1rem',
+            background: showTranscript ? '#3b82f6' : '#334155',
+            border: 'none',
+            borderRadius: '0.375rem',
+            color: '#e2e8f0',
+            cursor: 'pointer'
+          }}
+          onClick={() => setShowTranscript(true)}
+        >
+          {content.type === 'podcast_episode' ? 'Transcript' : 'Content'}
+        </button>
+        {structuredComments && structuredComments.length > 0 && (
           <button
-            className={showTranscript ? 'active' : ''}
-            onClick={() => setShowTranscript(true)}
+            style={{
+              padding: '0.5rem 1rem',
+              background: !showTranscript ? '#3b82f6' : '#334155',
+              border: 'none',
+              borderRadius: '0.375rem',
+              color: '#e2e8f0',
+              cursor: 'pointer'
+            }}
+            onClick={() => setShowTranscript(false)}
           >
-            {content.type === 'podcast_episode' ? 'Transcript' : 'Content'}
+            Comments ({structuredComments.length})
           </button>
-          {structuredComments && structuredComments.length > 0 && (
-            <button
-              className={!showTranscript ? 'active' : ''}
-              onClick={() => setShowTranscript(false)}
-            >
-              Comments ({structuredComments.length})
-            </button>
-          )}
-        </div>
+        )}
+      </div>
 
-        <div className="content-display">
-          {showTranscript ? (
-            <div className="transcript">
-              {transcript ? (
-                getHighlightedTranscript()
-              ) : content.content ? (
-                <div dangerouslySetInnerHTML={{ __html: content.content }} />
-              ) : transcriptError ? (
-                <div className="error">{transcriptError}</div>
-              ) : (
-                <div>
-                  <p>No transcript available.</p>
-                  {content.type === 'podcast_episode' && (
-                    <button onClick={loadTranscript} disabled={loadingTranscript}>
-                      {loadingTranscript ? 'Generating transcript...' : 'Generate Transcript'}
-                    </button>
-                  )}
-                </div>
+      {showTranscript ? (
+        <div className="transcript-section">
+          {transcript ? (
+            <div className="transcript-content">{getHighlightedTranscript()}</div>
+          ) : content.content ? (
+            <div className="transcript-content" style={{ whiteSpace: 'pre-wrap' }}>
+              {content.content}
+            </div>
+          ) : transcriptError ? (
+            <div className="error">{transcriptError}</div>
+          ) : (
+            <div>
+              <p>No content available.</p>
+              {content.type === 'podcast_episode' && (
+                <button onClick={loadTranscript} disabled={loadingTranscript}>
+                  {loadingTranscript ? 'Generating transcript...' : 'Generate Transcript'}
+                </button>
               )}
             </div>
-          ) : (
-            <div className="comments">
-              {structuredComments && renderComments(structuredComments)}
-            </div>
           )}
         </div>
-      </div>
+      ) : (
+        <div className="comments-section">
+          <div className="comments-list">
+            {structuredComments && renderComments(structuredComments)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

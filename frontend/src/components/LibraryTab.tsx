@@ -356,9 +356,9 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
                   {item.audio_url && <span className="badge">🔊 Audio</span>}
                   {item.transcript && <span className="badge">📝 Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
-                  {item.playback_position > 0 && (
+                  {item.playback_position > 0 && item.duration && (
                     <span className="progress">
-                      {Math.round((item.playback_position / (item.duration || 1)) * 100)}% complete
+                      {Math.min(100, Math.round((item.playback_position / item.duration) * 100))}% complete
                     </span>
                   )}
                 </div>
