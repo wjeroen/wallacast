@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && mkdir -p dist/database && cp src/database/*.sql dist/database/",
+    "build": "tsc && mkdir -p dist/database/migrations && cp src/database/*.sql dist/database/ && cp src/database/migrations/*.sql dist/database/migrations/",
     "start": "node dist/index.js"
   },
   "dependencies": {
