@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
   Pause,
@@ -255,7 +255,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   // Parse comments from JSON string if available
-  const parsedComments: Comment[] = React.useMemo(() => {
+  const parsedComments: Comment[] = useMemo(() => {
     if (!content?.comments) return [];
     try {
       const comments = typeof content.comments === 'string'
