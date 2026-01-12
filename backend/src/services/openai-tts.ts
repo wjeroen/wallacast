@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
+import { getAudioDir, getTempDir } from '../config/storage.js';
 
 // Get audio duration in seconds
 async function getAudioDuration(filePath: string): Promise<number> {
@@ -429,7 +430,7 @@ export async function generateArticleAudio(
       const buffer = Buffer.from(await response.arrayBuffer());
 
       // Save temp file to get duration
-      const tempDir = path.join(process.cwd(), 'temp');
+      const tempDir = getTempDir();
       await fs.mkdir(tempDir, { recursive: true });
       const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
       await fs.writeFile(tempFile, buffer);
@@ -448,7 +449,7 @@ export async function generateArticleAudio(
     }
 
     // Multiple chunks - generate and concatenate
-    const tempDir = path.join(process.cwd(), 'temp');
+    const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
 
     const chunkFiles: string[] = [];
@@ -749,7 +750,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     }
 
     // Save audio file
-    const audioDir = path.join(process.cwd(), 'public', 'audio');
+    const audioDir = getAudioDir();
     await fs.mkdir(audioDir, { recursive: true });
 
     const audioFilename = `article_${contentId}_${Date.now()}.mp3`;
