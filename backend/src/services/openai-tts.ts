@@ -28,7 +28,7 @@ async function getOpenAIClient(): Promise<OpenAI | null> {
   return null;
 }
 
-export async function extractArticleContent(htmlContent: string): Promise<string> {
+export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<string> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -36,19 +36,33 @@ export async function extractArticleContent(htmlContent: string): Promise<string
       return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    // Use GPT-4o-mini to extract and format ONLY the article body (not comments)
-    const htmlToSend = htmlContent.slice(0, 80000);
+    // Use GPT-4o-mini to extract and format article content for audio reading
+    // Increase limit to 100k characters to avoid cutting off comments
+    const htmlToSend = htmlContent.slice(0, 100000);
+
+    // Build the user prompt with separate sections for better extraction
+    let userPrompt = `Extract the main article content from this HTML for reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes.\n\nMain HTML:\n\n${htmlToSend}`;
+
+    // Add comments HTML separately if provided (better for extraction)
+    if (commentsHtml) {
+      const commentsToSend = commentsHtml.slice(0, 50000);
+      userPrompt += `\n\nComments Section HTML:\n\n${commentsToSend}`;
+    }
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: `Extract ONLY the main article body for text-to-speech reading. DO NOT extract comments or post metadata - they will be added separately.
+          content: `You are a content extraction assistant that formats web content for text-to-speech reading.
 
-Rules:
-1. Extract main article text only (remove navigation, ads, headers, footers, "Share" buttons, newsletter prompts)
-2. NEVER include URL strings from href/src attributes
+Extract and format content following these rules:
+
+**IMPORTANT: Do NOT include post metadata intro (title, author, date, karma) - that will be added separately. Start directly with the main article content.**
+
+**Main Content:**
+1. Extract article body, removing navigation, ads, footers, headers, "Share" buttons, newsletter prompts
+2. NEVER extract actual URL strings from href/src attributes
    - For links: keep anchor text only (e.g., "click here" but not "https://example.com")
    - Don't say URLs aloud, but you can say "link" when it appears naturally in text
 3. For visual elements:
@@ -57,17 +71,25 @@ Rules:
    - Videos/embeds: Say "The article links to a video here" (don't read the URL)
 4. Replace HTML entities (&#x27; → apostrophe, etc.) with proper characters
 5. Format lists and structure naturally for speaking
-6. STOP after the main article ends - do NOT extract any comments section
 
-Return ONLY the article body. Post metadata and comments will be handled separately.`,
+**Comments Section:**
+6. After main article, say "Comments section:"
+7. For EACH comment (including nested replies), extract:
+   - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
+   - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+   - For replies: "A reply to this comment by [username] on [date] with [X] karma: [comment text]"
+8. Include ALL comments and nested replies in conversation order
+9. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
+
+Return: Main article body, then complete comments section with all available metadata.`,
         },
         {
           role: 'user',
-          content: `Extract article body only (no comments, no metadata):\n\n${htmlToSend}`,
+          content: userPrompt,
         },
       ],
       temperature: 0.3,
-      max_tokens: 16000,
+      max_tokens: 16000, // Increase token limit to avoid cutoff
     });
 
     const cleanContent = response.choices[0]?.message?.content || '';
@@ -316,7 +338,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
-      // Extract clean content from HTML (article body only, not comments)
+      // Extract clean content from HTML
       const cleanContent = await extractArticleContent(content.html_content || content.content);
       textToConvert = cleanContent;
     } else {
@@ -327,53 +349,33 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Build dynamic intro based on available metadata (adapts to any source)
+    // Add intro with title, author, date, and EA Forum metadata (if available)
     let intro = '';
     if (content.title) {
-      // Determine content type based on metadata
-      const isForumPost = (content.karma !== undefined && content.karma !== null);
-      const sourceType = isForumPost ? 'post' : 'article';
+      intro = `This post is titled: ${content.title}`;
 
-      intro = `This ${sourceType} is titled: ${content.title}`;
-
-      // Add author if available
       if (content.author) {
         intro += `, written by ${content.author}`;
       }
 
-      // Add published date with source-specific wording
+      // Add published date if available
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-        // Determine source label from URL
-        let sourceLabel = '';
-        if (content.url) {
-          if (content.url.includes('forum.effectivealtruism.org')) {
-            sourceLabel = ' on the EA Forum';
-          } else if (content.url.includes('lesswrong.com')) {
-            sourceLabel = ' on LessWrong';
-          }
-        }
-
-        intro += `, posted${sourceLabel} on ${formattedDate}`;
+        intro += `, posted on the EA Forum on ${formattedDate}`;
       }
 
-      // Add forum-specific metadata (karma/votes) only if present
+      // Add EA Forum metadata if available (from stored fields)
       if (content.karma !== undefined && content.karma !== null) {
         intro += `. It has ${content.karma} karma`;
 
-        // Build vote metadata list
-        const voteMetadata: string[] = [];
+        // Add agree/disagree votes if available
         if (content.agree_votes !== undefined && content.agree_votes !== null) {
-          voteMetadata.push(`${content.agree_votes} agree votes`);
-        }
-        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
-          voteMetadata.push(`${content.disagree_votes} disagree votes`);
+          intro += `, ${content.agree_votes} agree votes`;
         }
 
-        if (voteMetadata.length > 0) {
-          intro += `, ${voteMetadata.join(', and ')}`;
+        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
+          intro += `, and ${content.disagree_votes} disagree votes`;
         }
 
         intro += '.';
@@ -384,70 +386,8 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       intro += '\n\n';
     }
 
-    // Build comments section from structured data (if available)
-    let commentsSection = '';
-    if (content.comments) {
-      try {
-        const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-
-        if (Array.isArray(comments) && comments.length > 0) {
-          commentsSection = '\n\nComments section:\n\n';
-
-          comments.forEach((comment: any) => {
-            let commentIntro = comment.author;
-
-            if (commentIntro) {
-              commentIntro += ' commented';
-
-              // Add date if available
-              if (comment.date) {
-                try {
-                  const commentDate = new Date(comment.date);
-                  const formattedDate = commentDate.toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric'
-                  });
-                  commentIntro += ` on ${formattedDate}`;
-                } catch (e) {
-                  // If date parsing fails, skip it
-                }
-              }
-
-              // Add karma and votes if available
-              const metadataParts: string[] = [];
-              if (comment.karma !== undefined && comment.karma !== null) {
-                metadataParts.push(`${comment.karma} karma`);
-              }
-              if (comment.agree_votes !== undefined && comment.agree_votes !== null) {
-                metadataParts.push(`${comment.agree_votes} agree votes`);
-              }
-              if (comment.disagree_votes !== undefined && comment.disagree_votes !== null) {
-                metadataParts.push(`${comment.disagree_votes} disagree votes`);
-              }
-
-              if (metadataParts.length > 0) {
-                commentIntro += ` with ${metadataParts.join(', ')}`;
-              }
-
-              commentIntro += ': ';
-
-              // Add comment content
-              if (comment.content) {
-                commentsSection += commentIntro + comment.content + '\n\n';
-              }
-            }
-          });
-
-          console.log(`Built comments section with ${comments.length} comments`);
-        }
-      } catch (error) {
-        console.error('Failed to parse comments:', error);
-      }
-    }
-
-    // Prepend intro and append comments to content
-    const fullText = intro + textToConvert + commentsSection;
+    // Prepend intro to content
+    const fullText = intro + textToConvert;
     const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
