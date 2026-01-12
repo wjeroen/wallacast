@@ -18,6 +18,13 @@ interface AudioPlayerProps {
 }
 
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
+  console.log('AudioPlayer render:', {
+    hasContent: !!content,
+    contentId: content?.id,
+    hasAudioUrl: !!content?.audio_url,
+    title: content?.title
+  });
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -418,7 +425,20 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     );
   };
 
-  if (!content) return null;
+  if (!content) {
+    console.error('AudioPlayer: content is null or undefined');
+    return (
+      <div className="audio-player">
+        <div className="player-header">
+          <h2>Error</h2>
+          <button onClick={onClose} className="close-btn">
+            <X size={24} />
+          </button>
+        </div>
+        <p style={{ padding: '1rem', color: '#ef4444' }}>Failed to load content</p>
+      </div>
+    );
+  }
 
   // Parse structured comments if available
   let structuredComments: Comment[] | undefined;
@@ -558,33 +578,51 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
       {showTranscript ? (
         <div className="transcript-section">
-          {transcript ? (
-            <div className="transcript-content">{getHighlightedTranscript()}</div>
-          ) : content.content ? (
-            <div className="transcript-content" style={{ whiteSpace: 'pre-wrap' }}>
-              {content.content}
-            </div>
-          ) : transcriptError ? (
-            <div className="error">{transcriptError}</div>
-          ) : (
-            <div>
-              <p>No content available.</p>
-              {content.type === 'podcast_episode' && (
-                <button onClick={loadTranscript} disabled={loadingTranscript}>
-                  {loadingTranscript ? 'Generating transcript...' : 'Generate Transcript'}
-                </button>
-              )}
-            </div>
-          )}
+          {(() => {
+            try {
+              if (transcript) {
+                return <div className="transcript-content">{getHighlightedTranscript()}</div>;
+              } else if (content.content) {
+                return (
+                  <div className="transcript-content" style={{ whiteSpace: 'pre-wrap' }}>
+                    {content.content}
+                  </div>
+                );
+              } else if (transcriptError) {
+                return <div className="error">{transcriptError}</div>;
+              } else {
+                return (
+                  <div>
+                    <p>No content available.</p>
+                    {content.type === 'podcast_episode' && (
+                      <button onClick={loadTranscript} disabled={loadingTranscript}>
+                        {loadingTranscript ? 'Generating transcript...' : 'Generate Transcript'}
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+            } catch (error) {
+              console.error('Error rendering transcript:', error);
+              return <p style={{ color: '#ef4444', padding: '1rem' }}>Error displaying content</p>;
+            }
+          })()}
         </div>
       ) : (
         <div className="comments-section">
           <div className="comments-list">
-            {structuredComments && structuredComments.length > 0 ? (
-              renderComments(structuredComments)
-            ) : (
-              <p style={{ color: '#94a3b8', padding: '1rem' }}>No comments available.</p>
-            )}
+            {(() => {
+              try {
+                if (structuredComments && structuredComments.length > 0) {
+                  return renderComments(structuredComments);
+                } else {
+                  return <p style={{ color: '#94a3b8', padding: '1rem' }}>No comments available.</p>;
+                }
+              } catch (error) {
+                console.error('Error rendering comments:', error);
+                return <p style={{ color: '#ef4444', padding: '1rem' }}>Error displaying comments</p>;
+              }
+            })()}
           </div>
         </div>
       )}
