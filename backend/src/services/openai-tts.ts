@@ -152,29 +152,33 @@ Return: Main article body, then complete comments section with ALL comments and 
 For EACH comment (including nested replies), extract:
 - username: The comment author's username (required)
 - date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
-- karma: The comment's karma/upvote count (if available, as a number - look for:
-  * Numbers in spans/divs with classes like "karma", "vote", "points", "score"
-  * Numbers near up/down arrow buttons
-  * Patterns like "15 points" or "+15" near the username
-  * Data attributes like data-karma or data-score
-- agree_votes: Number of agree votes (if available, as a number - look for:
-  * Green checkmark/agree buttons with numbers
-  * Text like "5 agree", "+5", or "✓ 5"
-  * Spans with classes like "agree", "agreement-count"
-  * May be in a vote breakdown section
-- disagree_votes: Number of disagree votes (if available, as a number - look for:
-  * Red X/disagree buttons with numbers
-  * Text like "2 disagree", "-2", or "✗ 2"
-  * Spans with classes like "disagree", "disagreement-count"
-  * May be in a vote breakdown section
+- karma: The INDIVIDUAL COMMENT's karma/upvote count (if available, as a number - look for:
+  * Small numbers (typically 0-50 for individual comments) near the comment header
+  * Numbers in spans/divs with classes like "karma", "vote", "points", "score" WITHIN the comment container
+  * Numbers near up/down arrow buttons for THAT SPECIFIC comment
+  * Patterns like "15 points" or "+15" near the comment username (not the post author)
+  * Data attributes like data-karma or data-score on the comment element
+  * IMPORTANT: Do NOT use the post's karma (which is much higher, like 300+). Comment karma is usually much smaller.
+- agree_votes: Number of agree votes FOR THIS COMMENT (if available, as a number - look for:
+  * Small numbers (typically 0-20) near green checkmark/agree buttons WITHIN this comment
+  * Text like "5 agree", "+5", or "✓ 5" in the comment's vote section
+  * Spans with classes like "agree", "agreement-count" for THIS comment only
+  * NOT the post's agree votes - look only within this comment's HTML
+- disagree_votes: Number of disagree votes FOR THIS COMMENT (if available, as a number - look for:
+  * Small numbers (typically 0-10) near red X/disagree buttons WITHIN this comment
+  * Text like "2 disagree", "-2", or "✗ 2" in the comment's vote section
+  * Spans with classes like "disagree", "disagreement-count" for THIS comment only
+  * NOT the post's disagree votes - look only within this comment's HTML
 - content: The comment text (clean, no HTML, preserve paragraph breaks)
 - replies: Array of nested reply comments with the same structure
 
 IMPORTANT:
 - Extract ALL comments from the HTML, don't stop early
-- EA Forum often shows agree/disagree votes separately from karma - look thoroughly
-- Check for vote data in: buttons, spans, data attributes, adjacent to usernames
-- If you can't find a metadata field after thorough searching, omit it (don't use null or 0)
+- Each comment has its OWN vote counts - don't reuse the post's votes or other comments' votes
+- Comment karma/votes are typically MUCH SMALLER than post karma (individual comments rarely exceed 50 karma)
+- If you see large numbers like 300+, that's likely the POST karma, not a comment's karma
+- Check for vote data ONLY within each comment's container/div, not at the page level
+- If you can't find a metadata field after thorough searching WITHIN that comment's HTML, omit it (don't use null or 0)
 - Preserve the hierarchical structure of replies
 
 Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
@@ -201,7 +205,18 @@ Example format:
                 },
                 {
                   role: 'user',
-                  content: `Extract ALL comments from this HTML. Make sure to get every single comment, don't cut off early:\n\n${commentsHtml.slice(0, 100000)}`,
+                  content: `Extract ALL comments from this HTML.
+
+CRITICAL: The vote data is located in the __APOLLO_STATE__ JSON block within a <script> tag. Look for entries like:
+- Comment IDs: "Comment:xxxxx" containing "baseScore" and "extendedScore":{"agree":X,"disagree":Y}
+- Post data: "Post:xxxxx" containing vote counts
+
+Example from the JSON:
+"Comment:tqwACbJGbgXwwrLWg": {"baseScore":35,"extendedScore":{"agree":11,"disagree":1}}
+
+Use this JSON data to get accurate vote counts. If the JSON is present, prioritize it over HTML elements.
+
+HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
                 },
               ],
               temperature: 0.2,
@@ -433,8 +448,8 @@ export async function generateArticleAudio(
         const chunkProgress = Math.round(((i + 1) / textChunks.length) * 90);
         if (options.contentId) {
           await query(
-            'UPDATE content_items SET generation_progress = $1 WHERE id = $2',
-            [chunkProgress, options.contentId]
+            'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+            [chunkProgress, `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
           );
         }
 
@@ -492,8 +507,7 @@ export async function generateArticleAudio(
 
         // Add delay between chunks to respect rate limits (except for last chunk)
         if (i < textChunks.length - 1) {
-          const delayMs = 1000; // 1 second delay between chunks
-          console.log(`Waiting ${delayMs}ms before next chunk to respect rate limits...`);
+          const delayMs = 200; // 200ms delay between chunks (retry logic handles rate limits)
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
@@ -505,8 +519,8 @@ export async function generateArticleAudio(
       // Update progress to 95% before concatenation
       if (options.contentId) {
         await query(
-          'UPDATE content_items SET generation_progress = $1 WHERE id = $2',
-          [95, options.contentId]
+          'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+          [95, 'concatenating_audio', options.contentId]
         );
       }
 
@@ -559,13 +573,42 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       const extracted = await extractArticleContent(content.html_content || content.content);
       textToConvert = extracted.content;
 
-      // Update the content field with extracted content and store structured comments
+      // Build intro for display (shown at top of content)
+      let displayIntro = '';
+      if (content.title) {
+        displayIntro = `# ${content.title}\n\n`;
+
+        const metadataParts: string[] = [];
+        if (content.author) {
+          metadataParts.push(`By ${content.author}`);
+        }
+        if (content.published_at) {
+          const date = new Date(content.published_at);
+          const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+          metadataParts.push(formattedDate);
+        }
+        if (content.karma !== undefined && content.karma !== null) {
+          metadataParts.push(`${content.karma} karma`);
+        }
+        if (content.agree_votes !== undefined && content.agree_votes !== null) {
+          metadataParts.push(`${content.agree_votes} agree`);
+        }
+        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
+          metadataParts.push(`${content.disagree_votes} disagree`);
+        }
+
+        if (metadataParts.length > 0) {
+          displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
+        }
+      }
+
+      // Update the content field with intro + extracted content and store structured comments
       const updates: string[] = [];
       const values: any[] = [];
       let paramCount = 1;
 
       updates.push(`content = $${paramCount}`);
-      values.push(extracted.content);
+      values.push(displayIntro + extracted.content);
       paramCount++;
 
       // Update status to show content is ready to read
@@ -599,20 +642,23 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       throw new Error('No content to convert to audio');
     }
 
-    // Add intro with title, author, date, and EA Forum metadata (if available)
+    // Add intro with title, author, date, and EA Forum metadata (if available) for TTS
     let intro = '';
     if (content.title) {
       intro = `This post is titled: ${content.title}`;
 
+      // Add author and date
+      const introParts: string[] = [];
       if (content.author) {
-        intro += `, written by ${content.author}`;
+        introParts.push(`written by ${content.author}`);
       }
-
-      // Add published date if available
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        intro += `, posted on the EA Forum on ${formattedDate}`;
+        introParts.push(`posted on ${formattedDate}`);
+      }
+      if (introParts.length > 0) {
+        intro += `, ${introParts.join(', ')}`;
       }
 
       // Add EA Forum metadata if available (from stored fields)
