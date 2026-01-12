@@ -1,3 +1,13 @@
+export interface Comment {
+  username: string;
+  date?: string;
+  karma?: number;
+  agree_votes?: number;
+  disagree_votes?: number;
+  content: string;
+  replies?: Comment[];
+}
+
 export interface ContentItem {
   id: number;
   type: 'article' | 'podcast_episode' | 'pdf' | 'text';
@@ -17,6 +27,10 @@ export interface ContentItem {
   podcast_id?: number;
   episode_number?: number;
   published_at?: string;
+  karma?: number; // EA Forum karma/upvotes
+  agree_votes?: number; // EA Forum agree votes
+  disagree_votes?: number; // EA Forum disagree votes
+  comments?: Comment[]; // Parsed comments with metadata
   is_favorite: boolean;
   is_archived: boolean;
   is_read: boolean;

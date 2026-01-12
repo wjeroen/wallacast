@@ -1,6 +1,16 @@
 import fetch from 'node-fetch';
 import { JSDOM } from 'jsdom';
 
+export interface Comment {
+  username: string;
+  date?: string;
+  karma?: number;
+  agree_votes?: number;
+  disagree_votes?: number;
+  content: string;
+  replies?: Comment[];
+}
+
 export interface ArticleContent {
   title: string;
   content: string;
@@ -14,6 +24,7 @@ export interface ArticleContent {
   agree_votes?: number;
   disagree_votes?: number;
   comments_html?: string;
+  comments?: Comment[];
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {

@@ -28,12 +28,23 @@ async function getOpenAIClient(): Promise<OpenAI | null> {
   return null;
 }
 
-export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<string> {
+interface Comment {
+  username: string;
+  date?: string;
+  karma?: number;
+  agree_votes?: number;
+  disagree_votes?: number;
+  content: string;
+  replies?: Comment[];
+}
+
+export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<{ content: string; comments?: Comment[] }> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
       console.warn('OpenAI API key not set, returning raw HTML content');
-      return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const fallbackContent = htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      return { content: fallbackContent };
     }
 
     // Use GPT-4o-mini to extract and format article content for audio reading
@@ -93,11 +104,75 @@ Return: Main article body, then complete comments section with all available met
     });
 
     const cleanContent = response.choices[0]?.message?.content || '';
-    return cleanContent;
+
+    // Extract structured comments if comments HTML was provided
+    let structuredComments: Comment[] | undefined;
+    if (commentsHtml) {
+      try {
+        console.log('Extracting structured comments data...');
+        const commentsResponse = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
+
+For EACH comment (including nested replies), extract:
+- username: The comment author's username
+- date: When the comment was posted (if available)
+- karma: The comment's karma/upvote count (if available, as a number)
+- agree_votes: Number of agree votes (if available, as a number)
+- disagree_votes: Number of disagree votes (if available, as a number)
+- content: The comment text (clean, no HTML)
+- replies: Array of nested reply comments with the same structure
+
+Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
+
+Example format:
+[
+  {
+    "username": "john_doe",
+    "date": "2024-01-15",
+    "karma": 42,
+    "agree_votes": 5,
+    "disagree_votes": 1,
+    "content": "This is a great article!",
+    "replies": [
+      {
+        "username": "jane_smith",
+        "date": "2024-01-16",
+        "karma": 15,
+        "content": "I agree with this point."
+      }
+    ]
+  }
+]`,
+            },
+            {
+              role: 'user',
+              content: `Extract comments from this HTML:\n\n${commentsHtml.slice(0, 50000)}`,
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: 8000,
+        });
+
+        const commentsJson = commentsResponse.choices[0]?.message?.content || '[]';
+        // Parse the JSON response
+        structuredComments = JSON.parse(commentsJson);
+        console.log(`Extracted ${structuredComments?.length || 0} structured comments`);
+      } catch (error) {
+        console.error('Error extracting structured comments:', error);
+        // Continue without structured comments
+      }
+    }
+
+    return { content: cleanContent, comments: structuredComments };
   } catch (error) {
     console.error('Error extracting article content:', error);
     // Fallback: strip HTML tags
-    return htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const fallbackContent = htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return { content: fallbackContent };
   }
 }
 
@@ -339,8 +414,16 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     if (content.type === 'article') {
       // Extract clean content from HTML
-      const cleanContent = await extractArticleContent(content.html_content || content.content);
-      textToConvert = cleanContent;
+      const extracted = await extractArticleContent(content.html_content || content.content);
+      textToConvert = extracted.content;
+
+      // Store structured comments if extracted
+      if (extracted.comments && extracted.comments.length > 0) {
+        await query(
+          'UPDATE content_items SET comments = $1 WHERE id = $2',
+          [JSON.stringify(extracted.comments), contentId]
+        );
+      }
     } else {
       textToConvert = content.content || '';
     }
