@@ -749,25 +749,22 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       console.log(`Generated audio from ${originalLength} chars using ${chunks} chunks`);
     }
 
-    // Save audio file
-    const audioDir = getAudioDir();
-    await fs.mkdir(audioDir, { recursive: true });
+    // Store audio data directly in database
+    console.log(`Storing audio in database (${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
 
-    const audioFilename = `article_${contentId}_${Date.now()}.mp3`;
-    const audioPath = path.join(audioDir, audioFilename);
-    await fs.writeFile(audioPath, audioBuffer);
-
-    // Construct full URL for audio file
+    // Construct audio URL pointing to database endpoint
     const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : 'http://localhost:3001';
-    const audioUrl = `${backendUrl}/audio/${audioFilename}`;
+    const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    // Update content item with audio URL and chunk metadata
+    // Update content item with audio data, URL, and chunk metadata
     await query(
-      'UPDATE content_items SET audio_url = $1, tts_chunks = $2 WHERE id = $3',
-      [audioUrl, JSON.stringify(chunkMetadata), contentId]
+      'UPDATE content_items SET audio_data = $1, audio_url = $2, tts_chunks = $3 WHERE id = $4',
+      [audioBuffer, audioUrl, JSON.stringify(chunkMetadata), contentId]
     );
+
+    console.log(`✓ Audio stored in database for content ${contentId}`);
 
     return { audioUrl, warning };
   } catch (error) {
