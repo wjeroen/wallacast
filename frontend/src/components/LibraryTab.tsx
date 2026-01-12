@@ -38,26 +38,33 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   // Poll for progress updates on items that are generating
   useEffect(() => {
     const generatingItems = content.filter(
-      item => item.generation_status === 'generating_audio' || item.generation_status === 'generating_transcript'
+      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript'].includes(item.generation_status)
     );
 
     if (generatingItems.length === 0) return;
 
-    // Only poll every 10 seconds to avoid constant list refreshing
+    // Poll every 2 seconds for active generation, complete when done
     const pollInterval = setInterval(async () => {
       // Fetch only the generating items, not the entire list
       for (const item of generatingItems) {
         try {
           const response = await contentAPI.getById(item.id);
-          // Update just this item in the state without full re-render
+          const updated = response.data;
+
+          // Update just this item in the state
           setContent(prevContent =>
-            prevContent.map(c => c.id === item.id ? response.data : c)
+            prevContent.map(c => c.id === item.id ? updated : c)
           );
+
+          // If item completed, reload the full list once to ensure fresh data
+          if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
+            setTimeout(() => loadContent(), 500);
+          }
         } catch (error) {
           console.error('Failed to fetch item status:', error);
         }
       }
-    }, 10000); // Poll every 10 seconds instead of 2
+    }, 2000); // Poll every 2 seconds for responsive updates
 
     return () => clearInterval(pollInterval);
   }, [content]);
@@ -212,12 +219,43 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
       );
     }
 
-    // Generating
-    const operation = item.current_operation === 'audio' ? 'audio' : 'transcript';
+    // Generate detailed status message
+    let statusMessage = '';
+    let progressPercent = item.generation_progress || 0;
+
+    if (item.generation_status === 'starting') {
+      statusMessage = '⏳ Starting...';
+    } else if (item.generation_status === 'extracting_content') {
+      statusMessage = '📄 Extracting content...';
+    } else if (item.generation_status === 'content_ready') {
+      // Parse chunk progress from current_operation
+      if (item.current_operation?.startsWith('audio_chunk_')) {
+        const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
+        if (match) {
+          const [_, current, total] = match;
+          statusMessage = `🔊 Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
+        } else {
+          statusMessage = `🔊 Generating audio... ${progressPercent}%`;
+        }
+      } else if (item.current_operation === 'concatenating_audio') {
+        statusMessage = `🔗 Combining audio files... ${progressPercent}%`;
+      } else {
+        statusMessage = `🔊 Generating audio... ${progressPercent}%`;
+      }
+    } else if (item.generation_status === 'generating_transcript') {
+      statusMessage = `📝 Generating transcript... ${progressPercent}%`;
+    } else {
+      statusMessage = `🔄 Processing... ${progressPercent}%`;
+    }
 
     return (
       <div className="generation-status generating">
-        <span>🔄 Generating {operation}...</span>
+        <span>{statusMessage}</span>
+        {progressPercent > 0 && (
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
+          </div>
+        )}
       </div>
     );
   };
