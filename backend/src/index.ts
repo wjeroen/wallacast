@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import basicAuth from 'express-basic-auth';
-import { initializeDatabase } from './database/db.js';
+import { initializeDatabase, closePool } from './database/db.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -62,12 +62,45 @@ app.use('/api/transcription', authMiddleware, transcriptionRouter);
 // Initialize database and start server
 async function start() {
   // Start HTTP server FIRST so Railway sees it as healthy
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Readcast API server running on http://0.0.0.0:${PORT}`);
   });
 
-  // Then initialize database with retries
-  let retries = 5;
+  // Graceful shutdown handler
+  const shutdown = async (signal: string) => {
+    console.log(`\n${signal} received, shutting down gracefully...`);
+
+    // Close HTTP server (stop accepting new connections)
+    server.close(async () => {
+      console.log('HTTP server closed');
+
+      // Close database pool
+      try {
+        await closePool();
+      } catch (error) {
+        console.error('Error closing database pool:', error);
+      }
+
+      console.log('Shutdown complete');
+      process.exit(0);
+    });
+
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+      console.error('Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+  };
+
+  // Register shutdown handlers
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Then initialize database with retries and exponential backoff
+  const maxRetries = 10;
+  let retries = maxRetries;
+  let delay = 2000; // Start with 2 seconds
+
   while (retries > 0) {
     try {
       await initializeDatabase();
@@ -75,12 +108,17 @@ async function start() {
       break;
     } catch (error) {
       retries--;
-      console.error(`Database connection failed (${5 - retries}/5), retrying in 2s...`, error);
+      const attemptNum = maxRetries - retries;
+      console.error(`Database connection failed (${attemptNum}/${maxRetries}), retrying in ${delay/1000}s...`, error);
+
       if (retries === 0) {
-        console.error('Failed to connect to database after 5 attempts');
+        console.error(`Failed to connect to database after ${maxRetries} attempts`);
+        console.error('Server will continue running for health checks, but database operations will fail');
         // Don't exit - server stays running for health checks
       } else {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, delay));
+        // Exponential backoff: increase delay for next retry (max 10s)
+        delay = Math.min(delay * 1.5, 10000);
       }
     }
   }
