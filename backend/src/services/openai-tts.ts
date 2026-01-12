@@ -28,7 +28,7 @@ async function getOpenAIClient(): Promise<OpenAI | null> {
   return null;
 }
 
-export async function extractArticleContent(htmlContent: string): Promise<string> {
+export async function extractArticleContent(htmlContent: string, commentsHtml?: string): Promise<string> {
   try {
     const openai = await getOpenAIClient();
     if (!openai) {
@@ -40,6 +40,15 @@ export async function extractArticleContent(htmlContent: string): Promise<string
     // Increase limit to 100k characters to avoid cutting off comments
     const htmlToSend = htmlContent.slice(0, 100000);
 
+    // Build the user prompt with separate sections for better extraction
+    let userPrompt = `Extract the main article content from this HTML for reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes.\n\nMain HTML:\n\n${htmlToSend}`;
+
+    // Add comments HTML separately if provided (better for extraction)
+    if (commentsHtml) {
+      const commentsToSend = commentsHtml.slice(0, 50000);
+      userPrompt += `\n\nComments Section HTML:\n\n${commentsToSend}`;
+    }
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -49,48 +58,34 @@ export async function extractArticleContent(htmlContent: string): Promise<string
 
 Extract and format content following these rules:
 
-**CRITICAL - URL Handling:**
-- NEVER extract or include actual URL strings from href/src attributes
-- If you see <a href="https://example.com">click here</a>, only output "click here"
-- NEVER output the URL itself like "https://example.com"
-- Keep link anchor text, but completely ignore href/src URLs
-- Keep the word "link" when used naturally in text (e.g., "see the link above")
+**IMPORTANT: Do NOT include post metadata intro (title, author, date, karma) - that will be added separately. Start directly with the main article content.**
 
-**Content Structure:**
-1. Extract the main article text, removing navigation, ads, footers, headers
-2. KEEP comment sections - they are VERY IMPORTANT
-3. Format lists and structure naturally for speaking
-4. Replace special characters (&#x27; → apostrophe, &quot; → quote, etc.)
-5. Remove "Share", "Tweet", "Like", "Subscribe" button text
-6. Remove newsletter signup prompts
+**Main Content:**
+1. Extract article body, removing navigation, ads, footers, headers, "Share" buttons, newsletter prompts
+2. NEVER extract actual URL strings from href/src attributes
+   - For links: keep anchor text only (e.g., "click here" but not "https://example.com")
+   - Don't say URLs aloud, but you can say "link" when it appears naturally in text
+3. For visual elements:
+   - Images: Say "The article shows an image here" or describe if alt text exists
+   - Tables: Say "The article contains a table" then describe headers/key data if readable
+   - Videos/embeds: Say "The article links to a video here" (don't read the URL)
+4. Replace HTML entities (&#x27; → apostrophe, etc.) with proper characters
+5. Format lists and structure naturally for speaking
 
-**Visual Elements:**
-- For images: say "There is an image showing [alt text or caption]"
-- For tables: format as natural speech like "The table shows X rows with columns A, B, C"
-- For embedded videos: say "There is a video titled [title]" (ignore the URL)
+**Comments Section:**
+6. After main article, say "Comments section:"
+7. For EACH comment (including nested replies), extract:
+   - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
+   - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+   - For replies: "A reply to this comment by [username] on [date] with [X] karma: [comment text]"
+8. Include ALL comments and nested replies in conversation order
+9. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
 
-**EA Forum Posts (most common):**
-- Post metadata is usually: Author, Date, Karma, Agree votes, Disagree votes
-- If you see patterns like "Username Oct 6 2025 15 3 1", that's: 15 karma, 3 agrees, 1 disagree
-- Additional numbers beyond the first 3 are other emoji reactions - ignore these
-
-**Comments Formatting:**
-- EA Forum format: "Username Date Karma Agree Disagree"
-- Example: "Maria Evans Oct 6 2025 4 0 0" = 4 karma, 0 agree, 0 disagree
-- Format as: "Maria Evans commented on October 6th 2025 with 4 karma, 0 agree votes and 0 disagree votes: [comment text]"
-- Include ALL comments, even nested replies
-- After the main article, add clear section break: "Comments section:"
-
-**Non-EA Forum Sources:**
-- For other websites, extract similarly but focus on author, date, main text
-- Keep any engagement metrics if visible (likes, shares, etc.)
-- Format naturally without forcing EA Forum structure
-
-Return: Article body → "Comments section:" → All comments formatted for natural speech.`,
+Return: Main article body, then complete comments section with all available metadata.`,
         },
         {
           role: 'user',
-          content: `Extract the main article content and comments from this HTML for audio reading. Remember: NEVER include actual URL strings (like https://...) even if they exist in href attributes:\n\n${htmlToSend}`,
+          content: userPrompt,
         },
       ],
       temperature: 0.3,
@@ -357,28 +352,34 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     // Add intro with title, author, date, and EA Forum metadata (if available)
     let intro = '';
     if (content.title) {
-      intro = `This article is titled: ${content.title}.`;
+      intro = `This post is titled: ${content.title}`;
 
       if (content.author) {
-        intro += ` Written by ${content.author}.`;
+        intro += `, written by ${content.author}`;
       }
 
       // Add published date if available
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        intro += ` Published on ${formattedDate}.`;
+        intro += `, posted on the EA Forum on ${formattedDate}`;
       }
 
       // Add EA Forum metadata if available (from stored fields)
       if (content.karma !== undefined && content.karma !== null) {
-        intro += ` This post has ${content.karma} karma`;
+        intro += `. It has ${content.karma} karma`;
 
         // Add agree/disagree votes if available
-        if (content.agree_votes !== undefined && content.disagree_votes !== undefined) {
-          intro += `, with ${content.agree_votes} agree votes and ${content.disagree_votes} disagree votes`;
+        if (content.agree_votes !== undefined && content.agree_votes !== null) {
+          intro += `, ${content.agree_votes} agree votes`;
         }
 
+        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
+          intro += `, and ${content.disagree_votes} disagree votes`;
+        }
+
+        intro += '.';
+      } else {
         intro += '.';
       }
 

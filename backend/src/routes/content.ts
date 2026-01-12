@@ -105,8 +105,8 @@ router.post('/', async (req, res) => {
         processedContent = articleData.content;
       }
 
-      // Use fetched title if no title provided
-      if (!finalTitle && articleData.title) {
+      // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
+      if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
       }
 
@@ -135,6 +135,23 @@ router.post('/', async (req, res) => {
       if (articleData.disagree_votes !== undefined) {
         disagreeVotes = articleData.disagree_votes;
       }
+
+      // Extract formatted content with comments for display in player
+      // This uses GPT to format the content properly, including comments
+      // Pass comments HTML separately for better extraction
+      try {
+        processedContent = await extractArticleContent(htmlContent, articleData.comments_html);
+        console.log('Extracted formatted content with comments for display');
+      } catch (error) {
+        console.error('Failed to extract formatted content, falling back to plain text:', error);
+        // Fall back to basic text extraction
+        processedContent = articleData.content;
+      }
+    }
+
+    // Ensure we have a title (final fallback)
+    if (!finalTitle || finalTitle === 'Untitled') {
+      finalTitle = 'Untitled Article';
     }
 
     const result = await query(
