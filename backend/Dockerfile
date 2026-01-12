@@ -1,8 +1,8 @@
 FROM node:22-slim
 
-# Install ffmpeg
+# Install ffmpeg and postgresql-client
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg postgresql-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
