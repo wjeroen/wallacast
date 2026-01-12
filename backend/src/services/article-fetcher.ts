@@ -188,6 +188,13 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('Published date extracted:', publishedDate);
     console.log('===========================================');
 
+    // Remove comments section before Readability to prevent duplication
+    // (Readability usually excludes comments, but EA Forum structure requires explicit removal)
+    if (commentsSection) {
+      commentsSection.remove();
+      console.log('✓ Removed comments section from article body to prevent duplication');
+    }
+
     // Use Mozilla Readability to extract clean article content
     const reader = new Readability(doc);
     const article = reader.parse();

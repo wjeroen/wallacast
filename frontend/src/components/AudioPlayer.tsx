@@ -49,75 +49,147 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
   const [transcriptError, setTranscriptError] = useState<string>('');
+  const [isAudioReady, setIsAudioReady] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const positionSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentContentIdRef = useRef<number | null>(null);
 
+  // Save position immediately when leaving
   useEffect(() => {
-    if (!content) return;
+    return () => {
+      if (content && audioRef.current) {
+        savePlaybackPositionImmediate(audioRef.current.currentTime);
+      }
+    };
+  }, [content]);
 
-    if (audioRef.current) {
-      const audio = audioRef.current;
-      const startPosition = content.playback_position || 0;
+  // Initialize audio when content changes
+  useEffect(() => {
+    if (!content || !audioRef.current) return;
 
-      // CRITICAL: Add event listener BEFORE setting src to avoid race condition
-      const handleLoadedMetadata = () => {
-        if (startPosition > 0) {
-          audio.currentTime = startPosition;
-          setCurrentTime(startPosition);
-          console.log('Restored playback position:', startPosition);
-        }
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      };
+    const audio = audioRef.current;
+    const contentId = content.id;
 
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-
-      // Set audio source and playback settings
-      audio.src = content.audio_url || '';
-      audio.playbackRate = content.playback_speed || 1;
-      setPlaybackSpeed(content.playback_speed || 1);
+    // Skip if this is the same content
+    if (currentContentIdRef.current === contentId && isAudioReady) {
+      return;
     }
 
+    currentContentIdRef.current = contentId;
+    setIsAudioReady(false);
+    setIsPlaying(false);
+
+    // Clean up old audio
+    audio.pause();
+    audio.currentTime = 0;
+
+    // Set up new audio
+    audio.src = content.audio_url || '';
+    audio.playbackRate = content.playback_speed || 1;
+    setPlaybackSpeed(content.playback_speed || 1);
+
+    // Wait for metadata to load, then restore position
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration);
+      const startPosition = content.playback_position || 0;
+
+      if (startPosition > 0 && startPosition < audio.duration) {
+        audio.currentTime = startPosition;
+        setCurrentTime(startPosition);
+        console.log('✓ Restored position:', startPosition);
+      }
+
+      setIsAudioReady(true);
+    };
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+
+    // Transcript setup
     if (content.transcript) {
       setTranscript(content.transcript);
       setTranscriptError('');
+
+      if (content.transcript_words) {
+        try {
+          const words = typeof content.transcript_words === 'string'
+            ? JSON.parse(content.transcript_words)
+            : content.transcript_words;
+          setTranscriptWords(words);
+        } catch (e) {
+          console.error('Failed to parse transcript words:', e);
+        }
+      }
     } else {
       setTranscript('');
       setTranscriptError('');
+      setTranscriptWords(null);
     }
-  }, [content]);
 
+    return () => {
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [content?.id]);
+
+  // Audio event listeners (independent of content changes)
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const handleLoadedMetadata = () => setDuration(audio.duration);
-    const handleEnded = () => {
-      setIsPlaying(false);
-      savePlaybackPosition(0);
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+      // Debounced position save
+      if (positionSaveTimeoutRef.current) {
+        clearTimeout(positionSaveTimeoutRef.current);
+      }
+      positionSaveTimeoutRef.current = setTimeout(() => {
+        if (content) {
+          savePlaybackPositionImmediate(audio.currentTime);
+        }
+      }, 2000);
     };
 
+    const handleEnded = () => {
+      setIsPlaying(false);
+      if (content) {
+        savePlaybackPositionImmediate(0);
+      }
+    };
+
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
-    };
-  }, []);
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (isPlaying && content) {
-        savePlaybackPosition(currentTime);
+      if (positionSaveTimeoutRef.current) {
+        clearTimeout(positionSaveTimeoutRef.current);
       }
-    }, 10000);
+    };
+  }, [content]);
 
-    return () => clearInterval(interval);
-  }, [isPlaying, currentTime, content]);
+  const savePlaybackPositionImmediate = async (position: number) => {
+    if (!content) return;
+
+    try {
+      await contentAPI.update(content.id, {
+        playback_position: Math.floor(position),
+        last_played_at: new Date().toISOString(),
+      });
+      console.log('✓ Saved position:', Math.floor(position));
+    } catch (error) {
+      console.error('Failed to save playback position:', error);
+    }
+  };
 
   const loadTranscript = async () => {
     if (!content) return;
@@ -137,28 +209,19 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     }
   };
 
-  const savePlaybackPosition = async (position: number) => {
-    if (!content) return;
+  const togglePlay = async () => {
+    if (!audioRef.current || !isAudioReady) return;
 
     try {
-      await contentAPI.update(content.id, {
-        playback_position: Math.floor(position),
-        last_played_at: new Date().toISOString(),
-      });
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        await audioRef.current.play();
+      }
     } catch (error) {
-      console.error('Failed to save playback position:', error);
+      console.error('Play/pause error:', error);
+      setIsPlaying(false);
     }
-  };
-
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
-    }
-    setIsPlaying(!isPlaying);
   };
 
   const handleSeek = (time: number) => {
@@ -248,286 +311,240 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       }
     }
 
-    // Method 3: Fall back to linear interpolation (least accurate)
-    const displayedText = cleanHtml(transcript || content.content || '');
-    const words = displayedText.split(/\s+/);
-    const estimatedPosition = (wordIndex / words.length) * duration;
-    console.log('Using linear interpolation:', { wordIndex, totalWords: words.length, duration, estimatedPosition });
-    handleSeek(estimatedPosition);
+    // Method 3: Fallback - estimate based on word position (least accurate)
+    if (duration > 0 && content.content) {
+      const allText = content.content;
+      const words = allText.split(/\s+/);
+      if (wordIndex < words.length) {
+        const estimatedTime = (wordIndex / words.length) * duration;
+        console.log('Using word position estimate:', { wordIndex, total: words.length, estimatedTime });
+        handleSeek(estimatedTime);
+      }
+    }
   };
 
-  // Parse comments from JSON string if available
-  const parsedComments: Comment[] = useMemo(() => {
-    if (!content?.comments) return [];
-    try {
-      const comments = typeof content.comments === 'string'
-        ? JSON.parse(content.comments)
-        : content.comments;
-      console.log('Parsed comments:', comments?.length || 0, 'comments');
-      return comments || [];
-    } catch (error) {
-      console.error('Failed to parse comments:', error);
-      return [];
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
-  }, [content?.comments]);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
-  // Recursive component to render comments with replies
-  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const hasMetadata = comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined;
-
-    return (
-      <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
-        <div className="comment-header">
-          <span className="comment-username">{comment.username}</span>
-          {comment.date && (
-            <span className="comment-date">
-              {' • '}
-              {(() => {
-                try {
-                  return new Date(comment.date).toLocaleDateString();
-                } catch {
-                  return comment.date;
-                }
-              })()}
+  const renderComments = (comments: Comment[], depth: number = 0) => {
+    return comments.map((comment, index) => (
+      <div key={index} style={{ marginLeft: `${depth * 20}px`, marginBottom: '1rem' }}>
+        <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+          {comment.username}
+          {comment.date && ` • ${comment.date}`}
+          {(comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined) && (
+            <span style={{ fontWeight: 'normal', color: '#666', marginLeft: '8px' }}>
+              {comment.karma !== undefined && `${comment.karma} karma`}
+              {comment.agree_votes !== undefined && ` • ${comment.agree_votes} agree`}
+              {comment.disagree_votes !== undefined && ` • ${comment.disagree_votes} disagree`}
             </span>
           )}
         </div>
-        {hasMetadata && (
-          <div className="comment-metadata">
-            {comment.karma !== undefined && comment.karma !== null && (
-              <span className="comment-karma">Karma: {comment.karma}</span>
-            )}
-            {comment.agree_votes !== undefined && comment.agree_votes !== null && (
-              <span className="comment-votes">Agree: {comment.agree_votes}</span>
-            )}
-            {comment.disagree_votes !== undefined && comment.disagree_votes !== null && (
-              <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
-            )}
-          </div>
-        )}
-        <p className="comment-content">{comment.content}</p>
-        {comment.replies && comment.replies.length > 0 && (
-          <div className="comment-replies">
-            {comment.replies.map((reply, idx) => (
-              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-            ))}
-          </div>
-        )}
+        <div style={{ marginBottom: '0.5rem' }}>{comment.content}</div>
+        {comment.replies && comment.replies.length > 0 && renderComments(comment.replies, depth + 1)}
+      </div>
+    ));
+  };
+
+  const getHighlightedTranscript = () => {
+    if (!transcript) return null;
+
+    const words = transcript.split(/\s+/);
+    let currentWordIndex = 0;
+
+    // If we have word-level timestamps, find the current word
+    if (transcriptWords && transcriptWords.length > 0) {
+      currentWordIndex = transcriptWords.findIndex(
+        (w) => currentTime >= w.start && currentTime < w.end
+      );
+      if (currentWordIndex === -1) {
+        // Find the closest word
+        currentWordIndex = transcriptWords.findIndex((w) => w.start > currentTime) - 1;
+      }
+    } else {
+      // Estimate based on time and total words
+      currentWordIndex = Math.floor((currentTime / duration) * words.length);
+    }
+
+    return (
+      <div style={{ lineHeight: '1.8' }}>
+        {words.map((word, index) => (
+          <span
+            key={index}
+            onClick={() => handleTranscriptClick(index)}
+            style={{
+              backgroundColor: index === currentWordIndex ? '#4CAF50' : 'transparent',
+              color: index === currentWordIndex ? 'white' : 'inherit',
+              padding: '2px 4px',
+              margin: '0 2px',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+            onMouseOver={(e) => {
+              if (index !== currentWordIndex) {
+                e.currentTarget.style.backgroundColor = '#e0e0e0';
+              }
+            }}
+            onMouseOut={(e) => {
+              if (index !== currentWordIndex) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+          >
+            {word}
+          </span>
+        ))}
       </div>
     );
   };
 
   if (!content) return null;
 
+  // Parse structured comments if available
+  let structuredComments: Comment[] | undefined;
+  if (content.comments) {
+    try {
+      structuredComments = typeof content.comments === 'string'
+        ? JSON.parse(content.comments)
+        : content.comments;
+    } catch (e) {
+      console.error('Failed to parse comments:', e);
+    }
+  }
+
   return (
     <div className="audio-player">
+      <div className="audio-player-header">
+        <h2>{content.title}</h2>
+        <button onClick={onClose} className="close-button">
+          <X size={24} />
+        </button>
+      </div>
+
       <audio ref={audioRef} />
 
-      <div className="player-main">
-        <div className="player-header">
-          <div className="content-info">
-            {content.thumbnail_url && (
-              <img src={content.thumbnail_url} alt={content.title} className="thumbnail" />
-            )}
-            <div>
-              <h3>{content.title}</h3>
-              {content.author && <p className="author">{content.author}</p>}
-              {content.published_at && (
-                <p className="published-date">
-                  Published: {new Date(content.published_at).toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
-                </p>
-              )}
-              {(content.karma !== undefined || content.agree_votes !== undefined || content.disagree_votes !== undefined) && (
-                <div className="article-metadata">
-                  {content.karma !== undefined && content.karma !== null && (
-                    <span className="metadata-item">
-                      <strong>Karma:</strong> {content.karma}
-                    </span>
-                  )}
-                  {content.agree_votes !== undefined && content.agree_votes !== null && (
-                    <span className="metadata-item">
-                      <strong>Agree votes:</strong> {content.agree_votes}
-                    </span>
-                  )}
-                  {content.disagree_votes !== undefined && content.disagree_votes !== null && (
-                    <span className="metadata-item">
-                      <strong>Disagree votes:</strong> {content.disagree_votes}
-                    </span>
-                  )}
-                </div>
-              )}
-              {content.url && (
-                <p className="source-link">
-                  <a href={content.url} target="_blank" rel="noopener noreferrer">
-                    View original source →
-                  </a>
-                </p>
-              )}
-            </div>
+      <div className="audio-controls">
+        <div className="progress-bar">
+          <input
+            type="range"
+            min="0"
+            max={duration || 0}
+            value={currentTime}
+            onChange={(e) => handleSeek(Number(e.target.value))}
+            disabled={!isAudioReady}
+          />
+          <div className="time-display">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
           </div>
-          <button onClick={onClose} className="close-btn">
-            <X size={24} />
+        </div>
+
+        <div className="playback-controls">
+          <button onClick={handleSkipBackward} disabled={!isAudioReady}>
+            <SkipBack size={24} />
+          </button>
+          <button
+            onClick={togglePlay}
+            className="play-button"
+            disabled={!isAudioReady}
+          >
+            {isPlaying ? <Pause size={32} /> : <Play size={32} />}
+          </button>
+          <button onClick={handleSkipForward} disabled={!isAudioReady}>
+            <SkipForward size={24} />
           </button>
         </div>
 
-        <div className="player-controls">
-          <div className="progress-bar">
-            <span className="time">{formatTime(currentTime)}</span>
+        <div className="secondary-controls">
+          <div className="volume-control">
+            <Volume2 size={20} />
             <input
               type="range"
               min="0"
-              max={duration || 0}
-              value={currentTime}
-              onChange={(e) => handleSeek(parseFloat(e.target.value))}
-              className="progress-slider"
+              max="1"
+              step="0.1"
+              value={volume}
+              onChange={(e) => handleVolumeChange(Number(e.target.value))}
             />
-            <span className="time">{formatTime(duration)}</span>
           </div>
 
-          <div className="playback-controls">
-            <button onClick={handleSkipBackward} title="Skip back 15s">
-              <SkipBack size={24} />
-            </button>
-            <button onClick={togglePlay} className="play-pause-btn">
-              {isPlaying ? <Pause size={32} /> : <Play size={32} />}
-            </button>
-            <button onClick={handleSkipForward} title="Skip forward 30s">
-              <SkipForward size={24} />
-            </button>
-          </div>
+          <button onClick={toggleSpeed} className="speed-button">
+            <Gauge size={20} />
+            <span>{playbackSpeed}x</span>
+          </button>
 
-          <div className="player-options">
-            <button onClick={toggleSpeed} className="speed-toggle">
-              <Gauge size={20} />
-              <span>{playbackSpeed}x</span>
+          <div className="sleep-timer">
+            <button onClick={() => setShowSleepTimer(!showSleepTimer)}>
+              <Clock size={20} />
+              {sleepTimer && <span>{sleepTimer}m</span>}
             </button>
-
-            <div className="option-group">
-              <button onClick={() => setShowSleepTimer(!showSleepTimer)}>
-                <Clock size={20} />
-                {sleepTimer && <span>{sleepTimer}m</span>}
-              </button>
-              {showSleepTimer && (
-                <div className="sleep-timer-menu">
-                  {[5, 10, 15, 30, 45, 60].map((minutes) => (
-                    <button key={minutes} onClick={() => setSleepTimerMinutes(minutes)}>
-                      {minutes} min
-                    </button>
-                  ))}
-                  {sleepTimer && (
-                    <button
-                      onClick={() => {
-                        if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
-                        setSleepTimer(null);
-                        setShowSleepTimer(false);
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="volume-control">
-              <Volume2 size={20} />
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={volume}
-                onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              />
-            </div>
+            {showSleepTimer && (
+              <div className="sleep-timer-options">
+                {[5, 15, 30, 60].map((mins) => (
+                  <button key={mins} onClick={() => setSleepTimerMinutes(mins)}>
+                    {mins}m
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {content.description && (
-        <div className="description">
-          <h4>Description</h4>
-          <p>{cleanHtml(content.description)}</p>
+      <div className="audio-content">
+        <div className="content-tabs">
+          <button
+            className={showTranscript ? 'active' : ''}
+            onClick={() => setShowTranscript(true)}
+          >
+            {content.type === 'podcast_episode' ? 'Transcript' : 'Content'}
+          </button>
+          {structuredComments && structuredComments.length > 0 && (
+            <button
+              className={!showTranscript ? 'active' : ''}
+              onClick={() => setShowTranscript(false)}
+            >
+              Comments ({structuredComments.length})
+            </button>
+          )}
         </div>
-      )}
 
-      {(content.type === 'podcast_episode' || content.content) && (
-        <div className="transcript-section">
-          <div className="transcript-header">
-            <h4>
-              {content.type === 'podcast_episode' ? 'Transcript' : 'Content'}
-            </h4>
-            {(transcript || content.content) && (
-              <button onClick={() => setShowTranscript(!showTranscript)}>
-                {showTranscript ? 'Hide' : 'Show'}
-              </button>
-            )}
-          </div>
-          {showTranscript && (
-            <div className="transcript-content">
-              {loadingTranscript ? (
-                <p>Generating transcript...</p>
+        <div className="content-display">
+          {showTranscript ? (
+            <div className="transcript">
+              {transcript ? (
+                getHighlightedTranscript()
+              ) : content.content ? (
+                <div dangerouslySetInnerHTML={{ __html: content.content }} />
               ) : transcriptError ? (
-                <div>
-                  <p className="error-message">{transcriptError}</p>
-                  <button onClick={loadTranscript} className="retry-btn">Retry</button>
-                </div>
-              ) : content.generation_status === 'starting' || content.generation_status === 'extracting_content' ? (
-                <p className="status-message">⏳ Content is being extracted and formatted for reading...</p>
-              ) : (transcript || content.content) ? (
-                <p>
-                  {cleanHtml(transcript || content.content || '').split(/\s+/).map((word, index) => (
-                    <span
-                      key={index}
-                      className="transcript-word"
-                      onClick={() => handleTranscriptClick(index)}
-                    >
-                      {word}{' '}
-                    </span>
-                  ))}
-                </p>
+                <div className="error">{transcriptError}</div>
               ) : (
                 <div>
                   <p>No transcript available.</p>
-                  <button onClick={loadTranscript} className="generate-transcript-btn">
-                    Generate Transcript
-                  </button>
+                  {content.type === 'podcast_episode' && (
+                    <button onClick={loadTranscript} disabled={loadingTranscript}>
+                      {loadingTranscript ? 'Generating transcript...' : 'Generate Transcript'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
+          ) : (
+            <div className="comments">
+              {structuredComments && renderComments(structuredComments)}
+            </div>
           )}
         </div>
-      )}
-
-      {parsedComments.length > 0 && (
-        <div className="comments-section">
-          <div className="comments-header">
-            <h4>Comments ({parsedComments.length})</h4>
-          </div>
-          <div className="comments-list">
-            {parsedComments.map((comment, index) => (
-              <CommentComponent key={index} comment={comment} depth={0} />
-            ))}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
-}
-
-function formatTime(seconds: number): string {
-  if (!seconds || !isFinite(seconds)) return '0:00';
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
