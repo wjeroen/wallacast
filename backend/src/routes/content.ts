@@ -2,7 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateTTS } from '../services/tts.js';
-import { generateAudioForContent } from '../services/openai-tts.js';
+import { generateAudioForContent, extractArticleContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 
 const router = express.Router();
@@ -94,8 +94,16 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
-      processedContent = articleData.content;
       htmlContent = articleData.html;
+
+      // Use GPT to extract content (includes comments) for display in player
+      try {
+        processedContent = await extractArticleContent(htmlContent);
+        console.log('Extracted content with GPT for display');
+      } catch (error) {
+        console.error('Failed to extract with GPT, using plain text:', error);
+        processedContent = articleData.content;
+      }
 
       // Use fetched title if no title provided
       if (!finalTitle && articleData.title) {
