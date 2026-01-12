@@ -66,8 +66,16 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     audio.pause();
     audio.currentTime = 0;
 
+    // Check if audio URL exists
+    if (!content.audio_url) {
+      console.warn('No audio URL available for content:', content.id);
+      setDuration(0);
+      setIsAudioReady(false);
+      return; // Don't set up audio if no URL
+    }
+
     // Set up new audio
-    audio.src = content.audio_url || '';
+    audio.src = content.audio_url;
     audio.playbackRate = content.playback_speed || 1;
     setPlaybackSpeed(content.playback_speed || 1);
 
@@ -537,6 +545,17 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
         )}
       </div>
 
+      {!content.audio_url && (
+        <div style={{ padding: '1rem', background: '#1e3a5f', borderRadius: '0.375rem', marginBottom: '1rem' }}>
+          <p style={{ color: '#e2e8f0', marginBottom: '0.5rem' }}>⚠️ Audio not available yet</p>
+          <p style={{ color: '#94a3b8', fontSize: '0.875rem' }}>
+            {content.generation_status === 'generating_audio' || content.generation_status === 'content_ready'
+              ? 'Audio is currently being generated...'
+              : 'Audio needs to be generated for this article.'}
+          </p>
+        </div>
+      )}
+
       {showTranscript ? (
         <div className="transcript-section">
           {transcript ? (
@@ -561,7 +580,11 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       ) : (
         <div className="comments-section">
           <div className="comments-list">
-            {structuredComments && renderComments(structuredComments)}
+            {structuredComments && structuredComments.length > 0 ? (
+              renderComments(structuredComments)
+            ) : (
+              <p style={{ color: '#94a3b8', padding: '1rem' }}>No comments available.</p>
+            )}
           </div>
         </div>
       )}
