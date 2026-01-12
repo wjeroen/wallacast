@@ -96,6 +96,15 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
+      // Use GPT to extract content (includes comments) for display in player
+      try {
+        processedContent = await extractArticleContent(htmlContent);
+        console.log('Extracted content with GPT for display');
+      } catch (error) {
+        console.error('Failed to extract with GPT, using plain text:', error);
+        processedContent = articleData.content;
+      }
+
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
