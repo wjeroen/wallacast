@@ -97,16 +97,8 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
-      // Use GPT to extract content (includes comments) for display in player
-      try {
-        const extracted = await extractArticleContent(htmlContent);
-        processedContent = extracted.content;
-        extractedComments = extracted.comments;
-        console.log('Extracted content with GPT for display');
-      } catch (error) {
-        console.error('Failed to extract with GPT, using plain text:', error);
-        processedContent = articleData.content;
-      }
+      // Use plain text for now (will be extracted in background)
+      processedContent = articleData.content;
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
@@ -138,20 +130,6 @@ router.post('/', async (req, res) => {
       if (articleData.disagree_votes !== undefined) {
         disagreeVotes = articleData.disagree_votes;
       }
-
-      // Extract formatted content with comments for display in player
-      // This uses GPT to format the content properly, including comments
-      // Pass comments HTML separately for better extraction
-      try {
-        const extracted = await extractArticleContent(htmlContent, articleData.comments_html);
-        processedContent = extracted.content;
-        extractedComments = extracted.comments;
-        console.log('Extracted formatted content with comments for display');
-      } catch (error) {
-        console.error('Failed to extract formatted content, falling back to plain text:', error);
-        // Fall back to basic text extraction
-        processedContent = articleData.content;
-      }
     }
 
     // Ensure we have a title (final fallback)
@@ -161,10 +139,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, comments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments ? JSON.stringify(extractedComments) : null]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes]
     );
 
     const createdItem = result.rows[0];
