@@ -26,8 +26,10 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   };
 
   useEffect(() => {
-    addDebug(`AudioPlayer mounted - hasContent: ${!!content}, id: ${content?.id}, hasAudio: ${!!content?.audio_url}, title: ${content?.title}`);
-  }, []);
+    if (content) {
+      addDebug(`AudioPlayer mounted - id: ${content.id}, hasAudio: ${!!content.audio_url}, title: ${content.title}`);
+    }
+  }, [content?.id]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
