@@ -104,8 +104,9 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       addDebug(`Setting audio src: ${content.audio_url.substring(0, 50)}...`);
       // Set up new audio
       audio.src = content.audio_url;
-      audio.playbackRate = content.playback_speed || 1;
-      setPlaybackSpeed(content.playback_speed || 1);
+      const speed = Number(content.playback_speed) || 1;
+      audio.playbackRate = speed;
+      setPlaybackSpeed(speed);
 
       // Wait for metadata to load, then restore position
       const handleLoadedMetadata = () => {
@@ -324,7 +325,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const toggleSpeed = () => {
     const speeds = [1, 1.25, 1.5, 2];
     // Normalize playbackSpeed to handle floating point comparison
-    const normalizedSpeed = Math.round(playbackSpeed * 100) / 100;
+    const normalizedSpeed = Math.round(Number(playbackSpeed) * 100) / 100;
     let currentIndex = speeds.findIndex(s => Math.abs(s - normalizedSpeed) < 0.01);
 
     // If current speed not in list, start from beginning
@@ -602,7 +603,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           <div className="option-group">
             <button onClick={toggleSpeed}>
               <Gauge size={20} />
-              <span>{playbackSpeed === 1 ? '1' : playbackSpeed.toFixed(2).replace(/\.?0+$/, '')}x</span>
+              <span>{Number(playbackSpeed) === 1 ? '1' : Number(playbackSpeed).toFixed(2).replace(/\.?0+$/, '')}x</span>
             </button>
           </div>
 
