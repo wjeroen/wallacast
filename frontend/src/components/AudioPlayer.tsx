@@ -27,7 +27,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   useEffect(() => {
     if (content) {
-      addDebug(`AudioPlayer mounted - id: ${content.id}, hasAudio: ${!!content.audio_url}, title: ${content.title}`);
+      const commentsCount = content.comments ? (typeof content.comments === 'string' ? JSON.parse(content.comments).length : content.comments.length) : 0;
+      addDebug(`AudioPlayer mounted - id: ${content.id}, hasAudio: ${!!content.audio_url}, comments: ${commentsCount}`);
     }
   }, [content?.id, addDebug]);
 

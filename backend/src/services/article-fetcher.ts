@@ -199,7 +199,22 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const selectorsToRemove = [
       '.sidebar', '.related-posts', '.newsletter-signup', '.social-share',
       '.article-footer', '.post-footer', '.author-bio', '.recommended-articles',
-      'nav', 'footer', '.nav', '.footer', '[role="navigation"]', '[role="complementary"]'
+      'nav', 'footer', '.nav', '.footer', '[role="navigation"]', '[role="complementary"]',
+      // EA Forum-specific UI elements to remove
+      '.FrontpagePostsHeader-root', // "Curated and popular this week" header
+      '.RecommendationsSection-root', // Recommendations sidebar
+      '.SidebarAction-root', // Sidebar action buttons
+      '.RecommendationsAndCurated-root', // Curated posts section
+      '.SidebarInfo-root', // Sidebar info boxes
+      '.SidebarHoverOver-root', // Hover overs in sidebar
+      '.PostsListPlaceholder-root', // Post list placeholders
+      '.RecentDiscussionThread-root', // Recent discussion threads
+      '.SequencesNavigationLink-root', // Sequence navigation
+      '.PostsItem-root:not(.PostsPage-postContent .PostsItem-root)', // Related posts (but not in main content)
+      '[class*="Sidebar"]', // Any other sidebar components
+      '[class*="Curated"]', // Curated sections
+      '[class*="Recommendation"]', // Recommendation sections
+      '[class*="Opportunity"]' // "Relevant opportunities" sections
     ];
 
     selectorsToRemove.forEach(selector => {
