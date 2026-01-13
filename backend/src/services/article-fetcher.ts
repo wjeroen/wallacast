@@ -95,12 +95,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Extract comments section HTML and parse structured comment data
     let structuredComments: Comment[] | undefined;
 
-    // Try multiple selectors for EA Forum comments
+    // Try multiple selectors for EA Forum comments (prioritize #comments first)
     const commentSelectors = [
+      '#comments',  // EA Forum uses this
       '.CommentsListSection-root',
       '[class*="CommentsSection"]',
       '[class*="CommentsList"]',
-      '#comments',
       '.comments-section'
     ];
 
