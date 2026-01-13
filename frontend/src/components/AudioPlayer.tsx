@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -20,16 +20,16 @@ interface AudioPlayerProps {
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
 
-  const addDebug = (msg: string) => {
+  const addDebug = useCallback((msg: string) => {
     console.log('[DEBUG]', msg);
     setDebugInfo(prev => [...prev.slice(-20), `${new Date().toISOString().split('T')[1].split('.')[0]} - ${msg}`]);
-  };
+  }, []);
 
   useEffect(() => {
     if (content) {
       addDebug(`AudioPlayer mounted - id: ${content.id}, hasAudio: ${!!content.audio_url}, title: ${content.title}`);
     }
-  }, [content?.id]);
+  }, [content?.id, addDebug]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -49,6 +49,12 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const positionSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentContentIdRef = useRef<number | null>(null);
+  const durationRef = useRef<number>(0);
+
+  // Sync duration to ref to avoid stale closures
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
 
   // Save position immediately when leaving
   useEffect(() => {
@@ -61,160 +67,198 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   // Initialize audio when content changes
   useEffect(() => {
-    addDebug('Audio init useEffect triggered');
+    try {
+      addDebug('Audio init useEffect triggered');
 
-    if (!content || !audioRef.current) {
-      addDebug('Audio init skipped - no content or audio ref');
-      return;
-    }
+      if (!content || !audioRef.current) {
+        addDebug('Audio init skipped - no content or audio ref');
+        return;
+      }
 
-    const audio = audioRef.current;
-    const contentId = content.id;
+      const audio = audioRef.current;
+      const contentId = content.id;
 
-    // Skip if this is the same content
-    if (currentContentIdRef.current === contentId && isAudioReady) {
-      addDebug('Audio init skipped - same content already ready');
-      return;
-    }
+      // Skip if this is the same content
+      if (currentContentIdRef.current === contentId && isAudioReady) {
+        addDebug('Audio init skipped - same content already ready');
+        return;
+      }
 
-    addDebug(`Setting up audio for content ${contentId}`);
-    currentContentIdRef.current = contentId;
-    setIsAudioReady(false);
-    setIsPlaying(false);
-
-    // Clean up old audio
-    audio.pause();
-    audio.currentTime = 0;
-
-    // Check if audio URL exists
-    if (!content.audio_url) {
-      addDebug('⚠️ No audio URL - stopping audio setup');
-      setDuration(0);
+      addDebug(`Setting up audio for content ${contentId}`);
+      currentContentIdRef.current = contentId;
       setIsAudioReady(false);
-      return; // Don't set up audio if no URL
-    }
+      setIsPlaying(false);
 
-    addDebug(`Setting audio src: ${content.audio_url.substring(0, 50)}...`);
-    // Set up new audio
-    audio.src = content.audio_url;
-    audio.playbackRate = content.playback_speed || 1;
-    setPlaybackSpeed(content.playback_speed || 1);
+      // Clean up old audio
+      audio.pause();
+      audio.currentTime = 0;
 
-    // Wait for metadata to load, then restore position
-    const handleLoadedMetadata = () => {
-      addDebug(`Metadata loaded - duration: ${audio.duration}s`);
-      setDuration(audio.duration);
-      const startPosition = content.playback_position || 0;
-
-      // Fix corrupted duration in database if detected
-      if (content.duration && Math.abs(content.duration - audio.duration) > 1) {
-        addDebug(`⚠️ Fixing corrupted duration: DB=${content.duration}s, actual=${audio.duration}s`);
-        contentAPI.update(content.id, { duration: Math.floor(audio.duration) }).catch(console.error);
+      // Check if audio URL exists
+      if (!content.audio_url) {
+        addDebug('⚠️ No audio URL - stopping audio setup');
+        setDuration(0);
+        setIsAudioReady(false);
+        return; // Don't set up audio if no URL
       }
 
-      if (startPosition > 0 && startPosition < audio.duration) {
-        audio.currentTime = startPosition;
-        setCurrentTime(startPosition);
-        addDebug(`✓ Restored position: ${startPosition}s`);
-      }
+      addDebug(`Setting audio src: ${content.audio_url.substring(0, 50)}...`);
+      // Set up new audio
+      audio.src = content.audio_url;
+      audio.playbackRate = content.playback_speed || 1;
+      setPlaybackSpeed(content.playback_speed || 1);
 
-      setIsAudioReady(true);
-      addDebug('✓ Audio ready');
-    };
-
-    const handleError = (e: Event) => {
-      addDebug(`❌ Audio error: ${(e as any).message || 'Unknown error'}`);
-    };
-
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
-    audio.addEventListener('error', handleError);
-
-    // Transcript setup
-    if (content.transcript) {
-      setTranscript(content.transcript);
-      setTranscriptError('');
-
-      if (content.transcript_words) {
+      // Wait for metadata to load, then restore position
+      const handleLoadedMetadata = () => {
         try {
-          const words = typeof content.transcript_words === 'string'
-            ? JSON.parse(content.transcript_words)
-            : content.transcript_words;
-          setTranscriptWords(words);
-        } catch (e) {
-          console.error('Failed to parse transcript words:', e);
-        }
-      }
-    } else {
-      setTranscript('');
-      setTranscriptError('');
-      setTranscriptWords(null);
-    }
+          addDebug(`Metadata loaded - duration: ${audio.duration}s`);
+          setDuration(audio.duration);
+          const startPosition = content.playback_position || 0;
 
-    return () => {
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-    };
-  }, [content?.id]);
+          // Fix corrupted duration in database if detected
+          if (content.duration && Math.abs(content.duration - audio.duration) > 1) {
+            addDebug(`⚠️ Fixing corrupted duration: DB=${content.duration}s, actual=${audio.duration}s`);
+            contentAPI.update(content.id, { duration: Math.floor(audio.duration) }).catch(console.error);
+          }
+
+          if (startPosition > 0 && startPosition < audio.duration) {
+            audio.currentTime = startPosition;
+            setCurrentTime(startPosition);
+            addDebug(`✓ Restored position: ${startPosition}s`);
+          }
+
+          setIsAudioReady(true);
+          addDebug('✓ Audio ready');
+        } catch (err) {
+          addDebug(`❌ FATAL ERROR in handleLoadedMetadata: ${err}`);
+          console.error('handleLoadedMetadata error:', err);
+        }
+      };
+
+      const handleError = (e: Event) => {
+        addDebug(`❌ Audio error: ${(e as any).message || 'Unknown error'}`);
+      };
+
+      audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+      audio.addEventListener('error', handleError);
+
+      // Transcript setup
+      if (content.transcript) {
+        setTranscript(content.transcript);
+        setTranscriptError('');
+
+        if (content.transcript_words) {
+          try {
+            const words = typeof content.transcript_words === 'string'
+              ? JSON.parse(content.transcript_words)
+              : content.transcript_words;
+            setTranscriptWords(words);
+          } catch (e) {
+            console.error('Failed to parse transcript words:', e);
+          }
+        }
+      } else {
+        setTranscript('');
+        setTranscriptError('');
+        setTranscriptWords(null);
+      }
+
+      return () => {
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        audio.removeEventListener('error', handleError);
+      };
+    } catch (error) {
+      addDebug(`❌ FATAL ERROR in audio init useEffect: ${error}`);
+      console.error('Audio init useEffect error:', error);
+    }
+  }, [content?.id, addDebug]);
 
   // Audio event listeners (independent of content changes)
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    try {
+      const audio = audioRef.current;
+      if (!audio) return;
 
-    const handleTimeUpdate = () => {
-      setCurrentTime(audio.currentTime);
-      // Debounced position save
-      if (positionSaveTimeoutRef.current) {
-        clearTimeout(positionSaveTimeoutRef.current);
-      }
-      positionSaveTimeoutRef.current = setTimeout(() => {
-        if (content) {
-          savePlaybackPositionImmediate(audio.currentTime);
+      const handleTimeUpdate = () => {
+        try {
+          setCurrentTime(audio.currentTime);
+          // Debounced position save
+          if (positionSaveTimeoutRef.current) {
+            clearTimeout(positionSaveTimeoutRef.current);
+          }
+          positionSaveTimeoutRef.current = setTimeout(() => {
+            if (content) {
+              savePlaybackPositionImmediate(audio.currentTime);
+            }
+          }, 2000);
+        } catch (err) {
+          console.error('handleTimeUpdate error:', err);
         }
-      }, 2000);
-    };
+      };
 
-    const handleEnded = () => {
-      setIsPlaying(false);
-      if (content) {
-        savePlaybackPositionImmediate(0);
-      }
-    };
+      const handleEnded = () => {
+        try {
+          setIsPlaying(false);
+          if (content) {
+            savePlaybackPositionImmediate(0);
+          }
+        } catch (err) {
+          console.error('handleEnded error:', err);
+        }
+      };
 
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+      const handlePlay = () => {
+        try {
+          setIsPlaying(true);
+        } catch (err) {
+          console.error('handlePlay error:', err);
+        }
+      };
 
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('play', handlePlay);
-    audio.addEventListener('pause', handlePause);
+      const handlePause = () => {
+        try {
+          setIsPlaying(false);
+        } catch (err) {
+          console.error('handlePause error:', err);
+        }
+      };
 
-    return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('play', handlePlay);
-      audio.removeEventListener('pause', handlePause);
+      audio.addEventListener('timeupdate', handleTimeUpdate);
+      audio.addEventListener('ended', handleEnded);
+      audio.addEventListener('play', handlePlay);
+      audio.addEventListener('pause', handlePause);
 
-      if (positionSaveTimeoutRef.current) {
-        clearTimeout(positionSaveTimeoutRef.current);
-      }
-    };
+      return () => {
+        audio.removeEventListener('timeupdate', handleTimeUpdate);
+        audio.removeEventListener('ended', handleEnded);
+        audio.removeEventListener('play', handlePlay);
+        audio.removeEventListener('pause', handlePause);
+
+        if (positionSaveTimeoutRef.current) {
+          clearTimeout(positionSaveTimeoutRef.current);
+        }
+      };
+    } catch (error) {
+      console.error('Audio event listeners useEffect error:', error);
+    }
   }, [content]);
 
   const savePlaybackPositionImmediate = async (position: number) => {
     if (!content) return;
 
     try {
+      // Use durationRef to avoid stale closure issues
+      const currentDuration = durationRef.current;
       // Only clamp if we have a valid duration from the loaded audio
       // If duration is 0 or invalid, save the raw position (don't corrupt data)
-      const clampedPosition = duration > 0
-        ? Math.max(0, Math.min(Math.floor(position), duration))
+      const clampedPosition = currentDuration > 0
+        ? Math.max(0, Math.min(Math.floor(position), currentDuration))
         : Math.floor(position);
 
       await contentAPI.update(content.id, {
         playback_position: clampedPosition,
         last_played_at: new Date().toISOString(),
       });
-      console.log('✓ Saved position:', clampedPosition, '/ duration:', duration);
+      console.log('✓ Saved position:', clampedPosition, '/ duration:', currentDuration);
     } catch (error) {
       console.error('Failed to save playback position:', error);
     }
