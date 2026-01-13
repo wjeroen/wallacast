@@ -94,17 +94,43 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Extract comments section HTML and parse structured comment data
     let structuredComments: Comment[] | undefined;
-    const commentsSection = doc.querySelector('.CommentsListSection-root');
+
+    // Try multiple selectors for EA Forum comments
+    const commentSelectors = [
+      '.CommentsListSection-root',
+      '[class*="CommentsSection"]',
+      '[class*="CommentsList"]',
+      '#comments',
+      '.comments-section'
+    ];
+
+    let commentsSection: Element | null = null;
+    for (const selector of commentSelectors) {
+      commentsSection = doc.querySelector(selector);
+      if (commentsSection) {
+        console.log(`✓ Found comments section using selector: ${selector}`);
+        break;
+      }
+    }
+
     if (commentsSection) {
       commentsHtml = commentsSection.outerHTML;
+      console.log(`Comments section HTML length: ${commentsHtml.length} chars`);
 
       // Parse structured comment data using DOM selectors
       try {
         structuredComments = parseCommentsFromDOM(commentsSection);
-        console.log(`Extracted ${structuredComments.length} structured comments from DOM`);
+        console.log(`✓ Extracted ${structuredComments.length} structured comments from DOM`);
       } catch (error) {
-        console.error('Error parsing comments from DOM:', error);
+        console.error('❌ Error parsing comments from DOM:', error);
       }
+    } else {
+      console.log('❌ No comments section found with any selector');
+      console.log('Available class names in document:',
+        Array.from(doc.querySelectorAll('[class*="omment"]'))
+          .slice(0, 5)
+          .map(el => el.className)
+      );
     }
 
     console.log('=== Article Fetcher Metadata Extraction ===');
