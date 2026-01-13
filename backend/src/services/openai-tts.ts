@@ -74,6 +74,11 @@ function formatCommentsForTTS(comments: Comment[], depth: number = 0): string {
   return text;
 }
 
+/**
+ * @deprecated This function is no longer used in the main audio generation flow.
+ * Article extraction now happens in article-fetcher.ts using Readability + Apollo State.
+ * Keeping this function for backward compatibility only.
+ */
 export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number, preExtractedComments?: Comment[]): Promise<{ content: string; comments?: Comment[] }> {
   // Handle overloaded parameters
   let commentsHtml: string | undefined;
@@ -297,20 +302,24 @@ export async function generateArticleAudio(
     }
 
     const voice = options.voice || 'alloy';
-    const instructions =
-      options.instructions ||
-      'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
-    // Split text into chunks that fit within OpenAI's 4096 character limit
+    // System prompt for multimodal audio generation
+    const systemPrompt = `You are a professional narrator. Read the provided article and comments section exactly as written. Do not summarize or omit text.
+* When you encounter tables: Describe the data naturally in a narrative flow.
+* When you encounter URLs: Say 'link to [domain name]' instead of reading the full URL string.
+* When you encounter metadata: Read it clearly (e.g., 'Jeff commented with 35 karma and 11 agree votes').
+* Maintain a neutral, professional tone with natural pauses at punctuation.`;
+
+    // Split text into chunks that fit within OpenAI's character limit
     // Using 3500 to leave buffer for any encoding or special characters
     const textChunks = splitTextIntoChunks(articleText, 3500);
-    console.log(`Generating TTS audio with gpt-4o-mini-tts for ${textChunks.length} chunk(s)...`);
+    console.log(`Generating audio with gpt-4o-mini multimodal for ${textChunks.length} chunk(s)...`);
 
     // Calculate word positions for the full text
     const allWords = articleText.split(/\s+/);
 
     if (textChunks.length === 1) {
-      // Single chunk - simple case with retry logic
+      // Single chunk - use multimodal audio API
       console.log(`Single chunk (${textChunks[0].length} chars)`);
 
       let retries = 5;
@@ -319,11 +328,20 @@ export async function generateArticleAudio(
 
       while (retries > 0) {
         try {
-          response = await openai.audio.speech.create({
-            model: 'gpt-4o-mini-tts',
-            voice: voice,
-            input: textChunks[0],
-            instructions: instructions,
+          response = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            modalities: ['text', 'audio'],
+            audio: { voice: voice, format: 'mp3' },
+            messages: [
+              {
+                role: 'system',
+                content: systemPrompt,
+              },
+              {
+                role: 'user',
+                content: textChunks[0],
+              },
+            ],
           });
           break;
         } catch (error: any) {
@@ -342,7 +360,13 @@ export async function generateArticleAudio(
         throw new Error('Failed to generate audio after retries');
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer());
+      // Extract Base64 audio data from response
+      const audioData = response.choices[0]?.message?.audio?.data;
+      if (!audioData) {
+        throw new Error('No audio data in response');
+      }
+
+      const buffer = Buffer.from(audioData, 'base64');
 
       // Save temp file to get duration
       const tempDir = getTempDir();
@@ -394,11 +418,20 @@ export async function generateArticleAudio(
 
         while (retries > 0) {
           try {
-            response = await openai.audio.speech.create({
-              model: 'gpt-4o-mini-tts',
-              voice: voice,
-              input: textChunks[i],
-              instructions: instructions,
+            response = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              modalities: ['text', 'audio'],
+              audio: { voice: voice, format: 'mp3' },
+              messages: [
+                {
+                  role: 'system',
+                  content: systemPrompt,
+                },
+                {
+                  role: 'user',
+                  content: textChunks[i],
+                },
+              ],
             });
             break; // Success, exit retry loop
           } catch (error: any) {
@@ -419,8 +452,14 @@ export async function generateArticleAudio(
           throw new Error(`Failed to generate chunk ${i + 1} after retries`);
         }
 
+        // Extract Base64 audio data from response
+        const audioData = response.choices[0]?.message?.audio?.data;
+        if (!audioData) {
+          throw new Error(`No audio data in response for chunk ${i + 1}`);
+        }
+
         const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
-        const chunkBuffer = Buffer.from(await response.arrayBuffer());
+        const chunkBuffer = Buffer.from(audioData, 'base64');
         await fs.writeFile(chunkFile, chunkBuffer);
         chunkFiles.push(chunkFile);
 
@@ -604,10 +643,9 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
-    // Trust the TTS model to read the pre-formatted content naturally
+    // Multimodal API handles content interpretation automatically
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
-      instructions:
-        'You are a professional narrator reading an article exactly as written. Read all text including titles, metadata, article body, and comments section completely and naturally. When you encounter a username followed by "with X karma, Y agree votes, Z disagree votes:", read the full phrase including all numbers - these are important metadata. Do not skip, summarize, or omit any part of the text. For URLs, say "link" instead of reading the full address. Maintain steady, clear pacing throughout.',
+      voice: 'alloy',
       contentId: contentId, // Pass contentId for progress tracking
     });
 

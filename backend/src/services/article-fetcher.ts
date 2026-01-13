@@ -29,6 +29,23 @@ export interface ArticleContent {
   comments?: Comment[];
 }
 
+function extractApolloState(html: string): any {
+  try {
+    const regex = /window\.__APOLLO_STATE__\s*=\s*({[\s\S]*?});\s*<\/script>/;
+    const match = html.match(regex);
+    if (!match || !match[1]) {
+      console.log('⚠️ Apollo State script tag not found in HTML');
+      return null;
+    }
+    const state = JSON.parse(match[1]);
+    console.log('✓ Successfully extracted Apollo State');
+    return state;
+  } catch (error) {
+    console.error('❌ Failed to parse Apollo State JSON:', error);
+    return null;
+  }
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   try {
     const response = await fetch(url);
@@ -37,6 +54,13 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Use jsdom for proper DOM parsing
     const dom = new JSDOM(html);
     const doc = dom.window.document;
+
+    // Extract Apollo State for accurate metadata
+    const apolloState = extractApolloState(html);
+
+    // Extract post ID from URL (EA Forum format: /posts/[postId]/[slug])
+    const postIdMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
+    const postId = postIdMatch ? postIdMatch[1] : null;
 
     // Extract title - try multiple sources
     let title = 'Untitled';
@@ -53,44 +77,52 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
-    // Try to extract EA Forum metadata using DOM selectors
+    // Extract EA Forum metadata from Apollo State (most reliable)
     let karma: number | undefined;
     let agreeVotes: number | undefined;
     let disagreeVotes: number | undefined;
     let commentsHtml: string | undefined;
 
-    // Extract karma from EA Forum's vote component
-    const karmaElement = doc.querySelector('.PostsVoteDefault-voteScore');
-    if (karmaElement) {
-      const karmaText = karmaElement.textContent?.trim();
-      if (karmaText) {
-        karma = parseInt(karmaText);
+    if (apolloState && postId) {
+      const postKey = `Post:${postId}`;
+      const postData = apolloState[postKey];
+
+      if (postData) {
+        console.log('✓ Found post data in Apollo State');
+
+        // Extract karma (baseScore)
+        if (postData.baseScore !== undefined) {
+          karma = postData.baseScore;
+          console.log(`  Karma from Apollo State: ${karma}`);
+        }
+
+        // Extract agree/disagree votes from extendedScore
+        if (postData.extendedScore) {
+          if (postData.extendedScore.agreementVoteScore !== undefined) {
+            agreeVotes = postData.extendedScore.agreementVoteScore;
+            console.log(`  Agree votes from Apollo State: ${agreeVotes}`);
+          }
+          if (postData.extendedScore.disagreementVoteScore !== undefined) {
+            disagreeVotes = postData.extendedScore.disagreementVoteScore;
+            console.log(`  Disagree votes from Apollo State: ${disagreeVotes}`);
+          }
+        }
+      } else {
+        console.log('⚠️ Post data not found in Apollo State, falling back to DOM selectors');
       }
     }
 
-    // Extract agree and disagree votes from EA Forum reaction buttons
-    const reactionButtons = doc.querySelectorAll('.EAReactsSection-button');
-    reactionButtons.forEach(button => {
-      // Check if this button contains a checkmark (agree) or X (disagree) SVG
-      const svg = button.querySelector('svg');
-      if (svg) {
-        const svgContent = svg.innerHTML;
-        // Look for the number in the div after the emoji preview
-        const numberDiv = button.querySelector('.EAReactsSection-emojiPreview + div');
-        if (numberDiv) {
-          const voteCount = parseInt(numberDiv.textContent?.trim() || '0');
-
-          // Check if it's an agree vote (checkmark path)
-          if (svgContent.includes('Vector (Stroke)') || svgContent.includes('M2.5 7.5L6 11L13.5 3.5')) {
-            agreeVotes = voteCount;
-          }
-          // Check if it's a disagree vote (X path)
-          else if (svgContent.includes('Union') || svgContent.includes('M3 3L13 13M13 3L3 13')) {
-            disagreeVotes = voteCount;
-          }
+    // Fallback to DOM selectors if Apollo State failed
+    if (karma === undefined) {
+      const karmaElement = doc.querySelector('.PostsVoteDefault-voteScore');
+      if (karmaElement) {
+        const karmaText = karmaElement.textContent?.trim();
+        if (karmaText) {
+          karma = parseInt(karmaText);
+          console.log(`  Karma from DOM fallback: ${karma}`);
         }
       }
-    });
+    }
 
     // Extract comments section HTML and parse structured comment data
     let structuredComments: Comment[] | undefined;
@@ -117,10 +149,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       commentsHtml = commentsSection.outerHTML;
       console.log(`Comments section HTML length: ${commentsHtml.length} chars`);
 
-      // Parse structured comment data using DOM selectors
+      // Parse structured comment data using DOM selectors + Apollo State
       try {
-        structuredComments = parseCommentsFromDOM(commentsSection);
-        console.log(`✓ Extracted ${structuredComments.length} structured comments from DOM`);
+        structuredComments = parseCommentsFromDOM(commentsSection, apolloState);
+        console.log(`✓ Extracted ${structuredComments.length} structured comments from DOM + Apollo State`);
       } catch (error) {
         console.error('❌ Error parsing comments from DOM:', error);
       }
@@ -334,14 +366,14 @@ function formatCommentsForTTS(comments: Comment[], depth: number = 0): string {
   return text;
 }
 
-function parseCommentsFromDOM(commentsSection: Element): Comment[] {
+function parseCommentsFromDOM(commentsSection: Element, apolloState: any): Comment[] {
   const comments: Comment[] = [];
 
   // Find all top-level comment items (not nested in replies)
   const topLevelComments = commentsSection.querySelectorAll('.CommentsNode-root > .CommentsItem-root');
 
   topLevelComments.forEach((commentElement) => {
-    const comment = parseCommentElement(commentElement);
+    const comment = parseCommentElement(commentElement, apolloState);
     if (comment) {
       comments.push(comment);
     }
@@ -350,15 +382,19 @@ function parseCommentsFromDOM(commentsSection: Element): Comment[] {
   return comments;
 }
 
-function parseCommentElement(commentElement: Element): Comment | null {
+function parseCommentElement(commentElement: Element, apolloState: any): Comment | null {
   try {
-    // Extract username
-    const usernameElement = commentElement.querySelector('.UsersNameDisplay-userName') ||
+    // Extract comment ID from element's id attribute
+    const commentId = commentElement.id;
+
+    // Extract username (keep using DOM - this is reliable)
+    const usernameElement = commentElement.querySelector('.CommentUserName-author') ||
+                           commentElement.querySelector('.UsersNameDisplay-userName') ||
                            commentElement.querySelector('.CommentsItem-author a');
     const username = usernameElement?.textContent?.trim();
     if (!username) return null;
 
-    // Extract date
+    // Extract date (keep using DOM)
     let date: string | undefined;
     const timeElement = commentElement.querySelector('time[dateTime]');
     if (timeElement) {
@@ -368,49 +404,51 @@ function parseCommentElement(commentElement: Element): Comment | null {
       }
     }
 
-    // Extract karma/vote score
+    // Extract karma/vote score from Apollo State (most reliable)
     let karma: number | undefined;
-    const karmaElement = commentElement.querySelector('.OverallVoteAxis-voteScore');
-    if (karmaElement) {
-      const karmaText = karmaElement.textContent?.trim();
-      if (karmaText) {
-        const parsed = parseInt(karmaText);
-        if (!isNaN(parsed)) {
-          karma = parsed;
+    let agreeVotes: number | undefined;
+    let disagreeVotes: number | undefined;
+
+    if (apolloState && commentId) {
+      const commentKey = `Comment:${commentId}`;
+      const commentData = apolloState[commentKey];
+
+      if (commentData) {
+        // Extract karma (baseScore)
+        if (commentData.baseScore !== undefined) {
+          karma = commentData.baseScore;
+        }
+
+        // Extract agree/disagree votes from extendedScore
+        if (commentData.extendedScore) {
+          if (commentData.extendedScore.agreementVoteScore !== undefined) {
+            agreeVotes = commentData.extendedScore.agreementVoteScore;
+          }
+          if (commentData.extendedScore.disagreementVoteScore !== undefined) {
+            disagreeVotes = commentData.extendedScore.disagreementVoteScore;
+          }
         }
       }
     }
 
-    // Extract agree and disagree votes from reaction buttons
-    let agreeVotes: number | undefined;
-    let disagreeVotes: number | undefined;
-
-    const reactionButtons = commentElement.querySelectorAll('.EAReactsSection-button');
-    reactionButtons.forEach((button) => {
-      const svg = button.querySelector('svg');
-      if (!svg) return;
-
-      const svgContent = svg.innerHTML;
-      const numberDiv = button.querySelector('.EAReactsSection-emojiPreview + div');
-      if (!numberDiv) return;
-
-      const voteCountText = numberDiv.textContent?.trim();
-      if (!voteCountText) return;
-
-      const voteCount = parseInt(voteCountText);
-      if (isNaN(voteCount)) return;
-
-      // Check if it's an agree vote (checkmark) or disagree vote (X)
-      if (svgContent.includes('Vector (Stroke)') || svgContent.includes('M2.5 7.5L6 11L13.5 3.5')) {
-        agreeVotes = voteCount;
-      } else if (svgContent.includes('Union') || svgContent.includes('M3 3L13 13M13 3L3 13')) {
-        disagreeVotes = voteCount;
+    // Fallback to DOM selectors if Apollo State failed
+    if (karma === undefined) {
+      const karmaElement = commentElement.querySelector('.OverallVoteAxis-voteScore');
+      if (karmaElement) {
+        const karmaText = karmaElement.textContent?.trim();
+        if (karmaText) {
+          const parsed = parseInt(karmaText);
+          if (!isNaN(parsed)) {
+            karma = parsed;
+          }
+        }
       }
-    });
+    }
 
-    // Extract comment content (text only, no HTML)
+    // Extract comment content (text only, no HTML) - keep using DOM
     let content = '';
     const contentElement = commentElement.querySelector('.CommentBody-root') ||
+                          commentElement.querySelector('.CommentBody-commentStyling') ||
                           commentElement.querySelector('.CommentsItem-body');
     if (contentElement) {
       content = contentElement.textContent?.trim() || '';
@@ -422,7 +460,7 @@ function parseCommentElement(commentElement: Element): Comment | null {
     if (repliesContainer) {
       const replyElements = repliesContainer.querySelectorAll(':scope > .CommentsNode-root > .CommentsItem-root');
       replyElements.forEach((replyElement) => {
-        const reply = parseCommentElement(replyElement);
+        const reply = parseCommentElement(replyElement, apolloState);
         if (reply) {
           replies.push(reply);
         }
