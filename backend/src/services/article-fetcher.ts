@@ -222,6 +222,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
 
     // Remove common non-article elements before Readability
+    // IMPORTANT: Don't remove anything with "Comment" in class name!
     const selectorsToRemove = [
       '.sidebar', '.related-posts', '.newsletter-signup', '.social-share',
       '.article-footer', '.post-footer', '.author-bio', '.recommended-articles',
@@ -237,10 +238,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       '.RecentDiscussionThread-root', // Recent discussion threads
       '.SequencesNavigationLink-root', // Sequence navigation
       '.PostsItem-root:not(.PostsPage-postContent .PostsItem-root)', // Related posts (but not in main content)
-      '[class*="Sidebar"]', // Any other sidebar components
-      '[class*="Curated"]', // Curated sections
-      '[class*="Recommendation"]', // Recommendation sections
-      '[class*="Opportunity"]' // "Relevant opportunities" sections
+      // Removed overly broad wildcard selectors that might match comments
     ];
 
     selectorsToRemove.forEach(selector => {

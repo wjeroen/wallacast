@@ -526,7 +526,15 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   return (
     <div className="audio-player">
         <div className="player-header">
-          <h2>{content.title}</h2>
+          <h2>
+            {content.url ? (
+              <a href={content.url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>
+                {content.title}
+              </a>
+            ) : (
+              content.title
+            )}
+          </h2>
           <button onClick={onClose} className="close-btn">
             <X size={24} />
           </button>
