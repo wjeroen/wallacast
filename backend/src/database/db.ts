@@ -93,6 +93,11 @@ export async function initializeDatabase() {
     const audioDataMigration = await fs.readFile(audioDataMigrationPath, 'utf-8');
     await poolInstance.query(audioDataMigration);
 
+    // Run migration to add performance indexes
+    const indexesMigrationPath = path.join(__dirname, 'migrations', '002_add_performance_indexes.sql');
+    const indexesMigration = await fs.readFile(indexesMigrationPath, 'utf-8');
+    await poolInstance.query(indexesMigration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
