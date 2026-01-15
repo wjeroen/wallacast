@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
-import { generateTTS } from '../services/tts.js';
 import { generateAudioForContent, extractArticleContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 
