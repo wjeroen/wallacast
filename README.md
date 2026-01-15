@@ -1,335 +1,270 @@
 # Readcast
 
-A unified web application for reading and listening to articles and podcasts. Readcast combines the functionality of read-it-later services like Wallabag/Pocket with a full-featured podcast player.
+A personal read-it-later and podcast app that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Spotify Podcasts.
 
-## Features
+## Core Concept
 
-- **Unified Content Management**: Treat articles and podcasts the same way - read or listen to both
-- **AI-Powered Audio**:
-  - Convert articles to speech using OpenAI TTS (gpt-4o-mini-tts)
-  - **Unlimited article length** - automatically splits long articles into chunks and concatenates audio
-  - Transcribe podcast episodes using OpenAI Whisper (gpt-4o-mini-transcribe)
-  - **Unlimited podcast length** - automatically compresses and splits large episodes for transcription
-- **Click-to-Seek**: Click on any word in the transcript/text to jump to that position in the audio
-- **Full Podcast Support**:
-  - Subscribe to podcasts via RSS
-  - Search for new podcasts
-  - Manually select episodes to add to library
-- **Article Saving**:
-  - Save articles via URL
-  - Automatic content extraction from web pages
-- **Advanced Playback Features**:
-  - Variable playback speed (0.5x - 2x)
-  - Sleep timer
-  - Queue management
-  - Playback position memory
-- **Organization Tools**:
-  - Mark as favorite
-  - Archive items
-  - Filter by type
-  - Mark as read/listened
-- **Security**:
-  - HTTP Basic Auth protects all API endpoints
-  - OpenAI API key stored securely in environment variables only
-- **Cross-Device Sync**: Deploy to Railway and access your content from anywhere
-
-## Project Structure
-
-```
-readcast/
-├── frontend/          # React + TypeScript frontend
-│   ├── src/
-│   │   ├── components/   # React components
-│   │   ├── types.ts      # TypeScript interfaces
-│   │   ├── api.ts        # API client
-│   │   ├── App.tsx       # Main app component
-│   │   └── App.css       # Styling
-│   └── package.json
-│
-└── backend/           # Node.js + Express backend
-    ├── src/
-    │   ├── database/     # Database schema and connection
-    │   ├── routes/       # API routes
-    │   ├── services/     # Business logic (TTS, transcription, etc.)
-    │   └── index.ts      # Server entry point
-    └── package.json
-```
+- **Articles → Audio**: Add article URLs, they're extracted and converted to speech via OpenAI TTS
+- **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via OpenAI Whisper
+- **Unified Library**: Both content types appear in one library with playback position tracking
 
 ## Tech Stack
 
-### Frontend
-- React 18 with TypeScript
-- Vite for build tooling
-- Axios for API calls (with HTTP Basic Auth support)
-- Lucide React for icons
-- Responsive CSS for mobile-first design
+| Component | Technology |
+|-----------|------------|
+| Backend | Node.js, Express, TypeScript |
+| Frontend | React, Vite, TypeScript |
+| Database | PostgreSQL |
+| TTS | OpenAI gpt-4o-mini-tts |
+| Transcription | OpenAI Whisper (whisper-1, gpt-4o-mini-transcribe) |
+| Content Extraction | GPT-4o-mini (HTML → readable text) |
+| Audio Processing | FFmpeg (chunking, concatenation) |
+| Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
-### Backend
-- Node.js 22 with Express
-- PostgreSQL database
-- OpenAI API:
-  - Whisper (gpt-4o-mini-transcribe) for podcast transcription
-  - TTS (gpt-4o-mini-tts) for article audio generation
-- ffmpeg for audio processing:
-  - Splitting and compression for large podcast transcription
-  - Audio concatenation for long article TTS
-- express-basic-auth for API security
-- fluent-ffmpeg for Node.js ffmpeg integration
+## Quick Reference
 
-## Setup
+| When working on... | Look at... |
+|-------------------|------------|
+| Adding content | `backend/src/routes/content.ts` |
+| TTS generation | `backend/src/services/openai-tts.ts` |
+| Transcription | `backend/src/services/transcription.ts` |
+| Article extraction | `backend/src/services/article-fetcher.ts` |
+| Podcast feeds | `backend/src/services/podcast-service.ts` |
+| Audio player | `frontend/src/components/AudioPlayer.tsx` |
+| Library UI | `frontend/src/components/LibraryTab.tsx` |
+| Database schema | `backend/src/database/schema.sql` |
+| All types | `frontend/src/types.ts` |
 
-### Prerequisites
-- Node.js 22+ and npm
-- PostgreSQL 12+
-- ffmpeg (required for audio processing)
-- OpenAI API key (required for transcription and TTS)
+## Architecture Overview
 
-#### Installing ffmpeg
-
-**macOS:**
-```bash
-brew install ffmpeg
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│    Frontend     │────▶│     Backend     │────▶│   PostgreSQL    │
+│   (React/Vite)  │     │ (Express/Node)  │     │    Database     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │    OpenAI APIs      │
+                    │  (TTS, Whisper,     │
+                    │   GPT-4o-mini)      │
+                    └─────────────────────┘
 ```
 
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install ffmpeg
+## Project Structure
+
+### Backend (`/backend/src/`)
+
+#### Entry Point
+- **`index.ts`**: Express server setup, CORS, HTTP Basic Auth middleware, route mounting, database initialization with retry logic, graceful shutdown handling
+
+#### Configuration
+- **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`
+
+#### Database
+- **`database/db.ts`**: PostgreSQL connection pool management. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially
+- **`database/schema.sql`**: Main table definitions (`content_items`, `podcasts`, `queue_items`)
+- **`database/add_*.sql`**: Migration files for additional columns (word timestamps, generation status, article metadata, comments)
+- **`database/migrations/`**: Additional migrations (audio_data column)
+
+#### Routes
+- **`routes/content.ts`**: CRUD for content items. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
+  - `GET /` - List all content (excludes audio_data blob for performance)
+  - `POST /` - Create content, auto-extracts article HTML if URL provided
+  - `PATCH /:id` - Update playback position, archive status, etc.
+  - `POST /:id/generate-audio` - Manually trigger audio generation
+  - `DELETE /:id` - Delete content and clean up audio files
+
+- **`routes/podcasts.ts`**: Podcast subscription management
+  - `GET /search?q=` - Search iTunes podcast directory
+  - `POST /subscribe` - Subscribe to podcast feed URL
+  - `POST /:id/refresh` - Fetch new episodes from feed
+  - `GET /:id/preview-episodes` - Get episodes without saving to library
+
+- **`routes/queue.ts`**: Queue management (partially implemented)
+  - Standard CRUD for queue items with position management
+
+- **`routes/transcription.ts`**: Dedicated transcription endpoint
+  - `POST /content/:id` - Trigger transcription for podcast episode
+
+#### Services
+- **`services/article-fetcher.ts`**: Fetches article HTML, extracts metadata (title, author, date). Has specific selectors for EA Forum (karma, votes, comments section). Returns raw HTML for GPT extraction
+
+- **`services/openai-tts.ts`**: Main TTS service (this is the active one, not `tts.ts`)
+  - `extractArticleContent()`: Uses GPT-4o-mini to extract readable text from HTML, also extracts structured comments with metadata
+  - `generateArticleAudio()`: Generates TTS audio using gpt-4o-mini-tts, handles chunking for long articles (3500 char limit per chunk), concatenates with FFmpeg
+  - `generateAudioForContent()`: Orchestrates the full pipeline (extract content → generate TTS → save to DB)
+  - Includes retry logic with exponential backoff for rate limits
+
+- **`services/transcription.ts`**: Podcast transcription using Whisper
+  - `transcribeAudio()`: Basic transcription
+  - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
+  - Handles large files by splitting into 15-minute chunks
+  - Compresses audio before transcription if needed
+
+- **`services/podcast-service.ts`**: RSS feed parsing
+  - `parsePodcastFeed()`: Extracts podcast metadata from RSS
+  - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
+  - `getPreviewEpisodes()`: Gets episodes without saving
+  - Simple regex-based XML parsing (no library)
+
+- **`services/tts.ts`**: **LEGACY/UNUSED** - ElevenLabs TTS implementation. Not connected to anything, kept for potential future use
+
+### Frontend (`/frontend/src/`)
+
+#### Entry Point
+- **`main.tsx`**: React root with StrictMode
+- **`App.tsx`**: Main app component, manages tab navigation and current playing content state
+
+#### Components
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Favorites, Archived, Articles, Podcasts). Shows content cards with generation status, handles bulk selection mode, playback position display
+
+- **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
+
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder)
+
+- **`components/AudioPlayer.tsx`**: Full audio player with:
+  - Play/pause, seek, skip ±15/30s
+  - Speed control (0.5x to 3x)
+  - Sleep timer
+  - Volume control
+  - Transcript display with word-click-to-seek (for podcasts with timestamps)
+  - Comments section display (for EA Forum articles)
+  - Playback position persistence
+
+#### Other Files
+- **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
+- **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings
+- **`App.css`**: All styles (single CSS file, no modules)
+- **`index.css`**: Base styles from Vite template
+
+## Database Schema
+
+### content_items (main table)
+- `id`: Primary key
+- `type`: 'article' | 'podcast_episode' | 'pdf' | 'text'
+- `title`, `url`, `content`, `html_content`
+- `author`, `description`, `thumbnail_url`
+- `audio_url`: URL to generated/original audio file
+- `audio_data`: BYTEA column for storing audio in DB (not currently used, placeholder for Railway without volumes)
+- `transcript`, `transcript_words`: Transcription text and word-level timestamps (JSON)
+- `tts_chunks`: TTS chunk metadata for seeking (JSON)
+- `duration`, `file_size`
+- `podcast_id`: FK to podcasts table
+- `published_at`, `karma`, `agree_votes`, `disagree_votes`
+- `comments`: Structured comments JSON (for EA Forum)
+- `is_favorite`, `is_archived`, `is_read`
+- `playback_position`, `playback_speed`, `last_played_at`
+- `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
+- `generation_progress`, `generation_error`, `current_operation`
+
+### podcasts
+- `id`, `title`, `author`, `description`
+- `feed_url`, `website_url`, `thumbnail_url`
+- `category`, `language`
+- `is_subscribed`, `last_fetched_at`
+
+### queue_items (not fully implemented in UI)
+- `id`, `content_item_id`, `position`, `added_at`
+
+## Deployment (Railway)
+
+The app deploys as 3 separate Railway services from the same repo:
+
+1. **PostgreSQL Database**: Provisioned via Railway's database service
+2. **Backend**: Root directory set to `backend/`, uses Dockerfile for FFmpeg
+3. **Frontend**: Root directory set to `frontend/`, served via `npx serve`
+
+### Required Environment Variables
+
+**Backend:**
 ```
-
-**Windows:**
-Download from [ffmpeg.org](https://ffmpeg.org/download.html) or use chocolatey:
-```bash
-choco install ffmpeg
-```
-
-### Backend Setup
-
-1. Navigate to the backend directory:
-```bash
-cd backend
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Create a `.env` file:
-```bash
-touch .env
-```
-
-4. Edit `.env` and add your configuration:
-```env
-# Database configuration
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=readcast
-DB_USER=postgres
-DB_PASSWORD=your_password
-
-# Or use a connection string instead:
-# DATABASE_URL=postgresql://user:password@localhost:5432/readcast
-
-# Authentication (required)
-AUTH_USERNAME=admin
-AUTH_PASSWORD=your_secure_password
-
-# OpenAI API (required)
-OPENAI_API_KEY=sk-proj-your_openai_key
-
-# Server configuration
 PORT=3001
-FRONTEND_URL=http://localhost:5173
+DATABASE_URL=(auto-provided by Railway)
+FRONTEND_URL=https://your-frontend.up.railway.app
+AUTH_USERNAME=your-username
+AUTH_PASSWORD=your-password
+OPENAI_API_KEY=sk-...
 ```
 
-5. Create the PostgreSQL database:
-```bash
-createdb readcast
+**Frontend:**
+```
+VITE_API_URL=https://your-backend.up.railway.app/api
 ```
 
-6. Start the development server:
+### Important Notes
+- Backend has a Dockerfile that installs FFmpeg (required for audio processing)
+- HTTP Basic Auth protects all /api/* routes
+- Audio files are stored in /data if Railway volume is mounted, otherwise in ./public/audio
+- CORS is configured for single frontend URL only
+
+## Content Processing Flows
+
+### Article Flow
+1. User submits URL via AddTab
+2. Backend fetches HTML (`article-fetcher.ts`)
+3. GPT-4o-mini extracts readable content (`openai-tts.ts`)
+4. Content is chunked (max 3500 chars per chunk)
+5. Each chunk is converted to audio via gpt-4o-mini-tts
+6. Chunks are concatenated via FFmpeg
+7. Final audio URL saved to DB
+
+### Podcast Flow
+1. User subscribes to RSS feed
+2. Episodes are parsed and saved
+3. When user adds episode to library, transcription starts automatically
+4. Whisper transcribes with word timestamps
+5. Transcript saved for display and seeking
+
+## Common Tasks
+
+**Add a new field to content_items:**
+1. Create migration SQL file in `backend/src/database/`
+2. Add `fs.readFile` call in `db.ts initializeDatabase()`
+3. Update `types.ts` in frontend
+4. Add to SELECT queries in content.ts (explicit column list)
+
+**Modify TTS behavior:**
+Edit the system prompt in `openai-tts.ts extractArticleContent()` around line 1750
+
+**Modify transcription:**
+Edit `transcription.ts transcribeWithTimestamps()`
+
+**Add new API endpoint:**
+Add route in appropriate file in `backend/src/routes/`, import in `index.ts`
+
+## Known Issues / TODO
+
+See CODEBASE_CRITIQUE.md for detailed issues and fixes.
+
+Key issues:
+- Playback position not persisting correctly
+- Speed toggle UI inconsistent
+- EA Forum comment extraction unreliable
+- Queue functionality incomplete
+- Audio player should be smaller/persistent across tabs
+
+## Future Plans
+
+- Export/import functionality (Wallabag compatibility?)
+- Bulk podcast subscription import (OPML)
+- Edit text content after adding
+- "All" filter should exclude archived
+- Flemish-sounding Dutch TTS prompt
+- Fullscreen player mode for reading
+
+## Development
+
 ```bash
-npm run dev
-```
-
-The backend will run on `http://localhost:3001` and automatically initialize the database schema.
-
-**Note:** Your browser will prompt for the username and password (AUTH_USERNAME and AUTH_PASSWORD) when accessing the API.
-
-### Frontend Setup
-
-1. Navigate to the frontend directory:
-```bash
-cd frontend
-```
-
-2. Install dependencies:
-```bash
+# Backend
+cd backend
 npm install
-```
+npm run dev
 
-3. Create a `.env` file:
-```bash
-cp .env.example .env
-```
-
-4. Start the development server:
-```bash
+# Frontend (separate terminal)
+cd frontend
+npm install
 npm run dev
 ```
 
-The frontend will run on `http://localhost:5173`.
-
-## Usage
-
-### Adding Content
-
-1. Click the **+** button in the bottom navigation
-2. Choose content type:
-   - **Article**: Enter a URL to save and extract content
-   - **Text**: Paste plain text directly
-3. Click "Save Content"
-
-### Subscribing to Podcasts
-
-1. Go to the **Feed** tab (left icon in bottom navigation)
-2. Use the search bar to find podcasts by name
-3. Click "Subscribe" on any podcast
-4. View preview episodes and manually select which ones to add to your library
-5. Click "Add to Library" on episodes you want to listen to
-
-### Playing Content
-
-1. Go to the **Library** tab (right icon in bottom navigation)
-2. Click on any content item to open the player
-3. Use playback controls:
-   - Play/Pause
-   - Skip forward/backward 15 seconds
-   - Adjust playback speed (0.5x - 2x)
-   - Set a sleep timer
-4. For podcasts: Click "Generate Transcript" to transcribe the episode
-5. Click on transcript/content words to seek to that position in the audio
-
-### Managing Content
-
-In the Library tab, you can:
-- **Star** items to mark as favorite
-- **Archive** items you've finished
-- **Delete** items you no longer need
-- **Generate Audio** for articles using the volume icon (automatically handles any article length)
-- **Generate Transcript** for podcasts (automatically handles any episode length)
-
-## Deployment
-
-See [RAILWAY_DEPLOYMENT.md](RAILWAY_DEPLOYMENT.md) for complete instructions on deploying to Railway.app.
-
-**Quick summary:**
-1. Create Railway project with PostgreSQL database
-2. Deploy backend service (root directory: `backend`)
-3. Deploy frontend service (root directory: `frontend`)
-4. Set environment variables for authentication and OpenAI API key
-5. Railway automatically installs ffmpeg via the Dockerfile
-
-Your app will be accessible from anywhere with HTTP Basic Auth protection!
-
-## How It Works
-
-### Article Audio Generation (Unlimited Length)
-When you generate audio for an article:
-1. Content is extracted from the URL using OpenAI to identify the main article text
-2. Text is split into ~4KB chunks at sentence boundaries (OpenAI TTS has a 4096 char limit)
-3. Each chunk is converted to audio using OpenAI TTS (gpt-4o-mini-tts)
-4. Audio files are concatenated using ffmpeg into a single seamless MP3
-5. User receives complete audio file regardless of article length
-
-**Cost:** ~$0.015 per 1,000 characters (~$0.60 for a typical 40,000 character article)
-
-### Podcast Transcription (Unlimited Length)
-When you transcribe a podcast episode:
-1. Audio is downloaded and streamed to disk (no memory limits)
-2. If file > 25 MB (OpenAI Whisper limit):
-   - Audio is split into 15-minute chunks using ffmpeg
-   - Each chunk is compressed to mono, 64kbps, 16kHz (optimized for speech)
-3. Each chunk is transcribed using OpenAI Whisper (gpt-4o-mini-transcribe)
-4. Previous transcript is used as context (prompt parameter) for continuity
-5. Transcripts are concatenated with adjusted word timestamps
-6. User receives complete, accurate transcript
-
-**Cost:** ~$0.006 per minute (~$1.08 for a 3-hour podcast)
-
-## Roadmap
-
-**Completed:**
-- ✅ Unlimited article length TTS with audio concatenation
-- ✅ Unlimited podcast length transcription with splitting/compression
-- ✅ HTTP Basic Auth security
-- ✅ Click-to-seek on transcript words
-- ✅ Manual podcast episode selection
-
-**Planned:**
-- [ ] Chrome extension for one-click article saving
-- [ ] Android app with share target support
-- [ ] Better article parsing (current: OpenAI extraction, planned: Readability.js)
-- [ ] YouTube video support (audio extraction + transcription)
-- [ ] PDF support with text extraction
-- [ ] Playlist/collection management
-- [ ] Export functionality (transcripts, library data)
-- [ ] Offline mode with service workers
-
-## API Costs
-
-Readcast uses OpenAI's API which charges based on usage:
-
-| Feature | Model | Cost | Example |
-|---------|-------|------|---------|
-| Article TTS | gpt-4o-mini-tts | $0.015 / 1K chars | 40K char article = $0.60 |
-| Podcast Transcription | gpt-4o-mini-transcribe | $0.006 / minute | 180 min podcast = $1.08 |
-
-**Monthly estimate for typical usage:**
-- 50 articles (~30K chars each): ~$22.50
-- 20 podcast episodes (~60 min each): ~$7.20
-- **Total: ~$30/month**
-
-The free tier from OpenAI gives you $5 in credits to test the service.
-
-## Troubleshooting
-
-### "Cannot find ffprobe" or ffmpeg errors
-- Ensure ffmpeg is installed: `ffmpeg -version`
-- For Railway deployment: The Dockerfile automatically installs ffmpeg
-
-### Transcription fails for large podcasts
-- The app automatically handles files of any size
-- Check Railway logs to ensure ffmpeg is installed
-- Verify OpenAI API key is set correctly
-
-### Audio generation seems truncated
-- Modern implementation supports unlimited article length
-- Check that you see "Generated complete audio in X parts" message
-- Verify ffmpeg is available for audio concatenation
-
-### HTTP 401 Unauthorized errors
-- Check that AUTH_USERNAME and AUTH_PASSWORD are set in environment variables
-- Your browser should prompt for credentials on first access
-- For API access, use HTTP Basic Auth headers
-
-### Database connection errors
-- Verify PostgreSQL is running
-- Check DATABASE_URL or individual DB_* environment variables
-- For Railway: Ensure PostgreSQL service is linked to backend
-
-## License
-
-MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Support
-
-For deployment help, see [RAILWAY_DEPLOYMENT.md](RAILWAY_DEPLOYMENT.md).
-
-For issues or questions, please open an issue on GitHub.
+Requires PostgreSQL running locally or set `DATABASE_URL`.
