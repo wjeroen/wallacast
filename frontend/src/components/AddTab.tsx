@@ -4,7 +4,11 @@ import { contentAPI } from '../api';
 
 type ContentType = 'article' | 'text' | 'pdf' | 'podcast_episode';
 
-export function AddTab() {
+interface AddTabProps {
+  onContentAdded: () => void;
+}
+
+export function AddTab({ onContentAdded }: AddTabProps) {
   const [contentType, setContentType] = useState<ContentType>('article');
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -40,6 +44,9 @@ export function AddTab() {
 
       await contentAPI.create(data);
       setMessage('Content saved successfully!');
+
+      // Refresh content list in parent
+      onContentAdded();
 
       setUrl('');
       setTitle('');

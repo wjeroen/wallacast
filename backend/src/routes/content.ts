@@ -13,7 +13,8 @@ router.get('/', async (req, res) => {
   try {
     const { type, archived, favorite } = req.query;
 
-    let sql = 'SELECT id, type, title, url, content, html_content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE 1=1';
+    // Exclude large columns (html_content, comments, transcript) for performance
+    let sql = 'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
     const params: any[] = [];
     let paramCount = 1;
 
@@ -45,11 +46,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get single content item (excluding audio_data for performance)
+// Get single content item (includes large columns needed for display)
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
+      'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
       [req.params.id]
     );
 

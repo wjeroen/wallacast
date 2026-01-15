@@ -24,15 +24,33 @@ function cleanHtml(text: string): string {
   return cleaned;
 }
 
-export function LibraryTab({ onPlayContent }: { onPlayContent: (content: ContentItem) => void }) {
-  const [content, setContent] = useState<ContentItem[]>([]);
+interface LibraryTabProps {
+  onPlayContent: (content: ContentItem) => void;
+  content: ContentItem[];
+  setContent: React.Dispatch<React.SetStateAction<ContentItem[]>>;
+  loading: boolean;
+  onRefresh: (params?: any) => Promise<void>;
+}
+
+export function LibraryTab({ onPlayContent, content, setContent, loading, onRefresh }: LibraryTabProps) {
   const [filter, setFilter] = useState<FilterType>('all');
-  const [loading, setLoading] = useState(true);
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
 
   useEffect(() => {
-    loadContent();
+    const params: any = {};
+
+    if (filter === 'articles') {
+      params.type = 'article';
+    } else if (filter === 'podcasts') {
+      params.type = 'podcast_episode';
+    } else if (filter === 'favorites') {
+      params.favorite = true;
+    } else if (filter === 'archived') {
+      params.archived = true;
+    }
+
+    onRefresh(params);
   }, [filter]);
 
   // Poll for progress updates on items that are generating
@@ -58,7 +76,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
 
           // If item completed, reload the full list once to ensure fresh data
           if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
-            setTimeout(() => loadContent(), 500);
+            setTimeout(() => onRefresh(), 500);
           }
         } catch (error) {
           console.error('Failed to fetch item status:', error);
@@ -68,30 +86,6 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
 
     return () => clearInterval(pollInterval);
   }, [content]);
-
-  const loadContent = async () => {
-    setLoading(true);
-    try {
-      const params: any = {};
-
-      if (filter === 'articles') {
-        params.type = 'article';
-      } else if (filter === 'podcasts') {
-        params.type = 'podcast_episode';
-      } else if (filter === 'favorites') {
-        params.favorite = true;
-      } else if (filter === 'archived') {
-        params.archived = true;
-      }
-
-      const response = await contentAPI.getAll(params);
-      setContent(response.data);
-    } catch (error) {
-      console.error('Failed to load content:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handlePlayContent = async (item: ContentItem) => {
     try {
@@ -108,7 +102,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   const handleToggleFavorite = async (id: number, isFavorite: boolean) => {
     try {
       await contentAPI.update(id, { is_favorite: !isFavorite });
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to toggle favorite:', error);
     }
@@ -117,7 +111,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   const handleToggleArchive = async (id: number, isArchived: boolean) => {
     try {
       await contentAPI.update(id, { is_archived: !isArchived });
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to toggle archive:', error);
     }
@@ -126,7 +120,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   const handleMarkAsRead = async (id: number) => {
     try {
       await contentAPI.update(id, { is_read: true });
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to mark as read:', error);
     }
@@ -135,7 +129,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
   const handleDelete = async (id: number) => {
     try {
       await contentAPI.delete(id);
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to delete content:', error);
     }
@@ -163,7 +157,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     try {
       await Promise.all(Array.from(selectedItems).map(id => contentAPI.delete(id)));
       setSelectedItems(new Set());
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to bulk delete:', error);
     }
@@ -173,7 +167,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     try {
       await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_archived: true })));
       setSelectedItems(new Set());
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to bulk archive:', error);
     }
@@ -183,7 +177,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     try {
       await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_favorite: true })));
       setSelectedItems(new Set());
-      loadContent();
+      onRefresh();
     } catch (error) {
       console.error('Failed to bulk favorite:', error);
     }
@@ -193,7 +187,7 @@ export function LibraryTab({ onPlayContent }: { onPlayContent: (content: Content
     try {
       await contentAPI.generateAudio(id, regenerate);
       // Generation started in background, polling will update status
-      loadContent();
+      onRefresh();
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
