@@ -111,8 +111,6 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - `getPreviewEpisodes()`: Gets episodes without saving
   - Simple regex-based XML parsing (no library)
 
-- **`services/tts.ts`**: **LEGACY/UNUSED** - ElevenLabs TTS implementation. Not connected to anything, kept for potential future use
-
 ### Frontend (`/frontend/src/`)
 
 #### Entry Point
