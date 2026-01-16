@@ -488,10 +488,6 @@
   border-color: #475569;
 }
 
-.content-card.read {
-  opacity: 0.6;
-}
-
 .content-card .thumbnail {
   width: 100px;
   height: 100px;

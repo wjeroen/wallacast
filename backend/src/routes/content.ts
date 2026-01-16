@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
     const { type, archived, favorite } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
+    let sql = 'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
     const params: any[] = [];
     let paramCount = 1;
 
@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, is_read, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
+      'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
       [req.params.id]
     );
 
@@ -245,7 +245,6 @@ router.patch('/:id', async (req, res) => {
     const allowedFields = [
       'is_favorite',
       'is_archived',
-      'is_read',
       'playback_position',
       'playback_speed',
       'last_played_at',
@@ -253,18 +252,18 @@ router.patch('/:id', async (req, res) => {
       'description',
     ];
 
-    // Special handling for archiving: delete audio data to save space
+    // Special handling for archiving: delete audio data to save space (unless favorited)
     if (updates.is_archived === true) {
       const contentResult = await query(
-        'SELECT audio_data, type FROM content_items WHERE id = $1',
+        'SELECT audio_data, type, is_favorite FROM content_items WHERE id = $1',
         [id]
       );
 
       if (contentResult.rows.length > 0) {
-        const { audio_data, type } = contentResult.rows[0];
+        const { audio_data, type, is_favorite } = contentResult.rows[0];
 
-        // Only delete audio for articles (not podcasts)
-        if (audio_data && (type === 'article' || type === 'text')) {
+        // Only delete audio for articles (not podcasts) and only if not favorited
+        if (audio_data && (type === 'article' || type === 'text') && !is_favorite) {
           const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
 
@@ -272,6 +271,8 @@ router.patch('/:id', async (req, res) => {
           updates.audio_data = null;
           updates.audio_url = null;
           allowedFields.push('audio_data', 'audio_url');
+        } else if (audio_data && is_favorite) {
+          console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
       }
     }

@@ -98,6 +98,11 @@ export async function initializeDatabase() {
     const indexesMigration = await fs.readFile(indexesMigrationPath, 'utf-8');
     await poolInstance.query(indexesMigration);
 
+    // Run migration to remove unused is_read column
+    const removeIsReadMigrationPath = path.join(__dirname, 'migrations', '003_remove_is_read_column.sql');
+    const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
+    await poolInstance.query(removeIsReadMigration);
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
