@@ -93,7 +93,13 @@ export async function initializeDatabase() {
     const audioDataMigration = await fs.readFile(audioDataMigrationPath, 'utf-8');
     await poolInstance.query(audioDataMigration);
 
-    // Run migration to add performance indexes
+    // Run migration for Wallabag compatibility (renames + new fields)
+    // IMPORTANT: Must run BEFORE 002_add_performance_indexes because 002 creates indexes on renamed columns
+    const wallabagMigrationPath = path.join(__dirname, 'migrations', '004_wallabag_compatibility.sql');
+    const wallabagMigration = await fs.readFile(wallabagMigrationPath, 'utf-8');
+    await poolInstance.query(wallabagMigration);
+
+    // Run migration to add performance indexes (uses renamed columns from 004)
     const indexesMigrationPath = path.join(__dirname, 'migrations', '002_add_performance_indexes.sql');
     const indexesMigration = await fs.readFile(indexesMigrationPath, 'utf-8');
     await poolInstance.query(indexesMigration);
@@ -102,11 +108,6 @@ export async function initializeDatabase() {
     const removeIsReadMigrationPath = path.join(__dirname, 'migrations', '003_remove_is_read_column.sql');
     const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
     await poolInstance.query(removeIsReadMigration);
-
-    // Run migration for Wallabag compatibility (renames + new fields)
-    const wallabagMigrationPath = path.join(__dirname, 'migrations', '004_wallabag_compatibility.sql');
-    const wallabagMigration = await fs.readFile(wallabagMigrationPath, 'utf-8');
-    await poolInstance.query(wallabagMigration);
 
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
