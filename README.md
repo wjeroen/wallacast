@@ -60,6 +60,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 #### Configuration
 - **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`
+- **`config/processing.ts`**: Centralized constants for audio/text processing (TTS chunk size: 3500 chars, Whisper limits: 25MB/15min chunks, retry config: 5 attempts with exponential backoff). Makes tuning easier without code changes.
 
 #### Database
 - **`database/db.ts`**: PostgreSQL connection pool management. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially
@@ -91,19 +92,22 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - `POST /content/:id` - Trigger transcription for podcast episode
 
 #### Services
+- **`services/audio-utils.ts`**: Shared audio utilities
+  - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
+
 - **`services/article-fetcher.ts`**: Fetches article HTML, extracts metadata (title, author, date). Has specific selectors for EA Forum (karma, votes, comments section). Returns raw HTML for GPT extraction
 
-- **`services/openai-tts.ts`**: Main TTS service (this is the active one, not `tts.ts`)
+- **`services/openai-tts.ts`**: Main TTS service
   - `extractArticleContent()`: Uses GPT-4o-mini to extract readable text from HTML, also extracts structured comments with metadata
-  - `generateArticleAudio()`: Generates TTS audio using gpt-4o-mini-tts, handles chunking for long articles (3500 char limit per chunk), concatenates with FFmpeg
+  - `generateArticleAudio()`: Generates TTS audio using gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent()`: Orchestrates the full pipeline (extract content → generate TTS → save to DB)
-  - Includes retry logic with exponential backoff for rate limits
+  - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper
   - `transcribeAudio()`: Basic transcription
   - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
-  - Handles large files by splitting into 15-minute chunks
-  - Compresses audio before transcription if needed
+  - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
+  - Handles large files by splitting into chunks, compresses audio before transcription if needed
 
 - **`services/podcast-service.ts`**: RSS feed parsing
   - `parsePodcastFeed()`: Extracts podcast metadata from RSS
@@ -118,7 +122,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - **`App.tsx`**: Main app component. Manages tab navigation, current playing content state, and content list state (lifted from LibraryTab for performance). Prevents refetching content on tab switches.
 
 #### Components
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Favorites, Archived, Articles, Podcasts). Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates.
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Favorites, Archived, Articles, Podcasts). "All" filter excludes archived items by default. Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates.
 
 - **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
 
@@ -131,7 +135,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - Volume control
   - Transcript display with word-click-to-seek (for podcasts with timestamps)
   - Comments section display (for EA Forum articles)
-  - Playback position persistence
+  - Playback position persistence: Auto-saves every 10s during playback, on pause, and on component unmount
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
@@ -232,6 +236,9 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 3. Add to db.ts initialization sequence
 4. Consider composite indexes for common filter combinations
 
+**Tune processing parameters:**
+Edit `backend/src/config/processing.ts` to adjust TTS chunk sizes, Whisper file limits, retry behavior, etc. No code changes needed in services.
+
 **Modify TTS behavior:**
 Edit the system prompt in `openai-tts.ts extractArticleContent()` around line 1750
 
@@ -265,7 +272,6 @@ The app implements several performance optimizations:
 See CODEBASE_CRITIQUE.md for detailed issues and fixes.
 
 Key issues:
-- Playback position not persisting correctly
 - Speed toggle UI inconsistent
 - EA Forum comment extraction unreliable
 - Queue functionality incomplete
@@ -276,7 +282,6 @@ Key issues:
 - Export/import functionality (Wallabag compatibility?)
 - Bulk podcast subscription import (OPML)
 - Edit text content after adding
-- "All" filter should exclude archived
 - Flemish-sounding Dutch TTS prompt
 - Fullscreen player mode for reading
 
