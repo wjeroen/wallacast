@@ -747,7 +747,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     try {
       // Write buffer to temp file to get duration
-      await fs.promises.writeFile(tempFilePath, audioBuffer);
+      await fs.writeFile(tempFilePath, audioBuffer);
       audioDuration = Math.floor(await getAudioDuration(tempFilePath));
       console.log(`Audio duration: ${audioDuration} seconds`);
     } catch (error) {
@@ -756,7 +756,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     } finally {
       // Clean up temp file
       try {
-        await fs.promises.unlink(tempFilePath);
+        await fs.unlink(tempFilePath);
       } catch (error) {
         // Ignore cleanup errors
       }
