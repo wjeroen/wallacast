@@ -1,13 +1,17 @@
 # Claude Code Instructions
 
+## User Context
+The user is a coding noob. ELI5 (Explain Like I'm 5) frequently when discussing technical concepts, code changes, and tradeoffs.
+
 ## Before Making Any Changes
 Read README.md to understand the project structure and current state.
 
 ## When Solving a Bug or Implementing a Feature
-1. Generate at least 3 possible approaches or hypotheses
-2. Briefly explain the tradeoffs of each
-3. Ask the user which approach they prefer before writing code
-4. Don't assume the first solution is correct
+1. Read relevant files first to understand the current implementation
+2. Generate at least 3 possible approaches or hypotheses based on what you read
+3. Briefly explain the tradeoffs of each (ELI5)
+4. Ask the user which approach they prefer before writing code
+5. Don't assume the first solution is correct
 
 ## After Making Changes
 Update README.md if you changed:
