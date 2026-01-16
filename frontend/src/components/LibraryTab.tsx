@@ -3,7 +3,7 @@ import { Star, Archive, Trash2, Volume2, CheckSquare, Square } from 'lucide-reac
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
-type FilterType = 'all' | 'articles' | 'podcasts' | 'favorites' | 'archived';
+type FilterType = 'all' | 'articles' | 'texts' | 'podcasts' | 'favorites' | 'archived';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -42,6 +42,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
     if (filter === 'articles') {
       params.type = 'article';
+    } else if (filter === 'texts') {
+      params.type = 'text';
     } else if (filter === 'podcasts') {
       params.type = 'podcast_episode';
     } else if (filter === 'favorites') {
@@ -271,6 +273,12 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
               Articles
             </button>
             <button
+              className={filter === 'texts' ? 'active' : ''}
+              onClick={() => setFilter('texts')}
+            >
+              Texts
+            </button>
+            <button
               className={filter === 'podcasts' ? 'active' : ''}
               onClick={() => setFilter('podcasts')}
             >
@@ -345,7 +353,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
               </div>
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-                  {item.type === 'article' && (
+                  {(item.type === 'article' || item.type === 'text') && (
                     <button
                       onClick={() => handleGenerateAudio(item.id, !!item.audio_url)}
                       title={item.audio_url ? 'Regenerate audio' : 'Generate audio'}
