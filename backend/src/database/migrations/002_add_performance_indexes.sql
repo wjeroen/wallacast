@@ -11,6 +11,8 @@ CREATE INDEX IF NOT EXISTS idx_content_items_type ON content_items(type);
 CREATE INDEX IF NOT EXISTS idx_content_items_is_archived ON content_items(is_archived);
 
 -- Index on is_starred for filtering starred items (renamed from is_favorite for Wallabag compatibility)
+-- Drop old index name if it exists (from old is_favorite column before rename)
+DROP INDEX IF EXISTS idx_content_items_is_favorite;
 CREATE INDEX IF NOT EXISTS idx_content_items_is_starred ON content_items(is_starred);
 
 -- Composite index for common filter combinations

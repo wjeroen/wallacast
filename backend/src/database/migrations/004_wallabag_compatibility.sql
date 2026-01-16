@@ -35,8 +35,5 @@ ALTER TABLE content_items ADD COLUMN IF NOT EXISTS tags TEXT;
 -- Create index for Wallabag sync lookups
 CREATE INDEX IF NOT EXISTS idx_content_items_wallabag_id ON content_items(wallabag_id);
 
--- Drop old index name if it exists (from old is_favorite column)
-DROP INDEX IF EXISTS idx_content_items_is_favorite;
-
--- Create index with new name (idempotent)
-CREATE INDEX IF NOT EXISTS idx_content_items_is_starred ON content_items(is_starred);
+-- Note: Index on is_starred is created by migration 002_add_performance_indexes.sql
+-- which runs after this migration completes (ensuring column rename is committed first)
