@@ -250,52 +250,56 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
   return (
     <div className="library-tab">
       <div className="library-header">
-        <h2>Library</h2>
-        <button onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }} className="bulk-mode-btn">
-          {bulkMode ? 'Cancel' : 'Select'}
-        </button>
+        <div className="header-top">
+          <button
+            onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
+            className="select-mode-btn"
+          >
+            {bulkMode ? 'Cancel' : 'Select'}
+          </button>
+          <div className="filter-buttons">
+            <button
+              className={filter === 'all' ? 'active' : ''}
+              onClick={() => setFilter('all')}
+            >
+              All
+            </button>
+            <button
+              className={filter === 'articles' ? 'active' : ''}
+              onClick={() => setFilter('articles')}
+            >
+              Articles
+            </button>
+            <button
+              className={filter === 'podcasts' ? 'active' : ''}
+              onClick={() => setFilter('podcasts')}
+            >
+              Podcasts
+            </button>
+            <button
+              className={filter === 'favorites' ? 'active' : ''}
+              onClick={() => setFilter('favorites')}
+            >
+              <Star size={16} /> Favorites
+            </button>
+            <button
+              className={filter === 'archived' ? 'active' : ''}
+              onClick={() => setFilter('archived')}
+            >
+              <Archive size={16} /> Archived
+            </button>
+          </div>
+        </div>
         {bulkMode && selectedItems.size > 0 && (
           <div className="bulk-actions">
-            <span>{selectedItems.size} selected</span>
+            <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            <button onClick={handleBulkFavorite}><Star size={16} /></button>
-            <button onClick={handleBulkArchive}><Archive size={16} /></button>
-            <button onClick={handleBulkDelete}><Trash2 size={16} /></button>
+            <button onClick={handleBulkFavorite} title="Favorite selected"><Star size={16} /></button>
+            <button onClick={handleBulkArchive} title="Archive selected"><Archive size={16} /></button>
+            <button onClick={handleBulkDelete} title="Delete selected"><Trash2 size={16} /></button>
           </div>
         )}
-        <div className="filter-buttons">
-          <button
-            className={filter === 'all' ? 'active' : ''}
-            onClick={() => setFilter('all')}
-          >
-            All
-          </button>
-          <button
-            className={filter === 'articles' ? 'active' : ''}
-            onClick={() => setFilter('articles')}
-          >
-            Articles
-          </button>
-          <button
-            className={filter === 'podcasts' ? 'active' : ''}
-            onClick={() => setFilter('podcasts')}
-          >
-            Podcasts
-          </button>
-          <button
-            className={filter === 'favorites' ? 'active' : ''}
-            onClick={() => setFilter('favorites')}
-          >
-            <Star size={16} /> Favorites
-          </button>
-          <button
-            className={filter === 'archived' ? 'active' : ''}
-            onClick={() => setFilter('archived')}
-          >
-            <Archive size={16} /> Archived
-          </button>
-        </div>
       </div>
 
       {loading ? (
