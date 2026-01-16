@@ -252,6 +252,123 @@ router.patch('/:id', async (req, res) => {
       'description',
     ];
 
+    // Special handling for removing audio
+    if (updates.audio_data === null && updates.audio_url === null) {
+      const contentResult = await query(
+        'SELECT type FROM content_items WHERE id = $1',
+        [id]
+      );
+
+      if (contentResult.rows.length > 0) {
+        const { type } = contentResult.rows[0];
+
+        // Only allow removing audio for articles and texts
+        if (type === 'article' || type === 'text') {
+          console.log(`Manually removing audio for ${type} ${id}`);
+          allowedFields.push('audio_data', 'audio_url');
+        }
+      }
+    }
+
+    // Special handling for regenerating content (articles only)
+    if (updates.regenerate_content === true) {
+      const contentResult = await query(
+        'SELECT type, html_content FROM content_items WHERE id = $1',
+        [id]
+      );
+
+      if (contentResult.rows.length > 0) {
+        const { type, html_content } = contentResult.rows[0];
+
+        if (type === 'article' && html_content) {
+          console.log(`Regenerating content for article ${id}`);
+
+          // Start content regeneration in background
+          (async () => {
+            try {
+              // Set status to extracting content
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+                ['extracting_content', 0, 'content_extraction', id]
+              );
+
+              // Re-extract content from HTML using LLM
+              const extractedContent = await extractArticleContent(html_content);
+
+              // Update with new content
+              await query(
+                'UPDATE content_items SET content = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                [extractedContent, 'completed', 100, id]
+              );
+
+              console.log(`Content regenerated successfully for article ${id}`);
+            } catch (error) {
+              console.error('Content regeneration error:', error);
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                ['failed', (error as Error).message || 'Failed to regenerate content', 0, id]
+              );
+            }
+          })();
+
+          // Set initial status
+          updates.generation_status = 'extracting_content';
+          updates.generation_progress = 0;
+          allowedFields.push('generation_status', 'generation_progress');
+          delete updates.regenerate_content;
+        }
+      }
+    }
+
+    // Special handling for regenerating transcript (podcasts only)
+    if (updates.regenerate_transcript === true) {
+      const contentResult = await query(
+        'SELECT type, audio_url FROM content_items WHERE id = $1',
+        [id]
+      );
+
+      if (contentResult.rows.length > 0) {
+        const { type, audio_url } = contentResult.rows[0];
+
+        if (type === 'podcast_episode' && audio_url) {
+          console.log(`Regenerating transcript for podcast ${id}`);
+
+          // Start transcription in background
+          (async () => {
+            try {
+              // Set status to generating transcript
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+                ['generating_transcript', 0, 'transcript', id]
+              );
+
+              // Regenerate transcript
+              const result = await transcribeWithTimestamps(audio_url);
+
+              await query(
+                'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
+                [result.text, JSON.stringify(result.words), 'completed', 100, id]
+              );
+
+              console.log(`Transcript regenerated successfully for podcast ${id}`);
+            } catch (error) {
+              console.error('Transcript regeneration error:', error);
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                ['failed', (error as Error).message || 'Failed to regenerate transcript', 0, id]
+              );
+            }
+          })();
+
+          // Set initial status
+          updates.generation_status = 'generating_transcript';
+          updates.generation_progress = 0;
+          allowedFields.push('generation_status', 'generation_progress');
+          delete updates.regenerate_transcript;
+        }
+      }
+    }
+
     // Special handling for archiving: delete audio data to save space (unless favorited)
     if (updates.is_archived === true) {
       const contentResult = await query(
