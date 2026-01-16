@@ -103,6 +103,20 @@ export async function initializeDatabase() {
     const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
     await poolInstance.query(removeIsReadMigration);
 
+    // Reset any stuck generation statuses (server restart during generation)
+    const resetResult = await poolInstance.query(`
+      UPDATE content_items
+      SET generation_status = 'failed',
+          generation_error = 'Server restarted during generation',
+          generation_progress = 0,
+          current_operation = NULL
+      WHERE generation_status NOT IN ('idle', 'completed', 'failed')
+    `);
+
+    if (resetResult.rowCount && resetResult.rowCount > 0) {
+      console.log(`Reset ${resetResult.rowCount} stuck generation task(s) to failed status`);
+    }
+
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
