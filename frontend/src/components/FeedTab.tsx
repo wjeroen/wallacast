@@ -163,8 +163,8 @@ export function FeedTab() {
           <h3>Search Results</h3>
           {searchResults.map((podcast, index) => (
             <div key={index} className="podcast-card">
-              {podcast.thumbnail_url && (
-                <img src={podcast.thumbnail_url} alt={podcast.title} />
+              {podcast.preview_picture && (
+                <img src={podcast.preview_picture} alt={podcast.title} />
               )}
               <div className="podcast-info">
                 <h4>{podcast.title}</h4>
@@ -190,8 +190,8 @@ export function FeedTab() {
               className={`podcast-card ${selectedPodcast === podcast.id ? 'selected' : ''}`}
               onClick={() => loadPodcastEpisodes(podcast.id)}
             >
-              {podcast.thumbnail_url && (
-                <img src={podcast.thumbnail_url} alt={podcast.title} />
+              {podcast.preview_picture && (
+                <img src={podcast.preview_picture} alt={podcast.title} />
               )}
               <div className="podcast-info">
                 <h4>{podcast.title}</h4>
@@ -235,8 +235,8 @@ export function FeedTab() {
         )}
         {episodes.map((episode, index) => (
           <div key={episode.audio_url || index} className="episode-card">
-            {episode.thumbnail_url && (
-              <img src={episode.thumbnail_url} alt={episode.title} />
+            {episode.preview_picture && (
+              <img src={episode.preview_picture} alt={episode.title} />
             )}
             <div className="episode-info">
               <h4>{episode.title}</h4>

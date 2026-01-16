@@ -49,7 +49,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     } else if (filter === 'podcasts') {
       params.type = 'podcast_episode';
     } else if (filter === 'favorites') {
-      params.favorite = true;
+      params.starred = true;
     } else if (filter === 'archived') {
       params.archived = true;
     } else if (filter === 'all') {
@@ -122,9 +122,9 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     }
   };
 
-  const handleToggleFavorite = async (id: number, isFavorite: boolean) => {
+  const handleToggleStarred = async (id: number, isFavorite: boolean) => {
     try {
-      await contentAPI.update(id, { is_favorite: !isFavorite });
+      await contentAPI.update(id, { is_starred: !isFavorite });
       onRefresh();
     } catch (error) {
       console.error('Failed to toggle favorite:', error);
@@ -187,9 +187,9 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     }
   };
 
-  const handleBulkFavorite = async () => {
+  const handleBulkStar = async () => {
     try {
-      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_favorite: true })));
+      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_starred: true })));
       setSelectedItems(new Set());
       onRefresh();
     } catch (error) {
@@ -358,7 +358,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            <button onClick={handleBulkFavorite} title="Favorite selected"><Star size={16} /></button>
+            <button onClick={handleBulkStar} title="Favorite selected"><Star size={16} /></button>
             <button onClick={handleBulkArchive} title="Archive selected"><Archive size={16} /></button>
             <button onClick={handleBulkDelete} title="Delete selected"><Trash2 size={16} /></button>
           </div>
@@ -384,8 +384,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
                   {selectedItems.has(item.id) ? <CheckSquare size={20} /> : <Square size={20} />}
                 </div>
               )}
-              {item.thumbnail_url && (
-                <img src={item.thumbnail_url} alt={item.title} className="thumbnail" />
+              {item.preview_picture && (
+                <img src={item.preview_picture} alt={item.title} className="thumbnail" />
               )}
               <div className="content-info">
                 <h3>{item.title}</h3>
@@ -409,11 +409,11 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                   <button
-                    onClick={() => handleToggleFavorite(item.id, item.is_favorite)}
-                    className={item.is_favorite ? 'active' : ''}
+                    onClick={() => handleToggleStarred(item.id, item.is_starred)}
+                    className={item.is_starred ? 'active' : ''}
                     title="Toggle favorite"
                   >
-                    <Star size={16} fill={item.is_favorite ? 'currentColor' : 'none'} />
+                    <Star size={16} fill={item.is_starred ? 'currentColor' : 'none'} />
                   </button>
                   <button
                     onClick={() => handleToggleArchive(item.id, item.is_archived)}

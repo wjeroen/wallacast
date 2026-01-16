@@ -1,6 +1,8 @@
-# Readcast
+# Wallacast
 
 A personal read-it-later and podcast app that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Spotify Podcasts.
+
+**Wallabag Integration (Planned):** Bidirectional sync with Wallabag for articles, texts, and podcasts. Wallacast extends Wallabag with audio generation and podcast transcription.
 
 ## Core Concept
 

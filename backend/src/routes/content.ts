@@ -10,10 +10,10 @@ const router = express.Router();
 // Get all content items (excluding audio_data for performance)
 router.get('/', async (req, res) => {
   try {
-    const { type, archived, favorite } = req.query;
+    const { type, archived, starred } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
     const params: any[] = [];
     let paramCount = 1;
 
@@ -29,9 +29,9 @@ router.get('/', async (req, res) => {
       paramCount++;
     }
 
-    if (favorite !== undefined) {
-      sql += ` AND is_favorite = $${paramCount}`;
-      params.push(favorite === 'true');
+    if (starred !== undefined) {
+      sql += ` AND is_starred = $${paramCount}`;
+      params.push(starred === 'true');
       paramCount++;
     }
 
@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, author, description, thumbnail_url, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_favorite, is_archived, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
+      'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
       [req.params.id]
     );
 
@@ -101,7 +101,7 @@ router.post('/', async (req, res) => {
       content,
       author,
       description,
-      thumbnail_url,
+      preview_picture,
       podcast_id,
       audio_url,
       published_at,
@@ -167,10 +167,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, thumbnail_url, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, thumbnail_url, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes]
     );
 
     const createdItem = result.rows[0];
@@ -243,7 +243,7 @@ router.patch('/:id', async (req, res) => {
     const updates = req.body;
 
     const allowedFields = [
-      'is_favorite',
+      'is_starred',
       'is_archived',
       'playback_position',
       'playback_speed',
@@ -375,15 +375,15 @@ router.patch('/:id', async (req, res) => {
     // Special handling for archiving: delete audio data to save space (unless favorited)
     if (updates.is_archived === true) {
       const contentResult = await query(
-        'SELECT audio_data, type, is_favorite FROM content_items WHERE id = $1',
+        'SELECT audio_data, type, is_starred FROM content_items WHERE id = $1',
         [id]
       );
 
       if (contentResult.rows.length > 0) {
-        const { audio_data, type, is_favorite } = contentResult.rows[0];
+        const { audio_data, type, is_starred } = contentResult.rows[0];
 
         // Only delete audio for articles (not podcasts) and only if not favorited
-        if (audio_data && (type === 'article' || type === 'text') && !is_favorite) {
+        if (audio_data && (type === 'article' || type === 'text') && !is_starred) {
           const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
 
@@ -392,7 +392,7 @@ router.patch('/:id', async (req, res) => {
           updates.audio_url = null;
           updates.duration = null;
           allowedFields.push('audio_data', 'audio_url', 'duration');
-        } else if (audio_data && is_favorite) {
+        } else if (audio_data && is_starred) {
           console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
       }
