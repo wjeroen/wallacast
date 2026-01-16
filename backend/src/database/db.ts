@@ -32,7 +32,7 @@ const getDatabaseConfig = () => {
   const config = {
     host: process.env.PGHOST || process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.PGPORT || process.env.DB_PORT || '5432'),
-    database: process.env.PGDATABASE || process.env.DB_NAME || 'readcast',
+    database: process.env.PGDATABASE || process.env.DB_NAME || 'wallacast',
     user: process.env.PGUSER || process.env.DB_USER || 'postgres',
     password: process.env.PGPASSWORD || process.env.DB_PASSWORD || 'postgres',
   };
@@ -102,6 +102,11 @@ export async function initializeDatabase() {
     const removeIsReadMigrationPath = path.join(__dirname, 'migrations', '003_remove_is_read_column.sql');
     const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
     await poolInstance.query(removeIsReadMigration);
+
+    // Run migration for Wallabag compatibility (renames + new fields)
+    const wallabagMigrationPath = path.join(__dirname, 'migrations', '004_wallabag_compatibility.sql');
+    const wallabagMigration = await fs.readFile(wallabagMigrationPath, 'utf-8');
+    await poolInstance.query(wallabagMigration);
 
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`

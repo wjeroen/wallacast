@@ -5,7 +5,7 @@ export interface PodcastSearchResult {
   title: string;
   author: string;
   feed_url: string;
-  thumbnail_url?: string;
+  preview_picture?: string;
   description?: string;
 }
 
@@ -35,7 +35,7 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
       title: result.collectionName,
       author: result.artistName,
       feed_url: result.feedUrl,
-      thumbnail_url: result.artworkUrl600 || result.artworkUrl100,
+      preview_picture: result.artworkUrl600 || result.artworkUrl100,
       description: result.description,
     }));
   } catch (error) {
@@ -62,7 +62,7 @@ export async function subscribeToPodcast(feedUrl: string) {
     // Insert podcast
     const result = await query(
       `INSERT INTO podcasts
-       (title, author, description, feed_url, website_url, thumbnail_url, category, language)
+       (title, author, description, feed_url, website_url, preview_picture, category, language)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
@@ -71,7 +71,7 @@ export async function subscribeToPodcast(feedUrl: string) {
         podcastDetails.description,
         feedUrl,
         podcastDetails.website_url,
-        podcastDetails.thumbnail_url,
+        podcastDetails.preview_picture,
         podcastDetails.category,
         podcastDetails.language,
       ]
@@ -95,7 +95,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
     const title = extractXMLTag(xml, 'title');
     const author = extractXMLTag(xml, 'itunes:author') || extractXMLTag(xml, 'author');
     const description = extractXMLTag(xml, 'description');
-    const thumbnail_url = extractXMLAttribute(xml, 'itunes:image', 'href');
+    const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href');
     const website_url = extractXMLTag(xml, 'link');
     const category = extractXMLTag(xml, 'itunes:category');
     const language = extractXMLTag(xml, 'language');
@@ -104,7 +104,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
       title,
       author,
       description,
-      thumbnail_url,
+      preview_picture,
       website_url,
       category,
       language,

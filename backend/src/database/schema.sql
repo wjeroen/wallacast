@@ -1,4 +1,5 @@
--- Readcast Database Schema
+-- Wallacast Database Schema
+-- Field names aligned with Wallabag API for future bidirectional sync
 
 -- Podcasts (shows/feeds) - Must be created first as content_items references it
 CREATE TABLE IF NOT EXISTS podcasts (
@@ -8,7 +9,7 @@ CREATE TABLE IF NOT EXISTS podcasts (
     description TEXT,
     feed_url TEXT NOT NULL UNIQUE,
     website_url TEXT,
-    thumbnail_url TEXT,
+    preview_picture TEXT,  -- Renamed from thumbnail_url (Wallabag compatibility)
     category VARCHAR(100),
     language VARCHAR(10),
     is_subscribed BOOLEAN DEFAULT TRUE,
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS podcasts (
 );
 
 -- Content types enum (articles, podcasts, PDFs, etc.)
+-- Field names aligned with Wallabag API where applicable
 CREATE TABLE IF NOT EXISTS content_items (
     id SERIAL PRIMARY KEY,
     type VARCHAR(50) NOT NULL, -- 'article', 'podcast_episode', 'pdf', 'text'
@@ -27,7 +29,7 @@ CREATE TABLE IF NOT EXISTS content_items (
     html_content TEXT, -- For articles
     author VARCHAR(255),
     description TEXT,
-    thumbnail_url TEXT,
+    preview_picture TEXT,  -- Renamed from thumbnail_url (Wallabag: preview_picture)
     audio_url TEXT, -- For podcasts or generated TTS
     transcript TEXT, -- For podcasts (from Whisper)
     duration INTEGER, -- In seconds
@@ -38,12 +40,16 @@ CREATE TABLE IF NOT EXISTS content_items (
     episode_number INTEGER,
     published_at TIMESTAMP,
 
-    -- Organization
-    is_favorite BOOLEAN DEFAULT FALSE,
+    -- Organization (Wallabag-compatible naming)
+    is_starred BOOLEAN DEFAULT FALSE,  -- Renamed from is_favorite (Wallabag: starred)
     is_archived BOOLEAN DEFAULT FALSE,
-    is_read BOOLEAN DEFAULT FALSE,
+    tags TEXT,  -- Comma-separated tags (Wallabag style: "article,tech,toread")
 
-    -- Playback state
+    -- Wallabag sync fields
+    wallabag_id INTEGER,  -- ID in Wallabag (NULL if not synced)
+    wallabag_updated_at TIMESTAMP,  -- Last update time in Wallabag (for conflict resolution)
+
+    -- Playback state (Wallacast-specific, not synced to Wallabag)
     playback_position INTEGER DEFAULT 0, -- In seconds
     playback_speed DECIMAL(3,2) DEFAULT 1.00,
     last_played_at TIMESTAMP,
@@ -87,4 +93,6 @@ CREATE INDEX IF NOT EXISTS idx_content_items_type ON content_items(type);
 CREATE INDEX IF NOT EXISTS idx_content_items_created_at ON content_items(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_content_items_podcast_id ON content_items(podcast_id);
 CREATE INDEX IF NOT EXISTS idx_content_items_is_archived ON content_items(is_archived);
+CREATE INDEX IF NOT EXISTS idx_content_items_is_starred ON content_items(is_starred);
+CREATE INDEX IF NOT EXISTS idx_content_items_wallabag_id ON content_items(wallabag_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_position ON queue_items(position);

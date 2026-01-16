@@ -12,7 +12,7 @@ const api = axios.create({
 });
 
 export const contentAPI = {
-  getAll: (params?: { type?: string; archived?: boolean; favorite?: boolean }) =>
+  getAll: (params?: { type?: string; archived?: boolean; starred?: boolean }) =>
     api.get<ContentItem[]>('/content', { params }),
 
   getById: (id: number) => api.get<ContentItem>(`/content/${id}`),

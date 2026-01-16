@@ -378,8 +378,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       <div className="player-main">
         <div className="player-header">
           <div className="content-info">
-            {content.thumbnail_url && (
-              <img src={content.thumbnail_url} alt={content.title} className="thumbnail" />
+            {content.preview_picture && (
+              <img src={content.preview_picture} alt={content.title} className="thumbnail" />
             )}
             <div>
               <h3>{content.title}</h3>

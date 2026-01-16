@@ -17,7 +17,7 @@ export interface ContentItem {
   html_content?: string;
   author?: string;
   description?: string;
-  thumbnail_url?: string;
+  preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   audio_url?: string;
   transcript?: string;
   transcript_words?: string; // JSON string of word timestamps
@@ -31,8 +31,11 @@ export interface ContentItem {
   agree_votes?: number; // EA Forum agree votes
   disagree_votes?: number; // EA Forum disagree votes
   comments?: Comment[]; // Parsed comments with metadata
-  is_favorite: boolean;
+  is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
+  tags?: string;  // Comma-separated tags (Wallabag style)
+  wallabag_id?: number;  // ID in Wallabag (for sync)
+  wallabag_updated_at?: string;  // Last update in Wallabag (for conflict resolution)
   playback_position: number;
   playback_speed: number;
   last_played_at?: string;
@@ -51,7 +54,7 @@ export interface Podcast {
   description?: string;
   feed_url: string;
   website_url?: string;
-  thumbnail_url?: string;
+  preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   category?: string;
   language?: string;
   is_subscribed: boolean;
