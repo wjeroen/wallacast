@@ -213,7 +213,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
   const handleRemoveAudio = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { audio_data: null, audio_url: null });
+      await contentAPI.update(id, { audio_data: null, audio_url: null } as any);
       onRefresh();
     } catch (error) {
       console.error('Failed to remove audio:', error);
@@ -225,7 +225,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     try {
       setOpenDropdown(null);
       // This will re-extract and re-process the article through the LLM
-      await contentAPI.update(id, { regenerate_content: true });
+      await contentAPI.update(id, { regenerate_content: true } as any);
       onRefresh();
     } catch (error) {
       console.error('Failed to regenerate content:', error);
@@ -237,7 +237,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     try {
       setOpenDropdown(null);
       // Re-generate transcript for podcast
-      await contentAPI.update(id, { regenerate_transcript: true });
+      await contentAPI.update(id, { regenerate_transcript: true } as any);
       onRefresh();
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
