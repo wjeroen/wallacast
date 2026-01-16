@@ -76,7 +76,12 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - `GET /` - List all content (excludes audio_data, html_content, comments, transcript for performance)
   - `GET /:id` - Get single item (includes comments and transcript for display)
   - `POST /` - Create content, auto-extracts article HTML if URL provided
-  - `PATCH /:id` - Update playback position, archive status, etc. Archiving deletes audio to save space (unless item is favorited)
+  - `PATCH /:id` - Update playback position, archive status, etc. Special operations:
+    - Archiving deletes audio to save space (unless item is favorited)
+    - Un-archiving regenerates audio if missing
+    - `audio_data: null, audio_url: null` removes audio from articles/texts
+    - `regenerate_content: true` re-extracts article content through GPT-4o-mini
+    - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
   - `DELETE /:id` - Delete content and clean up audio files
 
@@ -123,7 +128,10 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - **`App.tsx`**: Main app component. Manages tab navigation, current playing content state, and content list state (lifted from LibraryTab for performance). Prevents refetching content on tab switches.
 
 #### Components
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Favorites, Archived, Articles, Podcasts). "All" filter excludes archived items by default. Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates.
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). "All" filter excludes archived items by default. Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
+  - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
+  - **Articles only**: Regenerate content (re-extracts through LLM)
+  - **Podcasts**: Regenerate transcript (if transcript exists)
 
 - **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
 
