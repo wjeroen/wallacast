@@ -127,17 +127,24 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 #### Entry Point
 - **`main.tsx`**: React root with StrictMode
-- **`App.tsx`**: Main app component. Manages tab navigation, current playing content state, and content list state (lifted from LibraryTab for performance). Prevents refetching content on tab switches.
+- **`App.tsx`**: Main app component. Manages tab navigation and current playing content state.
+
+#### State Management
+- **`store/contentStore.ts`**: Zustand store for centralized content state management
+  - Holds content items array and current filter state
+  - Provides optimistic updates for instant UI feedback (star, archive, delete)
+  - Filter-aware: items automatically show/hide based on current filter
+  - Prepared for future Wallabag bidirectional sync
 
 #### Components
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). "All" filter excludes archived items by default. Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
 - **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Calls parent refresh callback on successful content creation.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
 
 - **`components/AudioPlayer.tsx`**: Full audio player with:
   - Play/pause, seek, skip ±15/30s
@@ -150,33 +157,37 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
-- **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings
+- **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings (field names aligned with Wallabag API)
 - **`App.css`**: All styles (single CSS file, no modules)
 - **`index.css`**: Base styles from Vite template
 
 ## Database Schema
 
+Field names are aligned with Wallabag API for future bidirectional sync.
+
 ### content_items (main table)
 - `id`: Primary key
 - `type`: 'article' | 'podcast_episode' | 'pdf' | 'text'
 - `title`, `url`, `content`, `html_content`
-- `author`, `description`, `thumbnail_url`
+- `author`, `description`, `preview_picture` (Wallabag: preview_picture)
 - `audio_url`: URL to generated/original audio file
-- `audio_data`: BYTEA column for storing audio in DB (not currently used, placeholder for Railway without volumes)
+- `audio_data`: BYTEA column for storing audio in DB
 - `transcript`, `transcript_words`: Transcription text and word-level timestamps (JSON)
 - `tts_chunks`: TTS chunk metadata for seeking (JSON)
 - `duration`, `file_size`
 - `podcast_id`: FK to podcasts table
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
 - `comments`: Structured comments JSON (for EA Forum)
-- `is_favorite`, `is_archived` (archiving deletes audio unless favorited)
+- `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
+- `tags`: Comma-separated tags (Wallabag style)
+- `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
 - `playback_position`, `playback_speed`, `last_played_at`
 - `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
 
 ### podcasts
 - `id`, `title`, `author`, `description`
-- `feed_url`, `website_url`, `thumbnail_url`
+- `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
 - `is_subscribed`, `last_fetched_at`
 
@@ -266,17 +277,18 @@ The app implements several performance optimizations:
 **Backend:**
 - List queries exclude large columns (html_content, comments, transcript) that aren't needed for display
 - Single-item queries include all necessary display data (comments, transcript)
-- Database indexes on frequently filtered/sorted columns (created_at, type, is_archived, is_favorite)
+- Database indexes on frequently filtered/sorted columns (created_at, type, is_archived, is_starred)
 - Composite indexes for common filter combinations
 - Build process uses `copyfiles` to ensure SQL migrations are included in dist/
 
 **Frontend:**
-- Content state lifted to App.tsx to prevent refetching on tab switches
-- LibraryTab receives content as props instead of managing its own state
-- Optimistic UI updates with polling for generation status
+- Zustand store for centralized state management
+- Optimistic UI updates: star/archive/delete happen instantly, then sync with server
+- Filter state preserved in store - no lost filter when updating items
+- Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 
-**Result:** Query times reduced from 1-3 seconds to <100ms, instant tab switches
+**Result:** Query times reduced from 1-3 seconds to <100ms, instant UI feedback for all actions
 
 ## Known Issues / TODO
 
@@ -290,7 +302,12 @@ Key issues:
 
 ## Future Plans
 
-- Export/import functionality (Wallabag compatibility?)
+- **Wallabag Integration (in progress):** Bidirectional sync with Wallabag
+  - Articles, texts, and podcasts sync as Wallabag entries
+  - Tags: `article`, `podcast`, `text` identify content type
+  - Texts use generated URLs, podcasts store transcript as content
+  - Items tagged `#nosync` in Wallabag are ignored
+  - Wallacast stores TTS audio and playback position locally (not synced)
 - Bulk podcast subscription import (OPML)
 - Edit text content after adding
 - Flemish-sounding Dutch TTS prompt
