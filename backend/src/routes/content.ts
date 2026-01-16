@@ -266,7 +266,9 @@ router.patch('/:id', async (req, res) => {
         // Only allow removing audio for articles and texts
         if (type === 'article' || type === 'text') {
           console.log(`Manually removing audio for ${type} ${id}`);
-          allowedFields.push('audio_data', 'audio_url');
+          // Also clear duration when removing audio
+          updates.duration = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration');
         }
       }
     }
@@ -385,10 +387,11 @@ router.patch('/:id', async (req, res) => {
           const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
 
-          // Clear audio_data and audio_url from database
+          // Clear audio_data, audio_url, and duration from database
           updates.audio_data = null;
           updates.audio_url = null;
-          allowedFields.push('audio_data', 'audio_url');
+          updates.duration = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration');
         } else if (audio_data && is_favorite) {
           console.log(`Archived: Preserving audio for favorited item ${id}`);
         }

@@ -740,16 +740,38 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     // Store audio data directly in database
     console.log(`Storing audio in database (${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
 
+    // Get duration from audio buffer
+    const tempDir = getTempDir();
+    const tempFilePath = path.join(tempDir, `temp_duration_${contentId}.mp3`);
+    let audioDuration = 0;
+
+    try {
+      // Write buffer to temp file to get duration
+      await fs.promises.writeFile(tempFilePath, audioBuffer);
+      audioDuration = Math.floor(await getAudioDuration(tempFilePath));
+      console.log(`Audio duration: ${audioDuration} seconds`);
+    } catch (error) {
+      console.error('Failed to get audio duration:', error);
+      // Continue without duration rather than failing
+    } finally {
+      // Clean up temp file
+      try {
+        await fs.promises.unlink(tempFilePath);
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+    }
+
     // Construct audio URL pointing to database endpoint
     const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : 'http://localhost:3001';
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    // Update content item with audio data, URL, and chunk metadata
+    // Update content item with audio data, URL, duration, and chunk metadata
     await query(
-      'UPDATE content_items SET audio_data = $1, audio_url = $2, tts_chunks = $3 WHERE id = $4',
-      [audioBuffer, audioUrl, JSON.stringify(chunkMetadata), contentId]
+      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, tts_chunks = $4 WHERE id = $5',
+      [audioBuffer, audioUrl, audioDuration, JSON.stringify(chunkMetadata), contentId]
     );
 
     console.log(`✓ Audio stored in database for content ${contentId}`);
