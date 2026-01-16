@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Star, Archive, Trash2, Volume2, CheckSquare, Square } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
@@ -36,6 +36,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
   const [filter, setFilter] = useState<FilterType>('all');
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState<number | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const params: any = {};
@@ -56,6 +58,23 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
     onRefresh(params);
   }, [filter]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setOpenDropdown(null);
+      }
+    };
+
+    if (openDropdown !== null) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openDropdown]);
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -180,6 +199,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     try {
+      setOpenDropdown(null);
       await contentAPI.generateAudio(id, regenerate);
       // Generation started in background, polling will update status
       onRefresh();
@@ -187,6 +207,41 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
       alert(errorMsg);
+    }
+  };
+
+  const handleRemoveAudio = async (id: number) => {
+    try {
+      setOpenDropdown(null);
+      await contentAPI.update(id, { audio_data: null, audio_url: null });
+      onRefresh();
+    } catch (error) {
+      console.error('Failed to remove audio:', error);
+      alert('Failed to remove audio');
+    }
+  };
+
+  const handleRegenerateContent = async (id: number) => {
+    try {
+      setOpenDropdown(null);
+      // This will re-extract and re-process the article through the LLM
+      await contentAPI.update(id, { regenerate_content: true });
+      onRefresh();
+    } catch (error) {
+      console.error('Failed to regenerate content:', error);
+      alert('Failed to regenerate content');
+    }
+  };
+
+  const handleRegenerateTranscript = async (id: number) => {
+    try {
+      setOpenDropdown(null);
+      // Re-generate transcript for podcast
+      await contentAPI.update(id, { regenerate_transcript: true });
+      onRefresh();
+    } catch (error) {
+      console.error('Failed to regenerate transcript:', error);
+      alert('Failed to regenerate transcript');
     }
   };
 
@@ -353,37 +408,75 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
               </div>
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-                  {(item.type === 'article' || item.type === 'text') && (
+                  <button
+                    onClick={() => handleToggleFavorite(item.id, item.is_favorite)}
+                    className={item.is_favorite ? 'active' : ''}
+                    title="Toggle favorite"
+                  >
+                    <Star size={16} fill={item.is_favorite ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    onClick={() => handleToggleArchive(item.id, item.is_archived)}
+                    title="Toggle archive"
+                  >
+                    <Archive size={16} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(item.id)}
+                    className="delete-btn"
+                    title="Delete"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  <div className="dropdown-container" ref={openDropdown === item.id ? dropdownRef : null}>
                     <button
-                      onClick={() => handleGenerateAudio(item.id, !!item.audio_url)}
-                      title={item.audio_url ? 'Regenerate audio' : 'Generate audio'}
-                      disabled={item.generation_status === 'generating_audio'}
+                      onClick={() => setOpenDropdown(openDropdown === item.id ? null : item.id)}
+                      title="More options"
+                      className="more-options-btn"
                     >
-                      <Volume2 size={16} />
-                      {item.audio_url && <span className="regenerate-indicator">🔄</span>}
+                      <MoreVertical size={16} />
                     </button>
-                  )}
-                <button
-                  onClick={() => handleToggleFavorite(item.id, item.is_favorite)}
-                  className={item.is_favorite ? 'active' : ''}
-                  title="Toggle favorite"
-                >
-                  <Star size={16} fill={item.is_favorite ? 'currentColor' : 'none'} />
-                </button>
-                <button
-                  onClick={() => handleToggleArchive(item.id, item.is_archived)}
-                  title="Toggle archive"
-                >
-                  <Archive size={16} />
-                </button>
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  className="delete-btn"
-                  title="Delete"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
+                    {openDropdown === item.id && (
+                      <div className="dropdown-menu">
+                        {(item.type === 'article' || item.type === 'text') && (
+                          <>
+                            {!item.audio_url && (
+                              <button
+                                onClick={() => handleGenerateAudio(item.id, false)}
+                                disabled={item.generation_status === 'generating_audio'}
+                              >
+                                Generate audio
+                              </button>
+                            )}
+                            {item.audio_url && (
+                              <>
+                                <button
+                                  onClick={() => handleGenerateAudio(item.id, true)}
+                                  disabled={item.generation_status === 'generating_audio'}
+                                >
+                                  Regenerate audio
+                                </button>
+                                <button onClick={() => handleRemoveAudio(item.id)}>
+                                  Remove audio
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                        {item.type === 'article' && (
+                          <button onClick={() => handleRegenerateContent(item.id)}>
+                            Regenerate content
+                          </button>
+                        )}
+                        {item.type === 'podcast_episode' && item.transcript && (
+                          <button onClick={() => handleRegenerateTranscript(item.id)}>
+                            Regenerate transcript
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           ))}
