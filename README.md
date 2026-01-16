@@ -69,13 +69,14 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - **`database/migrations/`**: Additional migrations
   - `001_add_audio_data_column.sql`: Adds BYTEA column for storing audio in database
   - `002_add_performance_indexes.sql`: Adds indexes on created_at, type, is_archived, is_favorite for query performance
+  - `003_remove_is_read_column.sql`: Removes unused is_read column (was only cosmetic)
 
 #### Routes
 - **`routes/content.ts`**: CRUD for content items. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
   - `GET /` - List all content (excludes audio_data, html_content, comments, transcript for performance)
   - `GET /:id` - Get single item (includes comments and transcript for display)
   - `POST /` - Create content, auto-extracts article HTML if URL provided
-  - `PATCH /:id` - Update playback position, archive status, etc.
+  - `PATCH /:id` - Update playback position, archive status, etc. Archiving deletes audio to save space (unless item is favorited)
   - `POST /:id/generate-audio` - Manually trigger audio generation
   - `DELETE /:id` - Delete content and clean up audio files
 
@@ -158,7 +159,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - `podcast_id`: FK to podcasts table
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
 - `comments`: Structured comments JSON (for EA Forum)
-- `is_favorite`, `is_archived`, `is_read`
+- `is_favorite`, `is_archived` (archiving deletes audio unless favorited)
 - `playback_position`, `playback_speed`, `last_played_at`
 - `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
