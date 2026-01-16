@@ -63,7 +63,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - **`config/processing.ts`**: Centralized constants for audio/text processing (TTS chunk size: 3500 chars, Whisper limits: 25MB/15min chunks, retry config: 5 attempts with exponential backoff). Makes tuning easier without code changes.
 
 #### Database
-- **`database/db.ts`**: PostgreSQL connection pool management. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially
+- **`database/db.ts`**: PostgreSQL connection pool management. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially. Also performs startup cleanup to reset any stuck generation tasks (items left in 'generating' status after server restart) to 'failed' status
 - **`database/schema.sql`**: Main table definitions (`content_items`, `podcasts`, `queue_items`)
 - **`database/add_*.sql`**: Migration files for additional columns (word timestamps, generation status, article metadata, comments)
 - **`database/migrations/`**: Additional migrations
@@ -131,7 +131,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 - **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). "All" filter excludes archived items by default. Receives content state and refresh callback as props. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
-  - **Podcasts**: Regenerate transcript (if transcript exists)
+  - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
 - **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
 
