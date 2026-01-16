@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical } from 'lucide-react';
 import { contentAPI } from '../api';
+import { useContentStore, type FilterType } from '../store/contentStore';
 import type { ContentItem } from '../types';
-
-type FilterType = 'all' | 'articles' | 'texts' | 'podcasts' | 'favorites' | 'archived';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -26,38 +25,32 @@ function cleanHtml(text: string): string {
 
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem) => void;
-  content: ContentItem[];
-  setContent: React.Dispatch<React.SetStateAction<ContentItem[]>>;
-  loading: boolean;
-  onRefresh: (params?: any) => Promise<void>;
 }
 
-export function LibraryTab({ onPlayContent, content, setContent, loading, onRefresh }: LibraryTabProps) {
-  const [filter, setFilter] = useState<FilterType>('all');
+export function LibraryTab({ onPlayContent }: LibraryTabProps) {
+  // Use Zustand store for content state
+  const {
+    items: content,
+    filter,
+    loading,
+    setFilter,
+    fetchContent,
+    toggleStarred,
+    toggleArchived,
+    deleteItem,
+    updateItem,
+    refreshItem,
+  } = useContentStore();
+
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Fetch content on mount
   useEffect(() => {
-    const params: any = {};
-
-    if (filter === 'articles') {
-      params.type = 'article';
-    } else if (filter === 'texts') {
-      params.type = 'text';
-    } else if (filter === 'podcasts') {
-      params.type = 'podcast_episode';
-    } else if (filter === 'favorites') {
-      params.starred = true;
-    } else if (filter === 'archived') {
-      params.archived = true;
-    } else if (filter === 'all') {
-      params.archived = false; // Explicitly exclude archived items
-    }
-
-    onRefresh(params);
-  }, [filter]);
+    fetchContent();
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -84,31 +77,28 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
     if (generatingItems.length === 0) return;
 
-    // Poll every 2 seconds for active generation, complete when done
+    // Poll every 2 seconds for active generation
     const pollInterval = setInterval(async () => {
-      // Fetch only the generating items, not the entire list
       for (const item of generatingItems) {
         try {
           const response = await contentAPI.getById(item.id);
           const updated = response.data;
 
-          // Update just this item in the state
-          setContent(prevContent =>
-            prevContent.map(c => c.id === item.id ? updated : c)
-          );
+          // Update just this item in the store
+          updateItem(item.id, updated);
 
-          // If item completed, reload the full list once to ensure fresh data
+          // If item completed, refresh to get full data
           if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
-            setTimeout(() => onRefresh(), 500);
+            setTimeout(() => refreshItem(item.id), 500);
           }
         } catch (error) {
           console.error('Failed to fetch item status:', error);
         }
       }
-    }, 2000); // Poll every 2 seconds for responsive updates
+    }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [content]);
+  }, [content, updateItem, refreshItem]);
 
   const handlePlayContent = async (item: ContentItem) => {
     try {
@@ -122,31 +112,16 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     }
   };
 
-  const handleToggleStarred = async (id: number, isFavorite: boolean) => {
-    try {
-      await contentAPI.update(id, { is_starred: !isFavorite });
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to toggle favorite:', error);
-    }
+  const handleToggleStarred = async (id: number) => {
+    await toggleStarred(id);
   };
 
-  const handleToggleArchive = async (id: number, isArchived: boolean) => {
-    try {
-      await contentAPI.update(id, { is_archived: !isArchived });
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to toggle archive:', error);
-    }
+  const handleToggleArchive = async (id: number) => {
+    await toggleArchived(id);
   };
 
   const handleDelete = async (id: number) => {
-    try {
-      await contentAPI.delete(id);
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to delete content:', error);
-    }
+    await deleteItem(id);
   };
 
   const toggleSelection = (id: number) => {
@@ -169,9 +144,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
   const handleBulkDelete = async () => {
     try {
-      await Promise.all(Array.from(selectedItems).map(id => contentAPI.delete(id)));
+      await Promise.all(Array.from(selectedItems).map(id => deleteItem(id)));
       setSelectedItems(new Set());
-      onRefresh();
     } catch (error) {
       console.error('Failed to bulk delete:', error);
     }
@@ -179,9 +153,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
 
   const handleBulkArchive = async () => {
     try {
-      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_archived: true })));
+      await Promise.all(Array.from(selectedItems).map(id => toggleArchived(id)));
       setSelectedItems(new Set());
-      onRefresh();
     } catch (error) {
       console.error('Failed to bulk archive:', error);
     }
@@ -191,9 +164,9 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     try {
       await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_starred: true })));
       setSelectedItems(new Set());
-      onRefresh();
+      fetchContent(); // Refresh after bulk operation
     } catch (error) {
-      console.error('Failed to bulk favorite:', error);
+      console.error('Failed to bulk star:', error);
     }
   };
 
@@ -202,7 +175,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
       setOpenDropdown(null);
       await contentAPI.generateAudio(id, regenerate);
       // Generation started in background, polling will update status
-      onRefresh();
+      refreshItem(id);
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
@@ -214,7 +187,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     try {
       setOpenDropdown(null);
       await contentAPI.update(id, { audio_data: null, audio_url: null } as any);
-      onRefresh();
+      refreshItem(id);
     } catch (error) {
       console.error('Failed to remove audio:', error);
       alert('Failed to remove audio');
@@ -224,9 +197,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
   const handleRegenerateContent = async (id: number) => {
     try {
       setOpenDropdown(null);
-      // This will re-extract and re-process the article through the LLM
       await contentAPI.update(id, { regenerate_content: true } as any);
-      onRefresh();
+      refreshItem(id);
     } catch (error) {
       console.error('Failed to regenerate content:', error);
       alert('Failed to regenerate content');
@@ -236,9 +208,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
   const handleRegenerateTranscript = async (id: number) => {
     try {
       setOpenDropdown(null);
-      // Re-generate transcript for podcast
       await contentAPI.update(id, { regenerate_transcript: true } as any);
-      onRefresh();
+      refreshItem(id);
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
       alert('Failed to regenerate transcript');
@@ -251,45 +222,43 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
     }
 
     if (item.generation_status === 'completed') {
-      return null; // Don't show anything for completed
+      return null;
     }
 
     if (item.generation_status === 'failed') {
       return (
         <div className="generation-status error">
-          <span>❌ Generation failed</span>
+          <span>Generation failed</span>
           {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
         </div>
       );
     }
 
-    // Generate detailed status message
     let statusMessage = '';
-    let progressPercent = item.generation_progress || 0;
+    const progressPercent = item.generation_progress || 0;
 
     if (item.generation_status === 'starting') {
-      statusMessage = '⏳ Starting...';
+      statusMessage = 'Starting...';
     } else if (item.generation_status === 'extracting_content') {
-      statusMessage = '📄 Extracting content...';
+      statusMessage = 'Extracting content...';
     } else if (item.generation_status === 'content_ready') {
-      // Parse chunk progress from current_operation
       if (item.current_operation?.startsWith('audio_chunk_')) {
         const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
         if (match) {
-          const [_, current, total] = match;
-          statusMessage = `🔊 Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
+          const [, current, total] = match;
+          statusMessage = `Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
         } else {
-          statusMessage = `🔊 Generating audio... ${progressPercent}%`;
+          statusMessage = `Generating audio... ${progressPercent}%`;
         }
       } else if (item.current_operation === 'concatenating_audio') {
-        statusMessage = `🔗 Combining audio files... ${progressPercent}%`;
+        statusMessage = `Combining audio files... ${progressPercent}%`;
       } else {
-        statusMessage = `🔊 Generating audio... ${progressPercent}%`;
+        statusMessage = `Generating audio... ${progressPercent}%`;
       }
     } else if (item.generation_status === 'generating_transcript') {
-      statusMessage = `📝 Generating transcript... ${progressPercent}%`;
+      statusMessage = `Generating transcript... ${progressPercent}%`;
     } else {
-      statusMessage = `🔄 Processing... ${progressPercent}%`;
+      statusMessage = `Processing... ${progressPercent}%`;
     }
 
     return (
@@ -358,7 +327,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            <button onClick={handleBulkStar} title="Favorite selected"><Star size={16} /></button>
+            <button onClick={handleBulkStar} title="Star selected"><Star size={16} /></button>
             <button onClick={handleBulkArchive} title="Archive selected"><Archive size={16} /></button>
             <button onClick={handleBulkDelete} title="Delete selected"><Trash2 size={16} /></button>
           </div>
@@ -395,8 +364,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
                 )}
                 <div className="metadata">
                   <span className="type">{item.type}</span>
-                  {item.audio_url && <span className="badge">🔊 Audio</span>}
-                  {item.transcript && <span className="badge">📝 Transcript</span>}
+                  {item.audio_url && <span className="badge">Audio</span>}
+                  {item.transcript && <span className="badge">Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
                   {item.playback_position > 0 && item.duration && item.duration > 0 && (
                     <span className="progress">
@@ -409,14 +378,14 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
               {!bulkMode && (
                 <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                   <button
-                    onClick={() => handleToggleStarred(item.id, item.is_starred)}
+                    onClick={() => handleToggleStarred(item.id)}
                     className={item.is_starred ? 'active' : ''}
-                    title="Toggle favorite"
+                    title="Toggle star"
                   >
                     <Star size={16} fill={item.is_starred ? 'currentColor' : 'none'} />
                   </button>
                   <button
-                    onClick={() => handleToggleArchive(item.id, item.is_archived)}
+                    onClick={() => handleToggleArchive(item.id)}
                     title="Toggle archive"
                   >
                     <Archive size={16} />

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, FileText, File, Mic } from 'lucide-react';
 import { contentAPI } from '../api';
+import type { ContentItem } from '../types';
 
 type ContentType = 'article' | 'text' | 'pdf' | 'podcast_episode';
 
 interface AddTabProps {
-  onContentAdded: () => void;
+  onContentAdded: (item: ContentItem) => void;
 }
 
 export function AddTab({ onContentAdded }: AddTabProps) {
@@ -42,11 +43,11 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         data.content = text;
       }
 
-      await contentAPI.create(data);
+      const response = await contentAPI.create(data);
       setMessage('Content saved successfully!');
 
-      // Refresh content list in parent
-      onContentAdded();
+      // Add the new item to the store
+      onContentAdded(response.data);
 
       setUrl('');
       setTitle('');
