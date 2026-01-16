@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Star, Archive, Trash2, Volume2, FileText, CheckSquare, Square } from 'lucide-react';
+import { Star, Archive, Trash2, Volume2, CheckSquare, Square } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
@@ -116,15 +116,6 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
       onRefresh();
     } catch (error) {
       console.error('Failed to toggle archive:', error);
-    }
-  };
-
-  const handleMarkAsRead = async (id: number) => {
-    try {
-      await contentAPI.update(id, { is_read: true });
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to mark as read:', error);
     }
   };
 
@@ -318,7 +309,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
           {content.map((item) => (
             <div
               key={item.id}
-              className={`content-card ${item.is_read ? 'read' : ''} ${selectedItems.has(item.id) ? 'selected' : ''}`}
+              className={`content-card ${selectedItems.has(item.id) ? 'selected' : ''}`}
               onClick={() => bulkMode ? toggleSelection(item.id) : handlePlayContent(item)}
             >
               {bulkMode && (
@@ -373,11 +364,6 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
                 >
                   <Archive size={16} />
                 </button>
-                {!item.is_read && (
-                  <button onClick={() => handleMarkAsRead(item.id)} title="Mark as read">
-                    <FileText size={16} />
-                  </button>
-                )}
                 <button
                   onClick={() => handleDelete(item.id)}
                   className="delete-btn"

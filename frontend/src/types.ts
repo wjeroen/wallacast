@@ -33,7 +33,6 @@ export interface ContentItem {
   comments?: Comment[]; // Parsed comments with metadata
   is_favorite: boolean;
   is_archived: boolean;
-  is_read: boolean;
   playback_position: number;
   playback_speed: number;
   last_played_at?: string;
