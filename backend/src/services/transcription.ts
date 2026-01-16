@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
+import { getAudioDuration } from './audio-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,19 +40,6 @@ async function compressAudio(inputPath: string, outputPath: string): Promise<voi
         reject(err);
       })
       .save(outputPath);
-  });
-}
-
-// Get audio duration in seconds
-async function getAudioDuration(filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(metadata.format.duration || 0);
-      }
-    });
   });
 }
 

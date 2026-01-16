@@ -4,19 +4,7 @@ import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 import { getAudioDir, getTempDir } from '../config/storage.js';
-
-// Get audio duration in seconds
-async function getAudioDuration(filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(metadata.format.duration || 0);
-      }
-    });
-  });
-}
+import { getAudioDuration } from './audio-utils.js';
 
 async function getOpenAIClient(): Promise<OpenAI | null> {
   // Use environment variable only for security
