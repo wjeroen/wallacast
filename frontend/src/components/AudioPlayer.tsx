@@ -52,6 +52,12 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPlayingRef = useRef(isPlaying);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     if (!content) return;
@@ -107,15 +113,27 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     };
   }, []);
 
+  // Auto-save position every 10 seconds during playback
   useEffect(() => {
+    if (!content) return;
+
     const interval = setInterval(() => {
-      if (isPlaying && content) {
-        savePlaybackPosition(currentTime);
+      if (isPlayingRef.current && audioRef.current) {
+        savePlaybackPosition(audioRef.current.currentTime);
       }
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTime, content]);
+  }, [content]); // Only recreate when content changes
+
+  // Save position on component unmount (user closes player or switches content)
+  useEffect(() => {
+    return () => {
+      if (audioRef.current && content) {
+        savePlaybackPosition(audioRef.current.currentTime);
+      }
+    };
+  }, [content]);
 
   const loadTranscript = async () => {
     if (!content) return;
@@ -152,6 +170,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     if (!audioRef.current) return;
 
     if (isPlaying) {
+      // Save position before pausing
+      savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
     } else {
       audioRef.current.play();
