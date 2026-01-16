@@ -38,4 +38,4 @@ export const PROCESSING_CONFIG = {
     // Maximum delay in milliseconds (exponential backoff cap)
     maxDelayMs: 30000,
   },
-} as const;
+};
