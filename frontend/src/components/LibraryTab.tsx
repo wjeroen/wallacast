@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical } from 'lucide-react';
 import { contentAPI } from '../api';
-import { useContentStore, type FilterType } from '../store/contentStore';
+import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
 
 function cleanHtml(text: string): string {
