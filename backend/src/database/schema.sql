@@ -89,10 +89,12 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Create indexes for performance
+-- Note: Only create indexes here for columns that exist in fresh databases AND won't cause
+-- conflicts with existing databases during migrations.
+-- The is_starred index is created by migration 002 AFTER migration 004 renames is_favorite.
+-- The wallabag_id index is created by migration 004.
 CREATE INDEX IF NOT EXISTS idx_content_items_type ON content_items(type);
 CREATE INDEX IF NOT EXISTS idx_content_items_created_at ON content_items(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_content_items_podcast_id ON content_items(podcast_id);
 CREATE INDEX IF NOT EXISTS idx_content_items_is_archived ON content_items(is_archived);
-CREATE INDEX IF NOT EXISTS idx_content_items_is_starred ON content_items(is_starred);
-CREATE INDEX IF NOT EXISTS idx_content_items_wallabag_id ON content_items(wallabag_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_position ON queue_items(position);
