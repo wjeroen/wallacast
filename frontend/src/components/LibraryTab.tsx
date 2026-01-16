@@ -470,7 +470,7 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
                         )}
                         {item.type === 'podcast_episode' && (
                           <>
-                            {!item.transcript ? (
+                            {(!item.transcript || item.transcript.trim() === '') ? (
                               <button
                                 onClick={() => handleRegenerateTranscript(item.id)}
                                 disabled={item.generation_status === 'generating_transcript'}
