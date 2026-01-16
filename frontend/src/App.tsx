@@ -16,11 +16,6 @@ function App() {
   const [content, setContent] = useState<ContentItem[]>([]);
   const [contentLoading, setContentLoading] = useState(false);
 
-  // Load content on mount
-  useEffect(() => {
-    loadContent();
-  }, []);
-
   const loadContent = useCallback(async (params?: any) => {
     setContentLoading(true);
     try {
