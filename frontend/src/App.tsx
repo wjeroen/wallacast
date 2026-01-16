@@ -15,7 +15,7 @@ function App() {
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
 
   // Get addItem from store for AddTab to use
-  const { addItem, fetchContent } = useContentStore();
+  const { addItem } = useContentStore();
 
   const handlePlayContent = (content: ContentItem) => {
     setCurrentContent(content);
