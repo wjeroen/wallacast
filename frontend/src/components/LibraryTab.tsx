@@ -468,10 +468,24 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
                             Regenerate content
                           </button>
                         )}
-                        {item.type === 'podcast_episode' && item.transcript && (
-                          <button onClick={() => handleRegenerateTranscript(item.id)}>
-                            Regenerate transcript
-                          </button>
+                        {item.type === 'podcast_episode' && (
+                          <>
+                            {!item.transcript ? (
+                              <button
+                                onClick={() => handleRegenerateTranscript(item.id)}
+                                disabled={item.generation_status === 'generating_transcript'}
+                              >
+                                Generate transcript
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleRegenerateTranscript(item.id)}
+                                disabled={item.generation_status === 'generating_transcript'}
+                              >
+                                Regenerate transcript
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     )}
