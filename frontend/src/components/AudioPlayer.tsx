@@ -79,6 +79,15 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           audio.currentTime = startPosition;
           setCurrentTime(startPosition);
         }
+
+        // If duration is missing from database, save it now
+        if ((!content.duration || content.duration === 0) && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+          const durationInSeconds = Math.floor(audio.duration);
+          contentAPI.update(content.id, { duration: durationInSeconds } as any).catch((error) => {
+            console.error('Failed to save duration:', error);
+          });
+        }
+
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
 

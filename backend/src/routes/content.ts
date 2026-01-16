@@ -250,6 +250,7 @@ router.patch('/:id', async (req, res) => {
       'last_played_at',
       'title',
       'description',
+      'duration',
     ];
 
     // Special handling for removing audio
