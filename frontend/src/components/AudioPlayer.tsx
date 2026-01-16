@@ -42,7 +42,6 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [volume, setVolume] = useState(1);
-  const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [transcriptWords, setTranscriptWords] = useState<Array<{ word: string; start: number; end: number }> | null>(null);
@@ -67,8 +66,12 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
       const startPosition = content.playback_position || 0;
 
       audio.src = content.audio_url || '';
-      audio.playbackRate = content.playback_speed || 1;
-      setPlaybackSpeed(content.playback_speed || 1);
+      // Ensure playback speed is one of the valid values
+      const validSpeeds = [1, 1.25, 1.5, 2];
+      const loadedSpeed = content.playback_speed || 1;
+      const normalizedSpeed = validSpeeds.includes(loadedSpeed) ? loadedSpeed : 1;
+      audio.playbackRate = normalizedSpeed;
+      setPlaybackSpeed(normalizedSpeed);
 
       // Wait for metadata to load before setting position
       const handleLoadedMetadata = () => {
@@ -216,21 +219,43 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
     setVolume(vol);
   };
 
-  const setSleepTimerMinutes = (minutes: number) => {
+  const toggleSleepTimer = () => {
+    // Clear existing timer if any
     if (sleepTimerRef.current) {
       clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
     }
 
-    setSleepTimer(minutes);
-    setShowSleepTimer(false);
-
-    sleepTimerRef.current = setTimeout(() => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        setIsPlaying(false);
+    // Cycle through: null → 5 → 10 → 15 → 30 → 45 → 60 → null
+    const timerOptions = [5, 10, 15, 30, 45, 60];
+    if (sleepTimer === null) {
+      // Start with 5 minutes
+      setSleepTimer(5);
+      sleepTimerRef.current = setTimeout(() => {
+        if (audioRef.current) {
+          audioRef.current.pause();
+          setIsPlaying(false);
+        }
+        setSleepTimer(null);
+      }, 5 * 60 * 1000);
+    } else {
+      const currentIndex = timerOptions.indexOf(sleepTimer);
+      if (currentIndex === timerOptions.length - 1) {
+        // Last option, turn off
+        setSleepTimer(null);
+      } else {
+        // Go to next option
+        const nextTimer = timerOptions[currentIndex + 1];
+        setSleepTimer(nextTimer);
+        sleepTimerRef.current = setTimeout(() => {
+          if (audioRef.current) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+          }
+          setSleepTimer(null);
+        }, nextTimer * 60 * 1000);
       }
-      setSleepTimer(null);
-    }, minutes * 60 * 1000);
+    }
   };
 
   const handleTranscriptClick = (wordIndex: number) => {
@@ -419,37 +444,15 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </div>
 
           <div className="player-options">
-            <button onClick={toggleSpeed} className="speed-toggle">
+            <button onClick={toggleSpeed} className="option-toggle">
               <Gauge size={20} />
               <span>{playbackSpeed}x</span>
             </button>
 
-            <div className="option-group">
-              <button onClick={() => setShowSleepTimer(!showSleepTimer)}>
-                <Clock size={20} />
-                {sleepTimer && <span>{sleepTimer}m</span>}
-              </button>
-              {showSleepTimer && (
-                <div className="sleep-timer-menu">
-                  {[5, 10, 15, 30, 45, 60].map((minutes) => (
-                    <button key={minutes} onClick={() => setSleepTimerMinutes(minutes)}>
-                      {minutes} min
-                    </button>
-                  ))}
-                  {sleepTimer && (
-                    <button
-                      onClick={() => {
-                        if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
-                        setSleepTimer(null);
-                        setShowSleepTimer(false);
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+            <button onClick={toggleSleepTimer} className="option-toggle">
+              <Clock size={20} />
+              <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+            </button>
 
             <div className="volume-control">
               <Volume2 size={20} />
