@@ -5,6 +5,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 import { getAudioDir, getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
 
 async function getOpenAIClient(): Promise<OpenAI | null> {
   // Use environment variable only for security
@@ -369,14 +370,13 @@ export async function generateArticleAudio(
       throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
     }
 
-    const voice = options.voice || 'alloy';
+    const voice = options.voice || PROCESSING_CONFIG.tts.voice;
     const instructions =
       options.instructions ||
       'Read this article clearly and naturally. Focus on the main content. Use appropriate pacing and emphasis for readability.';
 
     // Split text into chunks that fit within OpenAI's 4096 character limit
-    // Using 3500 to leave buffer for any encoding or special characters
-    const textChunks = splitTextIntoChunks(articleText, 3500);
+    const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
     console.log(`Generating TTS audio with gpt-4o-mini-tts for ${textChunks.length} chunk(s)...`);
 
     // Calculate word positions for the full text
@@ -386,8 +386,8 @@ export async function generateArticleAudio(
       // Single chunk - simple case with retry logic
       console.log(`Single chunk (${textChunks[0].length} chars)`);
 
-      let retries = 5;
-      let delay = 1000;
+      let retries = PROCESSING_CONFIG.retry.maxAttempts;
+      let delay = PROCESSING_CONFIG.retry.baseDelayMs;
       let response: any = null;
 
       while (retries > 0) {
@@ -403,7 +403,7 @@ export async function generateArticleAudio(
           if (error.status === 429 && retries > 1) {
             console.log(`Rate limit hit, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
             await new Promise(resolve => setTimeout(resolve, delay));
-            delay = Math.min(delay * 2, 30000);
+            delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
             retries--;
           } else {
             throw error;
@@ -461,8 +461,8 @@ export async function generateArticleAudio(
         }
 
         // Retry logic with exponential backoff for rate limits
-        let retries = 5;
-        let delay = 1000; // Start with 1 second
+        let retries = PROCESSING_CONFIG.retry.maxAttempts;
+        let delay = PROCESSING_CONFIG.retry.baseDelayMs;
         let response: any = null;
 
         while (retries > 0) {
@@ -479,7 +479,7 @@ export async function generateArticleAudio(
               // Rate limit hit, wait and retry
               console.log(`Rate limit hit on chunk ${i + 1}, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
               await new Promise(resolve => setTimeout(resolve, delay));
-              delay = Math.min(delay * 2, 30000); // Exponential backoff, max 30s
+              delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
             } else {
               // Other error or out of retries, throw

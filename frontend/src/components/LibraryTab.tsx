@@ -48,6 +48,8 @@ export function LibraryTab({ onPlayContent, content, setContent, loading, onRefr
       params.favorite = true;
     } else if (filter === 'archived') {
       params.archived = true;
+    } else if (filter === 'all') {
+      params.archived = false; // Explicitly exclude archived items
     }
 
     onRefresh(params);

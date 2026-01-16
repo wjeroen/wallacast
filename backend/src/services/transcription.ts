@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 import { getAudioDuration } from './audio-utils.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,12 +123,12 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
     let transcriptText = '';
     const tempFiles: string[] = [audioPath];
 
-    // OpenAI Whisper API has a 25 MB file size limit
-    if (fileSizeMB > 25) {
-      console.log(`File exceeds 25 MB limit, splitting into chunks...`);
+    // OpenAI Whisper API has a file size limit
+    if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
+      console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit, splitting into chunks...`);
 
-      // Split into 15-minute chunks (should be well under 25 MB after compression)
-      const chunkFiles = await splitAudioIntoChunks(audioPath, 15);
+      // Split into chunks (should be well under size limit after compression)
+      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
       tempFiles.push(...chunkFiles);
 
       // Transcribe each chunk with context from previous chunk
@@ -143,7 +144,7 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
         const transcription = await openai.audio.transcriptions.create({
           file: createReadStream(chunkFiles[i]),
           model: 'gpt-4o-mini-transcribe',
-          prompt: previousTranscript.slice(-224), // Last 224 chars for context (Whisper limit)
+          prompt: previousTranscript.slice(-PROCESSING_CONFIG.whisper.contextPromptMaxChars),
         });
 
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
@@ -155,9 +156,9 @@ export async function transcribeAudio(audioUrl: string): Promise<string> {
       // File is small enough - transcribe directly (with compression if needed)
       let fileToTranscribe = audioPath;
 
-      if (fileSizeMB > 20) {
+      if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
         // Close to limit, compress just in case
-        console.log('File close to 25 MB limit, compressing as precaution...');
+        console.log(`File close to ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit, compressing as precaution...`);
         const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
         await compressAudio(audioPath, compressedPath);
         fileToTranscribe = compressedPath;
