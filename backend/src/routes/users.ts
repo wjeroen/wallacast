@@ -27,6 +27,8 @@ const VALID_SETTING_KEYS = [
   'wallabag_password',     // encrypted
   'wallabag_access_token', // encrypted
   'wallabag_refresh_token',// encrypted
+  'wallabag_token_expires_at', // ISO timestamp when access token expires
+  'wallabag_last_sync',     // ISO timestamp of last successful sync
   'wallabag_sync_enabled',
   // App preferences
   'theme',

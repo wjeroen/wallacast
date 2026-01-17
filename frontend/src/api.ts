@@ -158,3 +158,20 @@ export const userSettingsAPI = {
 
   getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
 };
+
+export const wallabagAPI = {
+  testConnection: () =>
+    api.post<{ success: boolean; error?: string }>('/wallabag/test'),
+
+  getStatus: () =>
+    api.get<{ enabled: boolean; lastSync: string | null; pendingChanges: number }>('/wallabag/status'),
+
+  sync: () =>
+    api.post<{ pulled: number; pushed: number; errors: string[] }>('/wallabag/sync'),
+
+  pull: () =>
+    api.post<{ pulled: number; errors: string[] }>('/wallabag/pull'),
+
+  push: () =>
+    api.post<{ pushed: number; errors: string[] }>('/wallabag/push'),
+};

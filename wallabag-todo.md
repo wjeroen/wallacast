@@ -135,7 +135,7 @@ The `user_settings` table stores per-user key-value settings. In `backend/src/ro
 
 ### Phase 1: Configuration and Settings
 
-#### [ ] 1.1 Add missing setting keys to `backend/src/routes/users.ts`
+#### [x] 1.1 Add missing setting keys to `backend/src/routes/users.ts`
 
 In the `VALID_SETTING_KEYS` array, add:
 
@@ -146,30 +146,38 @@ In the `VALID_SETTING_KEYS` array, add:
 
 These are NOT secret keys (don't add to `SECRET_KEYS` array).
 
-#### [ ] 1.2 Add username/password input fields to frontend settings
+**Done:** Added both keys to VALID_SETTING_KEYS array.
+
+#### [x] 1.2 Add username/password input fields to frontend settings
 
 In `frontend/src/components/SettingsPage.tsx`, the Wallabag section needs:
 
-- [ ] Input field for `wallabag_username` (text input, not secret)
-- [ ] Input field for `wallabag_password` (password input, secret, with show/hide toggle)
-- [ ] Checkbox or toggle for `wallabag_sync_enabled`
+- [x] Input field for `wallabag_username` (text input, not secret)
+- [x] Input field for `wallabag_password` (password input, secret, with show/hide toggle)
+- [x] Checkbox or toggle for `wallabag_sync_enabled`
 
 Follow the existing pattern used for `wallabag_client_secret` (masked display, show/hide button).
 
-#### [ ] 1.3 Add form state for new fields
+**Done:** All fields already exist in SettingsPage.tsx (lines 338-370).
+
+#### [x] 1.3 Add form state for new fields
 
 In SettingsPage.tsx, update the `formData` state and `handleChange` to include:
 - `wallabag_username`
 - `wallabag_password`
 - `wallabag_sync_enabled`
 
+**Done:** All fields already in formData state (lines 44-46).
+
 ---
 
 ### Phase 2: Wallabag API Service
 
-#### [ ] 2.1 Create `backend/src/services/wallabag-service.ts`
+#### [x] 2.1 Create `backend/src/services/wallabag-service.ts`
 
 This service handles all communication with the Wallabag API.
+
+**Done:** Created complete service with OAuth, token management, API wrapper, and all CRUD methods.
 
 **Required exports:**
 
@@ -252,11 +260,11 @@ interface TokenResponse {
 }
 ```
 
-#### [ ] 2.2 Implement OAuth token management
+#### [x] 2.2 Implement OAuth token management
 
 The service must handle:
 
-- [ ] **Initial token acquisition** using password grant:
+- [x] **Initial token acquisition** using password grant:
   ```
   POST {wallabag_url}/oauth/v2/token
   Content-Type: application/x-www-form-urlencoded
@@ -268,34 +276,34 @@ The service must handle:
   &password={password}
   ```
 
-- [ ] **Token refresh** when access token expires:
+- [x] **Token refresh** when access token expires:
   ```
   POST {wallabag_url}/oauth/v2/token
   Content-Type: application/x-www-form-urlencoded
-  
+
   grant_type=refresh_token
   &client_id={client_id}
   &client_secret={client_secret}
   &refresh_token={refresh_token}
   ```
 
-- [ ] **Token storage:** Save `access_token`, `refresh_token`, and calculated `token_expires_at` to user_settings
+- [x] **Token storage:** Save `access_token`, `refresh_token`, and calculated `token_expires_at` to user_settings
 
-- [ ] **Automatic refresh:** Before any API call, check if token is expired (with 5-minute buffer). If so, refresh first.
+- [x] **Automatic refresh:** Before any API call, check if token is expired (with 5-minute buffer). If so, refresh first.
 
-- [ ] **Fallback:** If refresh token fails (e.g., expired after 14 days), fall back to password grant
+- [x] **Fallback:** If refresh token fails (e.g., expired after 14 days), fall back to password grant
 
-#### [ ] 2.3 Implement API request wrapper
+#### [x] 2.3 Implement API request wrapper
 
 Create a private method that:
 
-- [ ] Adds `Authorization: Bearer {token}` header
-- [ ] Handles 401 responses by refreshing token and retrying once
-- [ ] Handles rate limiting (429) with exponential backoff
-- [ ] Logs errors appropriately
-- [ ] Returns null on failure (don't throw, let caller handle)
+- [x] Adds `Authorization: Bearer {token}` header
+- [x] Handles 401 responses by refreshing token and retrying once
+- [x] Handles rate limiting (429) with exponential backoff
+- [x] Logs errors appropriately
+- [x] Returns null on failure (don't throw, let caller handle)
 
-#### [ ] 2.4 Implement fetchEntries with pagination
+#### [x] 2.4 Implement fetchEntries with pagination
 
 ```typescript
 async fetchEntries(since?: string): Promise<WallabagEntry[]> {
@@ -322,14 +330,14 @@ async fetchEntries(since?: string): Promise<WallabagEntry[]> {
 }
 ```
 
-#### [ ] 2.5 Implement CRUD operations
+#### [x] 2.5 Implement CRUD operations
 
-- [ ] `createEntry`: POST to `/api/entries.json`
-- [ ] `updateEntry`: PATCH to `/api/entries/{id}.json`
-- [ ] `deleteEntry`: DELETE to `/api/entries/{id}.json`
-- [ ] `addTags`: POST to `/api/entries/{id}/tags.json` with body `{ "tags": "tag1,tag2" }`
+- [x] `createEntry`: POST to `/api/entries.json`
+- [x] `updateEntry`: PATCH to `/api/entries/{id}.json`
+- [x] `deleteEntry`: DELETE to `/api/entries/{id}.json`
+- [x] `addTags`: POST to `/api/entries/{id}/tags.json` with body `{ "tags": "tag1,tag2" }`
 
-#### [ ] 2.6 Implement testConnection
+#### [x] 2.6 Implement testConnection
 
 ```typescript
 async testConnection(): Promise<{ success: boolean; error?: string }> {
@@ -805,7 +813,9 @@ async function setUserSetting(
 
 ### Phase 4: API Routes
 
-#### [ ] 4.1 Create `backend/src/routes/wallabag.ts`
+#### [x] 4.1 Create `backend/src/routes/wallabag.ts`
+
+**Done:** Created route with /test and /status endpoints. Sync endpoints are stubbed for later implementation.
 
 ```typescript
 import { Router } from 'express';
@@ -899,7 +909,7 @@ router.post('/push', async (req, res) => {
 export default router;
 ```
 
-#### [ ] 4.2 Register route in `backend/src/index.ts`
+#### [x] 4.2 Register route in `backend/src/index.ts`
 
 Add import and use:
 
@@ -909,6 +919,8 @@ import wallabagRoutes from './routes/wallabag.js';
 // ... after other route registrations
 app.use('/api/wallabag', wallabagRoutes);
 ```
+
+**Done:** Imported wallabagRouter and registered at /api/wallabag.
 
 ---
 
@@ -969,7 +981,9 @@ Verify that when content is updated (title, content, starred, archived), `update
 
 ### Phase 6: Frontend Updates
 
-#### [ ] 6.1 Add Wallabag API functions to `frontend/src/api.ts`
+#### [x] 6.1 Add Wallabag API functions to `frontend/src/api.ts`
+
+**Done:** Added wallabagAPI object with testConnection, getStatus, sync, pull, and push methods.
 
 ```typescript
 // Test Wallabag connection
@@ -1036,7 +1050,9 @@ export async function pushToWallabag(): Promise<{
 }
 ```
 
-#### [ ] 6.2 Add sync controls to SettingsPage.tsx
+#### [x] 6.2 Add sync controls to SettingsPage.tsx
+
+**Done:** Added test connection button, connection status display, error messages, and Wallabag status info (last sync, pending changes).
 
 Add state:
 
