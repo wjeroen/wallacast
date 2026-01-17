@@ -30,6 +30,11 @@ export const useAuthStore = create<AuthStore>((set) => ({
       set({ user, isAuthenticated: true, isLoading: false });
       return true;
     } catch (error: any) {
+      // Handle 503 Service Unavailable (database not ready)
+      if (error.response?.status === 503) {
+        set({ error: 'Service is starting up, please wait a moment and try again', isLoading: false });
+        return false;
+      }
       const message = error.response?.data?.error || 'Login failed';
       set({ error: message, isLoading: false });
       return false;
@@ -45,6 +50,11 @@ export const useAuthStore = create<AuthStore>((set) => ({
       set({ user, isAuthenticated: true, isLoading: false });
       return true;
     } catch (error: any) {
+      // Handle 503 Service Unavailable (database not ready)
+      if (error.response?.status === 503) {
+        set({ error: 'Service is starting up, please wait a moment and try again', isLoading: false });
+        return false;
+      }
       const message = error.response?.data?.error || 'Registration failed';
       set({ error: message, isLoading: false });
       return false;
@@ -68,12 +78,27 @@ export const useAuthStore = create<AuthStore>((set) => ({
       return;
     }
 
-    try {
-      const response = await authAPI.getMe();
-      set({ user: response.data.user, isAuthenticated: true, isLoading: false });
-    } catch {
-      clearTokens();
-      set({ user: null, isAuthenticated: false, isLoading: false });
+    // Retry logic for 503 errors during startup
+    const maxRetries = 5;
+    let delay = 2000;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await authAPI.getMe();
+        set({ user: response.data.user, isAuthenticated: true, isLoading: false });
+        return;
+      } catch (error: any) {
+        // If service is starting up, wait and retry
+        if (error.response?.status === 503 && attempt < maxRetries - 1) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay = Math.min(delay * 1.5, 10000);
+          continue;
+        }
+        // Other errors or max retries reached
+        clearTokens();
+        set({ user: null, isAuthenticated: false, isLoading: false });
+        return;
+      }
     }
   },
 

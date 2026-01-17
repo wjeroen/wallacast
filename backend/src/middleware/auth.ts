@@ -1,5 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, TokenPayload } from '../services/auth.js';
+import { isDatabaseReady } from '../database/db.js';
+
+// Middleware to check if database is ready - returns 503 if not
+export function requireDatabaseReady(req: Request, res: Response, next: NextFunction) {
+  if (!isDatabaseReady()) {
+    return res.status(503).json({
+      error: 'Service starting up, please try again in a moment',
+      retryAfter: 5,
+    });
+  }
+  next();
+}
 
 // Extend Express Request type to include user
 declare global {
