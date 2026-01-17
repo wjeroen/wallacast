@@ -12,6 +12,7 @@ import transcriptionRouter from './routes/transcription.js';
 import authRouter from './routes/auth.js';
 import usersRouter from './routes/users.js';
 import { requireAuth } from './middleware/auth.js';
+import { bootstrapFirstUser } from './services/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,6 +104,9 @@ async function start() {
     try {
       await initializeDatabase();
       console.log('✅ Database connection established');
+
+      // Bootstrap first user from AUTH_USERNAME/AUTH_PASSWORD env vars
+      await bootstrapFirstUser();
 
       // Initialize storage directories
       await ensureStorageDirectories();

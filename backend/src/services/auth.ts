@@ -247,3 +247,92 @@ export async function changePassword(userId: number, currentPassword: string, ne
 
   return true;
 }
+
+// Bootstrap: Create first user from AUTH_USERNAME/AUTH_PASSWORD env vars
+// Called on startup to ensure at least one user exists
+export async function bootstrapFirstUser(): Promise<void> {
+  // Check if any users exist
+  const result = await query('SELECT COUNT(*) as count FROM users');
+  const userCount = parseInt(result.rows[0].count, 10);
+
+  if (userCount > 0) {
+    console.log(`✓ ${userCount} user(s) already exist, skipping bootstrap`);
+
+    // Still assign orphaned content to the first user
+    await assignOrphanedContent();
+    return;
+  }
+
+  // No users exist - create from env vars
+  const username = process.env.AUTH_USERNAME;
+  const password = process.env.AUTH_PASSWORD;
+
+  if (!username || !password) {
+    console.error('ERROR: No users exist and AUTH_USERNAME/AUTH_PASSWORD env vars are not set');
+    console.error('Please set AUTH_USERNAME and AUTH_PASSWORD to create the first user');
+    return;
+  }
+
+  console.log(`Creating first user from AUTH_USERNAME: ${username}`);
+
+  const passwordHash = await hashPassword(password);
+
+  try {
+    const insertResult = await query(
+      `INSERT INTO users (username, password_hash, display_name)
+       VALUES ($1, $2, $3)
+       RETURNING id, username`,
+      [username.toLowerCase(), passwordHash, username]
+    );
+
+    const newUser = insertResult.rows[0];
+    console.log(`✓ Created user "${newUser.username}" with id ${newUser.id}`);
+
+    // Assign all existing content to this user
+    await assignOrphanedContent();
+
+  } catch (error: any) {
+    if (error.code === '23505') {
+      console.log(`User "${username}" already exists`);
+    } else {
+      throw error;
+    }
+  }
+}
+
+// Assign content with no user_id to the first user
+async function assignOrphanedContent(): Promise<void> {
+  // Get the first user (lowest ID)
+  const userResult = await query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+
+  if (userResult.rows.length === 0) {
+    return;
+  }
+
+  const firstUserId = userResult.rows[0].id;
+
+  // Update orphaned content
+  const contentResult = await query(
+    'UPDATE content_items SET user_id = $1 WHERE user_id IS NULL',
+    [firstUserId]
+  );
+  if (contentResult.rowCount && contentResult.rowCount > 0) {
+    console.log(`✓ Assigned ${contentResult.rowCount} content item(s) to user ${firstUserId}`);
+  }
+
+  const podcastResult = await query(
+    'UPDATE podcasts SET user_id = $1 WHERE user_id IS NULL',
+    [firstUserId]
+  );
+  if (podcastResult.rowCount && podcastResult.rowCount > 0) {
+    console.log(`✓ Assigned ${podcastResult.rowCount} podcast(s) to user ${firstUserId}`);
+  }
+
+  const queueResult = await query(
+    'UPDATE queue_items SET user_id = $1 WHERE user_id IS NULL',
+    [firstUserId]
+  );
+  if (queueResult.rowCount && queueResult.rowCount > 0) {
+    console.log(`✓ Assigned ${queueResult.rowCount} queue item(s) to user ${firstUserId}`);
+  }
+}

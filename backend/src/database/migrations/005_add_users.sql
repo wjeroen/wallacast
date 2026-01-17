@@ -1,5 +1,6 @@
 -- Migration: Add users and user settings tables
 -- With authentication support (password hashes)
+-- No hardcoded users - first user created from AUTH_USERNAME/AUTH_PASSWORD env vars
 
 -- Users table with auth support
 CREATE TABLE IF NOT EXISTS users (
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     revoked_at TIMESTAMP  -- NULL if active, timestamp if revoked
 );
 
--- Add user_id to content_items (default to user 1 for existing content)
+-- Add user_id to content_items
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'content_items' AND column_name = 'user_id') THEN
         ALTER TABLE content_items ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
@@ -73,27 +74,6 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Seed users (idempotent)
--- Passwords will be set via the app (these are placeholder bcrypt hashes for 'password123')
--- $2b$10$... is bcrypt format - this hash is for 'password123'
-INSERT INTO users (id, username, display_name, password_hash)
-VALUES (1, 'jeroen', 'Jeroen', '$2b$10$rQZ5qXJvQkVGJh1zZL1C4.8HvEF1L1xBQEMJQ2ZE1K5VqQkVV5Uve')
-ON CONFLICT (id) DO UPDATE SET
-    password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash);
-
-INSERT INTO users (id, username, display_name, password_hash)
-VALUES (2, 'testuser', 'TestUser', '$2b$10$rQZ5qXJvQkVGJh1zZL1C4.8HvEF1L1xBQEMJQ2ZE1K5VqQkVV5Uve')
-ON CONFLICT (id) DO UPDATE SET
-    password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash);
-
--- Reset sequence to avoid conflicts
-SELECT setval('users_id_seq', GREATEST((SELECT MAX(id) FROM users), 2));
-
--- Update existing content to belong to user 1 (Jeroen)
-UPDATE content_items SET user_id = 1 WHERE user_id IS NULL;
-UPDATE podcasts SET user_id = 1 WHERE user_id IS NULL;
-UPDATE queue_items SET user_id = 1 WHERE user_id IS NULL;
-
 -- Create indexes
 CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
@@ -101,3 +81,6 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at
 CREATE INDEX IF NOT EXISTS idx_content_items_user_id ON content_items(user_id);
 CREATE INDEX IF NOT EXISTS idx_podcasts_user_id ON podcasts(user_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_user_id ON queue_items(user_id);
+
+-- Note: First user is created by the application from AUTH_USERNAME/AUTH_PASSWORD env vars
+-- All existing content (user_id IS NULL) will be assigned to that first user
