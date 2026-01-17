@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query } from '../database/db.js';
 import { WallabagService } from '../services/wallabag-service.js';
+import { fullSync, syncFromWallabag, syncToWallabag } from '../services/wallabag-sync.js';
 
 const router = Router();
 
@@ -64,16 +65,15 @@ router.get('/status', async (req, res) => {
 /**
  * POST /api/wallabag/sync
  * Full bidirectional sync (pull then push)
- *
- * TODO: Implement once wallabag-sync.ts is created
  */
 router.post('/sync', async (req, res) => {
+  console.log('[Wallabag] Full sync endpoint called by user:', req.user!.userId);
   try {
-    // const result = await fullSync(req.user!.userId);
-    // res.json(result);
-    res.status(501).json({ error: 'Sync not yet implemented' });
+    const result = await fullSync(req.user!.userId);
+    console.log('[Wallabag] Full sync result:', result);
+    res.json(result);
   } catch (error) {
-    console.error('Wallabag sync error:', error);
+    console.error('[Wallabag] Sync error:', error);
     res.status(500).json({ error: 'Sync failed', details: String(error) });
   }
 });
@@ -81,16 +81,15 @@ router.post('/sync', async (req, res) => {
 /**
  * POST /api/wallabag/pull
  * Pull changes from Wallabag into Wallacast
- *
- * TODO: Implement once wallabag-sync.ts is created
  */
 router.post('/pull', async (req, res) => {
+  console.log('[Wallabag] Pull endpoint called by user:', req.user!.userId);
   try {
-    // const result = await syncFromWallabag(req.user!.userId);
-    // res.json({ pulled: result.count, errors: result.errors });
-    res.status(501).json({ error: 'Pull not yet implemented' });
+    const result = await syncFromWallabag(req.user!.userId);
+    console.log('[Wallabag] Pull result:', result);
+    res.json({ pulled: result.count, errors: result.errors });
   } catch (error) {
-    console.error('Wallabag pull error:', error);
+    console.error('[Wallabag] Pull error:', error);
     res.status(500).json({ error: 'Pull failed' });
   }
 });

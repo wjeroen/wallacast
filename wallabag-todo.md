@@ -364,7 +364,9 @@ async testConnection(): Promise<{ success: boolean; error?: string }> {
 
 ### Phase 3: Sync Service
 
-#### [ ] 3.1 Create `backend/src/services/wallabag-sync.ts`
+#### [x] 3.1 Create `backend/src/services/wallabag-sync.ts`
+
+**Done:** Created complete sync service with helper functions and syncFromWallabag implementation.
 
 **Required exports:**
 
@@ -393,7 +395,9 @@ interface FullSyncResult {
 }
 ```
 
-#### [ ] 3.2 Implement content type detection
+#### [x] 3.2 Implement content type detection
+
+**Done:** Implemented detectTypeFromWallabag, getTypeTag, and shouldSkip helper functions.
 
 Create helper functions:
 
@@ -440,7 +444,15 @@ function shouldSkip(entry: WallabagEntry): boolean {
 }
 ```
 
-#### [ ] 3.3 Implement syncFromWallabag (Pull)
+#### [x] 3.3 Implement syncFromWallabag (Pull)
+
+**Done:** Implemented complete pull sync with:
+- Fetches entries from Wallabag since last sync
+- Detects content types (article/text/podcast)
+- Creates new items or updates existing ones
+- Maps Wallabag fields to Wallacast fields correctly
+- Updates last sync timestamp
+- Comprehensive logging for debugging
 
 ```typescript
 export async function syncFromWallabag(userId: number): Promise<SyncResult> {
@@ -746,7 +758,9 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
 }
 ```
 
-#### [ ] 3.5 Implement fullSync
+#### [x] 3.5 Implement fullSync
+
+**Done:** Implemented fullSync that calls syncFromWallabag then syncToWallabag.
 
 ```typescript
 export async function fullSync(userId: number): Promise<FullSyncResult> {
@@ -764,7 +778,9 @@ export async function fullSync(userId: number): Promise<FullSyncResult> {
 }
 ```
 
-#### [ ] 3.6 Implement deleteFromWallabag
+#### [x] 3.6 Implement deleteFromWallabag
+
+**Done:** Implemented deleteFromWallabag stub (will be wired up in Phase 5).
 
 ```typescript
 export async function deleteFromWallabag(
@@ -781,7 +797,9 @@ export async function deleteFromWallabag(
 }
 ```
 
-#### [ ] 3.7 Add helper functions for user settings
+#### [x] 3.7 Add helper functions for user settings
+
+**Done:** Implemented getUserSetting and setUserSetting helpers in wallabag-sync.ts.
 
 ```typescript
 async function getUserSetting(userId: number, key: string): Promise<string | null> {
