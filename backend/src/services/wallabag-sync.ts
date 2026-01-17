@@ -67,10 +67,13 @@ function getTypeTag(type: string): string {
  * Check if entry should be skipped (has nosync tag)
  */
 function shouldSkip(entry: WallabagEntry): boolean {
-  return entry.tags.some(t =>
-    t.slug.toLowerCase() === 'nosync' ||
-    t.label.toLowerCase() === '#nosync'
-  );
+  return entry.tags.some(t => {
+    const labelLower = t.label.toLowerCase();
+    const slugLower = t.slug.toLowerCase();
+    return slugLower === 'nosync' ||
+           labelLower === 'nosync' ||
+           labelLower === '#nosync';
+  });
 }
 
 /**
