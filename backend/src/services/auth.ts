@@ -251,44 +251,41 @@ export async function changePassword(userId: number, currentPassword: string, ne
 // Bootstrap: Create first user from AUTH_USERNAME/AUTH_PASSWORD env vars
 // Called on startup to ensure at least one user exists
 export async function bootstrapFirstUser(): Promise<void> {
-  // Check if any users exist
-  const result = await query('SELECT COUNT(*) as count FROM users');
-  const userCount = parseInt(result.rows[0].count, 10);
-
-  if (userCount > 0) {
-    // Check if existing users have passwords set
-    const usersWithoutPasswords = await query(
-      'SELECT id, username FROM users WHERE password_hash IS NULL'
-    );
-
-    if (usersWithoutPasswords.rows.length > 0) {
-      console.log(`⚠ Found ${usersWithoutPasswords.rows.length} user(s) without passwords (legacy accounts)`);
-      console.log(`Removing legacy users: ${usersWithoutPasswords.rows.map((u: any) => u.username).join(', ')}`);
-
-      // Delete users without passwords
-      await query('DELETE FROM users WHERE password_hash IS NULL');
-      console.log(`✓ Removed ${usersWithoutPasswords.rows.length} legacy user(s)`);
-
-      // Now proceed to create user from env vars (fall through to creation logic below)
-    } else {
-      console.log(`✓ ${userCount} user(s) already exist with passwords, skipping bootstrap`);
-
-      // Still assign orphaned content to the first user
-      await assignOrphanedContent();
-      return;
-    }
-  }
-
-  // No users exist (or we just deleted legacy users) - create from env vars
   const username = process.env.AUTH_USERNAME;
   const password = process.env.AUTH_PASSWORD;
 
   if (!username || !password) {
-    console.error('ERROR: No users exist and AUTH_USERNAME/AUTH_PASSWORD env vars are not set');
-    console.error('Please set AUTH_USERNAME and AUTH_PASSWORD to create the first user');
+    console.log('⚠ AUTH_USERNAME/AUTH_PASSWORD not set, skipping user bootstrap');
     return;
   }
 
+  // Check if the AUTH_USERNAME user already exists
+  const existingUser = await query(
+    'SELECT id, username FROM users WHERE username = $1',
+    [username.toLowerCase()]
+  );
+
+  if (existingUser.rows.length > 0) {
+    console.log(`✓ User "${username}" already exists, skipping bootstrap`);
+    await assignOrphanedContent();
+    return;
+  }
+
+  // AUTH_USERNAME doesn't exist, but check if OTHER users exist
+  const userCountResult = await query('SELECT COUNT(*) as count FROM users');
+  const userCount = parseInt(userCountResult.rows[0].count, 10);
+
+  if (userCount > 0) {
+    // Other users exist but not the AUTH_USERNAME user
+    // This happens when hardcoded users were created but AUTH_USERNAME changed
+    console.log(`⚠ Found ${userCount} user(s) but AUTH_USERNAME "${username}" not found`);
+    console.log('Removing existing users to bootstrap with AUTH_USERNAME...');
+
+    await query('DELETE FROM users');
+    console.log(`✓ Removed ${userCount} user(s)`);
+  }
+
+  // Create the AUTH_USERNAME user
   console.log(`Creating first user from AUTH_USERNAME: ${username}`);
 
   const passwordHash = await hashPassword(password);
