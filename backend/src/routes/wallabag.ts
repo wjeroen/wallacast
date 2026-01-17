@@ -13,12 +13,14 @@ router.use(requireAuth);
  * Test connection with current credentials
  */
 router.post('/test', async (req, res) => {
+  console.log('[Wallabag] Test endpoint called by user:', req.user!.userId);
   try {
     const service = new WallabagService(req.user!.userId);
     const result = await service.testConnection();
+    console.log('[Wallabag] Test result:', result);
     res.json(result);
   } catch (error) {
-    console.error('Wallabag test error:', error);
+    console.error('[Wallabag] Test endpoint error:', error);
     res.status(500).json({ success: false, error: 'Internal error' });
   }
 });

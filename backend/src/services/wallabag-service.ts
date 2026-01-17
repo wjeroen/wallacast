@@ -166,11 +166,20 @@ export class WallabagService {
    */
   private async acquireNewToken(): Promise<string | null> {
     if (!this.baseUrl || !this.clientId || !this.clientSecret || !this.username || !this.password) {
-      console.error('Missing Wallabag configuration');
+      console.error('[Wallabag] Missing configuration:', {
+        hasUrl: !!this.baseUrl,
+        hasClientId: !!this.clientId,
+        hasClientSecret: !!this.clientSecret,
+        hasUsername: !!this.username,
+        hasPassword: !!this.password,
+      });
       return null;
     }
 
     try {
+      const tokenUrl = `${this.baseUrl}/oauth/v2/token`;
+      console.log('[Wallabag] Requesting token from:', tokenUrl);
+
       const params = new URLSearchParams({
         grant_type: 'password',
         client_id: this.clientId,
@@ -179,7 +188,7 @@ export class WallabagService {
         password: this.password,
       });
 
-      const response = await fetch(`${this.baseUrl}/oauth/v2/token`, {
+      const response = await fetch(tokenUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -189,16 +198,22 @@ export class WallabagService {
 
       if (!response.ok) {
         const text = await response.text();
-        console.error('Failed to acquire Wallabag token:', response.status, text);
+        console.error('[Wallabag] Token acquisition failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: text,
+          url: tokenUrl,
+        });
         return null;
       }
 
       const data: TokenResponse = await response.json();
+      console.log('[Wallabag] Token acquired successfully');
       await this.saveTokens(data);
 
       return data.access_token;
     } catch (error) {
-      console.error('Error acquiring Wallabag token:', error);
+      console.error('[Wallabag] Exception during token acquisition:', error);
       return null;
     }
   }
@@ -351,20 +366,36 @@ export class WallabagService {
    * Test that credentials work and API is accessible
    */
   async testConnection(): Promise<{ success: boolean; error?: string }> {
+    console.log('[Wallabag] testConnection called for user:', this.userId);
+
     try {
+      const enabled = await this.isEnabled();
+      console.log('[Wallabag] Sync enabled:', enabled);
+
+      if (!enabled) {
+        return { success: false, error: 'Wallabag sync is not enabled or configured.' };
+      }
+
       const token = await this.getAccessToken();
+      console.log('[Wallabag] Got access token:', !!token);
+
       if (!token) {
         return { success: false, error: 'Failed to obtain access token. Check credentials.' };
       }
 
       // Try to fetch one entry to verify API access
+      console.log('[Wallabag] Testing API request...');
       const response = await this.apiRequest('GET', '/entries.json?perPage=1');
+      console.log('[Wallabag] API response received:', !!response);
+
       if (response === null) {
         return { success: false, error: 'API request failed. Check URL and permissions.' };
       }
 
+      console.log('[Wallabag] Connection test successful');
       return { success: true };
     } catch (error) {
+      console.error('[Wallabag] Connection test exception:', error);
       return { success: false, error: String(error) };
     }
   }
