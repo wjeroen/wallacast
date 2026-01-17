@@ -17,16 +17,37 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Backend | Node.js, Express, TypeScript |
 | Frontend | React, Vite, TypeScript |
 | Database | PostgreSQL |
-| TTS | OpenAI gpt-4o-mini-tts |
+| Authentication | JWT tokens (access + refresh), bcrypt password hashing |
+| TTS | OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | OpenAI Whisper (whisper-1, gpt-4o-mini-transcribe) |
 | Content Extraction | GPT-4o-mini (HTML → readable text) |
 | Audio Processing | FFmpeg (chunking, concatenation) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
+## Authentication & Multi-User System
+
+Wallacast supports multiple users with complete data isolation:
+
+- **User Registration**: Users create accounts via `/api/auth/register`
+- **Per-User API Keys**: Each user stores their own OpenAI API key in Settings (encrypted in `user_settings` table)
+- **JWT Authentication**: Access tokens (15min) + refresh tokens (7 days) with automatic renewal
+- **Data Isolation**: All queries filter by `user_id` - users only see their own content
+- **Public Audio URLs**: Audio endpoints (`/api/content/:id/audio`) are public for HTML5 player compatibility, but content IDs remain private
+- **Byte-Range Support**: Audio streaming supports HTTP range requests for seeking without re-downloading
+
+**Security Model:**
+- Content IDs are not enumerable (UUIDs would be better for production)
+- Audio data stored in database with proper user isolation
+- No global OpenAI API key - each user must set their own
+- Orphaned content (created before multi-user) is auto-assigned to first user on startup
+
 ## Quick Reference
 
 | When working on... | Look at... |
 |-------------------|------------|
+| Authentication | `backend/src/routes/auth.ts`, `backend/src/services/auth.ts` |
+| User settings | `backend/src/routes/users.ts` |
+| Per-user API keys | `backend/src/services/ai-providers.ts` |
 | Adding content | `backend/src/routes/content.ts` |
 | TTS generation | `backend/src/services/openai-tts.ts` |
 | Transcription | `backend/src/services/transcription.ts` |
@@ -58,14 +79,14 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 ### Backend (`/backend/src/`)
 
 #### Entry Point
-- **`index.ts`**: Express server setup, CORS, HTTP Basic Auth middleware, route mounting, database initialization with retry logic, graceful shutdown handling
+- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling.
 
 #### Configuration
 - **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`
 - **`config/processing.ts`**: Centralized constants for audio/text processing (TTS chunk size: 3500 chars, Whisper limits: 25MB/15min chunks, retry config: 5 attempts with exponential backoff). Makes tuning easier without code changes.
 
 #### Database
-- **`database/db.ts`**: PostgreSQL connection pool management. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially. Also performs startup cleanup to reset any stuck generation tasks (items left in 'generating' status after server restart) to 'failed' status
+- **`database/db.ts`**: PostgreSQL connection pool management with connection retry logic. Auto-detects Railway's `DATABASE_URL` or individual `PG*` variables. Includes `initializeDatabase()` which runs schema and all migrations sequentially. Performs startup cleanup to reset any stuck generation tasks. **Optimized logging**: Only logs slow queries (>100ms) and write operations (INSERT/UPDATE/DELETE) to reduce noise by ~90%
 - **`database/schema.sql`**: Main table definitions (`content_items`, `podcasts`, `queue_items`)
 - **`database/add_*.sql`**: Migration files for additional columns (word timestamps, generation status, article metadata, comments)
 - **`database/migrations/`**: Additional migrations
@@ -74,7 +95,22 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - `003_remove_is_read_column.sql`: Removes unused is_read column (was only cosmetic)
 
 #### Routes
-- **`routes/content.ts`**: CRUD for content items. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
+
+- **`routes/auth.ts`**: User authentication endpoints (public, no JWT required)
+  - `POST /api/auth/register` - Create new user account
+  - `POST /api/auth/login` - Login with username/password, returns access + refresh tokens
+  - `POST /api/auth/refresh` - Refresh access token using refresh token
+  - `POST /api/auth/logout` - Revoke refresh token
+
+- **`routes/users.ts`**: User settings management (requires JWT auth)
+  - `GET /api/users/settings` - Get all settings (secrets are masked)
+  - `GET /api/users/settings/:key` - Get specific setting
+  - `PUT /api/users/settings/:key` - Set specific setting
+  - `PUT /api/users/settings` - Bulk update settings
+  - `DELETE /api/users/settings/:key` - Delete setting
+  - `GET /api/users/ai-providers` - Get available AI provider config
+
+- **`routes/content.ts`**: CRUD for content items (requires JWT auth). **All queries filter by `user_id`** for data isolation. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
   - `GET /` - List all content (excludes audio_data, html_content, comments, transcript for performance)
   - `GET /:id` - Get single item (includes comments and transcript for display)
   - `POST /` - Create content, auto-extracts article HTML if URL provided
@@ -85,9 +121,10 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
     - `regenerate_content: true` re-extracts article content through GPT-4o-mini
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
+  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens.
   - `DELETE /:id` - Delete content and clean up audio files
 
-- **`routes/podcasts.ts`**: Podcast subscription management
+- **`routes/podcasts.ts`**: Podcast subscription management (requires JWT auth, all queries filter by `user_id`)
   - `GET /search?q=` - Search iTunes podcast directory
   - `POST /subscribe` - Subscribe to podcast feed URL
   - `POST /:id/refresh` - Fetch new episodes from feed
@@ -100,18 +137,30 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
   - `POST /content/:id` - Trigger transcription for podcast episode
 
 #### Services
+
+- **`services/auth.ts`**: User authentication and session management
+  - `hashPassword()`, `verifyPassword()`: bcrypt password hashing
+  - `generateAccessToken()`, `generateRefreshToken()`: JWT token generation
+  - `verifyAccessToken()`, `verifyRefreshToken()`: JWT verification
+  - `bootstrapFirstUser()`: Assigns orphaned content to first user on startup
+
+- **`services/ai-providers.ts`**: Per-user API key management
+  - `getOpenAIClientForUser(userId)`: Returns OpenAI client with user's API key or null
+  - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
+  - No global API keys - each user must configure their own
+
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
 - **`services/article-fetcher.ts`**: Fetches article HTML, extracts metadata (title, author, date). Has specific selectors for EA Forum (karma, votes, comments section). Returns raw HTML for GPT extraction
 
-- **`services/openai-tts.ts`**: Main TTS service
+- **`services/openai-tts.ts`**: Main TTS service (requires per-user OpenAI API key)
   - `extractArticleContent()`: Uses GPT-4o-mini to extract readable text from HTML, also extracts structured comments with metadata
   - `generateArticleAudio()`: Generates TTS audio using gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
-  - `generateAudioForContent()`: Orchestrates the full pipeline (extract content → generate TTS → save to DB)
+  - `generateAudioForContent()`: Orchestrates the full pipeline (extract content → generate TTS → save to DB with `user_id`)
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
-- **`services/transcription.ts`**: Podcast transcription using Whisper
+- **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
   - `transcribeAudio()`: Basic transcription
   - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
@@ -163,10 +212,37 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 ## Database Schema
 
-Field names are aligned with Wallabag API for future bidirectional sync.
+Field names are aligned with Wallabag API for future bidirectional sync. All content tables have `user_id` foreign keys for multi-user data isolation.
+
+### users
+- `id`: Primary key (auto-increment)
+- `username`: Unique username for login
+- `email`: User email (optional)
+- `password_hash`: bcrypt hashed password
+- `display_name`: Display name
+- `is_active`: Account status
+- `created_at`, `last_login_at`
+
+### user_sessions (JWT refresh tokens)
+- `id`: Primary key
+- `user_id`: FK to users table
+- `refresh_token_hash`: bcrypt hashed refresh token
+- `expires_at`: Token expiration (7 days)
+- `revoked_at`: Manual revocation timestamp
+- `created_at`
+
+### user_settings (per-user configuration)
+- `id`: Primary key
+- `user_id`: FK to users table
+- `setting_key`: Setting name (e.g., 'openai_api_key', 'openai_tts_voice')
+- `setting_value`: Setting value (encrypted for secrets)
+- `is_secret`: Boolean flag for masking in API responses
+- `created_at`, `updated_at`
+- **Unique constraint**: (user_id, setting_key)
 
 ### content_items (main table)
 - `id`: Primary key
+- `user_id`: FK to users table (all queries filter by this)
 - `type`: 'article' | 'podcast_episode' | 'pdf' | 'text'
 - `title`, `url`, `content`, `html_content`
 - `author`, `description`, `preview_picture` (Wallabag: preview_picture)
@@ -186,13 +262,18 @@ Field names are aligned with Wallabag API for future bidirectional sync.
 - `generation_progress`, `generation_error`, `current_operation`
 
 ### podcasts
-- `id`, `title`, `author`, `description`
+- `id`: Primary key
+- `user_id`: FK to users table (subscriptions are per-user)
+- `title`, `author`, `description`
 - `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
 - `is_subscribed`, `last_fetched_at`
 
 ### queue_items (not fully implemented in UI)
-- `id`, `content_item_id`, `position`, `added_at`
+- `id`: Primary key
+- `user_id`: FK to users table (queues are per-user)
+- `content_item_id`: FK to content_items table
+- `position`, `added_at`
 
 ## Deployment (Railway)
 
@@ -209,9 +290,8 @@ The app deploys as 3 separate Railway services from the same repo:
 PORT=3001
 DATABASE_URL=(auto-provided by Railway)
 FRONTEND_URL=https://your-frontend.up.railway.app
-AUTH_USERNAME=your-username
-AUTH_PASSWORD=your-password
-OPENAI_API_KEY=sk-...
+JWT_SECRET=your-secret-key-here  # Optional but recommended for persistent sessions
+BACKEND_URL=https://your-backend.up.railway.app  # For audio URL generation
 ```
 
 **Frontend:**
@@ -221,9 +301,12 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 
 ### Important Notes
 - Backend has a Dockerfile that installs FFmpeg (required for audio processing)
-- HTTP Basic Auth protects all /api/* routes
-- Audio files are stored in /data if Railway volume is mounted, otherwise in ./public/audio
+- JWT authentication protects all `/api/*` routes except `/api/auth/*` and `/api/content/:id/audio`
+- Each user must set their own OpenAI API key in Settings (no global API key)
+- Audio data stored in database (PostgreSQL BYTEA column), not filesystem
+- Audio endpoint is public for HTML5 player compatibility, supports byte-range requests for seeking
 - CORS is configured for single frontend URL only
+- If JWT_SECRET not set, sessions won't persist across server restarts (uses random secret)
 
 ## Content Processing Flows
 
