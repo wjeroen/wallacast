@@ -319,8 +319,8 @@ router.patch('/:id', async (req, res) => {
               );
 
               // Re-extract content from HTML using LLM
-              // Pass content ID so it can look up the user's OpenAI API key
-              const extractedResult = await extractArticleContent(html_content, id);
+              // Pass content ID as a NUMBER so it can look up the user's OpenAI API key
+              const extractedResult = await extractArticleContent(html_content, parseInt(id, 10));
 
               // Update with new content
               await query(

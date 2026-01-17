@@ -32,8 +32,11 @@ export async function extractArticleContent(htmlContent: string, commentsHtmlOrC
     // If userId not provided, try to get it from contentId
     let effectiveUserId = userId;
     if (!effectiveUserId && actualContentId) {
+      console.log('[Extract Content] Looking up user_id for content item:', actualContentId);
       const contentResult = await query('SELECT user_id FROM content_items WHERE id = $1', [actualContentId]);
+      console.log('[Extract Content] Query result:', contentResult.rows);
       effectiveUserId = contentResult.rows[0]?.user_id;
+      console.log('[Extract Content] Effective user ID:', effectiveUserId);
     }
 
     if (!effectiveUserId) {
