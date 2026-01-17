@@ -174,4 +174,7 @@ export const wallabagAPI = {
 
   push: () =>
     api.post<{ pushed: number; errors: string[] }>('/wallabag/push'),
+
+  cleanup: (hoursAgo?: number) =>
+    api.post<{ deleted: number; message: string }>('/wallabag/cleanup', { hoursAgo }),
 };
