@@ -256,14 +256,30 @@ export async function bootstrapFirstUser(): Promise<void> {
   const userCount = parseInt(result.rows[0].count, 10);
 
   if (userCount > 0) {
-    console.log(`✓ ${userCount} user(s) already exist, skipping bootstrap`);
+    // Check if existing users have passwords set
+    const usersWithoutPasswords = await query(
+      'SELECT id, username FROM users WHERE password_hash IS NULL'
+    );
 
-    // Still assign orphaned content to the first user
-    await assignOrphanedContent();
-    return;
+    if (usersWithoutPasswords.rows.length > 0) {
+      console.log(`⚠ Found ${usersWithoutPasswords.rows.length} user(s) without passwords (legacy accounts)`);
+      console.log(`Removing legacy users: ${usersWithoutPasswords.rows.map((u: any) => u.username).join(', ')}`);
+
+      // Delete users without passwords
+      await query('DELETE FROM users WHERE password_hash IS NULL');
+      console.log(`✓ Removed ${usersWithoutPasswords.rows.length} legacy user(s)`);
+
+      // Now proceed to create user from env vars (fall through to creation logic below)
+    } else {
+      console.log(`✓ ${userCount} user(s) already exist with passwords, skipping bootstrap`);
+
+      // Still assign orphaned content to the first user
+      await assignOrphanedContent();
+      return;
+    }
   }
 
-  // No users exist - create from env vars
+  // No users exist (or we just deleted legacy users) - create from env vars
   const username = process.env.AUTH_USERNAME;
   const password = process.env.AUTH_PASSWORD;
 
