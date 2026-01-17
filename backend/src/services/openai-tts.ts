@@ -769,10 +769,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       : 'http://localhost:3001';
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    // Update content item with audio data, URL, duration, and chunk metadata
+    // Update content item with audio data, URL, duration, file size, and chunk metadata
+    const fileSize = audioBuffer.length;
     await query(
-      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, tts_chunks = $4 WHERE id = $5',
-      [audioBuffer, audioUrl, audioDuration, JSON.stringify(chunkMetadata), contentId]
+      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5 WHERE id = $6 AND user_id = $7',
+      [audioBuffer, audioUrl, audioDuration, fileSize, JSON.stringify(chunkMetadata), contentId, content.user_id]
     );
 
     console.log(`✓ Audio stored in database for content ${contentId}`);
