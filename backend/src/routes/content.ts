@@ -65,6 +65,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Serve audio from database (PUBLIC - no auth required for HTML5 audio player compatibility)
+// NOTE: This route is also registered in index.ts and will be handled there first
 router.get('/:id/audio', async (req, res) => {
   try {
     // Note: No user_id filter - audio URLs are public but content IDs are private
@@ -79,14 +80,34 @@ router.get('/:id/audio', async (req, res) => {
     }
 
     const audioData = result.rows[0].audio_data;
+    const fileSize = audioData.length;
 
-    // Set appropriate headers for audio streaming
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', audioData.length);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    // Handle range requests for seeking/streaming
+    const range = req.headers.range;
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
 
-    res.send(audioData);
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=31536000',
+      });
+
+      res.end(audioData.slice(start, end + 1));
+    } else {
+      // No range request - send full file
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
+
+      res.send(audioData);
+    }
   } catch (error) {
     console.error('Error serving audio:', error);
     res.status(500).json({ error: 'Failed to serve audio' });
