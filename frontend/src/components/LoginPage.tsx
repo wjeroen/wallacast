@@ -122,11 +122,6 @@ export function LoginPage() {
               : "Don't have an account? Create one"}
           </button>
         </div>
-
-        <div className="login-hint">
-          <p>Default accounts: <strong>jeroen</strong> or <strong>testuser</strong></p>
-          <p>Password: <strong>password123</strong></p>
-        </div>
       </div>
     </div>
   );
