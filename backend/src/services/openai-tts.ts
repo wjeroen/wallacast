@@ -568,15 +568,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     const content = contentResult.rows[0];
 
-    console.log('=== Content metadata debug ===');
-    console.log('Title:', content.title);
-    console.log('Author:', content.author);
-    console.log('Published:', content.published_at);
-    console.log('Karma:', content.karma);
-    console.log('Agree votes:', content.agree_votes);
-    console.log('Disagree votes:', content.disagree_votes);
-    console.log('==============================');
-
     let textToConvert = '';
 
     if (content.type === 'article') {
@@ -618,10 +609,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
           displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
         }
       }
-
-      console.log('=== Display Intro ===');
-      console.log(displayIntro);
-      console.log('=====================');
 
       // Update the content field with intro + extracted content and store structured comments
       const updates: string[] = [];
@@ -672,17 +659,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       const introParts: string[] = [];
       if (content.author) {
         introParts.push(`written by ${content.author}`);
-        console.log('✓ Including author in TTS:', content.author);
-      } else {
-        console.log('⚠ No author found in content object');
       }
       if (content.published_at) {
         const date = new Date(content.published_at);
         const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         introParts.push(`posted on ${formattedDate}`);
-        console.log('✓ Including date in TTS:', formattedDate);
-      } else {
-        console.log('⚠ No published_at found in content object');
       }
       if (introParts.length > 0) {
         intro += `, ${introParts.join(', ')}`;
@@ -695,16 +676,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         // Add agree/disagree votes if available
         if (content.agree_votes !== undefined && content.agree_votes !== null) {
           intro += `, ${content.agree_votes} agree votes`;
-          console.log('✓ Including agree votes in TTS:', content.agree_votes);
-        } else {
-          console.log('⚠ No agree_votes found');
         }
 
         if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
           intro += `, and ${content.disagree_votes} disagree votes`;
-          console.log('✓ Including disagree votes in TTS:', content.disagree_votes);
-        } else {
-          console.log('⚠ No disagree_votes found');
         }
 
         intro += '.';
@@ -714,10 +689,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
       intro += '\n\n';
     }
-
-    console.log('=== Final TTS Intro ===');
-    console.log(intro);
-    console.log('=======================');
 
     // Prepend intro to content
     const fullText = intro + textToConvert;
@@ -764,9 +735,9 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     }
 
     // Construct audio URL pointing to database endpoint
-    const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN
-      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-      : 'http://localhost:3001';
+    const backendUrl = process.env.BACKEND_URL
+      || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
+      || `http://localhost:3001`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
     // Update content item with audio data, URL, duration, file size, and chunk metadata
