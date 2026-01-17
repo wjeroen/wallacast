@@ -149,7 +149,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
 
         // Check if we already have this item
         const existing = await query(
-          'SELECT id, updated_at FROM content_items WHERE wallabag_id = $1 AND user_id = $2',
+          'SELECT id, updated_at, wallabag_updated_at FROM content_items WHERE wallabag_id = $1 AND user_id = $2',
           [entry.id, userId]
         );
 
@@ -157,58 +157,93 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
         const tagsString = entry.tags.map(t => t.label).join(',');
 
         if (existing.rows.length > 0) {
-          // UPDATE existing item
-          console.log('[Wallabag Sync] Updating existing item:', existing.rows[0].id);
+          // Check for conflicts: Has local item been modified since last Wallabag sync?
+          const localUpdated = new Date(existing.rows[0].updated_at);
+          const lastWallabagSync = existing.rows[0].wallabag_updated_at
+            ? new Date(existing.rows[0].wallabag_updated_at)
+            : new Date(0); // If never synced, assume very old
+          const wallabagUpdated = new Date(entry.updated_at);
 
-          if (type === 'podcast_episode') {
+          const localIsNewer = localUpdated > lastWallabagSync;
+          const wallabagIsNewer = wallabagUpdated > lastWallabagSync;
+
+          if (localIsNewer && wallabagIsNewer) {
+            // CONFLICT: Both modified since last sync
+            // Wallacast wins - skip content update, only update metadata
+            console.log('[Wallabag Sync] Conflict detected for item', existing.rows[0].id, '- local changes take precedence');
+
             await query(
               `UPDATE content_items SET
-                title = $1,
-                transcript = $2,
-                is_starred = $3,
-                is_archived = $4,
-                tags = $5,
-                preview_picture = $6,
-                wallabag_updated_at = $7,
-                updated_at = NOW()
-              WHERE id = $8`,
+                is_starred = $1,
+                is_archived = $2,
+                tags = $3,
+                wallabag_updated_at = $4
+              WHERE id = $5`,
               [
-                entry.title,
-                entry.content,  // Wallabag content → transcript for podcasts
                 entry.is_starred === 1,
                 entry.is_archived === 1,
                 tagsString,
-                entry.preview_picture,
                 entry.updated_at,
                 existing.rows[0].id,
               ]
             );
+          } else if (wallabagIsNewer) {
+            // Wallabag is newer, safe to update content
+            console.log('[Wallabag Sync] Updating existing item:', existing.rows[0].id);
+
+            if (type === 'podcast_episode') {
+              await query(
+                `UPDATE content_items SET
+                  title = $1,
+                  transcript = $2,
+                  is_starred = $3,
+                  is_archived = $4,
+                  tags = $5,
+                  preview_picture = $6,
+                  wallabag_updated_at = $7,
+                  updated_at = NOW()
+                WHERE id = $8`,
+                [
+                  entry.title,
+                  entry.content,  // Wallabag content → transcript for podcasts
+                  entry.is_starred === 1,
+                  entry.is_archived === 1,
+                  tagsString,
+                  entry.preview_picture,
+                  entry.updated_at,
+                  existing.rows[0].id,
+                ]
+              );
+            } else {
+              // Articles and texts
+              await query(
+                `UPDATE content_items SET
+                  title = $1,
+                  content = $2,
+                  html_content = $3,
+                  is_starred = $4,
+                  is_archived = $5,
+                  tags = $6,
+                  preview_picture = $7,
+                  wallabag_updated_at = $8,
+                  updated_at = NOW()
+                WHERE id = $9`,
+                [
+                  entry.title,
+                  entry.content,
+                  entry.content,  // Store in both fields
+                  entry.is_starred === 1,
+                  entry.is_archived === 1,
+                  tagsString,
+                  entry.preview_picture,
+                  entry.updated_at,
+                  existing.rows[0].id,
+                ]
+              );
+            }
           } else {
-            // Articles and texts
-            await query(
-              `UPDATE content_items SET
-                title = $1,
-                content = $2,
-                html_content = $3,
-                is_starred = $4,
-                is_archived = $5,
-                tags = $6,
-                preview_picture = $7,
-                wallabag_updated_at = $8,
-                updated_at = NOW()
-              WHERE id = $9`,
-              [
-                entry.title,
-                entry.content,
-                entry.content,  // Store in both fields
-                entry.is_starred === 1,
-                entry.is_archived === 1,
-                tagsString,
-                entry.preview_picture,
-                entry.updated_at,
-                existing.rows[0].id,
-              ]
-            );
+            // Local is current, no update needed
+            console.log('[Wallabag Sync] Local item', existing.rows[0].id, 'is up to date, skipping');
           }
         } else {
           // INSERT new item
