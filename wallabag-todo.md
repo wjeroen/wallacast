@@ -1072,23 +1072,24 @@ export async function pushToWallabag(): Promise<{
 
 **Done:** Added test connection button, connection status display, error messages, and Wallabag status info (last sync, pending changes).
 
-#### [ ] 6.3 Add sync status indicator in app header
+#### [x] 6.3 Add sync status indicator in app header
 
 Add a sync status indicator next to settings button in the app header (App.tsx):
 - Only shown when `wallabag_sync_enabled` is true
-- Shows last sync time (e.g., "Synced 2m ago")
-- Shows pending changes count if > 0 (e.g., "3 pending")
-- Includes a "Sync Now" button
+- Shows pending changes count if > 0 (e.g., "Sync (3)")
+- Clicking triggers sync (Pull from Wallabag)
+- Spinner animation while syncing
+- Tooltip shows last sync time
 - Status updates after manual sync
-- Clicking shows more details or triggers sync
+- Automatically refreshes library after sync
 
-**Implementation notes:**
-- Add state in App.tsx for wallabag status
-- Poll `/api/wallabag/status` periodically (every 5 min) when enabled
-- Show compact status: last sync relative time + pending count
-- Style to match existing header buttons
-
-Add state:
+**Done:** Implemented elegant sync button in header with:
+- RefreshCw icon that spins during sync
+- Shows "Sync", "Sync (N)" with pending count, or "Syncing..."
+- Only visible when Wallabag sync is enabled
+- Automatically refreshes content store after sync
+- Styled to match header aesthetic
+- Hides text on mobile (icon only)
 
 ```typescript
 const [syncing, setSyncing] = useState(false);
