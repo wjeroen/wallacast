@@ -25,8 +25,8 @@ function App() {
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
 
-  // Get addItem and refreshItems from store
-  const { addItem, refreshItems } = useContentStore();
+  // Get addItem and fetchContent from store
+  const { addItem, fetchContent } = useContentStore();
 
   // Wallabag sync state
   const [wallabagEnabled, setWallabagEnabled] = useState(false);
@@ -65,7 +65,7 @@ function App() {
       console.log('Sync result:', response.data);
 
       // Refresh the library to show new items
-      await refreshItems();
+      await fetchContent();
 
       // Reload status
       await loadWallabagStatus();
