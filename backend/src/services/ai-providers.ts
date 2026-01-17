@@ -80,8 +80,8 @@ export async function getAIProvider(userId: number): Promise<AIProvider | null> 
 
   switch (providerName) {
     case 'openai': {
-      // Try user's API key first, fall back to env
-      const apiKey = await getUserSetting(userId, 'openai_api_key') || process.env.OPENAI_API_KEY;
+      // Get user's API key from their settings
+      const apiKey = await getUserSetting(userId, 'openai_api_key');
       if (!apiKey) {
         return null;
       }
@@ -98,7 +98,7 @@ export async function getAIProvider(userId: number): Promise<AIProvider | null> 
 
 // Get OpenAI client for a user (for backward compatibility with existing code)
 export async function getOpenAIClientForUser(userId: number): Promise<OpenAI | null> {
-  const apiKey = await getUserSetting(userId, 'openai_api_key') || process.env.OPENAI_API_KEY;
+  const apiKey = await getUserSetting(userId, 'openai_api_key');
   if (!apiKey) {
     return null;
   }
@@ -119,11 +119,11 @@ export async function hasUserConfiguredAPIKey(userId: number): Promise<boolean> 
   switch (provider) {
     case 'openai': {
       const userKey = await getUserSetting(userId, 'openai_api_key');
-      return !!(userKey || process.env.OPENAI_API_KEY);
+      return !!userKey;
     }
     case 'anthropic': {
       const userKey = await getUserSetting(userId, 'anthropic_api_key');
-      return !!(userKey || process.env.ANTHROPIC_API_KEY);
+      return !!userKey;
     }
     default:
       return false;

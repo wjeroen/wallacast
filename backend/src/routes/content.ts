@@ -213,7 +213,7 @@ router.post('/', async (req, res) => {
       );
 
       // Start transcription in background (don't await)
-      transcribeWithTimestamps(audioUrlValue)
+      transcribeWithTimestamps(audioUrlValue, req.user!.userId)
         .then(async (result) => {
           await query(
             'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
@@ -346,7 +346,7 @@ router.patch('/:id', async (req, res) => {
               );
 
               // Regenerate transcript
-              const result = await transcribeWithTimestamps(audio_url);
+              const result = await transcribeWithTimestamps(audio_url, req.user!.userId);
 
               await query(
                 'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
