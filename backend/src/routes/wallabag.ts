@@ -111,4 +111,58 @@ router.post('/push', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/wallabag/cleanup
+ * Emergency cleanup: Delete recently synced items from Wallabag
+ *
+ * Deletes items that:
+ * - Have a wallabag_id (were synced from Wallabag)
+ * - Were created in the last 2 hours
+ * - Are NOT starred
+ * - Do NOT have audio
+ */
+router.post('/cleanup', async (req, res) => {
+  console.log('[Wallabag] Cleanup endpoint called by user:', req.user!.userId);
+  try {
+    const hoursAgo = req.body.hoursAgo || 2; // Default 2 hours
+
+    // First, count how many will be deleted
+    const countResult = await query(
+      `SELECT COUNT(*) as count FROM content_items
+       WHERE user_id = $1
+       AND wallabag_id IS NOT NULL
+       AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
+       AND is_starred = FALSE
+       AND audio_data IS NULL`,
+      [req.user!.userId]
+    );
+    const count = parseInt(countResult.rows[0].count, 10);
+
+    if (count === 0) {
+      return res.json({ deleted: 0, message: 'No items to delete' });
+    }
+
+    // Delete them
+    const deleteResult = await query(
+      `DELETE FROM content_items
+       WHERE user_id = $1
+       AND wallabag_id IS NOT NULL
+       AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
+       AND is_starred = FALSE
+       AND audio_data IS NULL
+       RETURNING id`,
+      [req.user!.userId]
+    );
+
+    console.log('[Wallabag] Cleanup deleted', deleteResult.rows.length, 'items');
+    res.json({
+      deleted: deleteResult.rows.length,
+      message: `Deleted ${deleteResult.rows.length} recently synced items`
+    });
+  } catch (error) {
+    console.error('[Wallabag] Cleanup error:', error);
+    res.status(500).json({ error: 'Cleanup failed' });
+  }
+});
+
 export default router;
