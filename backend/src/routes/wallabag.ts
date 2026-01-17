@@ -110,16 +110,15 @@ router.post('/pull', async (req, res) => {
 /**
  * POST /api/wallabag/push
  * Push changes from Wallacast to Wallabag
- *
- * TODO: Implement once wallabag-sync.ts is created
  */
 router.post('/push', async (req, res) => {
+  console.log('[Wallabag] Push endpoint called by user:', req.user!.userId);
   try {
-    // const result = await syncToWallabag(req.user!.userId);
-    // res.json({ pushed: result.count, errors: result.errors });
-    res.status(501).json({ error: 'Push not yet implemented' });
+    const result = await syncToWallabag(req.user!.userId);
+    console.log('[Wallabag] Push result:', result);
+    res.json({ pushed: result.count, errors: result.errors });
   } catch (error) {
-    console.error('Wallabag push error:', error);
+    console.error('[Wallabag] Push error:', error);
     res.status(500).json({ error: 'Push failed' });
   }
 });

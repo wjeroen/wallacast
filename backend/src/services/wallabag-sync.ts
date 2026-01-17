@@ -290,11 +290,163 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
 
 /**
  * Push changes from Wallacast to Wallabag
- * TODO: Implement in next phase
  */
 export async function syncToWallabag(userId: number): Promise<SyncResult> {
-  console.log('[Wallabag Sync] Push not yet implemented');
-  return { count: 0, errors: ['Push sync not yet implemented'] };
+  console.log('[Wallabag Sync] Starting push for user:', userId);
+
+  const wallabag = new WallabagService(userId);
+  const errors: string[] = [];
+  let count = 0;
+
+  // Check if enabled
+  if (!(await wallabag.isEnabled())) {
+    console.log('[Wallabag Sync] Push not enabled');
+    return { count: 0, errors: ['Wallabag sync not enabled'] };
+  }
+
+  try {
+    // Find items needing push:
+    // 1. wallabag_id IS NULL (never synced)
+    // 2. updated_at > wallabag_updated_at (local changes since last sync)
+    const itemsResult = await query(
+      `SELECT * FROM content_items
+       WHERE user_id = $1
+       AND (
+         wallabag_id IS NULL
+         OR updated_at > COALESCE(wallabag_updated_at, '1970-01-01'::timestamp)
+       )`,
+      [userId]
+    );
+
+    console.log('[Wallabag Sync] Found', itemsResult.rows.length, 'items to push');
+
+    for (const item of itemsResult.rows) {
+      try {
+        // Determine the type tag to use
+        const typeTag = getTypeTag(item.type);
+
+        // Build final tags string, with type tag present
+        const existingTags = item.tags
+          ? item.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+          : [];
+
+        // Remove any existing type tags to avoid duplicates
+        const typeTags = ['article', 'text', 'podcast'];
+        const otherTags = existingTags.filter(
+          (t: string) => !typeTags.includes(t.toLowerCase())
+        );
+
+        // Type tag first, then other tags
+        const finalTags = [typeTag, ...otherTags].join(',');
+
+        // Determine URL
+        let url = item.url;
+        if (!url) {
+          // Generate synthetic URL for items without one
+          const uuid = crypto.randomUUID();
+          if (item.type === 'text') {
+            url = `wallacast://text/${uuid}`;
+          } else if (item.type === 'podcast_episode') {
+            url = `wallacast://podcast/${uuid}`;
+          } else {
+            url = `wallacast://content/${uuid}`;
+          }
+        }
+
+        // Determine content to send
+        // Podcasts: send transcript
+        // Articles/texts: send html_content or content
+        let contentToSync: string;
+        if (item.type === 'podcast_episode') {
+          contentToSync = item.transcript || item.content || '';
+        } else {
+          contentToSync = item.html_content || item.content || '';
+        }
+
+        if (item.wallabag_id) {
+          // UPDATE existing Wallabag entry
+          console.log('[Wallabag Sync] Updating Wallabag entry:', item.wallabag_id);
+          const result = await wallabag.updateEntry(item.wallabag_id, {
+            title: item.title,
+            content: contentToSync,
+            tags: finalTags,
+            archive: item.is_archived,
+            starred: item.is_starred,
+          });
+
+          if (result) {
+            // Update local wallabag_updated_at to match
+            await query(
+              'UPDATE content_items SET wallabag_updated_at = $1 WHERE id = $2',
+              [result.updated_at, item.id]
+            );
+            count++;
+          } else {
+            // Entry might have been deleted from Wallabag
+            // Check if it exists
+            const exists = await wallabag.fetchEntry(item.wallabag_id);
+            if (!exists) {
+              // Re-create it
+              console.log('[Wallabag Sync] Entry deleted in Wallabag, re-creating:', item.wallabag_id);
+              const newEntry = await wallabag.createEntry({
+                url,
+                title: item.title,
+                content: contentToSync,
+                tags: finalTags,
+                archive: item.is_archived,
+                starred: item.is_starred,
+              });
+
+              if (newEntry) {
+                await query(
+                  'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = $3 WHERE id = $4',
+                  [newEntry.id, newEntry.updated_at, url, item.id]
+                );
+                count++;
+              } else {
+                errors.push(`Failed to recreate item ${item.id} in Wallabag`);
+              }
+            } else {
+              errors.push(`Failed to update item ${item.id} (Wallabag ID: ${item.wallabag_id})`);
+            }
+          }
+        } else {
+          // CREATE new Wallabag entry
+          console.log('[Wallabag Sync] Creating new Wallabag entry for item:', item.id);
+          const result = await wallabag.createEntry({
+            url,
+            title: item.title,
+            content: contentToSync,
+            tags: finalTags,
+            archive: item.is_archived,
+            starred: item.is_starred,
+            published_at: item.published_at,
+          });
+
+          if (result) {
+            // Store Wallabag ID and update URL if we generated a synthetic one
+            await query(
+              'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = COALESCE(url, $3) WHERE id = $4',
+              [result.id, result.updated_at, url, item.id]
+            );
+            count++;
+          } else {
+            errors.push(`Failed to create item ${item.id} in Wallabag`);
+          }
+        }
+      } catch (error) {
+        errors.push(`Item ${item.id} (${item.title}): ${error}`);
+        console.error('[Wallabag Sync] Error pushing item:', item.id, error);
+      }
+    }
+
+    console.log('[Wallabag Sync] Push complete:', count, 'items synced,', errors.length, 'errors');
+    return { count, errors };
+  } catch (error) {
+    console.error('[Wallabag Sync] Push failed:', error);
+    errors.push(`Push sync failed: ${error}`);
+    return { count, errors };
+  }
 }
 
 /**
