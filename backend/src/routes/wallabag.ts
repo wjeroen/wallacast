@@ -85,6 +85,19 @@ router.post('/sync', async (req, res) => {
 router.post('/pull', async (req, res) => {
   console.log('[Wallabag] Pull endpoint called by user:', req.user!.userId);
   try {
+    // Check if this is a full refresh (ignore timestamp)
+    const fullRefresh = req.query.full === 'true';
+
+    if (fullRefresh) {
+      console.log('[Wallabag] Full refresh requested - ignoring last sync timestamp');
+      // Delete the last sync timestamp so we fetch everything
+      await query(
+        `DELETE FROM user_settings
+         WHERE user_id = $1 AND setting_key = 'wallabag_last_sync'`,
+        [req.user!.userId]
+      );
+    }
+
     const result = await syncFromWallabag(req.user!.userId);
     console.log('[Wallabag] Pull result:', result);
     res.json({ pulled: result.count, errors: result.errors });

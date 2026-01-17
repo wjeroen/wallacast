@@ -187,6 +187,27 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
+  const handleFullRefresh = async () => {
+    if (!confirm('Fetch ALL items from Wallabag? This ignores the last sync timestamp and can take a while if you have many articles.')) {
+      return;
+    }
+
+    setSyncing(true);
+    setConnectionError(null);
+
+    try {
+      const response = await wallabagAPI.fullRefresh();
+      alert(`Full refresh complete! Pulled ${response.data.pulled} items`);
+      // Optionally reload status
+      await loadWallabagStatus();
+    } catch (err) {
+      setConnectionError('Full refresh failed. Check console for details.');
+      console.error('Full refresh error:', err);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="settings-page">
@@ -463,6 +484,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   className="test-connection-button"
                 >
                   {testingConnection ? 'Testing...' : 'Test Connection'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleFullRefresh}
+                  disabled={syncing}
+                  className="test-connection-button"
+                  style={{ background: '#0891b2' }}
+                  title="Fetch ALL items from Wallabag (ignores last sync timestamp)"
+                >
+                  🔄 Full Refresh
                 </button>
 
                 <button

@@ -172,6 +172,9 @@ export const wallabagAPI = {
   pull: () =>
     api.post<{ pulled: number; errors: string[] }>('/wallabag/pull'),
 
+  fullRefresh: () =>
+    api.post<{ pulled: number; errors: string[] }>('/wallabag/pull?full=true'),
+
   push: () =>
     api.post<{ pushed: number; errors: string[] }>('/wallabag/push'),
 

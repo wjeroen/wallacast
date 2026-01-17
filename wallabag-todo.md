@@ -944,7 +944,9 @@ app.use('/api/wallabag', wallabagRoutes);
 
 ### Phase 5: Integrate with Existing Code
 
-#### [ ] 5.1 Modify content deletion to also delete from Wallabag
+#### [x] 5.1 Modify content deletion to also delete from Wallabag
+
+**Done:** Implemented two-way delete. When deleting in Wallacast, the item is also deleted from Wallabag (fire-and-forget pattern).
 
 In `backend/src/routes/content.ts`, update the DELETE handler:
 
@@ -1073,6 +1075,23 @@ export async function pushToWallabag(): Promise<{
 **Done:** Added test connection button, connection status display, error messages, and Wallabag status info (last sync, pending changes).
 
 #### [x] 6.3 Add sync status indicator in app header
+
+Add a sync status indicator next to settings button in the app header (App.tsx):
+
+#### [x] 6.4 Add Full Refresh button for edge cases
+
+**Done:** Added "Full Refresh" button in Settings that fetches ALL items from Wallabag, ignoring the last sync timestamp. This solves the edge case where users remove `nosync` tags from old articles that wouldn't normally be picked up by incremental sync.
+
+Implementation:
+- Backend: Modified `/api/wallabag/pull` to accept `?full=true` query parameter
+- When full=true, deletes the `wallabag_last_sync` setting before syncing
+- Frontend: Added blue "🔄 Full Refresh" button in Settings next to Cleanup
+- Shows confirmation dialog warning that it may take a while
+
+Use cases:
+- After removing `nosync` tags from old Wallabag articles
+- To recover from sync issues or mismatches
+- When wanting to re-sync everything from scratch
 
 Add a sync status indicator next to settings button in the app header (App.tsx):
 - Only shown when `wallabag_sync_enabled` is true

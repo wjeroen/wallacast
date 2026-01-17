@@ -498,15 +498,32 @@ router.patch('/:id', async (req, res) => {
 // Delete content item
 router.delete('/:id', async (req, res) => {
   try {
+    // Get item first to check for wallabag_id
+    const itemResult = await query(
+      'SELECT wallabag_id FROM content_items WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user!.userId]
+    );
+
+    if (itemResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const wallabagId = itemResult.rows[0].wallabag_id;
+
+    // Delete from Wallabag if synced (fire and forget - don't fail local delete if this fails)
+    if (wallabagId) {
+      const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
+      deleteFromWallabag(req.user!.userId, wallabagId).catch(err => {
+        console.error(`[Wallabag] Failed to delete from Wallabag (ID: ${wallabagId}):`, err);
+      });
+      console.log(`[Wallabag] Queued deletion of Wallabag entry ${wallabagId}`);
+    }
+
     // Delete the database record (audio_data is automatically deleted)
     const result = await query(
       'DELETE FROM content_items WHERE id = $1 AND user_id = $2 RETURNING id',
       [req.params.id, req.user!.userId]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Content not found' });
-    }
 
     console.log(`Deleted content item ${req.params.id} (including audio data if present)`);
     res.json({ message: 'Content deleted successfully' });
