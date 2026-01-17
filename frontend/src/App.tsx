@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -8,6 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
+import { wallabagAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -24,13 +25,60 @@ function App() {
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
 
-  // Get addItem from store for AddTab to use
-  const { addItem } = useContentStore();
+  // Get addItem and refreshItems from store
+  const { addItem, refreshItems } = useContentStore();
+
+  // Wallabag sync state
+  const [wallabagEnabled, setWallabagEnabled] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [pendingChanges, setPendingChanges] = useState(0);
 
   // Check auth on mount
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Load Wallabag status
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadWallabagStatus();
+    }
+  }, [isAuthenticated]);
+
+  const loadWallabagStatus = async () => {
+    try {
+      const response = await wallabagAPI.getStatus();
+      setWallabagEnabled(response.data.enabled);
+      setLastSync(response.data.lastSync);
+      setPendingChanges(response.data.pendingChanges);
+    } catch (err) {
+      // Silently fail - Wallabag is optional
+      console.error('Failed to load Wallabag status:', err);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const response = await wallabagAPI.pull();
+      console.log('Sync result:', response.data);
+
+      // Refresh the library to show new items
+      await refreshItems();
+
+      // Reload status
+      await loadWallabagStatus();
+
+      if (response.data.errors.length > 0) {
+        console.warn('Sync completed with errors:', response.data.errors);
+      }
+    } catch (err) {
+      console.error('Sync failed:', err);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Close user menu when clicking outside
   useEffect(() => {
@@ -88,6 +136,20 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1>Wallacast</h1>
+
+        {wallabagEnabled && (
+          <button
+            className="sync-button"
+            onClick={handleSync}
+            disabled={syncing}
+            title={lastSync ? `Last sync: ${new Date(lastSync).toLocaleString()}` : 'Never synced'}
+          >
+            <RefreshCw size={18} className={syncing ? 'spinning' : ''} />
+            <span className="sync-text">
+              {syncing ? 'Syncing...' : pendingChanges > 0 ? `Sync (${pendingChanges})` : 'Sync'}
+            </span>
+          </button>
+        )}
 
         <div className="user-menu-container" ref={userMenuRef}>
           <button
