@@ -61,13 +61,14 @@ function App() {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const response = await wallabagAPI.pull();
+      // Full bidirectional sync: pull from Wallabag, then push local changes
+      const response = await wallabagAPI.sync();
       console.log('Sync result:', response.data);
 
       // Refresh the library to show new items
       await fetchContent();
 
-      // Reload status
+      // Reload status (pending changes should now be 0)
       await loadWallabagStatus();
 
       if (response.data.errors.length > 0) {

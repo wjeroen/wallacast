@@ -613,7 +613,22 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
 }
 ```
 
-#### [ ] 3.4 Implement syncToWallabag (Push)
+#### [x] 3.4 Implement syncToWallabag (Push)
+
+**Done:** Implemented complete push sync functionality that:
+- Finds items needing push (never synced OR locally modified since last sync)
+- Adds correct type tags (article/text/podcast)
+- Generates synthetic URLs for texts/podcasts without URLs
+- Sends appropriate content (transcript for podcasts, html_content/content for others)
+- Creates new entries in Wallabag OR updates existing ones
+- Handles edge case where entry was deleted from Wallabag (recreates it)
+- Updates wallabag_updated_at timestamp locally after successful push
+- Comprehensive error handling and logging
+
+Also updated:
+- `/api/wallabag/push` endpoint now functional
+- Header sync button now calls full bidirectional sync (pull then push)
+- "Pending changes" indicator now meaningful - shows items that will be pushed
 
 ```typescript
 export async function syncToWallabag(userId: number): Promise<SyncResult> {
