@@ -138,25 +138,28 @@ router.post('/cleanup', async (req, res) => {
     );
     const count = parseInt(countResult.rows[0].count, 10);
 
-    if (count === 0) {
-      return res.json({ deleted: 0, message: 'No items to delete' });
+    let deletedCount = 0;
+
+    // Delete items if any exist
+    if (count > 0) {
+      const deleteResult = await query(
+        `DELETE FROM content_items
+         WHERE user_id = $1
+         AND wallabag_id IS NOT NULL
+         AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
+         AND is_starred = FALSE
+         AND audio_data IS NULL
+         RETURNING id`,
+        [req.user!.userId]
+      );
+      deletedCount = deleteResult.rows.length;
+      console.log('[Wallabag] Cleanup deleted', deletedCount, 'items');
+    } else {
+      console.log('[Wallabag] No items to delete');
     }
 
-    // Delete them
-    const deleteResult = await query(
-      `DELETE FROM content_items
-       WHERE user_id = $1
-       AND wallabag_id IS NOT NULL
-       AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
-       AND is_starred = FALSE
-       AND audio_data IS NULL
-       RETURNING id`,
-      [req.user!.userId]
-    );
-
-    console.log('[Wallabag] Cleanup deleted', deleteResult.rows.length, 'items');
-
-    // Reset last sync timestamp so next sync fetches all entries
+    // ALWAYS reset last sync timestamp, even if no items were deleted
+    // This allows users to "start fresh" with their Wallabag sync
     await query(
       `DELETE FROM user_settings
        WHERE user_id = $1 AND setting_key = 'wallabag_last_sync'`,
@@ -165,8 +168,10 @@ router.post('/cleanup', async (req, res) => {
     console.log('[Wallabag] Reset last sync timestamp');
 
     res.json({
-      deleted: deleteResult.rows.length,
-      message: `Deleted ${deleteResult.rows.length} recently synced items. Last sync timestamp reset.`
+      deleted: deletedCount,
+      message: deletedCount > 0
+        ? `Deleted ${deletedCount} recently synced items. Last sync timestamp reset.`
+        : 'No items to delete. Last sync timestamp reset - next sync will fetch all entries.'
     });
   } catch (error) {
     console.error('[Wallabag] Cleanup error:', error);
