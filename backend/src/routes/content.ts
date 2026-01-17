@@ -13,9 +13,9 @@ router.get('/', async (req, res) => {
     const { type, archived, starred } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE 1=1';
-    const params: any[] = [];
-    let paramCount = 1;
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE user_id = $1';
+    const params: any[] = [req.user!.userId];
+    let paramCount = 2;
 
     if (type) {
       sql += ` AND type = $${paramCount}`;
@@ -49,8 +49,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1',
-      [req.params.id]
+      'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user!.userId]
     );
 
     if (result.rows.length === 0) {
@@ -68,8 +68,8 @@ router.get('/:id', async (req, res) => {
 router.get('/:id/audio', async (req, res) => {
   try {
     const result = await query(
-      'SELECT audio_data FROM content_items WHERE id = $1',
-      [req.params.id]
+      'SELECT audio_data FROM content_items WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user!.userId]
     );
 
     if (result.rows.length === 0 || !result.rows[0].audio_data) {
@@ -256,8 +256,8 @@ router.patch('/:id', async (req, res) => {
     // Special handling for removing audio
     if (updates.audio_data === null && updates.audio_url === null) {
       const contentResult = await query(
-        'SELECT type FROM content_items WHERE id = $1',
-        [id]
+        'SELECT type FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
@@ -276,8 +276,8 @@ router.patch('/:id', async (req, res) => {
     // Special handling for regenerating content (articles only)
     if (updates.regenerate_content === true) {
       const contentResult = await query(
-        'SELECT type, html_content FROM content_items WHERE id = $1',
-        [id]
+        'SELECT type, html_content FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
@@ -326,8 +326,8 @@ router.patch('/:id', async (req, res) => {
     // Special handling for regenerating transcript (podcasts only)
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
-        'SELECT type, audio_url FROM content_items WHERE id = $1',
-        [id]
+        'SELECT type, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
@@ -375,8 +375,8 @@ router.patch('/:id', async (req, res) => {
     // Special handling for archiving: delete audio data to save space (unless favorited)
     if (updates.is_archived === true) {
       const contentResult = await query(
-        'SELECT audio_data, type, is_starred FROM content_items WHERE id = $1',
-        [id]
+        'SELECT audio_data, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
@@ -401,8 +401,8 @@ router.patch('/:id', async (req, res) => {
     // Special handling for un-archiving: regenerate audio if it's missing
     if (updates.is_archived === false) {
       const contentResult = await query(
-        'SELECT audio_url, type, html_content FROM content_items WHERE id = $1',
-        [id]
+        'SELECT audio_url, type, html_content FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
@@ -455,8 +455,10 @@ router.patch('/:id', async (req, res) => {
 
     setClause.push(`updated_at = CURRENT_TIMESTAMP`);
     values.push(id);
+    paramCount++;
+    values.push(req.user!.userId);
 
-    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount} RETURNING *`;
+    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} RETURNING *`;
     const result = await query(sql, values);
 
     if (result.rows.length === 0) {
@@ -475,8 +477,8 @@ router.delete('/:id', async (req, res) => {
   try {
     // Delete the database record (audio_data is automatically deleted)
     const result = await query(
-      'DELETE FROM content_items WHERE id = $1 RETURNING id',
-      [req.params.id]
+      'DELETE FROM content_items WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.id, req.user!.userId]
     );
 
     if (result.rows.length === 0) {
@@ -498,8 +500,8 @@ router.post('/:id/generate-audio', async (req, res) => {
     const { regenerate } = req.body;
 
     const contentResult = await query(
-      'SELECT * FROM content_items WHERE id = $1',
-      [id]
+      'SELECT * FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
     );
 
     if (contentResult.rows.length === 0) {

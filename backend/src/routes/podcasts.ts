@@ -8,7 +8,8 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const result = await query(
-      'SELECT * FROM podcasts WHERE is_subscribed = true ORDER BY title ASC'
+      'SELECT * FROM podcasts WHERE user_id = $1 AND is_subscribed = true ORDER BY title ASC',
+      [req.user!.userId]
     );
     res.json(result.rows);
   } catch (error) {
@@ -55,8 +56,8 @@ router.post('/subscribe', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'UPDATE podcasts SET is_subscribed = false WHERE id = $1 RETURNING *',
-      [req.params.id]
+      'UPDATE podcasts SET is_subscribed = false WHERE id = $1 AND user_id = $2 RETURNING *',
+      [req.params.id, req.user!.userId]
     );
 
     if (result.rows.length === 0) {
@@ -74,8 +75,8 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/refresh', async (req, res) => {
   try {
     const podcastResult = await query(
-      'SELECT * FROM podcasts WHERE id = $1',
-      [req.params.id]
+      'SELECT * FROM podcasts WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user!.userId]
     );
 
     if (podcastResult.rows.length === 0) {
@@ -101,8 +102,8 @@ router.post('/:id/refresh', async (req, res) => {
 router.get('/:id/preview-episodes', async (req, res) => {
   try {
     const podcastResult = await query(
-      'SELECT feed_url FROM podcasts WHERE id = $1',
-      [req.params.id]
+      'SELECT feed_url FROM podcasts WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user!.userId]
     );
 
     if (podcastResult.rows.length === 0) {
@@ -123,8 +124,8 @@ router.get('/:id/preview-episodes', async (req, res) => {
 router.get('/:id/episodes', async (req, res) => {
   try {
     const result = await query(
-      'SELECT * FROM content_items WHERE podcast_id = $1 ORDER BY published_at DESC',
-      [req.params.id]
+      'SELECT * FROM content_items WHERE podcast_id = $1 AND user_id = $2 ORDER BY published_at DESC',
+      [req.params.id, req.user!.userId]
     );
     res.json(result.rows);
   } catch (error) {

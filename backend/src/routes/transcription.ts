@@ -11,8 +11,8 @@ router.post('/content/:id', async (req, res) => {
     const { regenerate } = req.body;
 
     const contentResult = await query(
-      'SELECT * FROM content_items WHERE id = $1',
-      [id]
+      'SELECT * FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
     );
 
     if (contentResult.rows.length === 0) {
@@ -56,15 +56,15 @@ router.post('/content/:id', async (req, res) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
         await query(
-          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
-          [result.text, JSON.stringify(result.words), 'completed', 100, id]
+          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+          [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
         );
       })
       .catch(async (error) => {
         console.error('Background transcription error:', error);
         await query(
-          'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-          ['failed', error.message || 'Failed to transcribe', 0, id]
+          'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4 AND user_id = $5',
+          ['failed', error.message || 'Failed to transcribe', 0, id, req.user!.userId]
         );
       });
 

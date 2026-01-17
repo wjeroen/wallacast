@@ -10,7 +10,9 @@ router.get('/', async (req, res) => {
       `SELECT q.id, q.position, c.*
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id
-       ORDER BY q.position ASC`
+       WHERE q.user_id = $1
+       ORDER BY q.position ASC`,
+      [req.user!.userId]
     );
     res.json(result.rows);
   } catch (error) {
@@ -25,7 +27,8 @@ router.post('/', async (req, res) => {
     const { content_item_id } = req.body;
 
     const maxPositionResult = await query(
-      'SELECT COALESCE(MAX(position), -1) as max_position FROM queue_items'
+      'SELECT COALESCE(MAX(position), -1) as max_position FROM queue_items WHERE user_id = $1',
+      [req.user!.userId]
     );
     const nextPosition = maxPositionResult.rows[0].max_position + 1;
 
@@ -45,8 +48,8 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await query(
-      'DELETE FROM queue_items WHERE id = $1 RETURNING position',
-      [req.params.id]
+      'DELETE FROM queue_items WHERE id = $1 AND user_id = $2 RETURNING position',
+      [req.params.id, req.user!.userId]
     );
 
     if (result.rows.length === 0) {
@@ -54,8 +57,8 @@ router.delete('/:id', async (req, res) => {
     }
 
     await query(
-      'UPDATE queue_items SET position = position - 1 WHERE position > $1',
-      [result.rows[0].position]
+      'UPDATE queue_items SET position = position - 1 WHERE position > $1 AND user_id = $2',
+      [result.rows[0].position, req.user!.userId]
     );
 
     res.json({ message: 'Removed from queue' });
@@ -72,8 +75,8 @@ router.put('/reorder', async (req, res) => {
 
     for (const item of items) {
       await query(
-        'UPDATE queue_items SET position = $1 WHERE id = $2',
-        [item.position, item.id]
+        'UPDATE queue_items SET position = $1 WHERE id = $2 AND user_id = $3',
+        [item.position, item.id, req.user!.userId]
       );
     }
 
@@ -87,7 +90,7 @@ router.put('/reorder', async (req, res) => {
 // Clear queue
 router.delete('/', async (req, res) => {
   try {
-    await query('DELETE FROM queue_items');
+    await query('DELETE FROM queue_items WHERE user_id = $1', [req.user!.userId]);
     res.json({ message: 'Queue cleared' });
   } catch (error) {
     console.error('Error clearing queue:', error);
