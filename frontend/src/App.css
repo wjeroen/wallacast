@@ -1138,7 +1138,7 @@
   font-size: 1.5rem;
 }
 
-.settings-header button {
+.settings-header .back-button {
   background: none;
   border: none;
   color: #94a3b8;
