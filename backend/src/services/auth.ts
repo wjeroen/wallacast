@@ -248,86 +248,22 @@ export async function changePassword(userId: number, currentPassword: string, ne
   return true;
 }
 
-// Bootstrap: Create first user from AUTH_USERNAME/AUTH_PASSWORD env vars
-// Called on startup to ensure at least one user exists
+// Bootstrap: Assign orphaned content to the first user if any exists
+// This is only needed for migrating from single-user to multi-user setup
 export async function bootstrapFirstUser(): Promise<void> {
-  const username = process.env.AUTH_USERNAME;
-  const password = process.env.AUTH_PASSWORD;
-
-  if (!username || !password) {
-    console.log('⚠ AUTH_USERNAME/AUTH_PASSWORD not set, skipping user bootstrap');
-    return;
-  }
-
-  // Check if the AUTH_USERNAME user already exists
-  const existingUser = await query(
-    'SELECT id, username, password_hash FROM users WHERE username = $1',
-    [username.toLowerCase()]
-  );
-
-  if (existingUser.rows.length > 0) {
-    const userId = existingUser.rows[0].id;
-    const currentHash = existingUser.rows[0].password_hash;
-
-    // Always update password to match current AUTH_PASSWORD
-    const newPasswordHash = await hashPassword(password);
-
-    if (!currentHash) {
-      console.log(`⚠ User "${username}" exists but has no password, setting password...`);
-    } else {
-      console.log(`✓ User "${username}" exists, updating password to match AUTH_PASSWORD...`);
-    }
-
-    await query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
-      [newPasswordHash, userId]
-    );
-    console.log(`✓ Password updated for user "${username}"`);
-
-    await assignOrphanedContent();
-    return;
-  }
-
-  // AUTH_USERNAME doesn't exist, but check if OTHER users exist
+  // Check if there are any users at all
   const userCountResult = await query('SELECT COUNT(*) as count FROM users');
   const userCount = parseInt(userCountResult.rows[0].count, 10);
 
-  if (userCount > 0) {
-    // Other users exist but not the AUTH_USERNAME user
-    // This happens when hardcoded users were created but AUTH_USERNAME changed
-    console.log(`⚠ Found ${userCount} user(s) but AUTH_USERNAME "${username}" not found`);
-    console.log('Removing existing users to bootstrap with AUTH_USERNAME...');
-
-    await query('DELETE FROM users');
-    console.log(`✓ Removed ${userCount} user(s)`);
+  if (userCount === 0) {
+    console.log('ℹ No users exist yet. Users can register via /api/auth/register');
+    return;
   }
 
-  // Create the AUTH_USERNAME user
-  console.log(`Creating first user from AUTH_USERNAME: ${username}`);
+  console.log(`✓ ${userCount} user(s) exist in database`);
 
-  const passwordHash = await hashPassword(password);
-
-  try {
-    const insertResult = await query(
-      `INSERT INTO users (username, password_hash, display_name)
-       VALUES ($1, $2, $3)
-       RETURNING id, username`,
-      [username.toLowerCase(), passwordHash, username]
-    );
-
-    const newUser = insertResult.rows[0];
-    console.log(`✓ Created user "${newUser.username}" with id ${newUser.id}`);
-
-    // Assign all existing content to this user
-    await assignOrphanedContent();
-
-  } catch (error: any) {
-    if (error.code === '23505') {
-      console.log(`User "${username}" already exists`);
-    } else {
-      throw error;
-    }
-  }
+  // Assign any orphaned content to the first user (migration from single-user setup)
+  await assignOrphanedContent();
 }
 
 // Assign content with no user_id to the first user

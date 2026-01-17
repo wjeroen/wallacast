@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
@@ -9,20 +8,10 @@ import ffmpeg from 'fluent-ffmpeg';
 import { query } from '../database/db.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
+import { getOpenAIClientForUser } from './ai-providers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Get OpenAI client from environment variable only (for security)
-async function getOpenAIClient(): Promise<OpenAI | null> {
-  if (process.env.OPENAI_API_KEY) {
-    return new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-  }
-
-  return null;
-}
 
 // Compress audio file to reduce size for OpenAI API limits
 async function compressAudio(inputPath: string, outputPath: string): Promise<void> {
@@ -87,113 +76,12 @@ async function splitAudioIntoChunks(
   return chunkFiles;
 }
 
-export async function transcribeAudio(audioUrl: string): Promise<string> {
-  try {
-    const openai = await getOpenAIClient();
-    if (!openai) {
-      console.warn('OpenAI API key not set, returning dummy transcript');
-      return 'Transcript not available. Please set your OpenAI API key in Settings.';
-    }
-
-    // Download audio file
-    const tempDir = path.join(process.cwd(), 'temp');
-    await fs.mkdir(tempDir, { recursive: true });
-
-    const audioFilename = `audio_${Date.now()}.mp3`;
-    const audioPath = path.join(tempDir, audioFilename);
-
-    console.log('Downloading audio from:', audioUrl);
-    const response = await fetch(audioUrl);
-
-    if (!response.ok) {
-      throw new Error(`Failed to download audio: ${response.statusText}`);
-    }
-
-    if (!response.body) {
-      throw new Error('No response body from audio URL');
-    }
-
-    // Stream download to disk instead of loading into memory
-    await pipeline(response.body, createWriteStream(audioPath));
-
-    const fileStats = await fs.stat(audioPath);
-    const fileSizeMB = fileStats.size / (1024 * 1024);
-    console.log('Audio downloaded, file size:', fileSizeMB.toFixed(2), 'MB');
-
-    let transcriptText = '';
-    const tempFiles: string[] = [audioPath];
-
-    // OpenAI Whisper API has a file size limit
-    if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
-      console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit, splitting into chunks...`);
-
-      // Split into chunks (should be well under size limit after compression)
-      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
-      tempFiles.push(...chunkFiles);
-
-      // Transcribe each chunk with context from previous chunk
-      let previousTranscript = '';
-      for (let i = 0; i < chunkFiles.length; i++) {
-        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
-
-        const chunkStats = await fs.stat(chunkFiles[i]);
-        const chunkSizeMB = chunkStats.size / (1024 * 1024);
-        console.log(`Chunk ${i + 1} size: ${chunkSizeMB.toFixed(2)} MB`);
-
-        // Use previous transcript as context for continuity
-        const transcription = await openai.audio.transcriptions.create({
-          file: createReadStream(chunkFiles[i]),
-          model: 'gpt-4o-mini-transcribe',
-          prompt: previousTranscript.slice(-PROCESSING_CONFIG.whisper.contextPromptMaxChars),
-        });
-
-        transcriptText += (i > 0 ? ' ' : '') + transcription.text;
-        previousTranscript = transcription.text;
-      }
-
-      console.log(`Transcription complete: ${chunkFiles.length} chunks, ${transcriptText.length} chars`);
-    } else {
-      // File is small enough - transcribe directly (with compression if needed)
-      let fileToTranscribe = audioPath;
-
-      if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
-        // Close to limit, compress just in case
-        console.log(`File close to ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit, compressing as precaution...`);
-        const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
-        await compressAudio(audioPath, compressedPath);
-        fileToTranscribe = compressedPath;
-        tempFiles.push(compressedPath);
-      }
-
-      console.log('Transcribing audio...');
-      const transcription = await openai.audio.transcriptions.create({
-        file: createReadStream(fileToTranscribe),
-        model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
-        response_format: 'verbose_json',
-        timestamp_granularities: ['word'],
-      });
-
-      transcriptText = transcription.text;
-    }
-
-    // Clean up all temp files
-    for (const tempFile of tempFiles) {
-      await fs.unlink(tempFile).catch(console.error);
-    }
-
-    return transcriptText;
-  } catch (error) {
-    console.error('Error transcribing audio:', error);
-    throw new Error('Failed to transcribe audio');
-  }
-}
-
-export async function transcribeWithTimestamps(audioUrl: string): Promise<{
+export async function transcribeWithTimestamps(audioUrl: string, userId: number): Promise<{
   text: string;
   words: Array<{ word: string; start: number; end: number }>;
 }> {
   try {
-    const openai = await getOpenAIClient();
+    const openai = await getOpenAIClientForUser(userId);
     if (!openai) {
       throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
     }

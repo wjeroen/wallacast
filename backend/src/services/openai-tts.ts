@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import fs from 'fs/promises';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
@@ -6,17 +5,7 @@ import { query } from '../database/db.js';
 import { getAudioDir, getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-
-async function getOpenAIClient(): Promise<OpenAI | null> {
-  // Use environment variable only for security
-  if (process.env.OPENAI_API_KEY) {
-    return new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-  }
-
-  return null;
-}
+import { getOpenAIClientForUser } from './ai-providers.js';
 
 interface Comment {
   username: string;
@@ -28,7 +17,7 @@ interface Comment {
   replies?: Comment[];
 }
 
-export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number): Promise<{ content: string; comments?: Comment[] }> {
+export async function extractArticleContent(htmlContent: string, commentsHtmlOrContentId?: string | number, contentId?: number, userId?: number): Promise<{ content: string; comments?: Comment[] }> {
   // Handle overloaded parameters
   let commentsHtml: string | undefined;
   let actualContentId: number | undefined;
@@ -40,7 +29,18 @@ export async function extractArticleContent(htmlContent: string, commentsHtmlOrC
     actualContentId = contentId;
   }
   try {
-    const openai = await getOpenAIClient();
+    // If userId not provided, try to get it from contentId
+    let effectiveUserId = userId;
+    if (!effectiveUserId && actualContentId) {
+      const contentResult = await query('SELECT user_id FROM content_items WHERE id = $1', [actualContentId]);
+      effectiveUserId = contentResult.rows[0]?.user_id;
+    }
+
+    if (!effectiveUserId) {
+      throw new Error('User ID is required to extract article content. Please set your OpenAI API key in Settings.');
+    }
+
+    const openai = await getOpenAIClientForUser(effectiveUserId);
     if (!openai) {
       console.warn('OpenAI API key not set, returning raw HTML content');
       const fallbackContent = htmlContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -358,6 +358,7 @@ interface ChunkMetadata {
 
 export async function generateArticleAudio(
   articleText: string,
+  userId: number,
   options: {
     voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral';
     instructions?: string;
@@ -365,7 +366,7 @@ export async function generateArticleAudio(
   } = {}
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
   try {
-    const openai = await getOpenAIClient();
+    const openai = await getOpenAIClientForUser(userId);
     if (!openai) {
       throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
     }
@@ -723,7 +724,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const originalLength = fullText.length;
 
     // Generate audio (with chunking for long articles)
-    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, {
+    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, content.user_id, {
       instructions:
         'You are reading an article aloud with comments. Start with the title and author introduction if present, then read the article body, then read the comments section. Do not read out URL strings (like https://example.com), but you can say the word "link" when it appears naturally in text. For comments, ALWAYS read the username, karma/upvotes, agree votes, and disagree votes if they are mentioned in the text - these numbers are important context. Read them naturally like "John Doe commented with 42 karma, 5 agree votes, and 2 disagree votes". Use appropriate pacing and natural emphasis.',
       contentId: contentId, // Pass contentId for progress tracking

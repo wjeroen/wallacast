@@ -51,7 +51,7 @@ router.post('/content/:id', async (req, res) => {
     console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
 
     // Start transcription in background (don't await)
-    transcribeWithTimestamps(content.audio_url)
+    transcribeWithTimestamps(content.audio_url, req.user!.userId)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
