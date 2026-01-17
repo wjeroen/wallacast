@@ -43,7 +43,7 @@ router.post('/subscribe', async (req, res) => {
       return res.status(400).json({ error: 'Feed URL required' });
     }
 
-    const podcast = await subscribeToPodcast(feed_url);
+    const podcast = await subscribeToPodcast(feed_url, req.user!.userId);
     res.status(201).json(podcast);
   } catch (error) {
     console.error('Error subscribing to podcast:', error);
@@ -83,7 +83,7 @@ router.post('/:id/refresh', async (req, res) => {
     }
 
     const podcast = podcastResult.rows[0];
-    const episodes = await fetchPodcastEpisodes(podcast.feed_url, podcast.id);
+    const episodes = await fetchPodcastEpisodes(podcast.feed_url, podcast.id, req.user!.userId);
 
     await query(
       'UPDATE podcasts SET last_fetched_at = CURRENT_TIMESTAMP WHERE id = $1',

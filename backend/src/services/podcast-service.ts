@@ -44,7 +44,7 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
   }
 }
 
-export async function subscribeToPodcast(feedUrl: string) {
+export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
     // Check if already subscribed
     const existing = await query(
@@ -62,8 +62,8 @@ export async function subscribeToPodcast(feedUrl: string) {
     // Insert podcast
     const result = await query(
       `INSERT INTO podcasts
-       (title, author, description, feed_url, website_url, preview_picture, category, language)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (title, author, description, feed_url, website_url, preview_picture, category, language, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         podcastDetails.title,
@@ -74,6 +74,7 @@ export async function subscribeToPodcast(feedUrl: string) {
         podcastDetails.preview_picture,
         podcastDetails.category,
         podcastDetails.language,
+        userId,
       ]
     );
 
@@ -115,7 +116,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
   }
 }
 
-export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number): Promise<any[]> {
+export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, userId: number): Promise<any[]> {
   try {
     const response = await fetch(feedUrl);
     const xml = await response.text();
@@ -146,8 +147,8 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number): 
       // Insert episode
       const result = await query(
         `INSERT INTO content_items
-         (type, title, description, audio_url, podcast_id, published_at, duration)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (type, title, description, audio_url, podcast_id, published_at, duration, user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
         [
           'podcast_episode',
@@ -157,6 +158,7 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number): 
           podcastId,
           pubDate ? new Date(pubDate) : new Date(),
           parseDuration(duration),
+          userId,
         ]
       );
 
