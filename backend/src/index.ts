@@ -11,7 +11,7 @@ import queueRouter from './routes/queue.js';
 import transcriptionRouter from './routes/transcription.js';
 import authRouter from './routes/auth.js';
 import usersRouter from './routes/users.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requireDatabaseReady } from './middleware/auth.js';
 import { bootstrapFirstUser } from './services/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,15 +48,15 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Auth routes (no auth required)
-app.use('/api/auth', authRouter);
+// Auth routes (no JWT auth required, but requires database)
+app.use('/api/auth', requireDatabaseReady, authRouter);
 
-// Protected API routes (JWT auth required)
-app.use('/api/users', usersRouter);
-app.use('/api/content', requireAuth, contentRouter);
-app.use('/api/podcasts', requireAuth, podcastRouter);
-app.use('/api/queue', requireAuth, queueRouter);
-app.use('/api/transcription', requireAuth, transcriptionRouter);
+// Protected API routes (JWT auth + database required)
+app.use('/api/users', requireDatabaseReady, usersRouter);
+app.use('/api/content', requireDatabaseReady, requireAuth, contentRouter);
+app.use('/api/podcasts', requireDatabaseReady, requireAuth, podcastRouter);
+app.use('/api/queue', requireDatabaseReady, requireAuth, queueRouter);
+app.use('/api/transcription', requireDatabaseReady, requireAuth, transcriptionRouter);
 
 // Initialize database and start server
 async function start() {

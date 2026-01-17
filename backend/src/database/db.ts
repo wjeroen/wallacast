@@ -43,6 +43,13 @@ const getDatabaseConfig = () => {
 // Create pool lazily to avoid connection attempts at module load time
 let pool: pg.Pool | null = null;
 
+// Database readiness flag - set to true after successful initialization
+let databaseReady = false;
+
+export function isDatabaseReady(): boolean {
+  return databaseReady;
+}
+
 export function getPool(): pg.Pool {
   if (!pool) {
     pool = new Pool(getDatabaseConfig());
@@ -128,6 +135,8 @@ export async function initializeDatabase() {
       console.log(`Reset ${resetResult.rowCount} stuck generation task(s) to failed status`);
     }
 
+    // Mark database as ready for queries
+    databaseReady = true;
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
