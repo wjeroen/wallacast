@@ -323,6 +323,26 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             Wallabag Sync
           </h3>
 
+          {/* Instructions */}
+          <div style={{
+            padding: '0.75rem',
+            background: '#1e3a5f',
+            borderRadius: '0.5rem',
+            fontSize: '0.875rem',
+            lineHeight: '1.5',
+            marginBottom: '1rem',
+            border: '1px solid #2563eb'
+          }}>
+            <strong>How to connect:</strong>
+            <ol style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+              <li>Log into your Wallabag instance</li>
+              <li>Go to <strong>Settings → API clients management</strong></li>
+              <li>Create a new client (name: "Wallacast")</li>
+              <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
+              <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
+            </ol>
+          </div>
+
           <div className="form-group checkbox-group">
             <label>
               <input

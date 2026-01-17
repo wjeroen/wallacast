@@ -1054,6 +1054,22 @@ export async function pushToWallabag(): Promise<{
 
 **Done:** Added test connection button, connection status display, error messages, and Wallabag status info (last sync, pending changes).
 
+#### [ ] 6.3 Add sync status indicator in app header
+
+Add a sync status indicator next to settings button in the app header (App.tsx):
+- Only shown when `wallabag_sync_enabled` is true
+- Shows last sync time (e.g., "Synced 2m ago")
+- Shows pending changes count if > 0 (e.g., "3 pending")
+- Includes a "Sync Now" button
+- Status updates after manual sync
+- Clicking shows more details or triggers sync
+
+**Implementation notes:**
+- Add state in App.tsx for wallabag status
+- Poll `/api/wallabag/status` periodically (every 5 min) when enabled
+- Show compact status: last sync relative time + pending count
+- Style to match existing header buttons
+
 Add state:
 
 ```typescript
@@ -1314,12 +1330,11 @@ Fix any errors.
 These are not part of this implementation but could be added later:
 
 1. **Automatic background sync** using cron/scheduler
-2. **Sync status indicator** in app header
-3. **Selective sync** (choose which items to sync)
-4. **Offline queue** (queue changes when offline)
-5. **Sync conflict UI** (show conflicts, let user choose)
-6. **Sync history/log** for debugging
-7. **Import all from Wallabag** button (one-time bulk import)
-8. **Webhook support** (if Wallabag supports it) for real-time sync
-9. **Auto-trigger TTS generation** for newly pulled articles
-10. **Auto-trigger transcription** for newly pulled podcasts (if audio accessible)
+2. **Selective sync** (choose which items to sync)
+3. **Offline queue** (queue changes when offline)
+4. **Sync conflict UI** (show conflicts, let user choose)
+5. **Sync history/log** for debugging
+6. **Import all from Wallabag** button (one-time bulk import)
+7. **Webhook support** (if Wallabag supports it) for real-time sync
+8. **Auto-trigger TTS generation** for newly pulled articles
+9. **Auto-trigger transcription** for newly pulled podcasts (if audio accessible)
