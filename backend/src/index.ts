@@ -11,6 +11,7 @@ import queueRouter from './routes/queue.js';
 import transcriptionRouter from './routes/transcription.js';
 import authRouter from './routes/auth.js';
 import usersRouter from './routes/users.js';
+import wallabagRouter from './routes/wallabag.js';
 import { requireAuth, requireDatabaseReady } from './middleware/auth.js';
 import { bootstrapFirstUser } from './services/auth.js';
 import { query } from './database/db.js';
@@ -107,6 +108,7 @@ app.use('/api/content', requireDatabaseReady, requireAuth, contentRouter);
 app.use('/api/podcasts', requireDatabaseReady, requireAuth, podcastRouter);
 app.use('/api/queue', requireDatabaseReady, requireAuth, queueRouter);
 app.use('/api/transcription', requireDatabaseReady, requireAuth, transcriptionRouter);
+app.use('/api/wallabag', requireDatabaseReady, wallabagRouter);
 
 // Initialize database and start server
 async function start() {

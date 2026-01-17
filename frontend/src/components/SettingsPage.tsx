@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, Bot, Globe, Check, AlertCircle } from 'lucide-react';
-import { userSettingsAPI } from '../api';
+import { userSettingsAPI, wallabagAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
 
 interface SettingsPageProps {
@@ -29,6 +29,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
 
+  // Wallabag connection state
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'untested' | 'success' | 'failed'>('untested');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [wallabagStatus, setWallabagStatus] = useState<{
+    enabled: boolean;
+    lastSync: string | null;
+    pendingChanges: number;
+  } | null>(null);
+
   // Form state
   const [formData, setFormData] = useState({
     // AI Settings
@@ -48,7 +58,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   useEffect(() => {
     loadSettings();
+    loadWallabagStatus();
   }, []);
+
+  const loadWallabagStatus = async () => {
+    try {
+      const response = await wallabagAPI.getStatus();
+      setWallabagStatus(response.data);
+    } catch (err) {
+      // Ignore errors, status just won't show
+      console.error('Failed to load Wallabag status:', err);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -120,6 +141,30 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   const isSecretSet = (key: string) => {
     return settings[key] === '••••••••';
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionStatus('untested');
+    setConnectionError(null);
+
+    try {
+      const response = await wallabagAPI.testConnection();
+      if (response.data.success) {
+        setConnectionStatus('success');
+        // Refresh status after successful test
+        await loadWallabagStatus();
+      } else {
+        setConnectionStatus('failed');
+        setConnectionError(response.data.error || 'Connection failed');
+      }
+    } catch (err) {
+      setConnectionStatus('failed');
+      setConnectionError('Connection test failed. Check console for details.');
+      console.error('Test connection error:', err);
+    } finally {
+      setTestingConnection(false);
+    }
   };
 
   if (loading) {
@@ -368,6 +413,63 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   </button>
                 </div>
               </div>
+
+              {/* Connection Test */}
+              <div className="form-group">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={testingConnection || !formData.wallabag_url || !formData.wallabag_client_id}
+                  className="test-connection-button"
+                  style={{ marginTop: '0.5rem' }}
+                >
+                  {testingConnection ? 'Testing...' : 'Test Connection'}
+                </button>
+                {connectionStatus === 'success' && (
+                  <span style={{ color: 'green', marginLeft: '0.5rem' }}>✓ Connected</span>
+                )}
+                {connectionStatus === 'failed' && (
+                  <span style={{ color: 'red', marginLeft: '0.5rem' }}>✗ Failed</span>
+                )}
+              </div>
+
+              {/* Connection Error */}
+              {connectionError && (
+                <div className="form-group" style={{
+                  padding: '0.5rem',
+                  background: '#fee',
+                  borderRadius: '4px',
+                  color: '#c33',
+                  fontSize: '0.9rem'
+                }}>
+                  {connectionError}
+                </div>
+              )}
+
+              {/* Status Info */}
+              {wallabagStatus && (
+                <div className="form-group" style={{
+                  padding: '0.5rem',
+                  background: '#f0f0f0',
+                  borderRadius: '4px',
+                  fontSize: '0.9rem',
+                  color: '#666'
+                }}>
+                  <div>
+                    <strong>Status:</strong> {wallabagStatus.enabled ? 'Enabled' : 'Disabled'}
+                  </div>
+                  {wallabagStatus.lastSync && (
+                    <div>
+                      <strong>Last Sync:</strong> {new Date(wallabagStatus.lastSync).toLocaleString()}
+                    </div>
+                  )}
+                  {wallabagStatus.pendingChanges > 0 && (
+                    <div>
+                      <strong>Pending Changes:</strong> {wallabagStatus.pendingChanges}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </section>
