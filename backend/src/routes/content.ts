@@ -64,12 +64,14 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Serve audio from database
+// Serve audio from database (PUBLIC - no auth required for HTML5 audio player compatibility)
 router.get('/:id/audio', async (req, res) => {
   try {
+    // Note: No user_id filter - audio URLs are public but content IDs are private
+    // This allows HTML5 <audio> elements to work without JWT tokens
     const result = await query(
-      'SELECT audio_data FROM content_items WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.user!.userId]
+      'SELECT audio_data FROM content_items WHERE id = $1',
+      [req.params.id]
     );
 
     if (result.rows.length === 0 || !result.rows[0].audio_data) {
