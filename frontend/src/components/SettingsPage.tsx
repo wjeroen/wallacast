@@ -195,6 +195,26 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
+  const handleCleanup = async () => {
+    if (!confirm('Delete recently synced items (last 2 hours)? This will delete items that are NOT starred and do NOT have audio.')) {
+      return;
+    }
+
+    setSyncing(true);
+    setConnectionError(null);
+
+    try {
+      const response = await wallabagAPI.cleanup(2); // 2 hours
+      alert(`Deleted ${response.data.deleted} items`);
+      setSyncResult({ pulled: 0, errors: [] }); // Clear sync result
+    } catch (err) {
+      setConnectionError('Cleanup failed. Check console for details.');
+      console.error('Cleanup error:', err);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="settings-page">
@@ -481,6 +501,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   style={{ background: '#059669' }}
                 >
                   {syncing ? 'Syncing...' : 'Pull from Wallabag'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCleanup}
+                  disabled={syncing}
+                  className="test-connection-button"
+                  style={{ background: '#dc2626' }}
+                  title="Delete recently synced items (last 2 hours)"
+                >
+                  🗑️ Cleanup
                 </button>
 
                 {connectionStatus === 'success' && (
