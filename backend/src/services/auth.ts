@@ -261,12 +261,29 @@ export async function bootstrapFirstUser(): Promise<void> {
 
   // Check if the AUTH_USERNAME user already exists
   const existingUser = await query(
-    'SELECT id, username FROM users WHERE username = $1',
+    'SELECT id, username, password_hash FROM users WHERE username = $1',
     [username.toLowerCase()]
   );
 
   if (existingUser.rows.length > 0) {
-    console.log(`✓ User "${username}" already exists, skipping bootstrap`);
+    const userId = existingUser.rows[0].id;
+    const currentHash = existingUser.rows[0].password_hash;
+
+    // Always update password to match current AUTH_PASSWORD
+    const newPasswordHash = await hashPassword(password);
+
+    if (!currentHash) {
+      console.log(`⚠ User "${username}" exists but has no password, setting password...`);
+    } else {
+      console.log(`✓ User "${username}" exists, updating password to match AUTH_PASSWORD...`);
+    }
+
+    await query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newPasswordHash, userId]
+    );
+    console.log(`✓ Password updated for user "${username}"`);
+
     await assignOrphanedContent();
     return;
   }
