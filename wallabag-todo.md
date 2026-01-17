@@ -42,6 +42,7 @@ All core phases of the bidirectional Wallabag sync implementation are complete a
 1. ✅ Fixed cleanup not resetting sync timestamp when no items to delete
 2. ✅ Fixed content regeneration failing for Wallabag-synced articles (string vs number bug)
 3. ✅ Fixed nosync tag detection to handle both "nosync" and "#nosync" variants
+4. ✅ **Fixed conflict resolution**: Pull sync was overwriting local changes (e.g., regenerated content) with Wallabag's older version. Now properly detects conflicts and preserves Wallacast changes per design rule "Wallacast always wins conflicts"
 
 ---
 
