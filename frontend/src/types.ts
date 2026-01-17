@@ -73,3 +73,18 @@ export interface QueueItem {
 export interface Settings {
   [key: string]: string;
 }
+
+export interface User {
+  id: number;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  user: User;
+}

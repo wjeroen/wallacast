@@ -3,13 +3,15 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import basicAuth from 'express-basic-auth';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
 import transcriptionRouter from './routes/transcription.js';
+import authRouter from './routes/auth.js';
+import usersRouter from './routes/users.js';
+import { requireAuth } from './middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,15 +30,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 
-// HTTP Basic Auth middleware
-const authMiddleware = basicAuth({
-  users: {
-    [process.env.AUTH_USERNAME || 'admin']: process.env.AUTH_PASSWORD || 'changeme'
-  },
-  challenge: true,
-  realm: 'Readcast API',
-});
-
 // Serve static files (audio, images, etc.) from persistent storage
 app.use('/audio', express.static(getAudioDir()));
 app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
@@ -44,7 +37,7 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')
 // Public routes (no auth required)
 app.get('/', (req, res) => {
   res.json({
-    name: 'Readcast API',
+    name: 'Wallacast API',
     version: '1.0.0',
     status: 'ok'
   });
@@ -54,17 +47,21 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Protected API routes (auth required)
-app.use('/api/content', authMiddleware, contentRouter);
-app.use('/api/podcasts', authMiddleware, podcastRouter);
-app.use('/api/queue', authMiddleware, queueRouter);
-app.use('/api/transcription', authMiddleware, transcriptionRouter);
+// Auth routes (no auth required)
+app.use('/api/auth', authRouter);
+
+// Protected API routes (JWT auth required)
+app.use('/api/users', usersRouter);
+app.use('/api/content', requireAuth, contentRouter);
+app.use('/api/podcasts', requireAuth, podcastRouter);
+app.use('/api/queue', requireAuth, queueRouter);
+app.use('/api/transcription', requireAuth, transcriptionRouter);
 
 // Initialize database and start server
 async function start() {
   // Start HTTP server FIRST so Railway sees it as healthy
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Readcast API server running on http://0.0.0.0:${PORT}`);
+    console.log(`🚀 Wallacast API server running on http://0.0.0.0:${PORT}`);
   });
 
   // Graceful shutdown handler
