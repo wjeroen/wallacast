@@ -13,6 +13,7 @@ import authRouter from './routes/auth.js';
 import usersRouter from './routes/users.js';
 import { requireAuth, requireDatabaseReady } from './middleware/auth.js';
 import { bootstrapFirstUser } from './services/auth.js';
+import { query } from './database/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +51,35 @@ app.get('/health', (req, res) => {
 
 // Auth routes (no JWT auth required, but requires database)
 app.use('/api/auth', requireDatabaseReady, authRouter);
+
+// Public audio endpoint (no auth - HTML5 audio player can't send JWT tokens)
+// Must be registered before protected /api/content routes to match first
+app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
+  try {
+    // Note: No user_id filter - audio URLs are public but content IDs are private
+    const result = await query(
+      'SELECT audio_data FROM content_items WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].audio_data) {
+      return res.status(404).json({ error: 'Audio not found' });
+    }
+
+    const audioData = result.rows[0].audio_data;
+
+    // Set appropriate headers for audio streaming
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioData.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+
+    res.send(audioData);
+  } catch (error) {
+    console.error('Error serving audio:', error);
+    res.status(500).json({ error: 'Failed to serve audio' });
+  }
+});
 
 // Protected API routes (JWT auth + database required)
 app.use('/api/users', requireDatabaseReady, usersRouter);
