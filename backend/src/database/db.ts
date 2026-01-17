@@ -25,6 +25,11 @@ const getDatabaseConfig = () => {
     console.log('Using DATABASE_URL connection string');
     return {
       connectionString: process.env.DATABASE_URL,
+      connectionTimeoutMillis: 10000, // 10 seconds to establish connection
+      idleTimeoutMillis: 30000, // 30 seconds before idle connection is closed
+      max: 20, // maximum pool size
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     };
   }
 
@@ -147,8 +152,38 @@ export async function initializeDatabase() {
 export async function query(text: string, params?: any[]) {
   const start = Date.now();
   const poolInstance = getPool();
-  const res = await poolInstance.query(text, params);
-  const duration = Date.now() - start;
-  console.log('Executed query', { text, duration, rows: res.rowCount });
-  return res;
+
+  // Retry logic for transient connection errors
+  let lastError: Error | null = null;
+  const maxRetries = 3;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await poolInstance.query(text, params);
+      const duration = Date.now() - start;
+      console.log('Executed query', { text, duration, rows: res.rowCount });
+      return res;
+    } catch (error: any) {
+      lastError = error;
+
+      // Only retry on connection errors, not on SQL errors
+      const isConnectionError =
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNREFUSED' ||
+        error.code === 'ECONNRESET' ||
+        error.message?.includes('Connection terminated') ||
+        error.message?.includes('Connection timeout');
+
+      if (!isConnectionError || attempt === maxRetries) {
+        throw error;
+      }
+
+      // Wait before retrying (exponential backoff)
+      const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+      console.log(`Query failed (attempt ${attempt}/${maxRetries}), retrying in ${delayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError;
 }
