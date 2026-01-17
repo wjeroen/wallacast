@@ -319,12 +319,13 @@ router.patch('/:id', async (req, res) => {
               );
 
               // Re-extract content from HTML using LLM
-              const extractedContent = await extractArticleContent(html_content);
+              // Pass content ID so it can look up the user's OpenAI API key
+              const extractedResult = await extractArticleContent(html_content, id);
 
               // Update with new content
               await query(
                 'UPDATE content_items SET content = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                [extractedContent, 'completed', 100, id]
+                [extractedResult.content, 'completed', 100, id]
               );
 
               console.log(`Content regenerated successfully for article ${id}`);
