@@ -155,9 +155,18 @@ router.post('/cleanup', async (req, res) => {
     );
 
     console.log('[Wallabag] Cleanup deleted', deleteResult.rows.length, 'items');
+
+    // Reset last sync timestamp so next sync fetches all entries
+    await query(
+      `DELETE FROM user_settings
+       WHERE user_id = $1 AND setting_key = 'wallabag_last_sync'`,
+      [req.user!.userId]
+    );
+    console.log('[Wallabag] Reset last sync timestamp');
+
     res.json({
       deleted: deleteResult.rows.length,
-      message: `Deleted ${deleteResult.rows.length} recently synced items`
+      message: `Deleted ${deleteResult.rows.length} recently synced items. Last sync timestamp reset.`
     });
   } catch (error) {
     console.error('[Wallabag] Cleanup error:', error);

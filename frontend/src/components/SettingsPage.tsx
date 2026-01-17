@@ -39,10 +39,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     pendingChanges: number;
   } | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{
-    pulled: number;
-    errors: string[];
-  } | null>(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -172,29 +168,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
-  const handlePullFromWallabag = async () => {
-    setSyncing(true);
-    setSyncResult(null);
-    setConnectionError(null);
-
-    try {
-      const response = await wallabagAPI.pull();
-      setSyncResult(response.data);
-
-      // Refresh status after sync
-      await loadWallabagStatus();
-
-      if (response.data.errors.length > 0) {
-        console.warn('Pull completed with errors:', response.data.errors);
-      }
-    } catch (err) {
-      setConnectionError('Pull sync failed. Check console for details.');
-      console.error('Pull sync error:', err);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const handleCleanup = async () => {
     if (!confirm('Delete recently synced items (last 2 hours)? This will delete items that are NOT starred and do NOT have audio.')) {
       return;
@@ -206,7 +179,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       const response = await wallabagAPI.cleanup(2); // 2 hours
       alert(`Deleted ${response.data.deleted} items`);
-      setSyncResult({ pulled: 0, errors: [] }); // Clear sync result
     } catch (err) {
       setConnectionError('Cleanup failed. Check console for details.');
       console.error('Cleanup error:', err);
@@ -495,16 +467,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
                 <button
                   type="button"
-                  onClick={handlePullFromWallabag}
-                  disabled={syncing || connectionStatus !== 'success'}
-                  className="test-connection-button"
-                  style={{ background: '#059669' }}
-                >
-                  {syncing ? 'Syncing...' : 'Pull from Wallabag'}
-                </button>
-
-                <button
-                  type="button"
                   onClick={handleCleanup}
                   disabled={syncing}
                   className="test-connection-button"
@@ -532,25 +494,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   fontSize: '0.9rem'
                 }}>
                   {connectionError}
-                </div>
-              )}
-
-              {/* Sync Result */}
-              {syncResult && (
-                <div className="form-group" style={{
-                  padding: '0.5rem',
-                  background: syncResult.errors.length > 0 ? '#fff3cd' : '#d4edda',
-                  borderRadius: '4px',
-                  fontSize: '0.9rem',
-                  color: syncResult.errors.length > 0 ? '#856404' : '#155724'
-                }}>
-                  <strong>Pulled: {syncResult.pulled} items</strong>
-                  {syncResult.errors.length > 0 && (
-                    <>
-                      <br />
-                      <span style={{ color: '#c33' }}>{syncResult.errors.length} error(s) - check console</span>
-                    </>
-                  )}
                 </div>
               )}
 
