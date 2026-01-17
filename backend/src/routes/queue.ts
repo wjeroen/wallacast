@@ -30,8 +30,8 @@ router.post('/', async (req, res) => {
     const nextPosition = maxPositionResult.rows[0].max_position + 1;
 
     const result = await query(
-      'INSERT INTO queue_items (content_item_id, position) VALUES ($1, $2) RETURNING *',
-      [content_item_id, nextPosition]
+      'INSERT INTO queue_items (content_item_id, position, user_id) VALUES ($1, $2, $3) RETURNING *',
+      [content_item_id, nextPosition, req.user!.userId]
     );
 
     res.status(201).json(result.rows[0]);
