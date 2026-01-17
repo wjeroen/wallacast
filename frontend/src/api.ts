@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ContentItem, Podcast, QueueItem } from './types';
+import type { ContentItem, Podcast, QueueItem, User, AuthTokens } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -8,8 +8,69 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true, // Include credentials for HTTP Basic Auth
 });
+
+// Token management
+let accessToken: string | null = localStorage.getItem('accessToken');
+let refreshToken: string | null = localStorage.getItem('refreshToken');
+
+export function setTokens(access: string, refresh: string) {
+  accessToken = access;
+  refreshToken = refresh;
+  localStorage.setItem('accessToken', access);
+  localStorage.setItem('refreshToken', refresh);
+}
+
+export function clearTokens() {
+  accessToken = null;
+  refreshToken = null;
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+}
+
+export function getAccessToken() {
+  return accessToken;
+}
+
+// Add auth header to requests
+api.interceptors.request.use((config) => {
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return config;
+});
+
+// Handle token refresh on 401
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry && refreshToken) {
+      originalRequest._retry = true;
+
+      try {
+        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+          refreshToken,
+        });
+
+        const { accessToken: newAccessToken } = response.data;
+        accessToken = newAccessToken;
+        localStorage.setItem('accessToken', newAccessToken);
+
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        // Refresh failed, clear tokens
+        clearTokens();
+        window.location.href = '/login';
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 export const contentAPI = {
   getAll: (params?: { type?: string; archived?: boolean; starred?: boolean }) =>
@@ -63,4 +124,37 @@ export const queueAPI = {
 export const transcriptionAPI = {
   transcribe: (contentId: number) =>
     api.post<{ transcript: string; words?: Array<{ word: string; start: number; end: number }> }>(`/transcription/content/${contentId}`),
+};
+
+export const authAPI = {
+  login: (username: string, password: string) =>
+    api.post<AuthTokens>('/auth/login', { username, password }),
+
+  register: (username: string, password: string, displayName?: string, email?: string) =>
+    api.post<AuthTokens>('/auth/register', { username, password, displayName, email }),
+
+  logout: () => {
+    const token = refreshToken;
+    clearTokens();
+    return api.post('/auth/logout', { refreshToken: token });
+  },
+
+  getMe: () => api.get<{ user: User }>('/auth/me'),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api.post('/auth/change-password', { currentPassword, newPassword }),
+};
+
+export const userSettingsAPI = {
+  getAll: () => api.get<{ settings: Record<string, string | null> }>('/users/settings'),
+
+  get: (key: string) => api.get<{ value: string | null; isSet?: boolean }>(`/users/settings/${key}`),
+
+  set: (key: string, value: string) => api.put(`/users/settings/${key}`, { value }),
+
+  setBulk: (settings: Record<string, string>) => api.put('/users/settings', { settings }),
+
+  delete: (key: string) => api.delete(`/users/settings/${key}`),
+
+  getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
 };

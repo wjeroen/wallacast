@@ -109,6 +109,11 @@ export async function initializeDatabase() {
     const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
     await poolInstance.query(removeIsReadMigration);
 
+    // Run migration to add users and user settings
+    const usersMigrationPath = path.join(__dirname, 'migrations', '005_add_users.sql');
+    const usersMigration = await fs.readFile(usersMigrationPath, 'utf-8');
+    await poolInstance.query(usersMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
       UPDATE content_items
