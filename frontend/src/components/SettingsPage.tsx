@@ -38,6 +38,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     lastSync: string | null;
     pendingChanges: number;
   } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{
+    pulled: number;
+    errors: string[];
+  } | null>(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -164,6 +169,29 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       console.error('Test connection error:', err);
     } finally {
       setTestingConnection(false);
+    }
+  };
+
+  const handlePullFromWallabag = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    setConnectionError(null);
+
+    try {
+      const response = await wallabagAPI.pull();
+      setSyncResult(response.data);
+
+      // Refresh status after sync
+      await loadWallabagStatus();
+
+      if (response.data.errors.length > 0) {
+        console.warn('Pull completed with errors:', response.data.errors);
+      }
+    } catch (err) {
+      setConnectionError('Pull sync failed. Check console for details.');
+      console.error('Pull sync error:', err);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -435,21 +463,31 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </div>
 
               {/* Connection Test */}
-              <div className="form-group">
+              <div className="form-group" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
                 <button
                   type="button"
                   onClick={handleTestConnection}
                   disabled={testingConnection || !formData.wallabag_url || !formData.wallabag_client_id}
                   className="test-connection-button"
-                  style={{ marginTop: '0.5rem' }}
                 >
                   {testingConnection ? 'Testing...' : 'Test Connection'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handlePullFromWallabag}
+                  disabled={syncing || connectionStatus !== 'success'}
+                  className="test-connection-button"
+                  style={{ background: '#059669' }}
+                >
+                  {syncing ? 'Syncing...' : 'Pull from Wallabag'}
+                </button>
+
                 {connectionStatus === 'success' && (
-                  <span style={{ color: 'green', marginLeft: '0.5rem' }}>✓ Connected</span>
+                  <span style={{ color: 'green' }}>✓ Connected</span>
                 )}
                 {connectionStatus === 'failed' && (
-                  <span style={{ color: 'red', marginLeft: '0.5rem' }}>✗ Failed</span>
+                  <span style={{ color: 'red' }}>✗ Failed</span>
                 )}
               </div>
 
@@ -463,6 +501,25 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   fontSize: '0.9rem'
                 }}>
                   {connectionError}
+                </div>
+              )}
+
+              {/* Sync Result */}
+              {syncResult && (
+                <div className="form-group" style={{
+                  padding: '0.5rem',
+                  background: syncResult.errors.length > 0 ? '#fff3cd' : '#d4edda',
+                  borderRadius: '4px',
+                  fontSize: '0.9rem',
+                  color: syncResult.errors.length > 0 ? '#856404' : '#155724'
+                }}>
+                  <strong>Pulled: {syncResult.pulled} items</strong>
+                  {syncResult.errors.length > 0 && (
+                    <>
+                      <br />
+                      <span style={{ color: '#c33' }}>{syncResult.errors.length} error(s) - check console</span>
+                    </>
+                  )}
                 </div>
               )}
 
