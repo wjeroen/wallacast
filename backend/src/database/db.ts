@@ -11,18 +11,8 @@ const __dirname = path.dirname(__filename);
 // Railway provides DATABASE_URL or individual PG* variables
 // Support both Railway's standard variables and custom DB_* variables
 const getDatabaseConfig = () => {
-  // DEBUG: Log what environment variables we actually have
-  console.log('=== DATABASE CONNECTION DEBUG ===');
-  console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
-  console.log('PGHOST:', process.env.PGHOST || 'NOT SET');
-  console.log('PGPORT:', process.env.PGPORT || 'NOT SET');
-  console.log('PGDATABASE:', process.env.PGDATABASE || 'NOT SET');
-  console.log('DB_HOST:', process.env.DB_HOST || 'NOT SET');
-  console.log('================================');
-
   // If DATABASE_URL is provided (Railway default), use it
   if (process.env.DATABASE_URL) {
-    console.log('Using DATABASE_URL connection string');
     return {
       connectionString: process.env.DATABASE_URL,
       connectionTimeoutMillis: 10000, // 10 seconds to establish connection
@@ -161,7 +151,20 @@ export async function query(text: string, params?: any[]) {
     try {
       const res = await poolInstance.query(text, params);
       const duration = Date.now() - start;
-      console.log('Executed query', { text, duration, rows: res.rowCount });
+
+      // Log query summary (only show full query text for slow queries > 100ms)
+      const queryType = text.trim().split(/\s+/)[0].toUpperCase();
+      const tableMatch = text.match(/(?:FROM|INTO|UPDATE)\s+(\w+)/i);
+      const table = tableMatch ? tableMatch[1] : '?';
+
+      if (duration > 100) {
+        console.log(`Slow query (${duration}ms): ${queryType} ${table}`, { text: text.substring(0, 100) + '...', rows: res.rowCount });
+      } else if (queryType !== 'SELECT') {
+        // Log non-SELECT queries (INSERT, UPDATE, DELETE are important)
+        console.log(`${queryType} ${table}`, { duration, rows: res.rowCount });
+      }
+      // Skip logging fast SELECT queries to reduce noise
+
       return res;
     } catch (error: any) {
       lastError = error;
