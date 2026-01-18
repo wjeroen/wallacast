@@ -4,6 +4,8 @@ import {
   Pause,
   SkipBack,
   SkipForward,
+  RotateCcw,
+  RotateCw,
   Volume2,
   Clock,
   Gauge,
@@ -442,14 +444,14 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
 
           <div className="playback-controls">
             <button onClick={handleSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
-              <SkipBack className="seek-icon" />
+              <RotateCcw className="seek-icon" />
               <span className="seek-label">15s</span>
             </button>
             <button onClick={togglePlay} className="play-pause-btn">
               {isPlaying ? <Pause size={32} /> : <Play size={32} />}
             </button>
             <button onClick={handleSkipForward} title="Seek forward 30 seconds" className="seek-btn">
-              <SkipForward className="seek-icon" />
+              <RotateCw className="seek-icon" />
               <span className="seek-label">30</span>
             </button>
           </div>
