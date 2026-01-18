@@ -444,7 +444,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           <div className="playback-controls">
             <button onClick={handleSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
               <RotateCcw className="seek-icon" />
-              <span className="seek-label">15s</span>
+              <span className="seek-label">15</span>
             </button>
             <button onClick={togglePlay} className="play-pause-btn">
               {isPlaying ? <Pause size={32} /> : <Play size={32} />}
