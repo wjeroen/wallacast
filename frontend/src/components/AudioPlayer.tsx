@@ -1,9 +1,8 @@
+// Import SkipBack and SkipForward at a later stage when implementing queue functionality 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
   Pause,
-  SkipBack,
-  SkipForward,
   RotateCcw,
   RotateCw,
   Volume2,
