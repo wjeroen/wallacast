@@ -441,14 +441,16 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </div>
 
           <div className="playback-controls">
-            <button onClick={handleSkipBackward} title="Skip back 15s">
-              <SkipBack size={24} />
+            <button onClick={handleSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+              <SkipBack className="seek-icon" />
+              <span className="seek-label">15s</span>
             </button>
             <button onClick={togglePlay} className="play-pause-btn">
               {isPlaying ? <Pause size={32} /> : <Play size={32} />}
             </button>
-            <button onClick={handleSkipForward} title="Skip forward 30s">
-              <SkipForward size={24} />
+            <button onClick={handleSkipForward} title="Seek forward 30 seconds" className="seek-btn">
+              <SkipForward className="seek-icon" />
+              <span className="seek-label">30</span>
             </button>
           </div>
 
