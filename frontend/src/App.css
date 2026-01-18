@@ -1774,8 +1774,8 @@
   border: none;
   color: #e2e8f0;
   cursor: pointer;
-  width: 100px;
-  height: 100px;
+  width: 52px;
+  height: 52px;
   padding: 0;
   border-radius: 50%;
   display: inline-flex;
@@ -1791,8 +1791,8 @@
 
 /* Icon forms the circular arrow */
 .seek-icon {
-  width: 100px;
-  height: 100px;
+  width: 60px;
+  height: 60px;
 }
 
 /* Number inside the circle */
