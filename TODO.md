@@ -18,7 +18,7 @@ The biggest current focus is bidirectional sync with Wallabag, allowing users to
 
 ---
 
-## 🎉 Implementation Status
+## 🎉 Wallabag Implementation Status
 
 **Status: COMPLETE** ✅
 
