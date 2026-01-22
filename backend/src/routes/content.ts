@@ -299,36 +299,60 @@ router.patch('/:id', async (req, res) => {
     // Special handling for regenerating content (articles only)
     if (updates.regenerate_content === true) {
       const contentResult = await query(
-        'SELECT type, html_content FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT type, url, preview_picture FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
-        const { type, html_content } = contentResult.rows[0];
+        const { type, url, preview_picture } = contentResult.rows[0];
 
-        if (type === 'article' && html_content) {
-          console.log(`Regenerating content for article ${id}`);
+        if (type === 'article' && url) {
+          console.log(`Regenerating content for article ${id} from URL:`, url);
 
           // Start content regeneration in background
           (async () => {
             try {
+              // Set status to fetching
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+                ['fetching', 10, 'fetching_article', id]
+              );
+
+              // REFETCH from the actual URL (not using stale html_content)
+              // This gets fresh content + EA Forum/LessWrong comments
+              const articleData = await fetchArticleContent(url);
+
               // Set status to extracting content
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-                ['extracting_content', 0, 'content_extraction', id]
+                ['extracting_content', 50, 'content_extraction', id]
               );
 
-              // Re-extract content from HTML using LLM
-              // Pass content ID as a NUMBER so it can look up the user's OpenAI API key
-              const extractedResult = await extractArticleContent(html_content, parseInt(id, 10));
+              // Extract readable content from HTML using LLM (with comments!)
+              const extractedResult = await extractArticleContent(
+                articleData.html,
+                articleData.comments_html,
+                parseInt(id, 10)
+              );
 
-              // Update with new content
+              // Add Wallacast provenance marker to content
+              const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${extractedResult.content}`;
+
+              // Update with new content + HTML (keep Wallabag thumbnail!)
               await query(
-                'UPDATE content_items SET content = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                [extractedResult.content, 'completed', 100, id]
+                `UPDATE content_items SET
+                  content = $1,
+                  html_content = $2,
+                  content_source = 'wallacast',
+                  generation_status = $3,
+                  generation_progress = $4,
+                  current_operation = NULL,
+                  updated_at = NOW()
+                WHERE id = $5`,
+                [markedContent, articleData.html, 'completed', 100, id]
               );
 
-              console.log(`Content regenerated successfully for article ${id}`);
+              console.log(`Content regenerated successfully for article ${id} (refetched from web)`);
             } catch (error) {
               console.error('Content regeneration error:', error);
               await query(

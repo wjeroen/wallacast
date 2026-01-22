@@ -253,9 +253,9 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             await query(
               `INSERT INTO content_items
                 (type, title, url, transcript, is_starred, is_archived, tags,
-                 preview_picture, wallabag_id, wallabag_updated_at, user_id,
+                 preview_picture, wallabag_id, wallabag_updated_at, content_source, user_id,
                  author, published_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
               [
                 type,
                 entry.title,
@@ -267,6 +267,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.preview_picture,
                 entry.id,
                 entry.updated_at,
+                'wallabag',  // Content from Wallabag
                 userId,
                 entry.published_by?.[0] || null,
                 entry.published_at,
@@ -277,9 +278,9 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             await query(
               `INSERT INTO content_items
                 (type, title, url, content, html_content, is_starred, is_archived, tags,
-                 preview_picture, wallabag_id, wallabag_updated_at, user_id,
+                 preview_picture, wallabag_id, wallabag_updated_at, content_source, user_id,
                  author, published_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
               [
                 type,
                 entry.title,
@@ -292,6 +293,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.preview_picture,
                 entry.id,
                 entry.updated_at,
+                'wallabag',  // Content from Wallabag
                 userId,
                 entry.published_by?.[0] || null,
                 entry.published_at,
