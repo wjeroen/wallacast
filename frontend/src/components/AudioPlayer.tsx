@@ -1,4 +1,3 @@
-// Import SkipBack and SkipForward at a later stage when implementing queue functionality 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
@@ -9,6 +8,7 @@ import {
   Clock,
   Gauge,
   X,
+  SquareArrowOutUpRight,
 } from 'lucide-react';
 import type { ContentItem, Comment } from '../types';
 import { contentAPI, transcriptionAPI } from '../api';
@@ -35,6 +35,15 @@ function cleanHtml(text: string): string {
   // Clean up whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   return cleaned;
+}
+
+function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
 }
 
 export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
@@ -384,6 +393,14 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
             )}
             <div>
               <h3>{content.title}</h3>
+              {content.url && (
+                <p className="source-link" style={{ marginTop: '0.25rem', marginBottom: '0.5rem' }}>
+                  <a href={content.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem' }}>
+                    {getDomainFromUrl(content.url)}
+                    <SquareArrowOutUpRight size={14} />
+                  </a>
+                </p>
+              )}
               {content.author && <p className="author">{content.author}</p>}
               {content.published_at && (
                 <p className="published-date">
@@ -412,13 +429,6 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
                     </span>
                   )}
                 </div>
-              )}
-              {content.url && (
-                <p className="source-link">
-                  <a href={content.url} target="_blank" rel="noopener noreferrer">
-                    View original source →
-                  </a>
-                </p>
               )}
             </div>
           </div>
@@ -505,8 +515,8 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
                       fontSize: '0.75rem',
                       padding: '0.125rem 0.5rem',
                       borderRadius: '0.25rem',
-                      background: source === 'wallacast' ? '#10b981' : '#6b7280',
-                      color: 'white',
+                      background: source === 'wallacast' ? '#065f46' : '#6b7280',
+                      color: source === 'wallacast' ? '#d1fae5' : 'white',
                       fontWeight: '500',
                       lineHeight: '1',
                     }}
