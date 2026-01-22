@@ -338,18 +338,34 @@ router.patch('/:id', async (req, res) => {
               // Add Wallacast provenance marker to content
               const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${extractedResult.content}`;
 
-              // Update with new content + HTML (keep Wallabag thumbnail!)
+              // Update with new content + HTML + metadata (keep Wallabag thumbnail!)
               await query(
                 `UPDATE content_items SET
                   content = $1,
                   html_content = $2,
                   content_source = 'wallacast',
-                  generation_status = $3,
-                  generation_progress = $4,
+                  author = COALESCE($3, author),
+                  published_at = COALESCE($4, published_at),
+                  karma = COALESCE($5, karma),
+                  agree_votes = COALESCE($6, agree_votes),
+                  disagree_votes = COALESCE($7, disagree_votes),
+                  generation_status = $8,
+                  generation_progress = $9,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $5`,
-                [markedContent, articleData.html, 'completed', 100, id]
+                WHERE id = $10`,
+                [
+                  markedContent,
+                  articleData.html,
+                  articleData.author || articleData.byline,
+                  articleData.published_date,
+                  articleData.karma,
+                  articleData.agree_votes,
+                  articleData.disagree_votes,
+                  'completed',
+                  100,
+                  id
+                ]
               );
 
               console.log(`Content regenerated successfully for article ${id} (refetched from web)`);
