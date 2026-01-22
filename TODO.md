@@ -1,4 +1,4 @@
-# Wallabag Bidirectional Sync Implementation Guide
+# To Do List
 
 > **Instructions for Claude Code:** As you complete tasks, mark them done by changing `[ ]` to `[x]`. Never remove any items from this document. Add notes under completed items if needed.
 
@@ -6,7 +6,9 @@
 
 Wallacast is a read-it-later app with TTS (text-to-speech) capabilities. Users can save articles, paste text, or subscribe to podcasts. The app generates audio for articles/texts using OpenAI TTS, and transcribes podcasts using Whisper.
 
-This document specifies bidirectional sync with Wallabag, allowing users to:
+This document serves as a general to do list.
+
+The biggest current focus is bidirectional sync with Wallabag, allowing users to:
 - Save articles in Wallabag and have them appear in Wallacast (with TTS generation)
 - Save content in Wallacast and have it sync to Wallabag
 - Keep starred/archived status synchronised
@@ -16,7 +18,7 @@ This document specifies bidirectional sync with Wallabag, allowing users to:
 
 ---
 
-## 🎉 Implementation Status
+## 🎉 Wallabag Implementation Status
 
 **Status: COMPLETE** ✅
 

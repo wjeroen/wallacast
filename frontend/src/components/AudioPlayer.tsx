@@ -1,9 +1,10 @@
+// Import SkipBack and SkipForward at a later stage when implementing queue functionality 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
   Pause,
-  SkipBack,
-  SkipForward,
+  RotateCcw,
+  RotateCw,
   Volume2,
   Clock,
   Gauge,
@@ -441,14 +442,16 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           </div>
 
           <div className="playback-controls">
-            <button onClick={handleSkipBackward} title="Skip back 15s">
-              <SkipBack size={24} />
+            <button onClick={handleSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+              <RotateCcw className="seek-icon" />
+              <span className="seek-label">15</span>
             </button>
             <button onClick={togglePlay} className="play-pause-btn">
               {isPlaying ? <Pause size={32} /> : <Play size={32} />}
             </button>
-            <button onClick={handleSkipForward} title="Skip forward 30s">
-              <SkipForward size={24} />
+            <button onClick={handleSkipForward} title="Seek forward 30 seconds" className="seek-btn">
+              <RotateCw className="seek-icon" />
+              <span className="seek-label">30</span>
             </button>
           </div>
 
