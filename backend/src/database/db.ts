@@ -116,6 +116,11 @@ export async function initializeDatabase() {
     const usersMigration = await fs.readFile(usersMigrationPath, 'utf-8');
     await poolInstance.query(usersMigration);
 
+    // Run migration to add content_source field for provenance tracking
+    const contentSourceMigrationPath = path.join(__dirname, 'migrations', '006_add_content_source.sql');
+    const contentSourceMigration = await fs.readFile(contentSourceMigrationPath, 'utf-8');
+    await poolInstance.query(contentSourceMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
       UPDATE content_items
