@@ -8,7 +8,6 @@
 - [ ] Test multi-user podcast subscriptions (after migration 007 runs)
 - [ ] Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] Fix speed toggle UI inconsistency (buttons don't always show current speed)
-- [ ] Test EA Forum comment extraction with recent articles
 
 ### Features to Implement
 - [ ] Bulk podcast subscription import (OPML format)
@@ -45,6 +44,8 @@
 
 ## Completed Recently ✅
 
+- [x] Fix infinite comment repetition bug in content extraction (2026-01-23)
+- [x] Fix migration crash loop and optimize playback position updates (2026-01-23)
 - [x] Fix GPT-5-mini reasoning_effort compatibility (2026-01-23)
 - [x] Fix audio regeneration to use existing content from content regeneration (2026-01-23)
 - [x] Fix podcast subscription multi-user bug (composite unique constraint) (2026-01-23)
