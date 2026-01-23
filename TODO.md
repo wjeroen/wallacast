@@ -6,14 +6,6 @@
 
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
-### High Priority
-- [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
-- [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
-- [ ] **[P2]** Remember last-set speed toggle (one setting applies to all items)
-- [ ] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
-- [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
-- [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
-
 ### Features to Implement
 - [ ] **[P1]** Groq API compatibility & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
 - [ ] **[P1]** Don't auto-generate podcast episodes, or make auto-generation optional in settings when adding articles/podcasts - SAVES MONEY!
@@ -27,6 +19,12 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
+- [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
+- [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
+- [ ] **[P2]** Remember last-set speed toggle (one setting applies to all items)
+- [ ] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
+- [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
+- [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
 - [ ] **[P2]** Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
 - [ ] **[P3]** EA Forum and Lesswrong comment extraction unreliable (Apollo state JSON parsing), sites might work slightly differently
 
