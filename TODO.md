@@ -1,48 +1,36 @@
 # Wallacast - Task List
 
-> **Instructions for Claude Code:** This is a general task list for Wallacast development. Mark tasks done by changing `[ ]` to `[x]`. Add new tasks as they come up. Keep it organized and actionable.
+> **Instructions for Claude Code:** This is a general task list for Wallacast development. Mark tasks done by changing `[ ]` to `[x]`. Add new tasks as they come up. Keep it organized and actionable. If you notice a to-do has already been completed by the user or a previous Claude instance but it it hasn't been marked yet, ask the user whether you can mark it done.
 
 ## Current Sprint
 
 ### High Priority
-- [ ] Test multi-user podcast subscriptions (after migration 007 runs)
 - [ ] Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] Play audio immediately upon clicking an item, don't forget last position
 - [ ] Remember last-set speed toggle (one setting applies to all items)
 - [ ] Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
 - [ ] Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
 - [ ] Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
-- [ ] Fix speed toggle UI inconsistency (buttons don't always show current speed)
 
 ### Features to Implement
 - [ ] Groq API compatibility & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users)
 - [ ] Don't auto-generate podcast episodes, or make auto-generation optional in settings when adding articles/podcasts
-- [ ] Use icons instead of showing the full word 'articles' etc. in library filter buttons, or only show full words on wide enough screens
-- [ ] Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast"
+- [ ] Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
+- [ ] Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
 - [ ] Add dark/bright mode switcher to the left of "Hi, [user]" button
 - [ ] Bulk podcast subscription import (OPML format)
 - [ ] Allow texts (not articles) to be edited with markdown support, doesn't immediately regenerate audio
-- [ ] Queue functionality (UI exists but incomplete)
-- [ ] Persistent mini-player across tabs (currently reloads when switching tabs)
-- [ ] Keyboard shortcuts for player (space = play/pause, arrows = seek)
 - [ ] Add button to summarize content (low priority) - if it's an EA forum article, check whether there's already a summary written by the summarybot in the comments and use that instead
-- [ ] Keep version history of all previous content/comment fetches (don't do this with audio, would take up too much space)
+- [ ] Keep version history of all previous content/comment fetches in case articles get deleted or regeneration went poorly (don't do this with audio, would take up too much space)
 - [ ] Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
-- [ ] Add content version history in case articles get deleted or regeneration went poorly
 
 ### Bug Fixes
-- [ ] Fix timestamp sync with podcast transcriptions
 - [ ] Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
-- [ ] EA Forum comment extraction unreliable (Apollo state JSON parsing)
-- [ ] Handle very long articles (>50k chars) gracefully
-- [ ] Fix audio player size on mobile (too large)
-- [ ] Improve error messages when OpenAI API key is missing/invalid
+- [ ] EA Forum and Lesswrong comment extraction unreliable (Apollo state JSON parsing), sites might work slightly differently
 
 ### Performance & Optimization
-- [ ] Add caching for article HTML (avoid re-fetching on regenerate)
 - [ ] Implement batch audio generation (queue multiple articles)
 - [ ] Add compression for stored audio (consider Opus codec)
-- [ ] Lazy load transcript/comments (only when viewing item)
 
 ### Technical Debt & Code Quality
 - [ ] Issue: No Database Migration System - migrations are SQL files run every time server starts via fs.readFile(), works with IF NOT EXISTS but no version tracking or rollback capability. Fix: Use node-pg-migrate or knex migrations, or at minimum add schema_migrations table to track versions (see backend/src/database/db.ts)
@@ -53,15 +41,6 @@
 ### Documentation
 - [ ] Add security warning on registration page: "This is a vibe-coded project. Your user data, including password and API keys and all your saved content, might not be safe. Choose a unique password and use this project at your own risk. If you want to be in control, feel free to ask for the source code and run all of this yourself."
 - [ ] Create user guide (how to set up OpenAI API key, Wallabag, etc.)
-- [ ] Add API documentation (for developers wanting to extend)
-- [ ] Document podcast RSS feed requirements
-- [ ] Create troubleshooting guide
-
-### Testing
-- [ ] Test with various podcast feed formats (iTunes, RSS 2.0, Atom)
-- [ ] Test with different article sources (Medium, Substack, EA Forum, LessWrong)
-- [ ] Load test with 1000+ articles
-- [ ] Test Wallabag sync with 10,000+ entries
 
 ## Audio Player and Content Overhaul
 
@@ -124,12 +103,6 @@ In fullscreen mode, there should be three or four tabs: Content, Comments (EA Fo
 
 - Share article with audio generation
 - Export to audiobook format (M4B with chapters)
-- Collaborative playlists
-- Reading statistics (words read, hours listened)
-- Smart recommendations based on reading history
-- Automatic tagging with GPT (genre, topic, difficulty)
-- Spaced repetition for article recall
-- Integration with Readwise for highlights
 
 ## Reference
 
