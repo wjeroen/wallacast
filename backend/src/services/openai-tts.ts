@@ -111,7 +111,6 @@ Return: Main article body, then complete comments section with ALL comments (eac
               content: userPrompt,
             },
           ],
-          temperature: 0.3,
           reasoning_effort: 'low', // Fast extraction for gpt-5-mini
           max_completion_tokens: 128000, // GPT-5-mini supports up to 128k output tokens
         } as any); // Cast to bypass SDK 4.24.1 type restrictions
@@ -133,6 +132,20 @@ Return: Main article body, then complete comments section with ALL comments (eac
     }
 
     const cleanContent = response.choices[0]?.message?.content || '';
+
+    // Validate that we got extracted content, not raw HTML
+    const htmlTagCount = (cleanContent.match(/<[^>]+>/g) || []).length;
+    const contentLength = cleanContent.length;
+    const htmlDensity = htmlTagCount / Math.max(contentLength, 1);
+
+    // If more than 5% of the content is HTML tags, something went wrong
+    if (htmlDensity > 0.05 || htmlTagCount > 100) {
+      throw new Error(
+        `Content extraction failed: received raw HTML instead of extracted text. ` +
+        `HTML tag density: ${(htmlDensity * 100).toFixed(1)}%, tag count: ${htmlTagCount}. ` +
+        `This usually means the LLM didn't follow extraction instructions.`
+      );
+    }
 
     // Update progress after main content extraction
     if (actualContentId) {
@@ -235,7 +248,6 @@ Use this JSON data to get accurate vote counts. If the JSON is present, prioriti
 HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
                 },
               ],
-              temperature: 0.2,
               reasoning_effort: 'low', // 'low' is the fastest supported setting for gpt-5-mini (supports: low, medium, high)
               max_completion_tokens: 128000, // GPT-5-mini supports up to 128k output tokens
             } as any); // Cast to any to bypass SDK 4.24.1 type restrictions
