@@ -505,6 +505,12 @@ router.patch('/:id', async (req, res) => {
     const values = [];
     let paramCount = 1;
 
+    // Track if we're updating content fields (vs just playback state)
+    const playbackOnlyFields = ['playback_position', 'playback_speed', 'last_played_at'];
+    const updatingContentFields = Object.keys(updates).some(
+      key => allowedFields.includes(key) && !playbackOnlyFields.includes(key)
+    );
+
     for (const [key, value] of Object.entries(updates)) {
       if (allowedFields.includes(key)) {
         setClause.push(`${key} = $${paramCount}`);
@@ -517,7 +523,12 @@ router.patch('/:id', async (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    setClause.push(`updated_at = CURRENT_TIMESTAMP`);
+    // Only update updated_at for content changes, not playback position updates
+    // Playback updates happen frequently (every few seconds) and shouldn't trigger sync
+    if (updatingContentFields) {
+      setClause.push(`updated_at = CURRENT_TIMESTAMP`);
+    }
+
     values.push(id);
     paramCount++;
     values.push(req.user!.userId);

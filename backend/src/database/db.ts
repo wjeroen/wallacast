@@ -126,6 +126,11 @@ export async function initializeDatabase() {
     const podcastMultiUserMigration = await fs.readFile(podcastMultiUserMigrationPath, 'utf-8');
     await poolInstance.query(podcastMultiUserMigration);
 
+    // Run migration to optimize playback position updates
+    const playbackOptimizationMigrationPath = path.join(__dirname, 'migrations', '008_optimize_playback_updates.sql');
+    const playbackOptimizationMigration = await fs.readFile(playbackOptimizationMigrationPath, 'utf-8');
+    await poolInstance.query(playbackOptimizationMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
       UPDATE content_items
