@@ -102,12 +102,12 @@ export async function fetchPodcastDetails(feedUrl: string) {
     const language = extractXMLTag(xml, 'language');
 
     return {
-      title,
-      author,
-      description,
+      title: cleanHtmlEntities(title),
+      author: cleanHtmlEntities(author),
+      description: cleanDescription(description),
       preview_picture,
       website_url,
-      category,
+      category: cleanHtmlEntities(category),
       language,
     };
   } catch (error) {
@@ -249,11 +249,11 @@ function cleanDescription(description: string): string {
   // Remove CDATA wrapper
   let cleaned = description.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
 
-  // Remove HTML tags
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-
-  // Decode common HTML entities
+  // Decode common HTML entities FIRST (so &lt;p&gt; becomes <p>)
   cleaned = cleanHtmlEntities(cleaned);
+
+  // THEN remove HTML tags (now <p> will be properly stripped)
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
 
   // Clean up whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
