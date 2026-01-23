@@ -234,9 +234,9 @@ HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
                 },
               ],
               temperature: 0.2,
-              reasoning_effort: 'minimal', // Set to minimal for fastest speed
+              reasoning_effort: 'low', // 'low' is the fastest supported setting for gpt-5-mini (supports: low, medium, high)
               max_completion_tokens: 128000, // GPT-5-mini supports up to 128k output tokens
-            });
+            } as any); // Cast to any to bypass SDK 4.24.1 type restrictions
             break;
           } catch (error: any) {
             if (error.status === 429 && commentRetries > 1) {
