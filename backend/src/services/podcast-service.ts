@@ -211,7 +211,13 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
 function extractXMLTag(xml: string, tag: string): string {
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = xml.match(regex);
-  return match ? match[1].trim() : '';
+  if (!match) return '';
+
+  // Remove CDATA wrapper if present
+  let content = match[1].trim();
+  content = content.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+
+  return content;
 }
 
 function extractXMLAttribute(xml: string, tag: string, attr: string): string {
