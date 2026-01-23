@@ -71,7 +71,7 @@ export async function extractArticleContent(htmlContent: string, commentsHtmlOrC
     while (retries > 0) {
       try {
         response = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
+          model: 'gpt-5-mini-2025-08-07',
           messages: [
             {
               role: 'system',
@@ -112,8 +112,9 @@ Return: Main article body, then complete comments section with ALL comments (eac
             },
           ],
           temperature: 0.3,
-          max_tokens: 16384, // Max tokens for gpt-4o-mini
-        });
+          reasoning_effort: 'low', // Fast extraction for gpt-5-mini
+          max_completion_tokens: 128000, // GPT-5-mini supports up to 128k output tokens
+        } as any); // Cast to bypass SDK 4.24.1 type restrictions
         break;
       } catch (error: any) {
         if (error.status === 429 && retries > 1) {
