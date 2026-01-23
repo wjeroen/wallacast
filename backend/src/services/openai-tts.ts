@@ -95,15 +95,16 @@ Extract and format content following these rules:
 
 **Comments Section:**
 6. After main article, say "Comments section:"
-7. For EACH comment (including nested replies), extract:
+7. For EACH comment (including nested replies), extract ONCE and ONLY ONCE:
    - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
    - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
    - For replies: "A reply to this comment by [username] on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
 8. Include ALL comments and nested replies in conversation order - do not cut off early
 9. IMPORTANT: Look carefully for vote/karma numbers in the HTML - they're usually in spans or divs near the comment header
 10. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
+11. CRITICAL: Each comment should appear exactly once - do NOT repeat or duplicate comments
 
-Return: Main article body, then complete comments section with ALL comments and all available metadata.`,
+Return: Main article body, then complete comments section with ALL comments (each listed exactly once) and all available metadata.`,
             },
             {
               role: 'user',
@@ -606,6 +607,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         // Content is from Wallabag or needs extraction - extract from HTML
         console.log(`Extracting fresh content from HTML for article ${contentId} (source: ${content.content_source || 'unknown'})`);
 
+        // CRITICAL: Only extract from html_content (raw HTML), never from content (already formatted)
+        // Passing formatted content to extraction causes LLM to duplicate/repeat comments
+        if (!content.html_content) {
+          throw new Error(`Cannot extract content for article ${contentId}: html_content is missing. Use existing content or regenerate from URL.`);
+        }
+
         // Update status to show content extraction is in progress
         await query(
           'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
@@ -613,7 +620,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         );
 
         // Extract clean content from HTML (with comments for audio)
-        const extracted = await extractArticleContent(content.html_content || content.content, contentId);
+        const extracted = await extractArticleContent(content.html_content, contentId);
         textToConvert = extracted.content;
 
         // Build intro for display (shown at top of content)
