@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, RefreshCw, Plus, X } from 'lucide-react';
+import { Search, Plus, X } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast } from '../types';
 
@@ -76,15 +76,6 @@ export function FeedTab() {
       setSearchResults([]);
     } catch (error) {
       console.error('Failed to subscribe:', error);
-    }
-  };
-
-  const handleRefresh = async (podcastId: number) => {
-    try {
-      await podcastAPI.refresh(podcastId);
-      loadLatestEpisodes();
-    } catch (error) {
-      console.error('Failed to refresh:', error);
     }
   };
 
@@ -198,15 +189,6 @@ export function FeedTab() {
                 <p className="author">{podcast.author}</p>
               </div>
               <div className="podcast-actions">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRefresh(podcast.id);
-                  }}
-                  title="Refresh episodes"
-                >
-                  <RefreshCw size={16} />
-                </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

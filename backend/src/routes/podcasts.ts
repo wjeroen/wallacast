@@ -71,7 +71,9 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Fetch latest episodes for a podcast
+// Fetch latest episodes for a podcast (DISABLED - auto-adding episodes to library was unwanted)
+// Users should manually add episodes via the "Add to Library" button
+/*
 router.post('/:id/refresh', async (req, res) => {
   try {
     const podcastResult = await query(
@@ -97,6 +99,7 @@ router.post('/:id/refresh', async (req, res) => {
     res.status(500).json({ error: 'Failed to refresh podcast' });
   }
 });
+*/
 
 // Get preview episodes from feed (without saving)
 router.get('/:id/preview-episodes', async (req, res) => {
