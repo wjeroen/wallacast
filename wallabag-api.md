@@ -309,3 +309,103 @@ Authorization: Bearer {access_token}
 ```
 
 A 200 response confirms valid setup. Store the current timestamp as `wallabag_last_sync` for initial sync baseline.
+
+---
+
+## Wallacast Implementation Guide
+
+This section documents how Wallacast implements Wallabag sync.
+
+### Core Design Rules
+
+1. **Wallacast always wins conflicts.** If both systems modified an item since last sync, Wallacast's version overwrites Wallabag.
+
+2. **`#nosync` items are ignored.** Wallabag entries tagged `nosync` or `#nosync` are never pulled into Wallacast.
+
+3. **Type tags are mandatory.** Every synced item must have exactly one type tag: `article`, `text`, or `podcast`. Wallacast adds/fixes this tag on every push.
+
+4. **Local-only fields never sync to Wallabag:**
+   - `audio_data` (binary TTS audio)
+   - `audio_url` (local endpoint for serving audio)
+   - `playback_position`, `playback_speed`, `last_played_at`
+   - `generation_status`, `generation_progress`, `generation_error`, `current_operation`
+   - `tts_chunks`, `transcript_words`
+   - `podcast_id`, `episode_number` (RSS metadata)
+
+5. **App works without Wallabag.** All sync functionality is optional. If credentials aren't configured or sync is disabled, the app functions normally.
+
+6. **Content is editable.** Users can edit article content, text content, or podcast transcripts in Wallacast. These edits sync to Wallabag on push.
+
+### Content Type Details
+
+#### Articles (`type = 'article'`)
+
+**What they are:** Web articles saved by URL. Wallacast fetches the HTML, extracts readable content using GPT-5-mini, and generates TTS audio.
+
+**Wallabag representation:**
+- `url`: The original article URL (e.g., `https://example.com/article`)
+- `content`: The extracted/cleaned HTML content
+- `tags`: Must include `article` tag
+
+**Sync behaviour:**
+- **Pull from Wallabag:** Create local article with the URL. Wallacast may re-fetch and re-extract content, or use Wallabag's content directly.
+- **Push to Wallabag:** Send the current `html_content` or `content` field. Edited content in Wallacast syncs to Wallabag.
+- **Content ownership:** Wallacast can overwrite/edit content. On push, Wallacast's version always wins.
+
+#### Texts (`type = 'text'`)
+
+**What they are:** User-pasted plain text (not from a URL). Users type or paste text directly into Wallacast, and TTS is generated.
+
+**Wallabag representation:**
+- `url`: Synthetic URL in format `wallacast://text/{uuid}` (Wallabag requires a URL but won't fetch it)
+- `content`: The user's text content (may be wrapped in basic HTML like `<p>` tags)
+- `tags`: Must include `text` tag
+
+**Sync behaviour:**
+- **Pull from Wallabag:** If URL matches `wallacast://text/*` pattern OR has `text` tag, create as text type.
+- **Push to Wallabag:** Generate synthetic URL if none exists. Push current content.
+- **Content ownership:** User can edit text in Wallacast. Edited version pushes to Wallabag.
+
+#### Podcasts (`type = 'podcast_episode'`)
+
+**What they are:** Podcast episodes from RSS feeds. Wallacast transcribes audio using Whisper.
+
+**Wallabag representation:**
+- `url`: The actual podcast audio URL (e.g., `https://podcast.com/episode.mp3`)
+- `content`: The Whisper transcription of the episode
+- `tags`: Must include `podcast` tag
+
+**Sync behaviour:**
+- **Pull from Wallabag:** If URL ends in audio extension (`.mp3`, `.m4a`, etc.) OR has `podcast` tag, create as podcast_episode type. The `content` from Wallabag becomes the `transcript` field locally.
+- **Push to Wallabag:** Push the `transcript` field as `content`. Audio URL is the real URL.
+- **Content ownership:** Wallacast owns the transcript. Re-transcription or edits push to Wallabag.
+
+### Implementation Status
+
+**Status: COMPLETE** ✅
+
+All core Wallabag sync features are implemented and functional:
+
+- **Pull Sync (Wallabag → Wallacast)**: Articles, texts, and podcasts automatically sync from Wallabag
+- **Push Sync (Wallacast → Wallabag)**: Local changes (creates, edits, stars, archives) sync to Wallabag
+- **Two-Way Delete**: Deletions sync bidirectionally
+- **Full Refresh**: Button to fetch all items from Wallabag (ignores timestamps)
+- **Cleanup Tool**: Emergency button to delete recently synced items and reset sync state
+- **OAuth Token Management**: Automatic token refresh with fallback
+- **Type Detection**: Automatic detection of article/text/podcast based on tags and URL patterns
+- **Conflict Resolution**: Pull sync properly detects conflicts and preserves Wallacast changes per "Wallacast always wins" rule
+
+### Implementation Files
+
+#### Created
+- `backend/src/services/wallabag-service.ts` - OAuth, API wrapper, CRUD operations
+- `backend/src/services/wallabag-sync.ts` - Pull sync, push sync, full sync, delete sync
+- `backend/src/routes/wallabag.ts` - API endpoints (test, status, pull, push, sync, cleanup, full refresh)
+
+#### Modified
+- `backend/src/routes/users.ts` - Added wallabag_token_expires_at and wallabag_last_sync keys
+- `backend/src/routes/content.ts` - Two-way delete integration, content regeneration fixes
+- `backend/src/index.ts` - Registered wallabag router at /api/wallabag
+- `frontend/src/api.ts` - Added wallabagAPI object
+- `frontend/src/components/SettingsPage.tsx` - Wallabag settings UI
+- `frontend/src/App.tsx` - Sync button in header with pending changes indicator

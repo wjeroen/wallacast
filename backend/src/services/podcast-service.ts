@@ -46,10 +46,10 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
 
 export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
-    // Check if already subscribed
+    // Check if this user is already subscribed to this feed
     const existing = await query(
-      'SELECT * FROM podcasts WHERE feed_url = $1',
-      [feedUrl]
+      'SELECT * FROM podcasts WHERE feed_url = $1 AND user_id = $2',
+      [feedUrl, userId]
     );
 
     if (existing.rows.length > 0) {
