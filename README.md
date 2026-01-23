@@ -2,7 +2,7 @@
 
 A personal read-it-later and podcast app that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Spotify Podcasts.
 
-**Wallabag Integration (Planned):** Bidirectional sync with Wallabag for articles, texts, and podcasts. Wallacast extends Wallabag with audio generation and podcast transcription.
+**Wallabag Integration (Complete ✅):** Full bidirectional sync with Wallabag for articles, texts, and podcasts. Wallacast extends Wallabag with audio generation and podcast transcription.
 
 ## Core Concept
 
@@ -20,7 +20,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | OpenAI Whisper (whisper-1, gpt-4o-mini-transcribe) |
-| Content Extraction | GPT-4o-mini (HTML → readable text) |
+| Content Extraction | GPT-4o-mini (HTML → readable text), GPT-5-mini (comment extraction) |
 | Audio Processing | FFmpeg (chunking, concatenation) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
@@ -93,6 +93,10 @@ Wallacast supports multiple users with complete data isolation:
   - `001_add_audio_data_column.sql`: Adds BYTEA column for storing audio in database
   - `002_add_performance_indexes.sql`: Adds indexes on created_at, type, is_archived, is_favorite for query performance
   - `003_remove_is_read_column.sql`: Removes unused is_read column (was only cosmetic)
+  - `004_wallabag_compatibility.sql`: Adds wallabag_id and wallabag_updated_at for sync tracking
+  - `005_add_users.sql`: Adds multi-user support (users, user_settings, user_sessions tables)
+  - `006_add_content_source.sql`: Adds content_source field for provenance tracking (wallabag vs wallacast)
+  - `007_fix_podcast_multi_user.sql`: Fixes podcast subscriptions with composite unique constraint (feed_url, user_id)
 
 #### Routes
 
@@ -268,6 +272,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
 - `is_subscribed`, `last_fetched_at`
+- **Unique constraint**: `(feed_url, user_id)` - Multiple users can subscribe to the same podcast
 
 ### queue_items (not fully implemented in UI)
 - `id`: Primary key
@@ -383,18 +388,28 @@ Key issues:
 - Queue functionality incomplete
 - Audio player should be smaller/persistent across tabs
 
+## Recent Improvements
+
+**January 2026:**
+- **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
+- **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
+- **Multi-User Podcast Subscriptions**: Fixed bug where only one user could subscribe to each podcast. Now uses composite unique constraint `(feed_url, user_id)`
+- **Wallabag Sync Complete**: Full bidirectional sync with conflict resolution, two-way delete, full refresh, and cleanup tools
+
+**December 2025:**
+- Content provenance tracking (wallabag vs wallacast)
+- Multi-user authentication with JWT tokens
+- Per-user OpenAI API keys
+- Performance optimizations (query times reduced from 1-3s to <100ms)
+- Optimistic UI updates with Zustand store
+
 ## Future Plans
 
-- **Wallabag Integration (in progress):** Bidirectional sync with Wallabag
-  - Articles, texts, and podcasts sync as Wallabag entries
-  - Tags: `article`, `podcast`, `text` identify content type
-  - Texts use generated URLs, podcasts store transcript as content
-  - Items tagged `#nosync` in Wallabag are ignored
-  - Wallacast stores TTS audio and playback position locally (not synced)
 - Bulk podcast subscription import (OPML)
 - Edit text content after adding
 - Flemish-sounding Dutch TTS prompt
 - Fullscreen player mode for reading
+- Keyboard shortcuts for player
 
 ## Development
 

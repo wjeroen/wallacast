@@ -121,6 +121,11 @@ export async function initializeDatabase() {
     const contentSourceMigration = await fs.readFile(contentSourceMigrationPath, 'utf-8');
     await poolInstance.query(contentSourceMigration);
 
+    // Run migration to fix podcast multi-user subscriptions
+    const podcastMultiUserMigrationPath = path.join(__dirname, 'migrations', '007_fix_podcast_multi_user.sql');
+    const podcastMultiUserMigration = await fs.readFile(podcastMultiUserMigrationPath, 'utf-8');
+    await poolInstance.query(podcastMultiUserMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
       UPDATE content_items
