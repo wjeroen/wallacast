@@ -100,7 +100,7 @@ export const podcastAPI = {
 
   unsubscribe: (id: number) => api.delete<Podcast>(`/podcasts/${id}`),
 
-  refresh: (id: number) => api.post(`/podcasts/${id}/refresh`),
+  // refresh: (id: number) => api.post(`/podcasts/${id}/refresh`), // Removed - auto-added episodes to library
 
   getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
 
