@@ -154,10 +154,10 @@ Return: Main article body, then complete comments section with ALL comments and 
         while (commentRetries > 0) {
           try {
             commentsResponse = await openai.chat.completions.create({
-              model: 'gpt-4o-mini',
+              model: 'gpt-5-mini-2025-08-07',
               messages: [
                 {
-                  role: 'system',
+                  role: 'developer',
                   content: `You are a comments extraction assistant. Extract comment data from HTML and return it as a JSON array.
 
 For EACH comment (including nested replies), extract:
@@ -191,6 +191,9 @@ IMPORTANT:
 - Check for vote data ONLY within each comment's container/div, not at the page level
 - If you can't find a metadata field after thorough searching WITHIN that comment's HTML, omit it (don't use null or 0)
 - Preserve the hierarchical structure of replies
+- CRITICAL: Identify comment boundaries by HTML container elements (div/article tags with comment classes)
+- QUOTES/BLOCKQUOTES WITHIN A COMMENT are PART OF THAT COMMENT'S CONTENT - do not treat them as separate comments
+- Only extract text that belongs to each comment's author - quoted text from others should be included in the "content" field of the comment that contains the quote
 
 Return ONLY a valid JSON array of comment objects, nothing else. If no comments found, return an empty array [].
 
@@ -231,7 +234,8 @@ HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
                 },
               ],
               temperature: 0.2,
-              max_tokens: 16384, // Max tokens for gpt-4o-mini to capture all comments
+              reasoning_effort: 'minimal', // Set to minimal for fastest speed
+              max_completion_tokens: 128000, // GPT-5-mini supports up to 128k output tokens
             });
             break;
           } catch (error: any) {
