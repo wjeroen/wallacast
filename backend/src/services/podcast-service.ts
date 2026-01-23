@@ -46,20 +46,40 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
 
 export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
-    // Check if this user is already subscribed to this feed
+    // Check if this user has this podcast (even if unsubscribed)
     const existing = await query(
       'SELECT * FROM podcasts WHERE feed_url = $1 AND user_id = $2',
       [feedUrl, userId]
     );
 
-    if (existing.rows.length > 0) {
-      return existing.rows[0];
-    }
-
-    // Fetch podcast details from feed
+    // Fetch fresh podcast details from feed
     const podcastDetails = await fetchPodcastDetails(feedUrl);
 
-    // Insert podcast
+    if (existing.rows.length > 0) {
+      // Podcast exists - update it with fresh data and resubscribe
+      const result = await query(
+        `UPDATE podcasts
+         SET title = $1, author = $2, description = $3, website_url = $4,
+             preview_picture = $5, category = $6, language = $7,
+             is_subscribed = true, updated_at = CURRENT_TIMESTAMP
+         WHERE feed_url = $8 AND user_id = $9
+         RETURNING *`,
+        [
+          podcastDetails.title,
+          podcastDetails.author,
+          podcastDetails.description,
+          podcastDetails.website_url,
+          podcastDetails.preview_picture,
+          podcastDetails.category,
+          podcastDetails.language?.substring(0, 100) || null,
+          feedUrl,
+          userId,
+        ]
+      );
+      return result.rows[0];
+    }
+
+    // New podcast - insert it
     const result = await query(
       `INSERT INTO podcasts
        (title, author, description, feed_url, website_url, preview_picture, category, language, user_id)
@@ -73,14 +93,12 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
         podcastDetails.website_url,
         podcastDetails.preview_picture,
         podcastDetails.category,
-        podcastDetails.language?.substring(0, 100) || null,  // Truncate language to 100 chars as safeguard
+        podcastDetails.language?.substring(0, 100) || null,
         userId,
       ]
     );
 
-    const podcast = result.rows[0];
-
-    return podcast;
+    return result.rows[0];
   } catch (error) {
     console.error('Error subscribing to podcast:', error);
     throw error;
