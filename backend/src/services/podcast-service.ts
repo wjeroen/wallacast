@@ -73,7 +73,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
         podcastDetails.website_url,
         podcastDetails.preview_picture,
         podcastDetails.category,
-        podcastDetails.language,
+        podcastDetails.language?.substring(0, 100) || null,  // Truncate language to 100 chars as safeguard
         userId,
       ]
     );

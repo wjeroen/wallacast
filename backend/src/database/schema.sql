@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS podcasts (
     website_url TEXT,
     preview_picture TEXT,  -- Renamed from thumbnail_url (Wallabag compatibility)
     category VARCHAR(100),
-    language VARCHAR(10),
+    language VARCHAR(100),  -- Expanded from VARCHAR(10) - some podcast feeds have long language codes
     is_subscribed BOOLEAN DEFAULT TRUE,
     last_fetched_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

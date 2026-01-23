@@ -131,6 +131,11 @@ export async function initializeDatabase() {
     const playbackOptimizationMigration = await fs.readFile(playbackOptimizationMigrationPath, 'utf-8');
     await poolInstance.query(playbackOptimizationMigration);
 
+    // Run migration to expand podcast language column
+    const expandLanguageMigrationPath = path.join(__dirname, 'migrations', '009_expand_podcast_language_column.sql');
+    const expandLanguageMigration = await fs.readFile(expandLanguageMigrationPath, 'utf-8');
+    await poolInstance.query(expandLanguageMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await poolInstance.query(`
       UPDATE content_items
