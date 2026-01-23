@@ -44,6 +44,7 @@
 
 ## Completed Recently ✅
 
+- [x] Switch main content extraction to gpt-5-mini (128k token limit) (2026-01-23)
 - [x] Fix infinite comment repetition bug in content extraction (2026-01-23)
 - [x] Fix migration crash loop and optimize playback position updates (2026-01-23)
 - [x] Fix GPT-5-mini reasoning_effort compatibility (2026-01-23)
