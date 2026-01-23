@@ -578,85 +578,114 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     let textToConvert = '';
 
     if (content.type === 'article') {
-      // Update status to show content extraction is in progress
-      await query(
-        'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
-        ['extracting_content', 'extracting_article_text', 10, contentId]
-      );
+      // Check if content was already extracted by Wallacast (e.g., during regeneration)
+      if (content.content_source === 'wallacast' && content.content) {
+        console.log(`✓ Using existing Wallacast-extracted content for article ${contentId} (skipping re-extraction)`);
 
-      // Extract clean content from HTML (with comments for audio)
-      const extracted = await extractArticleContent(content.html_content || content.content, contentId);
-      textToConvert = extracted.content;
+        // Strip the wallacast-generated marker and use the content as-is
+        let existingContent = content.content;
+        existingContent = existingContent.replace(/^<!-- wallacast-generated:.*?-->\n/, '');
 
-      // Build intro for display (shown at top of content)
-      let displayIntro = '';
-      if (content.title) {
-        displayIntro = `# ${content.title}\n\n`;
+        // Strip the display intro (title + metadata) to get just the article text
+        // The display intro follows this format:
+        // # Title
+        // *metadata*
+        // ---
+        // [actual content starts here]
+        const introEndMarker = /^#.*?\n\n.*?\n\n---\n\n/s;
+        existingContent = existingContent.replace(introEndMarker, '');
 
-        const metadataParts: string[] = [];
-        if (content.author) {
-          metadataParts.push(`By ${content.author}`);
+        textToConvert = existingContent;
+
+        // Update status to show we're using existing content
+        await query(
+          'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
+          ['content_ready', 'audio_generation', 15, contentId]
+        );
+      } else {
+        // Content is from Wallabag or needs extraction - extract from HTML
+        console.log(`Extracting fresh content from HTML for article ${contentId} (source: ${content.content_source || 'unknown'})`);
+
+        // Update status to show content extraction is in progress
+        await query(
+          'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_progress = $3 WHERE id = $4',
+          ['extracting_content', 'extracting_article_text', 10, contentId]
+        );
+
+        // Extract clean content from HTML (with comments for audio)
+        const extracted = await extractArticleContent(content.html_content || content.content, contentId);
+        textToConvert = extracted.content;
+
+        // Build intro for display (shown at top of content)
+        let displayIntro = '';
+        if (content.title) {
+          displayIntro = `# ${content.title}\n\n`;
+
+          const metadataParts: string[] = [];
+          if (content.author) {
+            metadataParts.push(`By ${content.author}`);
+          }
+          if (content.published_at) {
+            const date = new Date(content.published_at);
+            const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+            metadataParts.push(formattedDate);
+          }
+          if (content.karma !== undefined && content.karma !== null) {
+            metadataParts.push(`${content.karma} karma`);
+          }
+          if (content.agree_votes !== undefined && content.agree_votes !== null) {
+            metadataParts.push(`${content.agree_votes} agree`);
+          }
+          if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
+            metadataParts.push(`${content.disagree_votes} disagree`);
+          }
+
+          if (metadataParts.length > 0) {
+            displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
+          }
         }
-        if (content.published_at) {
-          const date = new Date(content.published_at);
-          const formattedDate = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-          metadataParts.push(formattedDate);
-        }
-        if (content.karma !== undefined && content.karma !== null) {
-          metadataParts.push(`${content.karma} karma`);
-        }
-        if (content.agree_votes !== undefined && content.agree_votes !== null) {
-          metadataParts.push(`${content.agree_votes} agree`);
-        }
-        if (content.disagree_votes !== undefined && content.disagree_votes !== null) {
-          metadataParts.push(`${content.disagree_votes} disagree`);
-        }
 
-        if (metadataParts.length > 0) {
-          displayIntro += `*${metadataParts.join(' • ')}*\n\n---\n\n`;
-        }
-      }
+        // Update the content field with intro + extracted content and store structured comments
+        const updates: string[] = [];
+        const values: any[] = [];
+        let paramCount = 1;
 
-      // Update the content field with intro + extracted content and store structured comments
-      const updates: string[] = [];
-      const values: any[] = [];
-      let paramCount = 1;
+        // Add Wallacast provenance marker to content
+        const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${displayIntro}${extracted.content}`;
 
-      // Add Wallacast provenance marker to content
-      const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${displayIntro}${extracted.content}`;
-
-      updates.push(`content = $${paramCount}`);
-      values.push(markedContent);
-      paramCount++;
-
-      // Mark content source as wallacast (generated by us)
-      updates.push(`content_source = $${paramCount}`);
-      values.push('wallacast');
-      paramCount++;
-
-      // Update status to show content is ready to read
-      updates.push(`generation_status = $${paramCount}`);
-      values.push('content_ready');
-      paramCount++;
-
-      updates.push(`current_operation = $${paramCount}`);
-      values.push('audio_generation');
-      paramCount++;
-
-      if (extracted.comments && extracted.comments.length > 0) {
-        updates.push(`comments = $${paramCount}`);
-        values.push(JSON.stringify(extracted.comments));
+        updates.push(`content = $${paramCount}`);
+        values.push(markedContent);
         paramCount++;
-        console.log(`Storing ${extracted.comments.length} structured comments`);
+
+        // Mark content source as wallacast (generated by us)
+        updates.push(`content_source = $${paramCount}`);
+        values.push('wallacast');
+        paramCount++;
+
+        // Update status to show content is ready to read
+        updates.push(`generation_status = $${paramCount}`);
+        values.push('content_ready');
+        paramCount++;
+
+        updates.push(`current_operation = $${paramCount}`);
+        values.push('audio_generation');
+        paramCount++;
+
+        if (extracted.comments && extracted.comments.length > 0) {
+          updates.push(`comments = $${paramCount}`);
+          values.push(JSON.stringify(extracted.comments));
+          paramCount++;
+          console.log(`Storing ${extracted.comments.length} structured comments`);
+        }
+
+        values.push(contentId);
+        await query(
+          `UPDATE content_items SET ${updates.join(', ')} WHERE id = $${paramCount}`,
+          values
+        );
+
+        console.log(`✓ Content extracted and ready to read for article ${contentId}`);
       }
-
-      values.push(contentId);
-      await query(
-        `UPDATE content_items SET ${updates.join(', ')} WHERE id = $${paramCount}`,
-        values
-      );
-
-      console.log(`✓ Content extracted and ready to read for article ${contentId}`);
     } else {
       textToConvert = content.content || '';
     }
