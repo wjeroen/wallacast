@@ -100,7 +100,7 @@
 }
 
 .app-main:has(~ .bottom-container .mini-player) {
-  padding-bottom: 170px; /* Extra space when mini player is present */
+  padding-bottom: 185px; /* Extra space when mini player is present (player + nav + margins) */
 }
 
 /* Bottom container holds both mini player and nav together */
@@ -1823,14 +1823,13 @@
 
 .mini-player {
   position: absolute;
-  bottom: 70px; /* Height of bottom nav */
+  bottom: 82px; /* Height of bottom nav (70px) + margin (12px) to match side spacing */
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
   border: 1px solid #334155;
   border-radius: 0.75rem;
   padding: 0.75rem;
-  margin-bottom: 0.5rem; /* Space from bottom nav */
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1928,15 +1927,8 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: white !important;
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
-}
-
-.mini-play-button svg {
-  color: white !important;
-  stroke: white !important;
-  fill: white !important;
 }
 
 .mini-play-button:hover {

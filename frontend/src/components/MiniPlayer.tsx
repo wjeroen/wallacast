@@ -62,7 +62,7 @@ export function MiniPlayer({
 
       <div className="mini-player-controls">
         <button onClick={onPlayPause} className="mini-play-button">
-          {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+          {isPlaying ? <Pause size={20} color="white" strokeWidth={2.5} /> : <Play size={20} color="white" fill="white" strokeWidth={2.5} />}
         </button>
 
         <div className="mini-progress-container">
