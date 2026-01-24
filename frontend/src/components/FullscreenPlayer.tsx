@@ -357,11 +357,6 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-playback-controls">
-          <button onClick={onToggleSpeed} className="option-toggle">
-            <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
-          </button>
-
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
             <RotateCcw className="seek-icon" />
             <span className="seek-label">15</span>
@@ -374,6 +369,13 @@ export function FullscreenPlayer({
           <button onClick={onSkipForward} title="Seek forward 30 seconds" className="seek-btn">
             <RotateCw className="seek-icon" />
             <span className="seek-label">30</span>
+          </button>
+        </div>
+
+        <div className="fullscreen-player-options">
+          <button onClick={onToggleSpeed} className="option-toggle">
+            <Gauge size={20} />
+            <span>{playbackSpeed}x</span>
           </button>
 
           <button onClick={onToggleSleepTimer} className="option-toggle">

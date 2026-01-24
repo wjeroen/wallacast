@@ -1933,21 +1933,11 @@
   transition: background 0.2s, transform 0.1s;
   color: white;
   overflow: visible;
-  padding: 0;
+  padding: 2px;
 }
 
 .mini-play-button svg {
-  display: block;
-  width: 28px !important;
-  height: 28px !important;
-  stroke: white !important;
-  fill: white !important;
-  color: white !important;
-}
-
-.mini-play-button svg path {
-  stroke: white !important;
-  fill: white !important;
+  stroke: white;
 }
 
 .mini-play-button:hover {
