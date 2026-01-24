@@ -97,12 +97,15 @@ Extract and format content following these rules:
 6. After main article, say "Comments section:"
 7. For EACH comment (including nested replies), extract ONCE and ONLY ONCE:
    - Username, date, karma, agree/disagree votes (look for numbers near usernames, vote buttons, or patterns like "15 karma • 3 agree • 1 disagree")
-   - Format as: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
-   - For replies: "A reply to this comment by [username] on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+   - Format dates naturally: "15th of January 2026" not "2026-01-15T23:32:51.029Z"
+   - Format as: "[Username] commented on [date] with [X] karma and [Y] agree votes: [comment text]"
+   - If disagree votes exist, add them: "[Username] commented on [date] with [X] karma, [Y] agree votes, and [Z] disagree votes: [comment text]"
+   - For replies: "A reply to this comment by [username] on [date] with [X] karma and [Y] agree votes: [comment text]" (add disagree votes only if they exist)
 8. Include ALL comments and nested replies in conversation order - do not cut off early
 9. IMPORTANT: Look carefully for vote/karma numbers in the HTML - they're usually in spans or divs near the comment header
 10. If karma/votes aren't visible in HTML, just use: "[Username] commented on [date]: [comment text]"
 11. CRITICAL: Each comment should appear exactly once - do NOT repeat or duplicate comments
+12. IMPORTANT: Only mention disagree votes if the number is actually present in the HTML. If disagree data is missing or not visible, don't say "(no disagree number visible)" - just omit it entirely
 
 Return: Main article body, then complete comments section with ALL comments (each listed exactly once) and all available metadata.`,
             },
@@ -177,7 +180,7 @@ Return: Main article body, then complete comments section with ALL comments (eac
 
 For EACH comment (including nested replies), extract:
 - username: The comment author's username (required)
-- date: When the comment was posted (if available, format: YYYY-MM-DD or readable date)
+- date: When the comment was posted (if available, format as readable date like "15th of January 2026", not ISO timestamps)
 - karma: The INDIVIDUAL COMMENT's karma/upvote count (if available, as a number - look for:
   * Small numbers (typically 0-50 for individual comments) near the comment header
   * Numbers in spans/divs with classes like "karma", "vote", "points", "score" WITHIN the comment container
@@ -195,6 +198,7 @@ For EACH comment (including nested replies), extract:
   * Text like "2 disagree", "-2", or "✗ 2" in the comment's vote section
   * Spans with classes like "disagree", "disagreement-count" for THIS comment only
   * NOT the post's disagree votes - look only within this comment's HTML
+  * IMPORTANT: ONLY include this field if disagree data is actually visible in the HTML. If disagree votes aren't shown (like on LessWrong), completely omit this field
 - content: The comment text (clean, no HTML, preserve paragraph breaks)
 - replies: Array of nested reply comments with the same structure
 
@@ -205,6 +209,7 @@ IMPORTANT:
 - If you see large numbers like 300+, that's likely the POST karma, not a comment's karma
 - Check for vote data ONLY within each comment's container/div, not at the page level
 - If you can't find a metadata field after thorough searching WITHIN that comment's HTML, omit it (don't use null or 0)
+- For disagree_votes specifically: if the site doesn't show disagree data (like LessWrong), omit the field entirely - don't include it with null, 0, or placeholder text
 - Preserve the hierarchical structure of replies
 - CRITICAL: Identify comment boundaries by HTML container elements (div/article tags with comment classes)
 - QUOTES/BLOCKQUOTES WITHIN A COMMENT are PART OF THAT COMMENT'S CONTENT - do not treat them as separate comments
