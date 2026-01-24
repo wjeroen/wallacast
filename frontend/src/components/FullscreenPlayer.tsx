@@ -13,6 +13,15 @@ import {
 } from 'lucide-react';
 import type { ContentItem, Comment } from '../types';
 
+function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
 interface FullscreenPlayerProps {
   content: ContentItem;
   isPlaying: boolean;
@@ -292,7 +301,20 @@ export function FullscreenPlayer({
           )}
           <div>
             <h2 className="fullscreen-title">{content.title}</h2>
+            {content.url && (
+              <p className="fullscreen-source-link">
+                <a href={content.url} target="_blank" rel="noopener noreferrer">
+                  {getDomainFromUrl(content.url)}
+                  <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
+                </a>
+              </p>
+            )}
             {content.author && <p className="fullscreen-author">{content.author}</p>}
+            {(content.karma !== undefined && content.karma !== null) && (
+              <p className="fullscreen-metadata">
+                <span>Karma: {content.karma}</span>
+              </p>
+            )}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
