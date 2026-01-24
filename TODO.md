@@ -7,14 +7,14 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
-- [ ] **[P1]** Groq API compatibility & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
-- [ ] **[P1]** Don't auto-generate podcast episodes, or make auto-generation optional in settings when adding articles/podcasts - SAVES MONEY!
+- [ ] **[P1]** Groq API compatibility (for Whisper) & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
+- [ ] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY!
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [ ] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
 - [ ] **[P3]** Add dark/bright mode switcher to the left of "Hi, [user]" button
 - [ ] **[P4]** Bulk podcast subscription import (OPML format)
-- [ ] **[P3]** Allow texts (not articles) to be edited with markdown support, doesn't immediately regenerate audio
-- [ ] **[P5]** Add button to summarize content (low priority) - if it's an EA forum article, check whether there's already a summary written by the summarybot in the comments and use that instead
+- [ ] **[P3]** Allow texts (not articles) to be edited with markdown support, doesn't automatically regenerate audio
+- [ ] **[P7]** Add button to summarize content (low priority) - if it's an EA forum article, check whether there's already a summary written by the summarybot in the comments and use that instead
 - [ ] **[P4]** Keep version history of all previous content/comment fetches in case articles get deleted or regeneration went poorly (don't do this with audio, would take up too much space)
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
@@ -26,9 +26,14 @@
 - [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
 - [ ] **[P2]** Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
-- [ ] **[P3]** EA Forum and Lesswrong comment extraction unreliable (Apollo state JSON parsing), sites might work slightly differently
+- [ ] **[P2]** EA Forum and Lesswrong comment extraction unreliable (Apollo state JSON parsing), sites might work slightly differently
 
 ### Performance & Optimization
+- [ ] **[P2]** Audio optimization:
+  - Convert to mono (saves ~50% size, fine for speech)
+  - Use 96k bitrate
+  - Location: backend/src/services/openai-tts.ts in concatenateAudioFiles
+  - FFmpeg options: `-c:a libmp3lame -b:a 96k -ac 1`
 - [ ] **[P4]** Implement batch audio generation (queue multiple articles)
 - [ ] **[P4]** Add compression for stored audio (consider Opus codec)
 
@@ -44,19 +49,40 @@
 
 ## Audio Player and Content Overhaul
 
-> **⚠️ IMPORTANT:** Only start implementing this entire section after you see a file called "PLAYEROVERHAUL.md"
+> See PLAYEROVERHAUL.md for detailed implementation instructions
 
 ### Core Player Changes (Do Later)
 - [ ] **[P5]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs
 - [ ] **[P5]** On the smaller audio player, add a button to expand the player to fullscreen
 - [ ] **[P5]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing
-- [ ] **[P5]** Remove volume slider from player (unnecessary, space could be used for something else or just move the sleep timer there)
+
+#### Whisper Timestamps & Audio (P2-P3)
+- [ ] **[P2]** Fix Whisper timestamp seeking - clicking words doesn't seek to correct position (investigate implementation)
+- [ ] **[P2]** Fix podcast content provenance - shows "fetched by wallabag" incorrectly
+- [ ] **[P2]** Add HTTP caching headers to /api/content/:id/audio endpoint:
+  - Set Cache-Control: public, max-age=31536000, immutable
+  - Prevents re-downloading same files
+  - Location: backend/src/index.ts
+- [ ] **[P3]** Audio optimization (TEST QUALITY FIRST before deploying!):
+  - Convert to mono (saves ~50% size)
+  - Use 64k bitrate (might sound compressed, standard is 64-128k)
+  - Location: backend/src/services/openai-tts.ts in concatenateAudioFiles
+  - FFmpeg options: `-c:a libmp3lame -b:a 64k -ac 1`
 
 ### Fullscreen Player Tabs
-In fullscreen mode, there should be three or four tabs: Content, Comments (EA Forum and LessWrong only for now), Read-along, and Queue
+In fullscreen mode, there should be two to four tabs (depending on the type of item): Content (texts and articles only), Comments (EA Forum and LessWrong articles only), Read-along, and Queue
+- [ ] **[P1]** Create these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress")
 
 #### Content Tab (Do First - Saves Money!)
-- [ ] **[P1]** Stop using LLMs for content extraction (might still be necessary for TTS though, unsure) - use exact same article fetching process as Wallabag including thumbnails - SAVES MONEY!
+- [ ] **[P1]** Content fetching overhaul - SAVES MONEY! MAJOR CHANGE!
+  - Use current built-in HTML fetcher for immediate display
+  - If Wallabag sync enabled: immediate automatic background fetch via Wallabag API
+  - LLM fallback for non-Wallabag users or when Wallabag fetch fails (must be done manually by user)
+  - Display titles, headers, images properly in content tab for items saved through wallacast
+  - For LLM fallback: instruct to include comment sections (except EA Forum/LessWrong which are fetched separately)
+  - Add model selection dropdown in settings with cost per token displayed next to each model
+  - EA Forum/LessWrong comments still fetched via Wallacast (Wallabag doesn't support these comments)
+  - TTS should read article content + EA/LW comments together
 - [ ] **[P1]** Change "Regenerate content" to "Refetch content" with a simple refresh button (useful when changes are made to an article)
 - [ ] **[P1]** Display content just like Wallabag displays it, with nice headers and images etc. (current design with clickable words and no formatting will be used for read-along tab)
 
@@ -64,9 +90,9 @@ In fullscreen mode, there should be three or four tabs: Content, Comments (EA Fo
 - [ ] **[P1]** Create nicely organized comment section with clear UI showing karma and replies etc.
 - [ ] **[P1]** Add refetch comments button that looks like a refresh button
 
-#### Read-along Tab (Do First - Without Timesync)
+#### Read-along Tab (Do First Without Timesync)
 - [ ] **[P1]** Create read-along tab that shows current content tab UI (clickable words, no formatting)
-- [ ] **[P1]** TTS should describe images in the article
+- [ ] **[P4]** TTS should describe images in the article
 - [ ] **[P1]** Add refresh button here as well to regenerate the text and audio to match any new content/comment refetches
 - [ ] **[P6]** This should show the exact same text as the TTS - used to follow along with text-to-speech and implement function where clicking a word skips audio to that word (TIMESYNC - DO LATER)
 - [ ] **[P6]** Don't make tab automatically follow the audio (expect too many annoyances and bugs) - instead add a button that jumps to where the audio currently is (TIMESYNC - DO LATER)
@@ -74,8 +100,9 @@ In fullscreen mode, there should be three or four tabs: Content, Comments (EA Fo
 
 #### Queue Tab Implementation (Do Later)
 - [ ] **[P6]** Connect existing queue table/routes to UI - add queue state to App.tsx or Zustand store
-- [ ] **[P6]** Queue works like Spotify (library is essentially a playlist), but doesn't autoplay items that aren't manually added to queue
-- [ ] **[P6]** Add toggle to enable autoplay and shuffle for non-manually added items (they always come after manually added items)
+- [ ] **[P6]** Queue works like Spotify (library is essentially a playlist), but doesn't autoplay items that aren't manually added to queue (manually added items and non-manually items are clearly differentiated by a horizontal bar in the queue UI, similar to spotify)
+- [ ] **[P6]** Add "queue autoplay" toggle to enable autoplay, it replaces volume slider (since I never use it)
+- [ ] **[P6]** Add shuffle button that applies to non-manually added items (they always come after manually added items), autoplay toggle 
 - [ ] **[P6]** Add player buttons to go to previous and next items, and shuffle button (applies to non-manually added items only, manually added items in queue still play in set order)
 - [ ] **[P6]** LibraryTab should have "Add to queue" action in dropdown menu
 - [ ] **[P6]** If manually added item in queue doesn't have audio file: pop-up asks whether to generate audio or skip. With generate audio, continue to next item on queue but add the item back to queue (as next item to play) once audio generation finishes
@@ -83,20 +110,15 @@ In fullscreen mode, there should be three or four tabs: Content, Comments (EA Fo
 
 ## Completed Recently ✅
 
-- [x] Switch main content extraction to gpt-5-mini (128k token limit) (2026-01-23)
 - [x] Fix infinite comment repetition bug in content extraction (2026-01-23)
 - [x] Fix migration crash loop and optimize playback position updates (2026-01-23)
-- [x] Fix GPT-5-mini reasoning_effort compatibility (2026-01-23)
 - [x] Fix audio regeneration to use existing content from content regeneration (2026-01-23)
 - [x] Fix podcast subscription multi-user bug (composite unique constraint) (2026-01-23)
 - [x] Complete Wallabag bidirectional sync implementation
 - [x] Add full refresh button for Wallabag sync edge cases
 - [x] Add cleanup tool for Wallabag sync
-- [x] Fix content regeneration for Wallabag-synced articles
-- [x] Fix conflict resolution (Wallacast always wins)
 - [x] Implement two-way delete (Wallacast ↔ Wallabag)
 - [x] Add pending changes indicator to sync button
-- [x] Add GPT-5-mini for comment extraction (faster, cheaper than GPT-4o-mini)
 - [x] Add content provenance tracking (wallabag vs wallacast)
 
 ## Future Ideas (Nice to Have)
