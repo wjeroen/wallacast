@@ -51,10 +51,10 @@
 
 > See PLAYEROVERHAUL.md for detailed implementation instructions
 
-### Core Player Changes (Do Later)
-- [ ] **[P5]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs
-- [ ] **[P5]** On the smaller audio player, add a button to expand the player to fullscreen
-- [ ] **[P5]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing
+### Core Player Changes
+- [ ] **[P1]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs
+- [ ] **[P1]** On the smaller audio player, add a button to expand the player to fullscreen
+- [ ] **[P1]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing
 
 #### Whisper Timestamps & Audio (P2-P3)
 - [ ] **[P2]** Fix Whisper timestamp seeking - clicking words doesn't seek to correct position (investigate implementation)
@@ -71,7 +71,7 @@
 
 ### Fullscreen Player Tabs
 In fullscreen mode, there should be two to four tabs (depending on the type of item): Content (texts and articles only), Comments (EA Forum and LessWrong articles only), Read-along, and Queue
-- [ ] **[P1]** Create these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress")
+- [ ] **[P1]** Create fullscreen player with these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress")
 
 #### Content Tab (Do First - Saves Money!)
 - [ ] **[P1]** Content fetching overhaul - SAVES MONEY! MAJOR CHANGE!
