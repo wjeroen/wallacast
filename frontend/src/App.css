@@ -28,6 +28,12 @@
   color: #60a5fa;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 .sync-button {
   display: flex;
   align-items: center;
@@ -962,13 +968,14 @@
 
 .play-pause-btn {
   background: #3b82f6 !important;
-  width: 64px;
-  height: 64px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   border: none;
+  padding: 0;
 }
 
 .play-pause-btn:hover {
@@ -1807,8 +1814,8 @@
 
 /* Icon forms the circular arrow */
 .seek-icon {
-  width: 60px;
-  height: 60px;
+  width: 52px;
+  height: 52px;
 }
 
 /* Number inside the circle */
@@ -2455,6 +2462,8 @@
   cursor: pointer;
   font-size: 0.875rem;
   transition: background 0.2s, border-color 0.2s;
+  min-width: 90px;
+  justify-content: center;
 }
 
 .option-toggle:hover {

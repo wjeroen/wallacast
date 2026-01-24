@@ -138,21 +138,22 @@ function App() {
       <header className="app-header">
         <h1>Wallacast</h1>
 
-        {wallabagEnabled && (
-          <button
-            className="sync-button"
-            onClick={handleSync}
-            disabled={syncing}
-            title={lastSync ? `Last sync: ${new Date(lastSync).toLocaleString()}` : 'Never synced'}
-          >
-            <RefreshCw size={18} className={syncing ? 'spinning' : ''} />
-            <span className="sync-text">
-              {syncing ? 'Syncing...' : pendingChanges > 0 ? `Sync (${pendingChanges})` : 'Sync'}
-            </span>
-          </button>
-        )}
+        <div className="header-right">
+          {wallabagEnabled && (
+            <button
+              className="sync-button"
+              onClick={handleSync}
+              disabled={syncing}
+              title={lastSync ? `Last sync: ${new Date(lastSync).toLocaleString()}` : 'Never synced'}
+            >
+              <RefreshCw size={18} className={syncing ? 'spinning' : ''} />
+              <span className="sync-text">
+                {syncing ? 'Syncing...' : pendingChanges > 0 ? `Sync (${pendingChanges})` : 'Sync'}
+              </span>
+            </button>
+          )}
 
-        <div className="user-menu-container" ref={userMenuRef}>
+          <div className="user-menu-container" ref={userMenuRef}>
           <button
             className="user-menu-trigger"
             onClick={() => setShowUserMenu(!showUserMenu)}
@@ -186,6 +187,7 @@ function App() {
               </button>
             </div>
           )}
+          </div>
         </div>
       </header>
 
