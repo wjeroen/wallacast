@@ -5,10 +5,30 @@ The user is a coding noob. ELI5 (Explain Like I'm 5) frequently when discussing 
 
 ## After Every Prompt, Before Making Any Changes
 Ex. When Solving a Bug or Implementing a Feature
-1. Read README.md and ALL relevant files to understand the project structure and current state.
-2. Generate at least 3 possible approaches or hypotheses based on what you read
-3. Briefly explain the tradeoffs of each (ELI5)
-4. Ask the user which approach they prefer before writing code
+
+**CRITICAL WORKFLOW - FOLLOW THIS ORDER:**
+
+1. **Check README.md Quick Reference first** (lines 44-59)
+   - This table tells you EXACTLY which file handles what functionality
+   - Example: Bug with TTS? → `backend/src/services/openai-tts.ts`
+   - Example: Bug with audio player UI? → `frontend/src/components/AudioPlayer.tsx`
+   - **DO NOT GREP until you've checked this table**
+
+2. **Read the relevant service/component descriptions in README.md**
+   - Lines 79-178 (Backend structure) explain what each file does
+   - Lines 179-215 (Frontend structure) explain components
+   - This gives you the BIG PICTURE before diving into code
+
+3. **Only THEN read the actual files**
+   - Now that you know where to look, read the specific files
+   - Use Grep only for finding specific patterns within the right files
+   - Don't grep blindly across the entire codebase
+
+4. **Generate at least 3 possible approaches** based on what you read
+5. **Briefly explain the tradeoffs** of each (ELI5)
+6. **Ask the user which approach they prefer** before writing code
+
+**Why this order matters:** Grepping without context leads to local fixes that miss the big picture and create new bugs. README.md is your map - use it!
 
 ## After Making Changes
 Update README.md if you changed:

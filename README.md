@@ -58,6 +58,20 @@ Wallacast supports multiple users with complete data isolation:
 | Database schema | `backend/src/database/schema.sql` |
 | All types | `frontend/src/types.ts` |
 
+## Common Bug Locations
+
+| Problem | Where to look |
+|---------|---------------|
+| TTS says wrong things / bad formatting | `backend/src/services/openai-tts.ts` - Check the system prompts in `extractArticleContent()` around lines 77-107 and 176-210 |
+| Comments not extracted correctly | `backend/src/services/openai-tts.ts` - Comment extraction prompt around lines 176-250 |
+| Audio player UI issues | `frontend/src/components/AudioPlayer.tsx` - UI rendering and controls |
+| Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
+| Generation stuck or failing | `backend/src/routes/content.ts` - Check status updates in PATCH endpoint and `backend/src/services/openai-tts.ts` - Check error handling |
+| Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 100-150 |
+| Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
+| Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
+| Cost / API usage too high | Check: (1) `backend/src/services/openai-tts.ts` for LLM content extraction, (2) Auto-generation in `backend/src/routes/content.ts` POST endpoint |
+
 ## Architecture Overview
 
 ```
