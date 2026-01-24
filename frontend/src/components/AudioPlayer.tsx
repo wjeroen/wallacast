@@ -287,6 +287,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           onPlayPause={togglePlay}
           onSeek={handleSeek}
           onExpand={handleExpand}
+          onClose={onClose}
         />
       )}
     </>

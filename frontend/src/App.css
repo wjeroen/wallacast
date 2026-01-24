@@ -1809,28 +1809,38 @@
 
 .mini-player {
   position: fixed;
-  bottom: 70px; /* Above bottom nav */
-  left: 0;
-  right: 0;
-  background: linear-gradient(to bottom, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 1));
-  backdrop-filter: blur(10px);
-  border-top: 1px solid rgba(148, 163, 184, 0.2);
-  padding: 0.75rem 1rem;
+  bottom: 85px; /* Above bottom nav and floating + button */
+  left: 0.5rem;
+  right: 0.5rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
   z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.mini-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .mini-player-content {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .mini-player-thumbnail {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   border-radius: 0.375rem;
   object-fit: cover;
   flex-shrink: 0;
@@ -1860,6 +1870,25 @@
   margin-top: 0.125rem;
 }
 
+.mini-close-button {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, color 0.2s;
+}
+
+.mini-close-button:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
 .mini-player-controls {
   display: flex;
   align-items: center;
@@ -1870,8 +1899,8 @@
   background: #3b82f6;
   border: none;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1879,6 +1908,11 @@
   color: white;
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
+}
+
+.mini-play-button svg {
+  color: white;
+  fill: white;
 }
 
 .mini-play-button:hover {
@@ -1920,7 +1954,7 @@
   appearance: none;
   width: 12px;
   height: 12px;
-  background: #3b82f6;
+  background: #60a5fa;
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -1933,7 +1967,7 @@
 .mini-progress-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  background: #3b82f6;
+  background: #60a5fa;
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -1946,21 +1980,22 @@
 
 .mini-expand-button {
   background: transparent;
-  border: 1px solid #475569;
+  border: 1px solid #334155;
   border-radius: 0.375rem;
-  padding: 0.5rem;
-  color: #e2e8f0;
+  padding: 0.375rem;
+  color: #94a3b8;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, border-color 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .mini-expand-button:hover {
   background: #334155;
-  border-color: #64748b;
+  border-color: #475569;
+  color: #e2e8f0;
 }
 
 /* Adjust app-main to account for mini player when present */
@@ -1969,7 +2004,7 @@
 }
 
 body:has(.mini-player) .app-main {
-  padding-bottom: 140px; /* Mini player height + bottom nav */
+  padding-bottom: 160px; /* Mini player height + margin + bottom nav */
 }
 
 /* ===== Fullscreen Player ===== */
@@ -1991,8 +2026,9 @@ body:has(.mini-player) .app-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem;
-  border-bottom: 1px solid #1e293b;
+  padding: 1rem 1.5rem;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
   flex-shrink: 0;
 }
 
@@ -2038,20 +2074,21 @@ body:has(.mini-player) .app-main {
 
 .header-button {
   background: transparent;
-  border: 1px solid #475569;
+  border: 1px solid #334155;
   border-radius: 0.375rem;
   padding: 0.5rem;
-  color: #e2e8f0;
+  color: #94a3b8;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s, border-color 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .header-button:hover {
-  background: #1e293b;
-  border-color: #64748b;
+  background: #334155;
+  border-color: #475569;
+  color: #e2e8f0;
 }
 
 /* Tabs */
@@ -2059,32 +2096,35 @@ body:has(.mini-player) .app-main {
 .fullscreen-tabs {
   display: flex;
   gap: 0;
-  border-bottom: 1px solid #1e293b;
-  padding: 0 1rem;
+  border-bottom: 1px solid #334155;
+  padding: 0;
   flex-shrink: 0;
   overflow-x: auto;
+  background: #1e293b;
 }
 
 .tab-button {
   background: transparent;
   border: none;
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1.25rem;
   color: #94a3b8;
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
   border-bottom: 2px solid transparent;
-  transition: color 0.2s, border-color 0.2s;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
   white-space: nowrap;
 }
 
 .tab-button:hover {
-  color: #cbd5e1;
+  color: #e2e8f0;
+  background: #334155;
 }
 
 .tab-button.active {
-  color: #3b82f6;
-  border-bottom-color: #3b82f6;
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+  background: #0f172a;
 }
 
 /* Tab Content Area */
@@ -2312,10 +2352,10 @@ body:has(.mini-player) .app-main {
 /* Player Controls (in fullscreen) */
 
 .fullscreen-player-controls {
-  padding: 1rem;
-  border-top: 1px solid #1e293b;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #334155;
   flex-shrink: 0;
-  background: linear-gradient(to top, rgba(15, 23, 42, 1), rgba(15, 23, 42, 0.95));
+  background: #1e293b;
 }
 
 .fullscreen-progress-bar {
@@ -2348,7 +2388,7 @@ body:has(.mini-player) .app-main {
   appearance: none;
   width: 16px;
   height: 16px;
-  background: #3b82f6;
+  background: #60a5fa;
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -2361,7 +2401,7 @@ body:has(.mini-player) .app-main {
 .fullscreen-progress-bar .progress-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  background: #3b82f6;
+  background: #60a5fa;
   border-radius: 50%;
   cursor: pointer;
   border: none;
