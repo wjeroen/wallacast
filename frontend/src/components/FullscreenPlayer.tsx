@@ -357,9 +357,9 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-playback-controls">
-          <button onClick={onToggleSpeed} className="control-option-btn" title={`Speed: ${playbackSpeed}x`}>
+          <button onClick={onToggleSpeed} className="option-toggle">
             <Gauge size={20} />
-            <span className="control-option-label">{playbackSpeed}x</span>
+            <span>{playbackSpeed}x</span>
           </button>
 
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
@@ -376,9 +376,9 @@ export function FullscreenPlayer({
             <span className="seek-label">30</span>
           </button>
 
-          <button onClick={onToggleSleepTimer} className="control-option-btn" title={sleepTimer ? `Sleep timer: ${sleepTimer}m` : 'Sleep timer off'}>
+          <button onClick={onToggleSleepTimer} className="option-toggle">
             <Clock size={20} />
-            <span className="control-option-label">{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
           </button>
         </div>
       </div>
