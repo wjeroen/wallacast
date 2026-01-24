@@ -96,6 +96,20 @@
   overflow-y: auto;
   padding: 0;
   width: 100%;
+  padding-bottom: 70px; /* Space for bottom nav */
+}
+
+.app-main:has(~ .bottom-container .mini-player) {
+  padding-bottom: 170px; /* Extra space when mini player is present */
+}
+
+/* Bottom container holds both mini player and nav together */
+.bottom-container {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
 }
 
 .bottom-nav {
@@ -1808,15 +1822,15 @@
 /* ===== Mini Player (Compact player above bottom nav) ===== */
 
 .mini-player {
-  position: fixed;
-  bottom: 90px; /* Match side margins for visual consistency */
+  position: absolute;
+  bottom: 70px; /* Height of bottom nav */
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
   border: 1px solid #334155;
   border-radius: 0.75rem;
   padding: 0.75rem;
-  z-index: 40;
+  margin-bottom: 0.5rem; /* Space from bottom nav */
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1914,14 +1928,15 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: white;
+  color: white !important;
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
 }
 
 .mini-play-button svg {
-  stroke: white;
-  fill: white;
+  color: white !important;
+  stroke: white !important;
+  fill: white !important;
 }
 
 .mini-play-button:hover {
@@ -1985,15 +2000,6 @@
 
 .mini-progress-slider::-moz-range-thumb:hover {
   transform: scale(1.2);
-}
-
-/* Adjust app-main to account for mini player when present */
-.app-main {
-  padding-bottom: 0;
-}
-
-body:has(.mini-player) .app-main {
-  padding-bottom: 170px; /* Mini player height + margin + bottom nav */
 }
 
 /* ===== Fullscreen Player ===== */
