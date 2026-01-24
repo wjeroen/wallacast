@@ -967,6 +967,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
+  border: none;
 }
 
 .play-pause-btn:hover {
@@ -1823,7 +1825,7 @@
 
 .mini-player {
   position: absolute;
-  bottom: 110px; /* Height of bottom nav (70px) + + button overflow (28px) + margin (12px) */
+  bottom: 90px;
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
@@ -1929,7 +1931,11 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
-  color: white;
+}
+
+.mini-play-button svg {
+  stroke: white;
+  fill: white;
 }
 
 .mini-play-button:hover {
@@ -2048,7 +2054,30 @@
   -webkit-box-orient: vertical;
 }
 
+.fullscreen-source-link {
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.fullscreen-source-link a {
+  color: #60a5fa;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.2s;
+}
+
+.fullscreen-source-link a:hover {
+  color: #93c5fd;
+}
+
 .fullscreen-author {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  margin: 0.25rem 0 0 0;
+}
+
+.fullscreen-metadata {
   font-size: 0.875rem;
   color: #94a3b8;
   margin: 0.25rem 0 0 0;
