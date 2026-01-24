@@ -45,16 +45,19 @@ Wallacast supports multiple users with complete data isolation:
 
 | When working on... | Look at... |
 |-------------------|------------|
-| Authentication | `backend/src/routes/auth.ts`, `backend/src/services/auth.ts` |
+| Authentication | `backend/src/routes/auth.ts`, `backend/src/services/auth.ts`, `backend/src/middleware/auth.ts` |
 | User settings | `backend/src/routes/users.ts` |
 | Per-user API keys | `backend/src/services/ai-providers.ts` |
 | Adding content | `backend/src/routes/content.ts` |
+| Wallabag sync | `backend/src/routes/wallabag.ts`, `backend/src/services/wallabag-sync.ts`, `backend/src/services/wallabag-service.ts` |
 | TTS generation | `backend/src/services/openai-tts.ts` |
 | Transcription | `backend/src/services/transcription.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player | `frontend/src/components/AudioPlayer.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
+| Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
+| Settings UI | `frontend/src/components/SettingsPage.tsx` |
 | Database schema | `backend/src/database/schema.sql` |
 | All types | `frontend/src/types.ts` |
 
@@ -70,6 +73,7 @@ Wallacast supports multiple users with complete data isolation:
 | Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 100-150 |
 | Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
 | Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
+| Wallabag sync not working | `backend/src/services/wallabag-service.ts` - OAuth and API client, `backend/src/services/wallabag-sync.ts` - Sync logic, `backend/src/routes/wallabag.ts` - Endpoints |
 | Cost / API usage too high | Check: (1) `backend/src/services/openai-tts.ts` for LLM content extraction, (2) Auto-generation in `backend/src/routes/content.ts` POST endpoint |
 
 ## Architecture Overview
@@ -111,6 +115,14 @@ Wallacast supports multiple users with complete data isolation:
   - `005_add_users.sql`: Adds multi-user support (users, user_settings, user_sessions tables)
   - `006_add_content_source.sql`: Adds content_source field for provenance tracking (wallabag vs wallacast)
   - `007_fix_podcast_multi_user.sql`: Fixes podcast subscriptions with composite unique constraint (feed_url, user_id)
+  - `008_optimize_playback_updates.sql`: Adds composite index (id, user_id) to speed up playback position updates
+  - `009_expand_podcast_language_column.sql`: Expands language column to VARCHAR(100) for longer language codes
+
+#### Middleware
+
+- **`middleware/auth.ts`**: Authentication and database readiness middleware
+  - `requireAuth()`: JWT token validation middleware, extracts user from token and adds to `req.user`
+  - `requireDatabaseReady()`: Returns 503 if database isn't ready yet (prevents crashes during startup)
 
 #### Routes
 
@@ -154,6 +166,15 @@ Wallacast supports multiple users with complete data isolation:
 - **`routes/transcription.ts`**: Dedicated transcription endpoint
   - `POST /content/:id` - Trigger transcription for podcast episode
 
+- **`routes/wallabag.ts`**: Wallabag synchronization endpoints (requires JWT auth, all queries filter by `user_id`)
+  - `POST /test` - Test connection with configured Wallabag instance
+  - `GET /status` - Get sync status (pending changes count)
+  - `POST /sync/pull` - Pull articles from Wallabag to Wallacast
+  - `POST /sync/push` - Push Wallacast articles to Wallabag
+  - `POST /sync/full` - Bidirectional sync (pull then push)
+  - `POST /sync/cleanup` - Remove orphaned Wallabag mappings
+  - `POST /full-refresh` - Nuclear option: delete all Wallabag-synced items and re-pull
+
 #### Services
 
 - **`services/auth.ts`**: User authentication and session management
@@ -190,6 +211,20 @@ Wallacast supports multiple users with complete data isolation:
   - `getPreviewEpisodes()`: Gets episodes without saving
   - Simple regex-based XML parsing (no library)
 
+- **`services/wallabag-service.ts`**: Wallabag API client (requires per-user credentials)
+  - `testConnection()`: Validates Wallabag credentials (URL, client ID/secret, username/password)
+  - `getToken()`: OAuth2 token acquisition with automatic refresh
+  - `getEntries()`: Fetch articles from Wallabag (supports pagination, filtering by archived/starred)
+  - `createEntry()`, `updateEntry()`, `deleteEntry()`: CRUD operations for Wallabag articles
+  - Each service instance is tied to a specific user's credentials from `user_settings`
+
+- **`services/wallabag-sync.ts`**: Bidirectional sync logic between Wallacast and Wallabag
+  - `syncFromWallabag()`: Pull articles from Wallabag, create/update in Wallacast
+  - `syncToWallabag()`: Push Wallacast articles to Wallabag, handles creates and updates
+  - `fullSync()`: Orchestrates bidirectional sync (pull then push)
+  - Conflict resolution: Wallacast always wins (uses `wallabag_updated_at` to detect changes)
+  - Tracks sync state with `wallabag_id` and `wallabag_updated_at` fields on `content_items`
+
 ### Frontend (`/frontend/src/`)
 
 #### Entry Point
@@ -201,9 +236,20 @@ Wallacast supports multiple users with complete data isolation:
   - Holds content items array and current filter state
   - Provides optimistic updates for instant UI feedback (star, archive, delete)
   - Filter-aware: items automatically show/hide based on current filter
-  - Prepared for future Wallabag bidirectional sync
+  - Handles Wallabag bidirectional sync state
+
+- **`store/authStore.ts`**: Zustand store for authentication state
+  - Manages user login/logout state, JWT token storage in localStorage
+  - `login()`, `register()`, `logout()`: Auth operations with automatic token management
+  - `checkAuth()`: Validates existing tokens on app load
+  - Token refresh handled automatically by API client
 
 #### Components
+
+- **`components/LoginPage.tsx`**: User authentication UI
+  - Login/registration form with toggle between modes
+  - Displays auth errors from authStore
+  - Uses lucide-react icons for visual polish
 - **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
@@ -212,6 +258,13 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
 
 - **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
+
+- **`components/SettingsPage.tsx`**: User settings management UI
+  - OpenAI API key configuration (required for TTS/transcription)
+  - TTS voice selection (alloy, echo, fable, onyx, nova, shimmer)
+  - Wallabag integration settings (URL, client ID/secret, username/password)
+  - Test connection buttons for validating credentials
+  - Sync controls (pull, push, full sync) with status indicators
 
 - **`components/AudioPlayer.tsx`**: Full audio player with:
   - Play/pause, seek, skip ±15/30s
@@ -364,7 +417,7 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 Edit `backend/src/config/processing.ts` to adjust TTS chunk sizes, Whisper file limits, retry behavior, etc. No code changes needed in services.
 
 **Modify TTS behavior:**
-Edit the system prompt in `openai-tts.ts extractArticleContent()` around line 1750
+Edit the system prompts in `openai-tts.ts extractArticleContent()` around lines 77-107 (main content) and 176-210 (comment extraction)
 
 **Modify transcription:**
 Edit `transcription.ts transcribeWithTimestamps()`
@@ -405,10 +458,12 @@ Key issues:
 ## Recent Improvements
 
 **January 2026:**
+- **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
 - **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
 - **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
 - **Multi-User Podcast Subscriptions**: Fixed bug where only one user could subscribe to each podcast. Now uses composite unique constraint `(feed_url, user_id)`
 - **Wallabag Sync Complete**: Full bidirectional sync with conflict resolution, two-way delete, full refresh, and cleanup tools
+- **Comment Formatting Improvements**: TTS now formats dates as readable text (e.g., "15th of January 2026") and only mentions disagree votes when present
 
 **December 2025:**
 - Content provenance tracking (wallabag vs wallacast)
