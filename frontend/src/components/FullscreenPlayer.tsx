@@ -300,10 +300,12 @@ export function FullscreenPlayer({
                 </a>
               </p>
             )}
-            {content.author && <p className="fullscreen-author">{content.author}</p>}
-            {(content.karma !== undefined && content.karma !== null) && (
-              <p className="fullscreen-metadata">
-                <span>Karma: {content.karma}</span>
+            {content.author && (
+              <p className="fullscreen-author">
+                {content.author}
+                {(content.karma !== undefined && content.karma !== null) && (
+                  <> • {content.karma} upvotes</>
+                )}
               </p>
             )}
           </div>
@@ -355,28 +357,28 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-playback-controls">
+          <button onClick={onToggleSpeed} className="control-option-btn" title={`Speed: ${playbackSpeed}x`}>
+            <Gauge size={20} />
+            <span className="control-option-label">{playbackSpeed}x</span>
+          </button>
+
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
             <RotateCcw className="seek-icon" />
             <span className="seek-label">15</span>
           </button>
+
           <button onClick={onPlayPause} className="play-pause-btn">
             {isPlaying ? <Pause size={32} /> : <Play size={32} />}
           </button>
+
           <button onClick={onSkipForward} title="Seek forward 30 seconds" className="seek-btn">
             <RotateCw className="seek-icon" />
             <span className="seek-label">30</span>
           </button>
-        </div>
 
-        <div className="fullscreen-player-options">
-          <button onClick={onToggleSpeed} className="option-toggle">
-            <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
-          </button>
-
-          <button onClick={onToggleSleepTimer} className="option-toggle">
+          <button onClick={onToggleSleepTimer} className="control-option-btn" title={sleepTimer ? `Sleep timer: ${sleepTimer}m` : 'Sleep timer off'}>
             <Clock size={20} />
-            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+            <span className="control-option-label">{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
           </button>
         </div>
       </div>
