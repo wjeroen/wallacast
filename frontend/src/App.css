@@ -1828,6 +1828,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  padding: 0.25rem;
+  margin: -0.25rem;
+  border-radius: 0.5rem;
+  transition: background 0.2s;
+}
+
+.mini-player-header:hover {
+  background: rgba(51, 65, 85, 0.5);
 }
 
 .mini-player-content {
@@ -1872,20 +1880,21 @@
 
 .mini-close-button {
   background: transparent;
-  border: none;
+  border: 1px solid #334155;
+  border-radius: 0.375rem;
+  padding: 0.375rem;
   color: #94a3b8;
   cursor: pointer;
-  padding: 0.25rem;
-  border-radius: 0.25rem;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, color 0.2s;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .mini-close-button:hover {
   background: #334155;
+  border-color: #475569;
   color: #e2e8f0;
 }
 
@@ -1976,26 +1985,6 @@
 
 .mini-progress-slider::-moz-range-thumb:hover {
   transform: scale(1.2);
-}
-
-.mini-expand-button {
-  background: transparent;
-  border: 1px solid #334155;
-  border-radius: 0.375rem;
-  padding: 0.375rem;
-  color: #94a3b8;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
-}
-
-.mini-expand-button:hover {
-  background: #334155;
-  border-color: #475569;
-  color: #e2e8f0;
 }
 
 /* Adjust app-main to account for mini player when present */
