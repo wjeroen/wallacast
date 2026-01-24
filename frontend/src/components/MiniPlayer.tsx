@@ -39,8 +39,8 @@ export function MiniPlayer({
 
   return (
     <div className="mini-player">
-      <div className="mini-player-header" onClick={onExpand} style={{ cursor: 'pointer' }}>
-        <div className="mini-player-content">
+      <div className="mini-player-header">
+        <div className="mini-player-content" onClick={onExpand} style={{ cursor: 'pointer' }}>
           {content.preview_picture && (
             <img
               src={content.preview_picture}
@@ -55,6 +55,9 @@ export function MiniPlayer({
             )}
           </div>
         </div>
+        <button onClick={onClose} className="mini-close-button" title="Close player">
+          <X size={18} />
+        </button>
       </div>
 
       <div className="mini-player-controls">
@@ -74,10 +77,6 @@ export function MiniPlayer({
           />
           <span className="mini-time">{formatTime(duration)}</span>
         </div>
-
-        <button onClick={onClose} className="mini-close-button" title="Close player">
-          <X size={18} />
-        </button>
       </div>
     </div>
   );

@@ -1809,7 +1809,7 @@
 
 .mini-player {
   position: fixed;
-  bottom: 85px; /* Above bottom nav and floating + button */
+  bottom: 90px; /* Match side margins for visual consistency */
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
@@ -1828,14 +1828,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.25rem;
-  margin: -0.25rem;
-  border-radius: 0.5rem;
-  transition: background 0.2s;
-}
-
-.mini-player-header:hover {
-  background: rgba(51, 65, 85, 0.5);
 }
 
 .mini-player-content {
@@ -1844,6 +1836,14 @@
   gap: 0.75rem;
   flex: 1;
   min-width: 0;
+  padding: 0.25rem;
+  margin: -0.25rem;
+  border-radius: 0.5rem;
+  transition: background 0.2s;
+}
+
+.mini-player-content:hover {
+  background: rgba(51, 65, 85, 0.5);
 }
 
 .mini-player-thumbnail {
@@ -1920,7 +1920,7 @@
 }
 
 .mini-play-button svg {
-  color: white;
+  stroke: white;
   fill: white;
 }
 
@@ -1993,7 +1993,7 @@
 }
 
 body:has(.mini-player) .app-main {
-  padding-bottom: 160px; /* Mini player height + margin + bottom nav */
+  padding-bottom: 170px; /* Mini player height + margin + bottom nav */
 }
 
 /* ===== Fullscreen Player ===== */
@@ -2100,8 +2100,7 @@ body:has(.mini-player) .app-main {
   cursor: pointer;
   font-size: 0.875rem;
   font-weight: 500;
-  border-bottom: 2px solid transparent;
-  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  transition: color 0.2s, background 0.2s;
   white-space: nowrap;
 }
 
@@ -2112,7 +2111,6 @@ body:has(.mini-player) .app-main {
 
 .tab-button.active {
   color: #60a5fa;
-  border-bottom-color: #60a5fa;
   background: #0f172a;
 }
 
