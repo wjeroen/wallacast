@@ -4,6 +4,7 @@ import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateAudioForContent, extractArticleContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
+import { getUserSetting } from '../services/ai-providers.js';
 
 const router = express.Router();
 
@@ -226,30 +227,38 @@ router.post('/', async (req, res) => {
     }
 
     // Auto-generate transcript for podcast episodes (if has audio but no transcript)
+    // Check user setting to see if auto-transcription is enabled
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
-      console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
+      const autoTranscribe = await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
+      const shouldAutoTranscribe = autoTranscribe === null || autoTranscribe === 'true'; // Default to true for backwards compatibility
 
-      // Set status to generating transcript
-      await query(
-        'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-        ['generating_transcript', 0, 'transcript', createdItem.id]
-      );
+      if (shouldAutoTranscribe) {
+        console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
 
-      // Start transcription in background (don't await)
-      transcribeWithTimestamps(audioUrlValue, req.user!.userId)
-        .then(async (result) => {
-          await query(
-            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
-            [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
-          );
-        })
-        .catch(async (error) => {
-          console.error('Auto transcription error:', error);
-          await query(
-            'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-            ['failed', error.message || 'Failed to transcribe', 0, createdItem.id]
-          );
-        });
+        // Set status to generating transcript
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+          ['generating_transcript', 0, 'transcript', createdItem.id]
+        );
+
+        // Start transcription in background (don't await)
+        transcribeWithTimestamps(audioUrlValue, req.user!.userId)
+          .then(async (result) => {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
+              [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
+            );
+          })
+          .catch(async (error) => {
+            console.error('Auto transcription error:', error);
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+              ['failed', error.message || 'Failed to transcribe', 0, createdItem.id]
+            );
+          });
+      } else {
+        console.log(`Auto-transcription disabled for user ${req.user!.userId}, skipping podcast episode ${createdItem.id}`);
+      }
     }
 
     res.status(201).json(createdItem);

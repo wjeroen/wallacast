@@ -197,6 +197,10 @@ function App() {
         )}
       </main>
 
+      {currentContent && (
+        <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
+      )}
+
       <nav className="bottom-nav">
         <button
           className={activeTab === 'feed' ? 'active' : ''}
@@ -219,12 +223,6 @@ function App() {
           <span>Library</span>
         </button>
       </nav>
-
-      {currentContent && (
-        <div className="player-container">
-          <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
-        </div>
-      )}
     </div>
   );
 }

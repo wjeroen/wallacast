@@ -48,6 +48,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     openai_model: 'gpt-4o-mini',
     openai_tts_model: 'gpt-4o-mini-tts',
     openai_tts_voice: 'coral',
+    auto_transcribe_podcasts: 'true',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -92,6 +93,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_model: loaded.openai_model || 'gpt-4o-mini',
         openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
+        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts || 'true',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -352,6 +354,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     <option key={voice} value={voice}>{voice}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={formData.auto_transcribe_podcasts === 'true'}
+                    onChange={(e) => handleChange('auto_transcribe_podcasts', e.target.checked ? 'true' : 'false')}
+                  />
+                  Auto-transcribe podcasts (costs API credits)
+                </label>
+                <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem', marginLeft: '1.5rem' }}>
+                  When disabled, you can manually generate transcripts from the dropdown menu.
+                </p>
               </div>
             </>
           )}
