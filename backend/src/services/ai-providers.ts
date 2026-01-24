@@ -26,7 +26,7 @@ export interface TTSOptions {
 }
 
 // Get user setting from database
-async function getUserSetting(userId: number, key: string): Promise<string | null> {
+export async function getUserSetting(userId: number, key: string): Promise<string | null> {
   const result = await query(
     'SELECT setting_value FROM user_settings WHERE user_id = $1 AND setting_key = $2',
     [userId, key]

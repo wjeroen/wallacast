@@ -9,7 +9,6 @@ interface MiniPlayerProps {
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onExpand: () => void;
-  onClose: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -33,7 +32,6 @@ export function MiniPlayer({
   onPlayPause,
   onSeek,
   onExpand,
-  onClose,
 }: MiniPlayerProps) {
   if (!content) return null;
 
