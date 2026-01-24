@@ -1,4 +1,4 @@
-import { Play, Pause, Maximize2, X } from 'lucide-react';
+import { Play, Pause, X } from 'lucide-react';
 import type { ContentItem } from '../types';
 
 interface MiniPlayerProps {
@@ -39,7 +39,7 @@ export function MiniPlayer({
 
   return (
     <div className="mini-player">
-      <div className="mini-player-header">
+      <div className="mini-player-header" onClick={onExpand} style={{ cursor: 'pointer' }}>
         <div className="mini-player-content">
           {content.preview_picture && (
             <img
@@ -55,9 +55,6 @@ export function MiniPlayer({
             )}
           </div>
         </div>
-        <button onClick={onClose} className="mini-close-button" title="Close player">
-          <X size={18} />
-        </button>
       </div>
 
       <div className="mini-player-controls">
@@ -78,8 +75,8 @@ export function MiniPlayer({
           <span className="mini-time">{formatTime(duration)}</span>
         </div>
 
-        <button onClick={onExpand} className="mini-expand-button" title="Expand player">
-          <Maximize2 size={18} />
+        <button onClick={onClose} className="mini-close-button" title="Close player">
+          <X size={18} />
         </button>
       </div>
     </div>
