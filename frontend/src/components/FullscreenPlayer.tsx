@@ -13,15 +13,6 @@ import {
 } from 'lucide-react';
 import type { ContentItem, Comment } from '../types';
 
-function getDomainFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
 interface FullscreenPlayerProps {
   content: ContentItem;
   isPlaying: boolean;
