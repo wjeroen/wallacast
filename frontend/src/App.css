@@ -1823,7 +1823,7 @@
 
 .mini-player {
   position: absolute;
-  bottom: 82px; /* Height of bottom nav (70px) + margin (12px) to match side spacing */
+  bottom: 110px; /* Height of bottom nav (70px) + + button overflow (28px) + margin (12px) */
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
@@ -1929,6 +1929,7 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
+  color: white;
 }
 
 .mini-play-button:hover {
