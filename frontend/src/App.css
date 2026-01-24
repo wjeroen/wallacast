@@ -1825,7 +1825,7 @@
 
 .mini-player {
   position: absolute;
-  bottom: 94px;
+  bottom: 92px;
   left: 0.5rem;
   right: 0.5rem;
   background: #1e293b;
@@ -1932,16 +1932,22 @@
   flex-shrink: 0;
   transition: background 0.2s, transform 0.1s;
   color: white;
+  overflow: visible;
+  padding: 0;
 }
 
 .mini-play-button svg {
-  stroke: currentColor !important;
-  fill: currentColor !important;
+  display: block;
+  width: 28px !important;
+  height: 28px !important;
+  stroke: white !important;
+  fill: white !important;
+  color: white !important;
 }
 
 .mini-play-button svg path {
-  stroke: currentColor !important;
-  fill: currentColor !important;
+  stroke: white !important;
+  fill: white !important;
 }
 
 .mini-play-button:hover {
@@ -2464,28 +2470,6 @@
 .option-toggle:hover {
   background: #334155;
   border-color: #475569;
-}
-
-.control-option-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  background: none;
-  border: none;
-  color: #e2e8f0;
-  cursor: pointer;
-  padding: 0.25rem;
-  transition: color 0.2s;
-}
-
-.control-option-btn:hover {
-  color: #60a5fa;
-}
-
-.control-option-label {
-  font-size: 0.7rem;
-  font-weight: 500;
 }
 
 /* Responsive adjustments */
