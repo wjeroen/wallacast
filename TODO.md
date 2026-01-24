@@ -8,7 +8,7 @@
 
 ### Features to Implement
 - [ ] **[P1]** Groq API compatibility (for Whisper) & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
-- [ ] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY!
+- [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [ ] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
 - [ ] **[P3]** Add dark/bright mode switcher to the left of "Hi, [user]" button
@@ -52,9 +52,9 @@
 > See PLAYEROVERHAUL.md for detailed implementation instructions
 
 ### Core Player Changes
-- [ ] **[P1]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs
-- [ ] **[P1]** On the smaller audio player, add a button to expand the player to fullscreen
-- [ ] **[P1]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing
+- [x] **[P1]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs (2026-01-24)
+- [x] **[P1]** On the smaller audio player, add a button to expand the player to fullscreen (2026-01-24)
+- [x] **[P1]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing (2026-01-24)
 
 #### Whisper Timestamps & Audio (P2-P3)
 - [ ] **[P2]** Fix Whisper timestamp seeking - clicking words doesn't seek to correct position (investigate implementation)
@@ -71,7 +71,7 @@
 
 ### Fullscreen Player Tabs
 In fullscreen mode, there should be two to four tabs (depending on the type of item): Content (texts and articles only), Comments (EA Forum and LessWrong articles only), Read-along, and Queue
-- [ ] **[P1]** Create fullscreen player with these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress")
+- [x] **[P1]** Create fullscreen player with these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress") (2026-01-24)
 
 #### Content Tab (Do First - Saves Money!)
 - [ ] **[P1]** Content fetching overhaul - SAVES MONEY! MAJOR CHANGE!
@@ -83,17 +83,17 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Add model selection dropdown in settings with cost per token displayed next to each model
   - EA Forum/LessWrong comments still fetched via Wallacast (Wallabag doesn't support these comments)
   - TTS should read article content + EA/LW comments together
-- [ ] **[P1]** Change "Regenerate content" to "Refetch content" with a simple refresh button (useful when changes are made to an article)
-- [ ] **[P1]** Display content just like Wallabag displays it, with nice headers and images etc. (current design with clickable words and no formatting will be used for read-along tab)
+- [ ] **[P1]** Change "Regenerate content" to "Refetch content" with a simple refresh button (useful when changes are made to an article) - NOTE: Not in dropdown menu, but in Content tab UI
+- [x] **[P1]** Display content just like Wallabag displays it, with nice headers and images etc. (current design with clickable words and no formatting will be used for read-along tab) (2026-01-24)
 
 #### Comment Tab (Do First)
-- [ ] **[P1]** Create nicely organized comment section with clear UI showing karma and replies etc.
-- [ ] **[P1]** Add refetch comments button that looks like a refresh button
+- [x] **[P1]** Create nicely organized comment section with clear UI showing karma and replies etc. (2026-01-24)
+- [x] **[P1]** Add refetch comments button that looks like a refresh button (2026-01-24) - NOTE: Button UI exists but not wired to backend yet
 
 #### Read-along Tab (Do First Without Timesync)
-- [ ] **[P1]** Create read-along tab that shows current content tab UI (clickable words, no formatting)
+- [x] **[P1]** Create read-along tab that shows current content tab UI (clickable words, no formatting) (2026-01-24)
 - [ ] **[P4]** TTS should describe images in the article
-- [ ] **[P1]** Add refresh button here as well to regenerate the text and audio to match any new content/comment refetches
+- [x] **[P1]** Add refresh button here as well to regenerate the text and audio to match any new content/comment refetches (2026-01-24) - NOTE: Button UI exists but not wired to backend yet
 - [ ] **[P6]** This should show the exact same text as the TTS - used to follow along with text-to-speech and implement function where clicking a word skips audio to that word (TIMESYNC - DO LATER)
 - [ ] **[P6]** Don't make tab automatically follow the audio (expect too many annoyances and bugs) - instead add a button that jumps to where the audio currently is (TIMESYNC - DO LATER)
 - [ ] **[P6]** Ensure jump-to-current-position button works properly on various screen display sizes (TIMESYNC - DO LATER)
@@ -110,6 +110,14 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] Implement optional podcast auto-transcription setting (saves money!) (2026-01-24)
+- [x] Create MiniPlayer component (compact player above bottom nav) (2026-01-24)
+- [x] Create FullscreenPlayer component with tabs (Content, Comments, Read-along, Queue) (2026-01-24)
+- [x] Implement Content tab for articles/texts with proper HTML formatting (2026-01-24)
+- [x] Implement Comments tab for EA Forum/LessWrong articles (2026-01-24)
+- [x] Implement Read-along tab with clickable words (2026-01-24)
+- [x] Implement Queue tab placeholder (work in progress message) (2026-01-24)
+- [x] Refactor AudioPlayer to manage state and switch between mini/fullscreen modes (2026-01-24)
 - [x] Fix infinite comment repetition bug in content extraction (2026-01-23)
 - [x] Fix migration crash loop and optimize playback position updates (2026-01-23)
 - [x] Fix audio regeneration to use existing content from content regeneration (2026-01-23)
