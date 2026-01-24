@@ -31,7 +31,7 @@
 .header-right {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .sync-button {
@@ -1814,8 +1814,8 @@
 
 /* Icon forms the circular arrow */
 .seek-icon {
-  width: 52px;
-  height: 52px;
+  width: 44px;
+  height: 44px;
 }
 
 /* Number inside the circle */
