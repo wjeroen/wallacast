@@ -1,4 +1,4 @@
-import { Play, Pause, Maximize2 } from 'lucide-react';
+import { Play, Pause, Maximize2, X } from 'lucide-react';
 import type { ContentItem } from '../types';
 
 interface MiniPlayerProps {
@@ -9,6 +9,7 @@ interface MiniPlayerProps {
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onExpand: () => void;
+  onClose: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -32,25 +33,31 @@ export function MiniPlayer({
   onPlayPause,
   onSeek,
   onExpand,
+  onClose,
 }: MiniPlayerProps) {
   if (!content) return null;
 
   return (
     <div className="mini-player">
-      <div className="mini-player-content">
-        {content.preview_picture && (
-          <img
-            src={content.preview_picture}
-            alt={content.title}
-            className="mini-player-thumbnail"
-          />
-        )}
-        <div className="mini-player-info">
-          <div className="mini-player-title">{content.title}</div>
-          {content.author && (
-            <div className="mini-player-author">{content.author}</div>
+      <div className="mini-player-header">
+        <div className="mini-player-content">
+          {content.preview_picture && (
+            <img
+              src={content.preview_picture}
+              alt={content.title}
+              className="mini-player-thumbnail"
+            />
           )}
+          <div className="mini-player-info">
+            <div className="mini-player-title">{content.title}</div>
+            {content.author && (
+              <div className="mini-player-author">{content.author}</div>
+            )}
+          </div>
         </div>
+        <button onClick={onClose} className="mini-close-button" title="Close player">
+          <X size={18} />
+        </button>
       </div>
 
       <div className="mini-player-controls">
@@ -72,7 +79,7 @@ export function MiniPlayer({
         </div>
 
         <button onClick={onExpand} className="mini-expand-button" title="Expand player">
-          <Maximize2 size={20} />
+          <Maximize2 size={18} />
         </button>
       </div>
     </div>
