@@ -197,32 +197,34 @@ function App() {
         )}
       </main>
 
-      {currentContent && (
-        <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
-      )}
+      <div className="bottom-container">
+        {currentContent && (
+          <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
+        )}
 
-      <nav className="bottom-nav">
-        <button
-          className={activeTab === 'feed' ? 'active' : ''}
-          onClick={() => setActiveTab('feed')}
-        >
-          <Rss size={24} />
-          <span>Feed</span>
-        </button>
-        <button
-          className={`add-button ${activeTab === 'add' ? 'active' : ''}`}
-          onClick={() => setActiveTab('add')}
-        >
-          <Plus size={32} />
-        </button>
-        <button
-          className={activeTab === 'library' ? 'active' : ''}
-          onClick={() => setActiveTab('library')}
-        >
-          <Library size={24} />
-          <span>Library</span>
-        </button>
-      </nav>
+        <nav className="bottom-nav">
+          <button
+            className={activeTab === 'feed' ? 'active' : ''}
+            onClick={() => setActiveTab('feed')}
+          >
+            <Rss size={24} />
+            <span>Feed</span>
+          </button>
+          <button
+            className={`add-button ${activeTab === 'add' ? 'active' : ''}`}
+            onClick={() => setActiveTab('add')}
+          >
+            <Plus size={32} />
+          </button>
+          <button
+            className={activeTab === 'library' ? 'active' : ''}
+            onClick={() => setActiveTab('library')}
+          >
+            <Library size={24} />
+            <span>Library</span>
+          </button>
+        </nav>
+      </div>
     </div>
   );
 }
