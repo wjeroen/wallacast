@@ -340,8 +340,8 @@ export function FullscreenPlayer({
             {content.author && (
               <p className="fullscreen-author">
                 {content.author}
-                {content.published_date && (
-                  <> • {new Date(content.published_date).toLocaleDateString()}</>
+                {content.published_at && (
+                  <> • {new Date(content.published_at).toLocaleDateString()}</>
                 )}
                 {(content.karma !== undefined && content.karma !== null) && (
                   <> • {content.karma} upvotes</>
