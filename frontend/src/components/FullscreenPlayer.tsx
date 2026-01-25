@@ -148,21 +148,20 @@ export function FullscreenPlayer({
 
   // Recursive component to render comments with replies
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const hasMetadata =
-      comment.karma !== undefined ||
-      (comment.extendedScore && Object.keys(comment.extendedScore).length > 0);
-
-    // Build metadata string like "7 upvotes • 1 agree • 1 laugh"
+    // Build metadata string like "94 upvotes • 16 agreement"
     const metadataParts: string[] = [];
+
+    // Always show karma as "upvotes"
     if (comment.karma !== undefined && comment.karma !== null) {
       metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
     }
-    if (comment.extendedScore) {
-      Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
-        const label = reactionType.toLowerCase();
-        metadataParts.push(`${count} ${label}`);
-      });
+
+    // For LessWrong/EA Forum: only show agreement score (simplify - ignore other reactions)
+    if (comment.extendedScore && typeof comment.extendedScore.agreement === 'number') {
+      metadataParts.push(`${comment.extendedScore.agreement} agreement`);
     }
+
+    const hasMetadata = metadataParts.length > 0;
 
     return (
       <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
