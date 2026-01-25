@@ -5,15 +5,13 @@ import { pipeline } from 'stream/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
-import { query } from '../database/db.js';
 import { getAudioDuration } from './audio-utils.js';
-import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getOpenAIClientForUser } from './ai-providers.js';
+import { getTranscriptionClientForUser } from './ai-providers.js'; // CHANGED: Import hybrid router
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Compress audio file to reduce size for OpenAI API limits
+// Compress audio file to reduce size for API limits
 async function compressAudio(inputPath: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -45,7 +43,6 @@ async function splitAudioIntoChunks(
   console.log(`Audio duration: ${(duration / 60).toFixed(1)} minutes, splitting into ${numChunks} chunks`);
 
   const chunkFiles: string[] = [];
-  const tempDir = path.dirname(inputPath);
 
   for (let i = 0; i < numChunks; i++) {
     const startTime = i * chunkDurationSeconds;
@@ -81,10 +78,14 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
   words: Array<{ word: string; start: number; end: number }>;
 }> {
   try {
-    const openai = await getOpenAIClientForUser(userId);
-    if (!openai) {
-      throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
+    // CHANGED: Use the smart router that picks OpenAI or DeepInfra
+    const provider = await getTranscriptionClientForUser(userId);
+    
+    if (!provider) {
+      throw new Error('No API key set. Please configure OpenAI or DeepInfra in Settings.');
     }
+
+    const { client, model } = provider; // Destructure the client and the correct model ID
 
     const tempDir = path.join(process.cwd(), 'temp');
     await fs.mkdir(tempDir, { recursive: true });
@@ -92,6 +93,7 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
     const audioFilename = `audio_${Date.now()}.mp3`;
     const audioPath = path.join(tempDir, audioFilename);
 
+    console.log(`[Transcription] Downloading audio from ${audioUrl}...`);
     const response = await fetch(audioUrl);
 
     if (!response.ok) {
@@ -102,7 +104,7 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
       throw new Error('No response body from audio URL');
     }
 
-    // Stream download to disk instead of loading into memory
+    // Stream download to disk
     await pipeline(response.body, createWriteStream(audioPath));
 
     const fileStats = await fs.stat(audioPath);
@@ -123,11 +125,11 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
       let timeOffset = 0;
 
       for (let i = 0; i < chunkFiles.length; i++) {
-        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}...`);
+        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length} using model ${model}...`);
 
-        const transcription = await openai.audio.transcriptions.create({
+        const transcription = await client.audio.transcriptions.create({
           file: createReadStream(chunkFiles[i]),
-          model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
+          model: model, // DYNAMIC MODEL ID (whisper-1 OR openai/whisper-large-v3-turbo)
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
           prompt: previousTranscript.slice(-224),
@@ -136,7 +138,6 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
         previousTranscript = transcription.text;
 
-        // Adjust word timestamps to account for chunk offset
         const chunkWords = (transcription as any).words || [];
         const adjustedWords = chunkWords.map((word: any) => ({
           ...word,
@@ -145,11 +146,10 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
         }));
         allWords.push(...adjustedWords);
 
-        // Update time offset for next chunk (15 minutes = 900 seconds)
         timeOffset += 900;
       }
     } else {
-      // File is small enough - transcribe directly (with compression if needed)
+      // Small file
       let fileToTranscribe = audioPath;
 
       if (fileSizeMB > 20) {
@@ -160,9 +160,10 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
         tempFiles.push(compressedPath);
       }
 
-      const transcription = await openai.audio.transcriptions.create({
+      console.log(`Transcribing file using model ${model}...`);
+      const transcription = await client.audio.transcriptions.create({
         file: createReadStream(fileToTranscribe),
-        model: 'whisper-1', // whisper-1 supports verbose_json and word timestamps
+        model: model, // DYNAMIC MODEL ID
         response_format: 'verbose_json',
         timestamp_granularities: ['word'],
       });
@@ -171,7 +172,7 @@ export async function transcribeWithTimestamps(audioUrl: string, userId: number)
       allWords = (transcription as any).words || [];
     }
 
-    // Clean up all temp files
+    // Clean up
     for (const tempFile of tempFiles) {
       await fs.unlink(tempFile).catch(console.error);
     }
