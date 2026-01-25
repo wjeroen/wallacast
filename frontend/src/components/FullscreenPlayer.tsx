@@ -236,7 +236,7 @@ export function FullscreenPlayer({
             </div>
             <div
               className="article-content"
-              dangerouslySetInnerHTML={{ __html: content.content || content.html_content || '<p>No content available</p>' }}
+              dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
             />
           </div>
         );
