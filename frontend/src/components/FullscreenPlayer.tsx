@@ -100,7 +100,7 @@ export function FullscreenPlayer({
   onTranscriptWordClick,
   onRefetch,
 }: FullscreenPlayerProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('read-along');
+  const [activeTab, setActiveTab] = useState<TabType>('content');
 
   // Parse comments from JSON string if available
   const parsedComments: Comment[] = useMemo(() => {

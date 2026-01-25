@@ -16,7 +16,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true); // Open fullscreen by default
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
