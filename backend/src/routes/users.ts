@@ -206,7 +206,7 @@ router.get('/ai-providers', async (_req, res) => {
         // OpenAI Voices
         'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'coral',
         // Kokoro Voices (DeepInfra)
-        'af_heart', 'af_bella', 'af_nicole', 'am_adam', 'am_michael'
+        'af_heart', 'af_bella', 'af_nicole', 'am_adam', 'am_michael', 'am_puck'
       ],
       requiredSettings: ['openai_api_key'], // DeepInfra is optional but recommended
       description: 'OpenAI for Chat. DeepInfra supported for cheaper Audio/TTS.',
