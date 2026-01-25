@@ -195,16 +195,23 @@ export function FullscreenPlayer({
       case 'content':
         return (
           <div className="tab-content-display">
-            <div className="content-header">
-              <h2>{content.title}</h2>
-              {content.author && <p className="content-author">By {content.author}</p>}
+            <div className="content-header-with-button">
+              <div className="content-header">
+                <h2>{content.title}</h2>
+                {content.author && <p className="content-author">By {content.author}</p>}
+                {content.url && (
+                  <p className="content-source">
+                    <a href={content.url} target="_blank" rel="noopener noreferrer">
+                      {getDomainFromUrl(content.url)}
+                      <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
+                    </a>
+                  </p>
+                )}
+              </div>
               {content.url && (
-                <p className="content-source">
-                  <a href={content.url} target="_blank" rel="noopener noreferrer">
-                    {getDomainFromUrl(content.url)}
-                    <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
-                  </a>
-                </p>
+                <button className="refetch-button" title="Refetch content">
+                  <RefreshCw size={16} />
+                </button>
               )}
             </div>
             <div

@@ -250,7 +250,7 @@ Example from the JSON:
 
 Use this JSON data to get accurate vote counts. If the JSON is present, prioritize it over HTML elements.
 
-HTML to extract:\n\n${commentsHtml.slice(0, 100000)}`,
+HTML to extract:\n\n${htmlContent.slice(0, 150000)}`,
                 },
               ],
               reasoning_effort: 'low', // 'low' is the fastest supported setting for gpt-5-mini (supports: low, medium, high)
