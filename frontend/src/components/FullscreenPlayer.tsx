@@ -66,6 +66,7 @@ function getDomainFromUrl(url: string): string {
 function isEAForumOrLessWrong(url: string): boolean {
   if (!url) return false;
   const domain = getDomainFromUrl(url);
+  
   return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
 }
 
@@ -156,9 +157,22 @@ export function FullscreenPlayer({
       metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
     }
 
-    // For LessWrong/EA Forum: only show agreement score (simplify - ignore other reactions)
-    if (comment.extendedScore && typeof comment.extendedScore.agreement === 'number') {
-      metadataParts.push(`${comment.extendedScore.agreement} agreement`);
+    // Handle extended scores (reactions)
+    if (comment.extendedScore) {
+      const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
+
+      if (isLessWrong) {
+        // LessWrong: Only show 'agreement' score (simplify - ignore other reactions)
+        if (typeof comment.extendedScore.agreement === 'number') {
+          metadataParts.push(`${comment.extendedScore.agreement} agreement`);
+        }
+      } else {
+        // EA Forum (and others): Show ALL reactions
+        Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
+          const label = reactionType.toLowerCase();
+          metadataParts.push(`${count} ${label}`);
+        });
+      }
     }
 
     const hasMetadata = metadataParts.length > 0;
@@ -234,7 +248,6 @@ export function FullscreenPlayer({
             />
           </div>
         );
-
       case 'comments':
         return (
           <div className="tab-comments-display">
@@ -257,7 +270,6 @@ export function FullscreenPlayer({
             )}
           </div>
         );
-
       case 'read-along':
         const transcript = content.transcript || content.content || '';
         const displayText = cleanHtml(transcript);
@@ -289,7 +301,6 @@ export function FullscreenPlayer({
             )}
           </div>
         );
-
       case 'queue':
         return (
           <div className="tab-queue-display">
@@ -300,7 +311,6 @@ export function FullscreenPlayer({
             </p>
           </div>
         );
-
       default:
         return null;
     }
