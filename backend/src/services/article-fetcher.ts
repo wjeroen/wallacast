@@ -28,7 +28,6 @@ export interface ArticleContent {
 }
 
 // Helper: robustly extract JS objects from .push(...) calls
-// Handles single quotes, double quotes, and cleans 'undefined' values
 function extractApolloSSRData(scriptContent: string): any[] {
   const results: any[] = [];
   const pushPattern = /\.push\s*\(\s*/g;
@@ -38,7 +37,7 @@ function extractApolloSSRData(scriptContent: string): any[] {
     const startIndex = match.index + match[0].length;
     let openBrackets = 0;
     let inString = false;
-    let stringChar = ''; // ' or "
+    let stringChar = '';
     let escape = false;
     let endIndex = -1;
 
@@ -55,7 +54,6 @@ function extractApolloSSRData(scriptContent: string): any[] {
         continue;
       }
 
-      // Handle strings (both single and double quotes)
       if (!inString && (char === '"' || char === "'")) {
         inString = true;
         stringChar = char;
@@ -69,11 +67,9 @@ function extractApolloSSRData(scriptContent: string): any[] {
         continue;
       }
 
-      // Bracket counting (only when not in string)
       if (char === '{' || char === '[') openBrackets++;
       if (char === '}' || char === ']') openBrackets--;
 
-      // Check for end of function argument: )
       if (char === ')' && openBrackets <= 0) {
         endIndex = i;
         break;
@@ -83,24 +79,17 @@ function extractApolloSSRData(scriptContent: string): any[] {
     if (endIndex !== -1) {
       let payloadString = scriptContent.substring(startIndex, endIndex).trim();
 
-      // 1. Handle IIFEs (Functions)
-      // The massive data chunk often lives inside: .push((function(){ ... const rehydrate = {...}; return ... })())
+      // 1. Handle IIFEs
       if (payloadString.startsWith('(') || payloadString.startsWith('function')) {
-        // Try to extract the 'rehydrate' object definition from the function body
-        // Looking for: const rehydrate = { ... };
         const rehydrateMatch = payloadString.match(/const\s+rehydrate\s*=\s*(\{[\s\S]*?\n\s*\}\s*);/);
         if (rehydrateMatch) {
-          payloadString = rehydrateMatch[1]; // Use the extracted object instead of the function
+          payloadString = rehydrateMatch[1];
         } else {
-          // If we can't extract specific data, skip the function to avoid crashing
-          console.log('Skipping ApolloSSRDataTransport function block (no rehydrate object found)');
           continue;
         }
       }
 
-      // 2. Sanitize "Loose JSON" to valid JSON
-      // Replace 'undefined' values with 'null' (Fixes "Unexpected token 'u'")
-      // Regex looks for: : undefined (followed by comma, end brace, or newline)
+      // 2. Sanitize "Loose JSON"
       payloadString = payloadString.replace(/:\s*undefined([,}\]])/g, ':null$1');
 
       // 3. Attempt Parsing
@@ -108,8 +97,7 @@ function extractApolloSSRData(scriptContent: string): any[] {
         const json = JSON.parse(payloadString);
         results.push(json);
       } catch (e) {
-        // Silent fail: some chunks might be code or complex refs we can't parse easily
-        console.warn('JSON Parse failed on chunk:', (e as Error).message.substring(0, 100));
+        // Ignore errors
       }
     }
   }
@@ -129,8 +117,16 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
 
   // Pass 1: Create Objects
   for (const [key, value] of Object.entries(apolloState)) {
-    if (key.startsWith('Comment:')) {
-      const commentData = value as any;
+    const commentData = value as any;
+
+    // CHANGED: Check __typename explicitly instead of just strict key prefixes
+    // This catches "Comment:123" AND "123" (where 123 is a Comment object)
+    const isComment =
+      key.startsWith('Comment:') ||
+      (commentData && commentData.__typename === 'Comment');
+
+    if (isComment) {
+      const extendedScore = commentData.extendedScore || {};
 
       let user = commentData.user;
       if (user && user.__ref) {
@@ -152,9 +148,6 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
                      commentData.content ||
                      '';
 
-      // Extract all reactions from extendedScore dynamically
-      const extendedScore = commentData.extendedScore || {};
-
       const comment: Comment = {
         username: user?.displayName || user?.slug || commentData.author || 'Anonymous',
         date: commentData.postedAt,
@@ -163,25 +156,43 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
         content: content,
         replies: [],
       };
+
+      // Map BOTH the key and the ID (if available) to this comment
       commentMap.set(key, comment);
+      if (commentData._id) {
+        commentMap.set(commentData._id, comment);
+        commentMap.set(`Comment:${commentData._id}`, comment);
+      }
     }
   }
 
   // Pass 2: Threading
   for (const [key, value] of Object.entries(apolloState)) {
-    if (key.startsWith('Comment:')) {
-      const commentData = value as any;
+    const commentData = value as any;
+    const isComment = key.startsWith('Comment:') || (commentData && commentData.__typename === 'Comment');
+
+    if (isComment) {
       const comment = commentMap.get(key);
 
       if (comment && commentData.parentCommentId) {
-        const parentKey = `Comment:${commentData.parentCommentId}`;
-        const parentComment = commentMap.get(parentKey);
+        // Try multiple key formats for the parent
+        let parentComment = commentMap.get(commentData.parentCommentId);
+        if (!parentComment) {
+          parentComment = commentMap.get(`Comment:${commentData.parentCommentId}`);
+        }
+
         if (parentComment) {
           if (!parentComment.replies) parentComment.replies = [];
-          parentComment.replies.push(comment);
+          // Avoid duplicates if we process the same comment twice (due to multiple map keys)
+          if (!parentComment.replies.includes(comment)) {
+            parentComment.replies.push(comment);
+          }
         }
       } else if (comment && !commentData.parentCommentId) {
-        comments.push(comment);
+        // Check if we already added this top-level comment (deduplication)
+        if (!comments.includes(comment)) {
+          comments.push(comment);
+        }
       }
     }
   }

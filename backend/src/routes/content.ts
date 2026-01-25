@@ -205,31 +205,39 @@ router.post('/', async (req, res) => {
 
     const createdItem = result.rows[0];
 
-    // Auto-generate audio for articles (if no audio URL provided)
+    // Auto-generate audio for articles (if no audio URL provided and user has it enabled)
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
-      console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
+      // Check user setting for auto audio generation (defaults to FALSE to save money)
+      const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
+      const shouldAutoGenerate = autoGenerateAudio === 'true'; // Default to FALSE for cost savings
 
-      // Set status to starting (will update to extracting_content immediately)
-      await query(
-        'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-        ['starting', 0, 'initialization', createdItem.id]
-      );
+      if (shouldAutoGenerate) {
+        console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
-      // Start generation in background (don't await)
-      generateAudioForContent(createdItem.id)
-        .then(async () => {
-          await query(
-            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-            ['completed', 100, createdItem.id]
-          );
-        })
-        .catch(async (error) => {
-          console.error('Auto audio generation error:', error);
-          await query(
-            'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-            ['failed', error.message || 'Failed to generate audio', 0, createdItem.id]
-          );
-        });
+        // Set status to starting (will update to extracting_content immediately)
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+          ['starting', 0, 'initialization', createdItem.id]
+        );
+
+        // Start generation in background (don't await)
+        generateAudioForContent(createdItem.id)
+          .then(async () => {
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+              ['completed', 100, createdItem.id]
+            );
+          })
+          .catch(async (error) => {
+            console.error('Auto audio generation error:', error);
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+              ['failed', error.message || 'Failed to generate audio', 0, createdItem.id]
+            );
+          });
+      } else {
+        console.log(`Skipping auto audio generation for ${type} ${createdItem.id} (disabled in settings)`);
+      }
     }
 
     // Auto-generate transcript for podcast episodes (if has audio but no transcript)
