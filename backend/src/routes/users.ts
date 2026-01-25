@@ -34,6 +34,8 @@ const VALID_SETTING_KEYS = [
   'theme',
   'playback_speed',
   'auto_archive_after_listen',
+  'auto_transcribe_podcasts',          // Boolean: auto-transcribe podcast episodes (costs API credits)
+  'auto_generate_audio_for_articles',  // Boolean: auto-generate audio for new articles (costs API credits)
 ];
 
 // Secret keys that should be masked in responses
@@ -132,14 +134,24 @@ router.put('/settings', async (req, res) => {
   try {
     const { settings } = req.body;
 
+    console.log(`[SETTINGS] User ${req.user!.userId} attempting to save settings:`, Object.keys(settings));
+
     if (!settings || typeof settings !== 'object') {
       return res.status(400).json({ error: 'Settings object required' });
     }
 
+    const savedKeys: string[] = [];
+    const skippedKeys: string[] = [];
+
     for (const [key, value] of Object.entries(settings)) {
       if (!VALID_SETTING_KEYS.includes(key)) {
+        skippedKeys.push(key);
+        console.log(`[SETTINGS] ⚠️  Skipping unknown key: ${key}`);
         continue; // Skip unknown keys
       }
+
+      savedKeys.push(key);
+      console.log(`[SETTINGS] ✓ Saving ${key} = ${typeof value === 'string' && value.length > 50 ? '[REDACTED]' : value}`);
 
       const isSecret = SECRET_KEYS.includes(key);
 
@@ -152,6 +164,8 @@ router.put('/settings', async (req, res) => {
         [req.user!.userId, key, value as string, isSecret]
       );
     }
+
+    console.log(`[SETTINGS] ✅ Saved ${savedKeys.length} settings${skippedKeys.length > 0 ? `, skipped ${skippedKeys.length} unknown keys: ${skippedKeys.join(', ')}` : ''}`);
 
     res.json({ success: true });
   } catch (error) {
