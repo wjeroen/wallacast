@@ -353,7 +353,14 @@ router.patch('/:id', async (req, res) => {
               // Add Wallacast provenance marker to content
               const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${extractedResult.content}`;
 
-              // Update with new content + HTML + metadata (keep Wallabag thumbnail!)
+              // Prepare comments JSON (prefer direct Apollo state extraction over LLM)
+              const commentsJson = articleData.comments && articleData.comments.length > 0
+                ? JSON.stringify(articleData.comments)
+                : (extractedResult.comments && extractedResult.comments.length > 0
+                  ? JSON.stringify(extractedResult.comments)
+                  : null);
+
+              // Update with new content + HTML + metadata + comments (keep Wallabag thumbnail!)
               await query(
                 `UPDATE content_items SET
                   content = $1,
@@ -364,11 +371,12 @@ router.patch('/:id', async (req, res) => {
                   karma = COALESCE($5, karma),
                   agree_votes = COALESCE($6, agree_votes),
                   disagree_votes = COALESCE($7, disagree_votes),
-                  generation_status = $8,
-                  generation_progress = $9,
+                  comments = $8,
+                  generation_status = $9,
+                  generation_progress = $10,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $10`,
+                WHERE id = $11`,
                 [
                   markedContent,
                   articleData.html,
@@ -377,6 +385,7 @@ router.patch('/:id', async (req, res) => {
                   articleData.karma,
                   articleData.agree_votes,
                   articleData.disagree_votes,
+                  commentsJson,
                   'completed',
                   100,
                   id
@@ -597,6 +606,74 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting content item:', error);
     res.status(500).json({ error: 'Failed to delete content item' });
+  }
+});
+
+// Refetch content metadata and comments (no LLM, just re-scrape)
+router.post('/:id/refetch', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contentResult = await query(
+      'SELECT type, url FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const { type, url } = contentResult.rows[0];
+
+    if (type !== 'article' || !url) {
+      return res.status(400).json({ error: 'Refetch only available for articles with URLs' });
+    }
+
+    // Refetch in background
+    (async () => {
+      try {
+        console.log(`Refetching metadata and comments for article ${id} from:`, url);
+
+        // Refetch from URL (gets fresh metadata + comments)
+        const articleData = await fetchArticleContent(url);
+
+        // Prepare comments JSON
+        const commentsJson = articleData.comments && articleData.comments.length > 0
+          ? JSON.stringify(articleData.comments)
+          : null;
+
+        // Update metadata and comments only (don't touch content)
+        await query(
+          `UPDATE content_items SET
+            author = COALESCE($1, author),
+            published_at = COALESCE($2, published_at),
+            karma = $3,
+            agree_votes = $4,
+            disagree_votes = $5,
+            comments = $6,
+            updated_at = NOW()
+          WHERE id = $7`,
+          [
+            articleData.author || articleData.byline,
+            articleData.published_date,
+            articleData.karma,
+            articleData.agree_votes,
+            articleData.disagree_votes,
+            commentsJson,
+            id
+          ]
+        );
+
+        console.log(`Refetch completed for article ${id}. Comments: ${articleData.comments?.length || 0}`);
+      } catch (error) {
+        console.error(`Refetch error for article ${id}:`, error);
+      }
+    })();
+
+    res.json({ message: 'Refetch started' });
+  } catch (error) {
+    console.error('Error starting refetch:', error);
+    res.status(500).json({ error: 'Failed to start refetch' });
   }
 });
 
