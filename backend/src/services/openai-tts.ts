@@ -5,7 +5,8 @@ import { query } from '../database/db.js';
 import { getAudioDir, getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getOpenAIClientForUser } from './ai-providers.js';
+// CHANGED: Import the new provider helpers
+import { getTTSClientForUser, getTTSOptionsForUser } from './ai-providers.js';
 
 interface Comment {
   id?: string;
@@ -35,11 +36,14 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
 
   while (currentPos < text.length) {
     let chunkEnd = currentPos + maxLength;
+
+    // If this is the last chunk, take everything
     if (chunkEnd >= text.length) {
       chunks.push(text.slice(currentPos));
       break;
     }
 
+    // Find the last sentence boundary within the chunk
     const chunk = text.slice(currentPos, chunkEnd);
     const lastSentenceEnd = Math.max(
       chunk.lastIndexOf('. '),
@@ -48,8 +52,10 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
     );
 
     if (lastSentenceEnd > maxLength * 0.6) {
+      // Good sentence boundary found
       chunkEnd = currentPos + lastSentenceEnd + 1;
     } else {
+      // No good boundary, try to break at word boundary
       const lastSpace = chunk.lastIndexOf(' ');
       if (lastSpace > maxLength * 0.8) {
         chunkEnd = currentPos + lastSpace;
@@ -59,11 +65,13 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
     chunks.push(text.slice(currentPos, chunkEnd).trim());
     currentPos = chunkEnd;
   }
+
   return chunks;
 }
 
 async function concatenateAudioFiles(inputFiles: string[], outputFile: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Create a temporary concat list file
     const concatListPath = outputFile + '.txt';
     const concatList = inputFiles.map(f => `file '${f}'`).join('\n');
 
@@ -75,6 +83,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
           .outputOptions(['-c copy'])
           .output(outputFile)
           .on('end', () => {
+            // Clean up concat list file
             fs.unlink(concatListPath).catch(console.error);
             resolve();
           })
@@ -89,7 +98,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
 }
 
 /**
- * Format a date naturally (e.g., "15th of January 2026")
+ * Format a date naturally for TTS narration (e.g., "15th of January 2026")
  */
 function formatDateForNarration(dateString: string): string {
   try {
@@ -98,32 +107,32 @@ function formatDateForNarration(dateString: string): string {
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
 
+    // Add ordinal suffix (1st, 2nd, 3rd, 4th, etc.)
     const suffix = ['th', 'st', 'nd', 'rd'];
     const v = day % 100;
     const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
 
     return `${ordinalDay} of ${month} ${year}`;
   } catch (e) {
-    return dateString;
+    return dateString; // Fallback to original if parsing fails
   }
 }
 
 /**
- * Format reactions exactly as requested: "7 upvotes, 1 agree, 1 laugh"
+ * Format reactions from extendedScore for narration (e.g., "7 upvotes, 1 agree, 1 laugh")
  */
 function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>): string {
   const parts: string[] = [];
 
-  // 1. Base Karma
+  // Always include karma as "upvotes"
   if (karma !== undefined && karma !== null) {
     parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
   }
 
-  // 2. Extended Reactions (Agree, Disagree, Laugh, etc.)
+  // Include explicit reactions if available
   if (extendedScore) {
     for (const [reaction, count] of Object.entries(extendedScore)) {
       if (count > 0 && reaction !== 'baseScore') {
-        // Map reaction keys to readable text if needed, or use as-is
         parts.push(`${count} ${reaction}`);
       }
     }
@@ -133,38 +142,48 @@ function formatReactionsForNarration(karma?: number, extendedScore?: Record<stri
 }
 
 /**
- * Recursive function to build the narration string from the comment tree
+ * Convert HTML content to clean text for TTS narration
  */
-function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, parentAuthor?: string): string {
+function htmlToNarrationText(html: string): string {
+  // Simple regex stripper since we trust the fetcher's cleaning mostly
+  // But strictly speaking, the Fetcher stores clean HTML, so we strip tags here.
+  let text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text;
+}
+
+/**
+ * Format structured comments for TTS narration
+ */
+function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string): string {
   let narration = '';
 
   for (const comment of comments) {
-    // A. The Intro
-    let commentIntro = '';
-    if (isReply && parentAuthor) {
-      commentIntro = `Reply to ${parentAuthor} by ${comment.username}`;
-    } else {
-      commentIntro = `${comment.username}`; // Top level just starts with name
-    }
-
-    // B. Date
-    if (comment.date) {
-      commentIntro += ` on ${formatDateForNarration(comment.date)}`;
-    }
-
-    // C. Reactions
+    // Format metadata
     const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore);
-    if (reactions) {
-      commentIntro += `. ${reactions}`; // "User on Date. 7 upvotes, 1 agree."
+    const date = comment.date ? formatDateForNarration(comment.date) : '';
+
+    // Build comment intro
+    let commentIntro = '';
+    if (isReply && replyTo) {
+      commentIntro = `Reply to ${replyTo} by ${comment.username}`;
+    } else {
+      commentIntro = `${comment.username}`;
     }
 
-    // D. The Content (Strip HTML tags for safety, though Fetcher usually handles this)
-    const cleanContent = comment.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (date) {
+      commentIntro += ` on ${date}`;
+    }
 
-    // E. Assemble
-    narration += `${commentIntro}.\n"${cleanContent}"\n\n`;
+    if (reactions) {
+      commentIntro += `. ${reactions}`;
+    }
 
-    // F. Recurse for replies
+    // Convert HTML content to plain text
+    const commentText = htmlToNarrationText(comment.content);
+
+    narration += `${commentIntro}.\n"${commentText}"\n\n`;
+
+    // Recursively add replies
     if (comment.replies && comment.replies.length > 0) {
       narration += formatCommentsForNarration(comment.replies, true, comment.username);
     }
@@ -210,200 +229,341 @@ async function polishGenericArticleText(rawText: string, openai: any): Promise<s
   }
 }
 
-// --- MAIN GENERATION FUNCTIONS ---
 
 export async function generateArticleAudio(
   articleText: string,
   userId: number,
   options: {
-    voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral';
+    voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'coral' | string;
     instructions?: string;
     contentId?: number;
   } = {}
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
   try {
-    const openai = await getOpenAIClientForUser(userId);
+    // 1. Get Settings (Model & Voice)
+    const userSettings = await getTTSOptionsForUser(userId);
+    const targetModel = userSettings.model || 'gpt-4o-mini-tts';
+    const targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+
+    // 2. Get the Client (Routes to DeepInfra if targetModel is Kokoro)
+    const openai = await getTTSClientForUser(userId, targetModel);
+    
     if (!openai) {
-      throw new Error('OpenAI API key not set. Please set your OpenAI API key in Settings.');
+      throw new Error('No AI API key set. Please configure OpenAI or DeepInfra in Settings.');
     }
 
-    const voice = options.voice || PROCESSING_CONFIG.tts.voice;
-    // Simplified instructions since we prepare the text heavily beforehand
-    const instructions = options.instructions || 'Read this text clearly and naturally.';
+    const instructions = options.instructions || 'Read this article clearly and naturally.';
 
+    // 3. Chunking
     const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
-    console.log(`Generating TTS audio with gpt-4o-mini-tts for ${textChunks.length} chunk(s)...`);
+    console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);
 
-    // ... (Same chunk generation logic as before, omitting for brevity as it was correct in original) ...
-    // Note: In a real deployment, ensure the loop/retry/concat logic from the previous file is preserved here.
-    // I am pasting the core logic back in to ensure the file is complete.
+    const allWords = articleText.split(/\s+/);
 
+    // --- CASE A: Single Chunk ---
+    if (textChunks.length === 1) {
+      console.log(`Single chunk (${textChunks[0].length} chars)`);
+
+      let retries = PROCESSING_CONFIG.retry.maxAttempts;
+      let delay = PROCESSING_CONFIG.retry.baseDelayMs;
+      let response: any = null;
+
+      while (retries > 0) {
+        try {
+          response = await openai.audio.speech.create({
+            model: targetModel, // Pass dynamic model
+            voice: targetVoice as any,
+            input: textChunks[0],
+            // instructions: instructions, // Note: some providers might ignore this
+          });
+          break;
+        } catch (error: any) {
+          if (error.status === 429 && retries > 1) {
+            console.log(`Rate limit hit, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
+            retries--;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      if (!response) {
+        throw new Error('Failed to generate audio after retries');
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      // Save temp file to get duration
+      const tempDir = getTempDir();
+      await fs.mkdir(tempDir, { recursive: true });
+      const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
+      await fs.writeFile(tempFile, buffer);
+      const duration = await getAudioDuration(tempFile);
+      await fs.unlink(tempFile).catch(console.error);
+
+      const chunkMetadata: ChunkMetadata[] = [{
+        text: textChunks[0],
+        startWord: 0,
+        endWord: allWords.length - 1,
+        duration: duration,
+        startTime: 0
+      }];
+
+      return { buffer, chunks: 1, chunkMetadata };
+    }
+
+    // --- CASE B: Multiple Chunks ---
     const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
-    
-    // Single Chunk Optimization
-    if (textChunks.length === 1) {
-       const response = await openai.audio.speech.create({
-          model: 'gpt-4o-mini-tts',
-          voice: voice,
-          input: textChunks[0],
-          instructions: instructions,
-        });
-        const buffer = Buffer.from(await response.arrayBuffer());
-        
-        // Quick duration check
-        const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
-        await fs.writeFile(tempFile, buffer);
-        const duration = await getAudioDuration(tempFile);
-        await fs.unlink(tempFile).catch(console.error);
 
-        return { 
-          buffer, 
-          chunks: 1, 
-          chunkMetadata: [{ 
-            text: textChunks[0], 
-            startWord: 0, 
-            endWord: textChunks[0].split(/\s+/).length, 
-            duration, 
-            startTime: 0 
-          }] 
-        };
-    }
-
-    // Multi-chunk Logic
     const chunkFiles: string[] = [];
     const chunkMetadata: ChunkMetadata[] = [];
-    let currentTime = 0;
+    const timestamp = Date.now();
     let currentWordIndex = 0;
+    let currentTime = 0;
 
-    for (let i = 0; i < textChunks.length; i++) {
-        // Progress Update
+    try {
+      for (let i = 0; i < textChunks.length; i++) {
+        console.log(`Generating chunk ${i + 1}/${textChunks.length} (${textChunks[i].length} chars)...`);
+
+        const chunkProgress = Math.round(((i + 1) / textChunks.length) * 90);
         if (options.contentId) {
-             const progress = Math.round(((i + 1) / textChunks.length) * 90);
-             await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [progress, options.contentId]);
+          await query(
+            'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+            [chunkProgress, `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
+          );
         }
 
-        const response = await openai.audio.speech.create({
-            model: 'gpt-4o-mini-tts',
-            voice: voice,
-            input: textChunks[i],
-            instructions: instructions,
-        });
-        
+        let retries = PROCESSING_CONFIG.retry.maxAttempts;
+        let delay = PROCESSING_CONFIG.retry.baseDelayMs;
+        let response: any = null;
+
+        while (retries > 0) {
+          try {
+            response = await openai.audio.speech.create({
+              model: targetModel, // Pass dynamic model
+              voice: targetVoice as any,
+              input: textChunks[i],
+              // instructions: instructions,
+            });
+            break;
+          } catch (error: any) {
+            if (error.status === 429 && retries > 1) {
+              console.log(`Rate limit hit on chunk ${i + 1}, retrying in ${delay/1000}s... (${retries - 1} retries left)`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
+              retries--;
+            } else {
+              throw error;
+            }
+          }
+        }
+
+        if (!response) {
+          throw new Error(`Failed to generate chunk ${i + 1} after retries`);
+        }
+
+        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
         const chunkBuffer = Buffer.from(await response.arrayBuffer());
-        const chunkFile = path.join(tempDir, `chunk_${Date.now()}_${i}.mp3`);
         await fs.writeFile(chunkFile, chunkBuffer);
         chunkFiles.push(chunkFile);
 
         const duration = await getAudioDuration(chunkFile);
-        const wordCount = textChunks[i].split(/\s+/).length;
-        
+        const chunkWords = textChunks[i].split(/\s+/).length;
+
         chunkMetadata.push({
-            text: textChunks[i],
-            startWord: currentWordIndex,
-            endWord: currentWordIndex + wordCount,
-            duration,
-            startTime: currentTime
+          text: textChunks[i],
+          startWord: currentWordIndex,
+          endWord: currentWordIndex + chunkWords - 1,
+          duration: duration,
+          startTime: currentTime
         });
 
+        currentWordIndex += chunkWords;
         currentTime += duration;
-        currentWordIndex += wordCount;
+
+        if (i < textChunks.length - 1) {
+          const delayMs = 200; 
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+
+      const outputFile = path.join(tempDir, `concatenated_${timestamp}.mp3`);
+      console.log(`Concatenating ${chunkFiles.length} audio files...`);
+
+      if (options.contentId) {
+        await query(
+          'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+          [95, 'concatenating_audio', options.contentId]
+        );
+      }
+
+      await concatenateAudioFiles(chunkFiles, outputFile);
+      const finalBuffer = await fs.readFile(outputFile);
+
+      // Cleanup
+      await fs.unlink(outputFile).catch(console.error);
+      for (const chunkFile of chunkFiles) {
+        await fs.unlink(chunkFile).catch(console.error);
+      }
+
+      return { buffer: finalBuffer, chunks: textChunks.length, chunkMetadata };
+    } catch (error) {
+      for (const chunkFile of chunkFiles) {
+        await fs.unlink(chunkFile).catch(console.error);
+      }
+      throw error;
     }
-
-    const outputFile = path.join(tempDir, `concat_${Date.now()}.mp3`);
-    await concatenateAudioFiles(chunkFiles, outputFile);
-    const finalBuffer = await fs.readFile(outputFile);
-
-    // Cleanup
-    await fs.unlink(outputFile).catch(() => {});
-    for (const f of chunkFiles) await fs.unlink(f).catch(() => {});
-
-    return { buffer: finalBuffer, chunks: textChunks.length, chunkMetadata };
-
   } catch (error) {
     console.error('Error generating audio:', error);
-    throw error;
+    throw new Error('Failed to generate audio. Please check your API keys.');
   }
 }
 
 export async function generateAudioForContent(contentId: number): Promise<{ audioUrl: string; warning?: string }> {
   try {
-    // 1. Get content from DB
-    const res = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
-    if (res.rows.length === 0) throw new Error('Content not found');
-    const content = res.rows[0];
+    // 1. Get content
+    const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
 
-    const openai = await getOpenAIClientForUser(content.user_id);
-
-    // 2. Prepare the Script
-    let finalScript = '';
-
-    // --- A. INTRO ---
-    if (content.title) {
-      finalScript += `Title: ${content.title}. `;
-      if (content.author) finalScript += `Written by ${content.author}. `;
-      if (content.published_at) finalScript += `Published on ${formatDateForNarration(content.published_at)}. `;
-      finalScript += '\n\n';
+    if (contentResult.rows.length === 0) {
+      throw new Error('Content not found');
     }
 
-    // --- B. MAIN CONTENT ---
-    let articleBody = content.content || '';
-    const isSpecializedSite = content.url && (content.url.includes('effectivealtruism.org') || content.url.includes('lesswrong.com'));
+    const content = contentResult.rows[0];
 
-    // Decision: Do we polish?
-    // If it's EA/LW, we assume the Fetcher did a perfect job extracting the markdown/text.
-    // If it's a random blog, we use the LLM to "polish" the text (remove clutter), but NOT re-parse structure.
-    if (!isSpecializedSite && articleBody && openai) {
-        console.log('[TTS] Generic site detected. Running lightweight text polishing...');
-        await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['polishing_text', contentId]);
-        articleBody = await polishGenericArticleText(articleBody, openai);
-    }
-
-    finalScript += articleBody;
-
-    // --- C. COMMENTS (Only for EA/LW or if explicitly parsed) ---
-    // We only read comments if they exist in the DB JSON column.
-    if (content.comments) {
-      let commentsArray: Comment[] = [];
-      try {
-        commentsArray = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-      } catch (e) { console.error('Error parsing comments JSON', e); }
-
-      if (commentsArray.length > 0) {
-        console.log(`[TTS] appending ${commentsArray.length} comments to script.`);
-        finalScript += '\n\nComments Section:\n\n';
-        finalScript += formatCommentsForNarration(commentsArray);
-      }
-    }
-
-    // 3. Generate Audio
-    console.log(`[TTS] Sending ${finalScript.length} chars to OpenAI Audio API...`);
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['synthesizing_audio', contentId]);
+    // 2. Prepare Text (Use existing, clean content from Fetcher)
+    let textToConvert = '';
     
-    const { buffer, chunks, chunkMetadata } = await generateArticleAudio(finalScript, content.user_id, {
-        contentId
+    // We assume the Fetcher has done its job.
+    // However, if we are in "Generate Audio" mode, we might need to construct the reading script.
+    
+    if (content.type === 'article') {
+       // Check if content exists
+       if (content.content) {
+          textToConvert = content.content;
+       } else if (content.html_content) {
+          // Fallback if no formatted content (should generally not happen if fetcher ran)
+          textToConvert = htmlToNarrationText(content.html_content);
+       }
+    } else {
+      textToConvert = content.content || '';
+    }
+
+    if (!textToConvert) {
+      throw new Error('No content to convert to audio');
+    }
+
+    // 3. Assemble the Script (Intro + Body + Comments)
+    let fullText = '';
+
+    // Intro
+    if (content.title) {
+      fullText = `This post is titled: ${content.title}`;
+      if (content.author) fullText += `, written by ${content.author}`;
+      if (content.published_at) fullText += `, posted on ${formatDateForNarration(content.published_at)}`;
+      
+      // Add karma info to intro if available
+      if (content.karma !== undefined && content.karma !== null) {
+        fullText += `. It has ${content.karma} karma`;
+      }
+      fullText += '.\n\n';
+    }
+
+    // Polish generic text?
+    // Get OpenAI client just for polishing (doesn't matter if it's deepinfra or openai for this, 
+    // but polishing is best done by a smart model like 4o-mini, so let's stick to OpenAI for polish if available)
+    // Note: If user ONLY has DeepInfra key, we can skip polishing or use Llama if we added that support.
+    // For now, let's try to get a client.
+    
+    // Check if we need polishing
+    const isSpecializedSite = content.url && (content.url.includes('effectivealtruism.org') || content.url.includes('lesswrong.com'));
+    
+    // Only polish if it's a generic site AND we have content
+    if (!isSpecializedSite && textToConvert.length > 0) {
+        try {
+            // We use the "Chat" provider for polishing.
+            // Currently assuming 'openai' provider for chat.
+            const { getOpenAIClientForUser } = await import('./ai-providers.js');
+            const chatClient = await getOpenAIClientForUser(content.user_id);
+            
+            if (chatClient) {
+                 console.log('[TTS] Generic site detected. Running text polishing...');
+                 await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['polishing_text', contentId]);
+                 // We don't want to re-polish if it looks clean, but the fetcher saves raw text.
+                 // Safety: only polish if it hasn't been polished (difficult to track without flag)
+                 // or just polish the input string before concatenating.
+                 textToConvert = await polishGenericArticleText(textToConvert, chatClient);
+            }
+        } catch (e) {
+            console.warn("Skipping text polish due to client error", e);
+        }
+    }
+
+    fullText += textToConvert;
+
+    // Comments
+    // Check for structured comments
+    if (content.comments) {
+       try {
+          const comments = typeof content.comments === 'string' 
+            ? JSON.parse(content.comments) 
+            : content.comments;
+            
+          if (comments && comments.length > 0) {
+              console.log(`[TTS] Formatting ${comments.length} comments for narration`);
+              fullText += '\n\nComments section:\n\n' + formatCommentsForNarration(comments);
+          }
+       } catch (e) {
+           console.error("Failed to parse comments for audio:", e);
+       }
+    }
+
+    // 4. Generate
+    const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullText, content.user_id, {
+      contentId: contentId,
     });
 
-    // 4. Save and Return
-    // ... (Same saving logic as before) ...
-    const tempDir = getTempDir();
-    const tempFilePath = path.join(tempDir, `duration_${contentId}.mp3`);
-    await fs.writeFile(tempFilePath, buffer);
-    const audioDuration = Math.floor(await getAudioDuration(tempFilePath));
-    await fs.unlink(tempFilePath).catch(() => {});
+    // 5. Store Result
+    let warning: string | undefined;
+    if (chunks > 1) {
+      const estimatedMinutes = Math.round(fullText.length / 900);
+      warning = `Generated complete audio in ${chunks} parts (~${estimatedMinutes} minutes).`;
+    }
 
-    const backendUrl = process.env.BACKEND_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'http://localhost:3001');
+    console.log(`Storing audio in database (${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Get duration
+    const tempDir = getTempDir();
+    const tempFilePath = path.join(tempDir, `temp_duration_${contentId}.mp3`);
+    let audioDuration = 0;
+
+    try {
+      await fs.writeFile(tempFilePath, audioBuffer);
+      audioDuration = Math.floor(await getAudioDuration(tempFilePath));
+    } catch (error) {
+      console.error('Failed to get audio duration:', error);
+    } finally {
+      await fs.unlink(tempFilePath).catch(() => {});
+    }
+
+    const backendUrl = process.env.BACKEND_URL
+      || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
+      || `http://localhost:3001`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
+    const fileSize = audioBuffer.length;
     await query(
       'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6 WHERE id = $7',
-      [buffer, audioUrl, audioDuration, buffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
+      [audioBuffer, audioUrl, audioDuration, fileSize, JSON.stringify(chunkMetadata), 'ready', contentId]
     );
 
-    return { audioUrl };
+    console.log(`✓ Audio stored in database for content ${contentId}`);
 
+    return { audioUrl, warning };
   } catch (error) {
-    console.error('Error in generateAudioForContent:', error);
+    console.error('Error generating audio for content:', error);
     throw error;
   }
 }
