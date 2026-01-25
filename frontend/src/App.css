@@ -284,6 +284,23 @@
   margin-bottom: 0.5rem;
 }
 
+.content-source-link {
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0.5rem 0;
+}
+
+.content-source-link a {
+  color: #60a5fa;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.2s;
+}
+
+.content-source-link a:hover {
+  color: #93c5fd;
+}
+
 .source-link {
   font-size: 0.875rem;
   margin-top: 0.5rem;

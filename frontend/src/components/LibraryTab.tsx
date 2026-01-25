@@ -1,8 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical } from 'lucide-react';
+import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
+
+function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -359,6 +368,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <div className="content-info">
                 <h3>{item.title}</h3>
                 {item.author && <p className="author">{item.author}</p>}
+                {item.url && (
+                  <p className="content-source-link">
+                    <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                      {getDomainFromUrl(item.url)}
+                      <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+                    </a>
+                  </p>
+                )}
                 {item.description && (
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}

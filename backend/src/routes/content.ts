@@ -182,6 +182,12 @@ router.post('/', async (req, res) => {
       if (articleData.disagree_votes !== undefined) {
         disagreeVotes = articleData.disagree_votes;
       }
+
+      // Store parsed comments from Apollo state (EA Forum/LessWrong)
+      if (articleData.comments && articleData.comments.length > 0) {
+        extractedComments = JSON.stringify(articleData.comments);
+        console.log(`Extracted ${articleData.comments.length} comments from Apollo state`);
+      }
     }
 
     // Ensure we have a title (final fallback)
@@ -191,10 +197,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, comments, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, req.user!.userId]
     );
 
     const createdItem = result.rows[0];
