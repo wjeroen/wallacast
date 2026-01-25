@@ -366,6 +366,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                         <option value="af_nicole">Nicole (Female)</option>
                         <option value="am_adam">Adam (Male)</option>
                         <option value="am_michael">Michael (Male)</option>
+                        <option value="am_puck">Puck (Male) - Playful</option>
                     </select>
                 ) : (
                     <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
