@@ -87,6 +87,9 @@ export const contentAPI = {
 
   generateAudio: (id: number, regenerate: boolean = false) =>
     api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate }),
+
+  refetch: (id: number) =>
+    api.post<{ message: string }>(`/content/${id}/refetch`),
 };
 
 export const podcastAPI = {

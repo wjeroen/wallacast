@@ -30,6 +30,7 @@ interface FullscreenPlayerProps {
   onMinimize: () => void;
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
+  onRefetch?: () => void;
 }
 
 type TabType = 'content' | 'comments' | 'read-along' | 'queue';
@@ -97,6 +98,7 @@ export function FullscreenPlayer({
   onMinimize,
   onClose,
   onTranscriptWordClick,
+  onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('read-along');
 
@@ -123,8 +125,8 @@ export function FullscreenPlayer({
       tabs.push('content');
     }
 
-    // Comments tab only for EA Forum/LessWrong articles
-    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '') && parsedComments.length > 0) {
+    // Comments tab for EA Forum/LessWrong articles (even if no comments yet)
+    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) {
       tabs.push('comments');
     }
 
@@ -208,8 +210,8 @@ export function FullscreenPlayer({
                   </p>
                 )}
               </div>
-              {content.url && (
-                <button className="refetch-button" title="Refetch content">
+              {content.url && onRefetch && (
+                <button className="refetch-button" title="Refetch content" onClick={onRefetch}>
                   <RefreshCw size={16} />
                 </button>
               )}
@@ -226,15 +228,21 @@ export function FullscreenPlayer({
           <div className="tab-comments-display">
             <div className="comments-header">
               <h3>Comments ({parsedComments.length})</h3>
-              <button className="refetch-button" title="Refetch comments">
-                <RefreshCw size={16} />
-              </button>
+              {onRefetch && (
+                <button className="refetch-button" title="Refetch comments" onClick={onRefetch}>
+                  <RefreshCw size={16} />
+                </button>
+              )}
             </div>
-            <div className="comments-list">
-              {parsedComments.map((comment, index) => (
-                <CommentComponent key={index} comment={comment} depth={0} />
-              ))}
-            </div>
+            {parsedComments.length > 0 ? (
+              <div className="comments-list">
+                {parsedComments.map((comment, index) => (
+                  <CommentComponent key={index} comment={comment} depth={0} />
+                ))}
+              </div>
+            ) : (
+              <p className="no-content">No comments available. Click the refresh button to fetch comments.</p>
+            )}
           </div>
         );
 
@@ -336,7 +344,7 @@ export function FullscreenPlayer({
             onClick={() => setActiveTab(tab)}
           >
             {tab === 'content' && 'Content'}
-            {tab === 'comments' && 'Comments'}
+            {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
             {tab === 'read-along' && 'Read-along'}
             {tab === 'queue' && 'Queue'}
           </button>

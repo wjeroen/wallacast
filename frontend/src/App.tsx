@@ -8,7 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
-import { wallabagAPI } from './api';
+import { wallabagAPI, contentAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -94,6 +94,21 @@ function App() {
 
   const handlePlayContent = (content: ContentItem) => {
     setCurrentContent(content);
+  };
+
+  const handleRefetchContent = async () => {
+    if (!currentContent) return;
+
+    try {
+      await contentAPI.refetch(currentContent.id);
+      // Wait a bit for the backend to process, then reload
+      setTimeout(async () => {
+        const response = await contentAPI.getById(currentContent.id);
+        setCurrentContent(response.data);
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to refetch content:', error);
+    }
   };
 
   // Callback for AddTab when content is added
@@ -201,7 +216,11 @@ function App() {
 
       <div className="bottom-container">
         {currentContent && (
-          <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
+          <AudioPlayer
+            content={currentContent}
+            onClose={() => setCurrentContent(null)}
+            onRefetch={handleRefetchContent}
+          />
         )}
 
         <nav className="bottom-nav">

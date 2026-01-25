@@ -7,9 +7,10 @@ import { FullscreenPlayer } from './FullscreenPlayer';
 interface AudioPlayerProps {
   content: ContentItem | null;
   onClose: () => void;
+  onRefetch?: () => void;
 }
 
-export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
+export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -277,6 +278,7 @@ export function AudioPlayer({ content, onClose }: AudioPlayerProps) {
           onMinimize={handleMinimize}
           onClose={onClose}
           onTranscriptWordClick={handleTranscriptClick}
+          onRefetch={onRefetch}
         />
       ) : (
         <MiniPlayer
