@@ -19,6 +19,7 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
+- [ ] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress - need endpoint to cancel generation and UI button during audio generation
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
@@ -127,6 +128,11 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **CRITICAL FIX**: Add auto_generate_audio_for_articles setting (defaults to FALSE, SAVES MONEY!) (2026-01-25)
+- [x] Check auto_generate_audio_for_articles setting before auto-generating audio for new articles (2026-01-25)
+- [x] Add UI checkbox in SettingsPage for controlling auto audio generation (2026-01-25)
+- [x] Fix LessWrong comment extraction by checking __typename === 'Comment' instead of key prefix (2026-01-25)
+- [x] Map LessWrong comments by multiple keys for flexible lookup and threading (2026-01-25)
 - [x] Fix LessWrong comment extraction with robust JavaScript tokenizer (handles single/double quotes, IIFEs, undefined values) (2026-01-25)
 - [x] Fix EA Forum comment content extraction (resolve contents reference, not just user reference) (2026-01-25)
 - [x] Fix EA Forum/LessWrong comment reactions display - dynamic extendedScore support for all reaction types (agree, disagree, love, etc.) (2026-01-25)
