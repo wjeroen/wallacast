@@ -49,6 +49,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     openai_tts_model: 'gpt-4o-mini-tts',
     openai_tts_voice: 'coral',
     auto_transcribe_podcasts: 'true',
+    auto_generate_audio_for_articles: 'false', // Default FALSE to save money
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -94,6 +95,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts || 'true',
+        auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles || 'false', // Default FALSE to save money
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -354,6 +356,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     <option key={voice} value={voice}>{voice}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={formData.auto_generate_audio_for_articles === 'true'}
+                    onChange={(e) => handleChange('auto_generate_audio_for_articles', e.target.checked ? 'true' : 'false')}
+                  />
+                  Auto-generate audio for articles (costs API credits)
+                </label>
+                <p style={{ fontSize: '0.875rem', color: '#9ca3af', marginTop: '0.25rem', marginLeft: '1.5rem' }}>
+                  When disabled, you can manually generate audio from the "Generate audio" button. Saves money!
+                </p>
               </div>
 
               <div className="form-group checkbox-group">
