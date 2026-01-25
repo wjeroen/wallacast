@@ -27,6 +27,64 @@ export interface ArticleContent {
   comments?: Comment[];
 }
 
+function extractCommentsFromApolloState(apolloState: any): Comment[] {
+  const comments: Comment[] = [];
+  const commentMap = new Map<string, Comment>();
+
+  // First pass: Create all comment objects
+  for (const [key, value] of Object.entries(apolloState)) {
+    if (key.startsWith('Comment:')) {
+      const commentData = value as any;
+      const comment: Comment = {
+        username: commentData.user?.displayName || commentData.author || 'Anonymous',
+        date: commentData.postedAt,
+        karma: commentData.baseScore,
+        agree_votes: commentData.extendedScore?.agree,
+        disagree_votes: commentData.extendedScore?.disagree,
+        content: commentData.contents?.plaintextDescription || commentData.body || '',
+        replies: [],
+      };
+      commentMap.set(key, comment);
+    }
+  }
+
+  // Second pass: Build the comment tree
+  for (const [key, value] of Object.entries(apolloState)) {
+    if (key.startsWith('Comment:')) {
+      const commentData = value as any;
+      const comment = commentMap.get(key);
+
+      if (comment && commentData.parentCommentId) {
+        const parentKey = `Comment:${commentData.parentCommentId}`;
+        const parentComment = commentMap.get(parentKey);
+        if (parentComment) {
+          if (!parentComment.replies) {
+            parentComment.replies = [];
+          }
+          parentComment.replies.push(comment);
+        }
+      } else if (comment && !commentData.parentCommentId) {
+        // Top-level comment
+        comments.push(comment);
+      }
+    }
+  }
+
+  // Sort comments by karma (highest first)
+  comments.sort((a, b) => (b.karma || 0) - (a.karma || 0));
+
+  // Recursively sort replies
+  function sortReplies(comment: Comment) {
+    if (comment.replies && comment.replies.length > 0) {
+      comment.replies.sort((a, b) => (b.karma || 0) - (a.karma || 0));
+      comment.replies.forEach(sortReplies);
+    }
+  }
+  comments.forEach(sortReplies);
+
+  return comments;
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   try {
     const response = await fetch(url);
@@ -90,7 +148,35 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     });
 
-    // Extract comments section HTML
+    // Extract comments from Apollo state JSON (EA Forum / LessWrong)
+    let comments: Comment[] | undefined;
+    try {
+      const scriptTags = doc.querySelectorAll('script');
+      let apolloState: any = null;
+
+      // Find the script tag containing __APOLLO_STATE__
+      for (const script of Array.from(scriptTags)) {
+        const scriptContent = script.textContent || '';
+        if (scriptContent.includes('__APOLLO_STATE__')) {
+          // Extract JSON from the script content
+          const match = scriptContent.match(/__APOLLO_STATE__\s*=\s*(\{.+\});?\s*$/s);
+          if (match) {
+            apolloState = JSON.parse(match[1]);
+            break;
+          }
+        }
+      }
+
+      if (apolloState) {
+        console.log('Found Apollo state, extracting comments...');
+        comments = extractCommentsFromApolloState(apolloState);
+        console.log(`Extracted ${comments.length} top-level comments from Apollo state`);
+      }
+    } catch (error) {
+      console.error('Error extracting comments from Apollo state:', error);
+    }
+
+    // Extract comments section HTML (fallback for LLM parsing if Apollo state fails)
     const commentsSection = doc.querySelector('.CommentsListSection-root');
     if (commentsSection) {
       commentsHtml = commentsSection.outerHTML;
@@ -188,6 +274,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       agree_votes: agreeVotes,
       disagree_votes: disagreeVotes,
       comments_html: commentsHtml,
+      comments: comments,
     };
   } catch (error) {
     console.error('Error fetching article:', error);
