@@ -2166,7 +2166,20 @@
   margin: 0 auto;
 }
 
+.content-header-with-button {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2rem;
+  gap: 1rem;
+}
+
 .content-header {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.tab-content-display .content-header {
   margin-bottom: 2rem;
 }
 
