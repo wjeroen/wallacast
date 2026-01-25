@@ -128,6 +128,11 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **CRITICAL FIX**: Settings not saving - add auto_transcribe_podcasts and auto_generate_audio_for_articles to VALID_SETTING_KEYS (backend was silently skipping them!) (2026-01-25)
+- [x] Add comprehensive logging to settings endpoint (shows which keys saved vs skipped, values, summary) (2026-01-25)
+- [x] **CRITICAL FIX**: LessWrong comments now extract with hybrid parser (handles both Direct Object and IIFE formats) (2026-01-25)
+- [x] Deep recursive search for Comment objects in Apollo state (Gemini's solution) (2026-01-25)
+- [x] Comprehensive logging for comment extraction (shows script tags, parse results, comment counts at each step) (2026-01-25)
 - [x] **CRITICAL FIX**: Add auto_generate_audio_for_articles setting (defaults to FALSE, SAVES MONEY!) (2026-01-25)
 - [x] Check auto_generate_audio_for_articles setting before auto-generating audio for new articles (2026-01-25)
 - [x] Add UI checkbox in SettingsPage for controlling auto audio generation (2026-01-25)
