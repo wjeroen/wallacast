@@ -147,10 +147,10 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
-      htmlContent = articleData.html;
+      htmlContent = articleData.cleaned_html; // Use cleaned HTML (main content with formatting)
+      processedContent = articleData.content; // Store plain text for search/indexing
 
-      // No placeholder - html_content is enough for display
-      processedContent = null;
+      // Keep full HTML for potential future use (stored in articleData.html but not used)
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
@@ -345,19 +345,21 @@ router.patch('/:id', async (req, res) => {
               await query(
                 `UPDATE content_items SET
                   html_content = $1,
-                  author = COALESCE($2, author),
-                  published_at = COALESCE($3, published_at),
-                  karma = $4,
-                  agree_votes = $5,
-                  disagree_votes = $6,
-                  comments = $7,
+                  content = $2,
+                  author = COALESCE($3, author),
+                  published_at = COALESCE($4, published_at),
+                  karma = $5,
+                  agree_votes = $6,
+                  disagree_votes = $7,
+                  comments = $8,
                   generation_status = 'completed',
                   generation_progress = 100,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $8`,
+                WHERE id = $9`,
                 [
-                  articleData.html,
+                  articleData.cleaned_html, // Use cleaned HTML with formatting
+                  articleData.content, // Plain text for search
                   articleData.author || articleData.byline,
                   articleData.published_date,
                   articleData.karma,
@@ -618,18 +620,22 @@ router.post('/:id/refetch', async (req, res) => {
           ? JSON.stringify(articleData.comments)
           : null;
 
-        // Update metadata and comments only (don't touch content)
+        // Update content, metadata, and comments
         await query(
           `UPDATE content_items SET
-            author = COALESCE($1, author),
-            published_at = COALESCE($2, published_at),
-            karma = $3,
-            agree_votes = $4,
-            disagree_votes = $5,
-            comments = $6,
+            html_content = $1,
+            content = $2,
+            author = COALESCE($3, author),
+            published_at = COALESCE($4, published_at),
+            karma = $5,
+            agree_votes = $6,
+            disagree_votes = $7,
+            comments = $8,
             updated_at = NOW()
-          WHERE id = $7`,
+          WHERE id = $9`,
           [
+            articleData.cleaned_html, // Use cleaned HTML with formatting
+            articleData.content, // Plain text for search
             articleData.author || articleData.byline,
             articleData.published_date,
             articleData.karma,

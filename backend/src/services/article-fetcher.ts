@@ -16,6 +16,7 @@ export interface ArticleContent {
   title: string;
   content: string;
   html: string;
+  cleaned_html: string; // Cleaned article HTML (just main content, with formatting)
   author?: string;
   excerpt?: string;
   byline?: string;
@@ -205,7 +206,13 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
             const match = scriptContent.match(/\.push\s*\(\s*(\{[\s\S]*?\})\s*\)\s*;?\s*$/);
             if (match) {
               try {
-                const transportData = JSON.parse(match[1]);
+                // Sanitize JavaScript undefined values before parsing as JSON
+                let jsonString = match[1];
+                // Replace undefined with null (valid JSON)
+                jsonString = jsonString.replace(/:\s*undefined/g, ': null');
+                jsonString = jsonString.replace(/,\s*undefined/g, ', null');
+
+                const transportData = JSON.parse(jsonString);
                 // The state is often in 'rehydrate' property, or is the object itself
                 apolloState = transportData.rehydrate || transportData;
                 console.log('Found ApolloSSRDataTransport state');
@@ -319,7 +326,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     return {
       title,
       content: extractTextFromHTML(cleanedHtml),
-      html: html, // Keep full HTML for GPT extraction
+      html: html, // Full page HTML
+      cleaned_html: cleanedHtml, // Cleaned article HTML with formatting
       author: author,
       byline: author,
       published_date: publishedDate,
