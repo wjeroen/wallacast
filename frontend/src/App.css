@@ -2462,7 +2462,7 @@
   cursor: pointer;
   font-size: 0.875rem;
   transition: background 0.2s, border-color 0.2s;
-  min-width: 90px;
+  min-width: 100px;
   justify-content: center;
 }
 
