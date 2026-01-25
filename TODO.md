@@ -19,9 +19,7 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
-- [ ] **[P1]** CRITICAL: EA Forum comments show authors/karma but content is completely empty - comments are extracted but content field is blank
-- [ ] **[P1]** CRITICAL: LessWrong comments don't show at all - extraction returns 0 comments even though comments exist on the page
-- [ ] **[P1]** Content display shows plain text with no formatting - should show proper headers, images, bold text, links etc. like Wallabag does
+- [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
 - [ ] **[P2]** TTS narration improvements:
@@ -95,11 +93,11 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Audio generation waits for Wallabag upgrade to complete (if enabled), then uses best available content
   - Manual "Generate audio" button uses latest AVAILABLE content (no refetch, just what's there)
   - LLM prep is ONLY for making text sound natural when narrated, NOT for extraction
-- [ ] **[P1]** Fix EA Forum/LessWrong comment extraction issues:
-  - LessWrong: Missing comments entirely (uses ApolloSSRDataTransport instead of window.__APOLLO_STATE__)
-  - EA Forum: Missing authors (need to resolve user references) and content (need htmlBody not plaintextDescription)
-  - LessWrong uses single agreement_score, EA Forum uses separate agree_votes/disagree_votes
-  - Need to render HTML content with dangerouslySetInnerHTML for blockquotes/formatting
+- [x] **[P1]** Fix EA Forum/LessWrong comment extraction issues (2026-01-25):
+  - LessWrong: Fixed with robust JavaScript tokenizer for ApolloSSRDataTransport parsing
+  - EA Forum: Fixed by resolving both user AND contents references
+  - Both platforms: Dynamic extendedScore support for all reaction types
+  - HTML content rendering with dangerouslySetInnerHTML for blockquotes/formatting
 - [x] **[P1]** Change "Regenerate content" to "Refetch from web" in library dropdown (2026-01-25)
 - [x] **[P1]** Display content just like Wallabag displays it, with nice headers and images etc. (current design with clickable words and no formatting will be used for read-along tab) (2026-01-24)
 
@@ -129,6 +127,12 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] Fix LessWrong comment extraction with robust JavaScript tokenizer (handles single/double quotes, IIFEs, undefined values) (2026-01-25)
+- [x] Fix EA Forum comment content extraction (resolve contents reference, not just user reference) (2026-01-25)
+- [x] Fix EA Forum/LessWrong comment reactions display - dynamic extendedScore support for all reaction types (agree, disagree, love, etc.) (2026-01-25)
+- [x] Update comment metadata display to "7 upvotes • 1 agree • 1 laugh" format instead of "Karma: 7 Agree: 1 Laugh: 1" (2026-01-25)
+- [x] Fix content display formatting - html_content was stored in database but not returned by GET /:id API (2026-01-25)
+- [x] Add html_content to backend content.ts GET /:id SELECT query (2026-01-25)
 - [x] Implement optional podcast auto-transcription setting (saves money!) (2026-01-24)
 - [x] Create MiniPlayer component (compact player above bottom nav) (2026-01-24)
 - [x] Create FullscreenPlayer component with tabs (Content, Comments, Read-along, Queue) (2026-01-24)
