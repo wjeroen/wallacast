@@ -150,9 +150,7 @@ export function FullscreenPlayer({
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
     const hasMetadata =
       comment.karma !== undefined ||
-      comment.agree_votes !== undefined ||
-      comment.disagree_votes !== undefined ||
-      (comment as any).agreement_score !== undefined;
+      (comment.extendedScore && Object.keys(comment.extendedScore).length > 0);
 
     return (
       <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
@@ -177,18 +175,12 @@ export function FullscreenPlayer({
               <span className="comment-karma">Karma: {comment.karma}</span>
             )}
 
-            {/* EA Forum: separate agree/disagree votes */}
-            {comment.agree_votes !== undefined && comment.disagree_votes !== undefined ? (
-              <>
-                <span className="comment-votes">Agree: {comment.agree_votes}</span>
-                <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
-              </>
-            ) : (
-              /* LessWrong: single agreement score */
-              (comment as any).agreement_score !== undefined && (comment as any).agreement_score !== null && (
-                <span className="comment-votes">Agreement: {(comment as any).agreement_score}</span>
-              )
-            )}
+            {/* Dynamic reactions from extendedScore */}
+            {comment.extendedScore && Object.entries(comment.extendedScore).map(([reactionType, count]) => (
+              <span key={reactionType} className="comment-votes">
+                {reactionType.charAt(0).toUpperCase() + reactionType.slice(1)}: {count}
+              </span>
+            ))}
           </div>
         )}
 

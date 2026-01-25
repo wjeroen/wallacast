@@ -5,9 +5,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  agree_votes?: number;
-  disagree_votes?: number;
-  agreement_score?: number; // LessWrong uses this instead of separate agree/disagree
+  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
   content: string;
   replies?: Comment[];
 }
@@ -16,7 +14,7 @@ export interface ArticleContent {
   title: string;
   content: string;
   html: string;
-  cleaned_html: string; // Cleaned article HTML (just main content, with formatting)
+  cleaned_html: string;
   author?: string;
   excerpt?: string;
   byline?: string;
@@ -42,59 +40,39 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
   };
 
   // First pass: Create all comment objects
-  let debuggedFirst = false;
   for (const [key, value] of Object.entries(apolloState)) {
     if (key.startsWith('Comment:')) {
       const commentData = value as any;
 
-      // Debug first comment to see available fields
-      if (!debuggedFirst) {
-        debuggedFirst = true;
-        console.log('=== DEBUGGING FIRST COMMENT ===');
-        console.log('Comment key:', key);
-        console.log('Available fields:', Object.keys(commentData));
-        console.log('user:', commentData.user);
-        console.log('htmlBody:', commentData.htmlBody ? 'EXISTS' : 'MISSING');
-        console.log('contents:', commentData.contents ? Object.keys(commentData.contents) : 'MISSING');
-        console.log('body:', commentData.body ? 'EXISTS' : 'MISSING');
-        console.log('extendedScore:', commentData.extendedScore);
-        console.log('==============================');
-      }
-
-      const extendedScore = commentData.extendedScore || {};
-
-      // Resolve user reference if it's a reference object
+      // Resolve User Reference
       let user = commentData.user;
       if (user && user.__ref) {
         user = resolveRef(user);
       }
 
-      // CRITICAL: Resolve contents reference if it's a reference object
+      // Resolve contents reference if it exists (EA Forum uses this)
       let contents = commentData.contents;
       if (contents && contents.__ref) {
         contents = resolveRef(contents);
       }
 
-      // Extract content: Try multiple possible field locations
-      // Now that we've resolved the contents reference, we can access its fields
+      // Extract Content: Prefer HTML for formatting
       const content = commentData.htmlBody ||
                      contents?.html ||
                      contents?.plaintextDescription ||
-                     contents?.markdown ||
                      commentData.body ||
                      commentData.text ||
                      commentData.content ||
                      '';
 
+      // Extract all reactions from extendedScore dynamically
+      const extendedScore = commentData.extendedScore || {};
+
       const comment: Comment = {
         username: user?.displayName || user?.slug || commentData.author || 'Anonymous',
         date: commentData.postedAt,
         karma: commentData.baseScore,
-        // EA Forum uses separate agree/disagree
-        agree_votes: extendedScore.agree ?? extendedScore.agreeCount,
-        disagree_votes: extendedScore.disagree ?? extendedScore.disagreeCount,
-        // LessWrong uses single agreement score
-        agreement_score: extendedScore.agreement,
+        extendedScore: Object.keys(extendedScore).length > 0 ? extendedScore : undefined,
         content: content,
         replies: [],
       };
@@ -144,262 +122,126 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const response = await fetch(url);
     const html = await response.text();
 
-    // Use jsdom for proper DOM parsing
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // Extract title - try multiple sources
+    // --- Metadata Extraction ---
     let title = 'Untitled';
-
-    // First try og:title meta tag (most reliable)
     const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
     if (ogTitle) {
-      title = ogTitle.replace(/ — EA Forum$/, '').trim();
+      title = ogTitle.replace(/ — EA Forum$/, '').replace(/ — LessWrong$/, '').trim();
     } else {
-      // Fallback to <title> tag
       const titleTag = doc.querySelector('title')?.textContent;
       if (titleTag) {
-        title = titleTag.replace(/ — EA Forum$/, '').trim();
+        title = titleTag.replace(/ — EA Forum$/, '').replace(/ — LessWrong$/, '').trim();
       }
     }
 
-    // Try to extract EA Forum metadata using DOM selectors
     let karma: number | undefined;
-    let agreeVotes: number | undefined;
-    let disagreeVotes: number | undefined;
-    let commentsHtml: string | undefined;
-
-    // Extract karma from EA Forum's vote component
     const karmaElement = doc.querySelector('.PostsVoteDefault-voteScore');
     if (karmaElement) {
       const karmaText = karmaElement.textContent?.trim();
-      if (karmaText) {
-        karma = parseInt(karmaText);
-      }
+      if (karmaText) karma = parseInt(karmaText);
     }
 
-    // Extract agree and disagree votes from EA Forum reaction buttons
-    const reactionButtons = doc.querySelectorAll('.EAReactsSection-button');
-    reactionButtons.forEach(button => {
-      // Check if this button contains a checkmark (agree) or X (disagree) SVG
-      const svg = button.querySelector('svg');
-      if (svg) {
-        const svgContent = svg.innerHTML;
-        // Look for the number in the div after the emoji preview
-        const numberDiv = button.querySelector('.EAReactsSection-emojiPreview + div');
-        if (numberDiv) {
-          const voteCount = parseInt(numberDiv.textContent?.trim() || '0');
-
-          // Check if it's an agree vote (checkmark path)
-          if (svgContent.includes('Vector (Stroke)') || svgContent.includes('M2.5 7.5L6 11L13.5 3.5')) {
-            agreeVotes = voteCount;
-          }
-          // Check if it's a disagree vote (X path)
-          else if (svgContent.includes('Union') || svgContent.includes('M3 3L13 13M13 3L3 13')) {
-            disagreeVotes = voteCount;
-          }
-        }
-      }
-    });
-
-    // Extract comments from Apollo state JSON (EA Forum / LessWrong)
+    // --- Comment Extraction ---
     let comments: Comment[] | undefined;
+
+    // We will accumulate state from ALL found chunks here
+    let fullApolloState: any = {};
+
     try {
       const scriptTags = doc.querySelectorAll('script');
-      let apolloState: any = null;
 
-      // Strategy 1: Look for classic window.__APOLLO_STATE__ (EA Forum often uses this)
       for (const script of Array.from(scriptTags)) {
         const scriptContent = script.textContent || '';
+
+        // Strategy 1: Classic Apollo State (EA Forum)
         if (scriptContent.includes('__APOLLO_STATE__')) {
-          // Extract JSON from the script content
           const match = scriptContent.match(/__APOLLO_STATE__\s*=\s*(\{.+\});?\s*$/s);
           if (match) {
-            apolloState = JSON.parse(match[1]);
-            console.log('Found classic __APOLLO_STATE__');
-            break;
+            try {
+              const state = JSON.parse(match[1]);
+              fullApolloState = { ...fullApolloState, ...state };
+              console.log('Merged classic Apollo state');
+            } catch (e) {
+              console.warn('Failed to parse classic Apollo state', e);
+            }
           }
         }
-      }
 
-      // Strategy 2: Look for ApolloSSRDataTransport (newer LessWrong uses this)
-      if (!apolloState) {
-        for (const script of Array.from(scriptTags)) {
-          const scriptContent = script.textContent || '';
-          if (scriptContent.includes('ApolloSSRDataTransport')) {
-            console.log('Found ApolloSSRDataTransport script tag, attempting to parse...');
+        // Strategy 2: ApolloSSRDataTransport (LessWrong) - Handle Multiple Pushes
+        if (scriptContent.includes('ApolloSSRDataTransport')) {
+          // Find ALL pushes in this script tag
+          const pushMatches = scriptContent.matchAll(/\.push\s*\(([\s\S]*?)\)\s*;?/g);
 
-            // LessWrong uses: (window[Symbol.for("ApolloSSRDataTransport")] ??= []).push(DATA)
-            // Extract everything between .push( and the matching )
-            // Use a simpler approach: find .push( and then manually find the closing paren
+          for (const match of pushMatches) {
+            const content = match[1].trim();
 
-            const pushIndex = scriptContent.indexOf('.push(');
-            if (pushIndex === -1) continue;
-
-            let depth = 0;
-            let startIdx = pushIndex + 6; // After '.push('
-            let endIdx = -1;
-
-            for (let i = startIdx; i < scriptContent.length; i++) {
-              if (scriptContent[i] === '{' || scriptContent[i] === '[') depth++;
-              if (scriptContent[i] === '}' || scriptContent[i] === ']') depth--;
-              if (scriptContent[i] === ')' && depth === 0) {
-                endIdx = i;
-                break;
-              }
-            }
-
-            if (endIdx === -1) {
-              console.log('Could not find closing paren for push()');
+            // CRITICAL FIX: Skip function calls!
+            // We only want: .push({ ... })
+            // We skip: .push((function(){ ... })())
+            if (content.startsWith('(') || content.startsWith('function')) {
+              console.log('Skipping ApolloSSRDataTransport function block (contains JS, not JSON)');
               continue;
             }
-
-            let jsonString = scriptContent.substring(startIdx, endIdx);
 
             try {
-              // Sanitize JavaScript-specific values
-              jsonString = jsonString.replace(/:\s*undefined\b/g, ': null');
-              jsonString = jsonString.replace(/,\s*undefined\b/g, ', null');
-              jsonString = jsonString.replace(/\bundefined\b/g, 'null');
-              jsonString = jsonString.replace(/Symbol\.for\([^)]+\)/g, 'null');
-
-              const transportData = JSON.parse(jsonString);
-
-              // Navigate to the actual state data
-              const potentialState = transportData.rehydrate || transportData.data || transportData;
-
-              // Check if this has Comment data
-              if (potentialState && typeof potentialState === 'object') {
-                const keys = Object.keys(potentialState);
-                const hasComments = keys.some(k => k.startsWith('Comment:'));
-
-                if (hasComments) {
-                  apolloState = potentialState;
-                  console.log(`Found ApolloSSRDataTransport state with ${keys.filter(k => k.startsWith('Comment:')).length} comment entries`);
-                  break;
-                }
+              const json = JSON.parse(content);
+              // The state is usually inside a 'rehydrate' property
+              if (json.rehydrate) {
+                fullApolloState = { ...fullApolloState, ...json.rehydrate };
+                console.log('Merged ApolloSSRDataTransport JSON chunk');
+              } else {
+                fullApolloState = { ...fullApolloState, ...json };
               }
             } catch (e) {
-              console.log('Failed to parse ApolloSSRDataTransport:', (e as Error).message);
-              continue;
+              // This is expected if the content is JS code but didn't start with ( or function
+              // or if JSON.parse fails for other reasons.
+              console.warn('Failed to parse ApolloSSRDataTransport chunk:', (e as Error).message);
             }
           }
         }
       }
 
-      if (apolloState) {
-        console.log('Extracting comments from Apollo state...');
-        comments = extractCommentsFromApolloState(apolloState);
-        console.log(`Extracted ${comments.length} top-level comments from Apollo state`);
-      } else {
-        console.log('No Apollo state found in page');
+      // If we found any state, extract comments
+      if (Object.keys(fullApolloState).length > 0) {
+        comments = extractCommentsFromApolloState(fullApolloState);
+        console.log(`Extracted ${comments.length} comments from combined Apollo state`);
       }
+
     } catch (error) {
       console.error('Error extracting comments from Apollo state:', error);
     }
 
-    // Extract comments section HTML (fallback for LLM parsing if Apollo state fails)
-    const commentsSection = doc.querySelector('.CommentsListSection-root');
-    if (commentsSection) {
-      commentsHtml = commentsSection.outerHTML;
-    }
-
-    console.log('=== Article Fetcher Metadata Extraction ===');
-    console.log('Karma extracted:', karma);
-    console.log('Agree votes extracted:', agreeVotes);
-    console.log('Disagree votes extracted:', disagreeVotes);
-
-    // Try to extract author from multiple sources
+    // --- HTML Cleaning & Finalizing ---
     let author: string | undefined;
-
-    // Try og:author meta tag first
     const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                    doc.querySelector('meta[name="author"]')?.getAttribute('content');
-    if (ogAuthor) {
-      author = ogAuthor.trim();
-    } else {
-      // Try the UsersNameDisplay link inside PostsAuthors-authorName
-      const authorLink = doc.querySelector('.PostsAuthors-authorName .UsersNameDisplay-noColor');
-      if (authorLink) {
-        author = authorLink.textContent?.trim();
-      } else {
-        // Fallback to any link in the author section
-        const authorElement = doc.querySelector('.PostsAuthors-authorName a');
-        if (authorElement) {
-          author = authorElement.textContent?.trim();
-        }
-      }
-    }
+                   doc.querySelector('meta[name="author"]')?.getAttribute('content');
+    if (ogAuthor) author = ogAuthor.trim();
 
-    // Try to extract published date
     let publishedDate: string | undefined;
+    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
+    if (ogPublished) publishedDate = ogPublished;
 
-    // Try og:published_time or article:published_time meta tags
-    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') ||
-                       doc.querySelector('meta[property="og:published_time"]')?.getAttribute('content');
-    if (ogPublished) {
-      publishedDate = ogPublished;
-    } else {
-      // Try to find <time> element with dateTime attribute
-      const timeElement = doc.querySelector('time[dateTime]');
-      if (timeElement) {
-        const dateTimeAttr = timeElement.getAttribute('dateTime');
-        if (dateTimeAttr) {
-          publishedDate = dateTimeAttr;
-        }
-      } else {
-        // Fallback to PostsPageDate-date or PostsItemDate
-        const dateElement = doc.querySelector('.PostsPageDate-date time') ||
-                           doc.querySelector('[class*="PostsItemDate"]');
-        if (dateElement) {
-          const dateText = dateElement.textContent?.trim();
-          if (dateText) {
-            try {
-              const date = new Date(dateText);
-              if (!isNaN(date.getTime())) {
-                publishedDate = date.toISOString();
-              }
-            } catch (e) {
-              console.warn('Failed to parse date:', dateText);
-            }
-          }
-        }
-      }
-    }
-
-    // Extract main content only - try to find the main article container
     let cleanedHtml = html;
-    const mainContent = doc.querySelector('.PostsPage-postContent') ||
-                       doc.querySelector('[class*="PostsPage-post"]') ||
-                       doc.querySelector('article') ||
-                       doc.querySelector('main');
-
+    const mainContent = doc.querySelector('.PostsPage-postContent') || doc.querySelector('article');
     if (mainContent) {
       cleanedHtml = mainContent.outerHTML;
-      console.log('Found main content container, using cleaned HTML');
+      console.log('Found main content container');
       console.log('Cleaned HTML length:', cleanedHtml.length, 'characters');
-      console.log('Cleaned HTML preview (first 500 chars):', cleanedHtml.substring(0, 500));
-    } else {
-      console.log('Could not find main content container, using full HTML');
     }
-
-    console.log('Author extracted:', author);
-    console.log('Published date extracted:', publishedDate);
-    console.log('===========================================');
 
     return {
       title,
       content: extractTextFromHTML(cleanedHtml),
-      html: html, // Full page HTML
-      cleaned_html: cleanedHtml, // Cleaned article HTML with formatting
-      author: author,
+      html: html,
+      cleaned_html: cleanedHtml,
+      author,
       byline: author,
       published_date: publishedDate,
-      karma: karma,
-      agree_votes: agreeVotes,
-      disagree_votes: disagreeVotes,
-      comments_html: commentsHtml,
-      comments: comments,
+      karma,
+      comments,
     };
   } catch (error) {
     console.error('Error fetching article:', error);
@@ -408,14 +250,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 }
 
 function extractTextFromHTML(html: string): string {
-  // Very basic text extraction
-  // In production, use @mozilla/readability or similar
   let text = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-
   return text;
 }

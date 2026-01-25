@@ -2,9 +2,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  agree_votes?: number;
-  disagree_votes?: number;
-  agreement_score?: number; // LessWrong uses this instead of separate agree/disagree
+  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
   content: string;
   replies?: Comment[];
 }
