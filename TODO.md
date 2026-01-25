@@ -19,6 +19,19 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
+- [ ] **[P1]** CRITICAL: EA Forum comments show authors/karma but content is completely empty - comments are extracted but content field is blank
+- [ ] **[P1]** CRITICAL: LessWrong comments don't show at all - extraction returns 0 comments even though comments exist on the page
+- [ ] **[P1]** Content display shows plain text with no formatting - should show proper headers, images, bold text, links etc. like Wallabag does
+- [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
+- [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
+- [ ] **[P2]** TTS narration improvements for LessWrong:
+  - Skip the author list outline that appears at the beginning (sidebar content being read)
+  - Fix vote numbers being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
+  - Reduce repetition in narration
+- [ ] **[P2]** Optimize slow database queries:
+  - `SELECT audio_data FROM content_items WHERE id = $1` taking 300-600ms
+  - `UPDATE content_items SET playback_position = $1, last_played_at = $2` taking 400-600ms
+  - Consider indexing, query optimization, or moving audio to separate table
 - [ ] **[P2]** Remove clickable domain URL links for podcasts (and texts if shown) in library cards and fullscreen player - they're pointless since podcasts don't have source URLs to visit
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position

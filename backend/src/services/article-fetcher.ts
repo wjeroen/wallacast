@@ -42,9 +42,25 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
   };
 
   // First pass: Create all comment objects
+  let debuggedFirst = false;
   for (const [key, value] of Object.entries(apolloState)) {
     if (key.startsWith('Comment:')) {
       const commentData = value as any;
+
+      // Debug first comment to see available fields
+      if (!debuggedFirst) {
+        debuggedFirst = true;
+        console.log('=== DEBUGGING FIRST COMMENT ===');
+        console.log('Comment key:', key);
+        console.log('Available fields:', Object.keys(commentData));
+        console.log('user:', commentData.user);
+        console.log('htmlBody:', commentData.htmlBody ? 'EXISTS' : 'MISSING');
+        console.log('contents:', commentData.contents ? Object.keys(commentData.contents) : 'MISSING');
+        console.log('body:', commentData.body ? 'EXISTS' : 'MISSING');
+        console.log('extendedScore:', commentData.extendedScore);
+        console.log('==============================');
+      }
+
       const extendedScore = commentData.extendedScore || {};
 
       // Resolve user reference if it's a reference object
@@ -53,11 +69,14 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
         user = resolveRef(user);
       }
 
-      // Extract content: Prefer htmlBody for formatting, fallback to plaintextDescription
+      // Extract content: Try multiple possible field locations
       const content = commentData.htmlBody ||
                      commentData.contents?.html ||
                      commentData.body ||
                      commentData.contents?.plaintextDescription ||
+                     commentData.contents?.markdown ||
+                     commentData.text ||
+                     commentData.content ||
                      '';
 
       const comment: Comment = {
@@ -201,26 +220,45 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         for (const script of Array.from(scriptTags)) {
           const scriptContent = script.textContent || '';
           if (scriptContent.includes('ApolloSSRDataTransport')) {
-            // Matches: (window[Symbol.for("ApolloSSRDataTransport")] ??= []).push({...})
-            // Extract the JSON object inside push()
-            const match = scriptContent.match(/\.push\s*\(\s*(\{[\s\S]*?\})\s*\)\s*;?\s*$/);
-            if (match) {
+            // Try to extract the JSON - LessWrong has multiple push() calls, we need the one with comment data
+            // Match pattern: .push({...})
+            const pushMatches = scriptContent.matchAll(/\.push\s*\(\s*(\{[^}]+\{[\s\S]*?\}[^}]*\})\s*\)/g);
+
+            for (const match of pushMatches) {
               try {
-                // Sanitize JavaScript undefined values before parsing as JSON
                 let jsonString = match[1];
+
+                // Comprehensive sanitization of JavaScript-specific values
                 // Replace undefined with null (valid JSON)
-                jsonString = jsonString.replace(/:\s*undefined/g, ': null');
-                jsonString = jsonString.replace(/,\s*undefined/g, ', null');
+                jsonString = jsonString.replace(/:\s*undefined\b/g, ': null');
+                jsonString = jsonString.replace(/,\s*undefined\b/g, ', null');
+                jsonString = jsonString.replace(/\bundefined\b/g, 'null');
+                // Remove function calls (shouldn't be in data, but just in case)
+                jsonString = jsonString.replace(/Symbol\.[^,}\]]+/g, 'null');
 
                 const transportData = JSON.parse(jsonString);
-                // The state is often in 'rehydrate' property, or is the object itself
-                apolloState = transportData.rehydrate || transportData;
-                console.log('Found ApolloSSRDataTransport state');
-                break;
+
+                // The actual data might be nested in different ways
+                const potentialState = transportData.rehydrate ||
+                                      transportData.data ||
+                                      transportData;
+
+                // Check if this chunk has Comment data
+                if (potentialState && typeof potentialState === 'object') {
+                  const hasComments = Object.keys(potentialState).some(k => k.startsWith('Comment:'));
+                  if (hasComments) {
+                    apolloState = potentialState;
+                    console.log('Found ApolloSSRDataTransport state with comments');
+                    break;
+                  }
+                }
               } catch (e) {
-                console.warn('Failed to parse ApolloSSRDataTransport JSON:', e);
+                // Try next match
+                continue;
               }
             }
+
+            if (apolloState) break;
           }
         }
       }
