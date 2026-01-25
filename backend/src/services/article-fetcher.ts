@@ -69,12 +69,19 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
         user = resolveRef(user);
       }
 
+      // CRITICAL: Resolve contents reference if it's a reference object
+      let contents = commentData.contents;
+      if (contents && contents.__ref) {
+        contents = resolveRef(contents);
+      }
+
       // Extract content: Try multiple possible field locations
+      // Now that we've resolved the contents reference, we can access its fields
       const content = commentData.htmlBody ||
-                     commentData.contents?.html ||
+                     contents?.html ||
+                     contents?.plaintextDescription ||
+                     contents?.markdown ||
                      commentData.body ||
-                     commentData.contents?.plaintextDescription ||
-                     commentData.contents?.markdown ||
                      commentData.text ||
                      commentData.content ||
                      '';
@@ -220,45 +227,62 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         for (const script of Array.from(scriptTags)) {
           const scriptContent = script.textContent || '';
           if (scriptContent.includes('ApolloSSRDataTransport')) {
-            // Try to extract the JSON - LessWrong has multiple push() calls, we need the one with comment data
-            // Match pattern: .push({...})
-            const pushMatches = scriptContent.matchAll(/\.push\s*\(\s*(\{[^}]+\{[\s\S]*?\}[^}]*\})\s*\)/g);
+            console.log('Found ApolloSSRDataTransport script tag, attempting to parse...');
 
-            for (const match of pushMatches) {
-              try {
-                let jsonString = match[1];
+            // LessWrong uses: (window[Symbol.for("ApolloSSRDataTransport")] ??= []).push(DATA)
+            // Extract everything between .push( and the matching )
+            // Use a simpler approach: find .push( and then manually find the closing paren
 
-                // Comprehensive sanitization of JavaScript-specific values
-                // Replace undefined with null (valid JSON)
-                jsonString = jsonString.replace(/:\s*undefined\b/g, ': null');
-                jsonString = jsonString.replace(/,\s*undefined\b/g, ', null');
-                jsonString = jsonString.replace(/\bundefined\b/g, 'null');
-                // Remove function calls (shouldn't be in data, but just in case)
-                jsonString = jsonString.replace(/Symbol\.[^,}\]]+/g, 'null');
+            const pushIndex = scriptContent.indexOf('.push(');
+            if (pushIndex === -1) continue;
 
-                const transportData = JSON.parse(jsonString);
+            let depth = 0;
+            let startIdx = pushIndex + 6; // After '.push('
+            let endIdx = -1;
 
-                // The actual data might be nested in different ways
-                const potentialState = transportData.rehydrate ||
-                                      transportData.data ||
-                                      transportData;
-
-                // Check if this chunk has Comment data
-                if (potentialState && typeof potentialState === 'object') {
-                  const hasComments = Object.keys(potentialState).some(k => k.startsWith('Comment:'));
-                  if (hasComments) {
-                    apolloState = potentialState;
-                    console.log('Found ApolloSSRDataTransport state with comments');
-                    break;
-                  }
-                }
-              } catch (e) {
-                // Try next match
-                continue;
+            for (let i = startIdx; i < scriptContent.length; i++) {
+              if (scriptContent[i] === '{' || scriptContent[i] === '[') depth++;
+              if (scriptContent[i] === '}' || scriptContent[i] === ']') depth--;
+              if (scriptContent[i] === ')' && depth === 0) {
+                endIdx = i;
+                break;
               }
             }
 
-            if (apolloState) break;
+            if (endIdx === -1) {
+              console.log('Could not find closing paren for push()');
+              continue;
+            }
+
+            let jsonString = scriptContent.substring(startIdx, endIdx);
+
+            try {
+              // Sanitize JavaScript-specific values
+              jsonString = jsonString.replace(/:\s*undefined\b/g, ': null');
+              jsonString = jsonString.replace(/,\s*undefined\b/g, ', null');
+              jsonString = jsonString.replace(/\bundefined\b/g, 'null');
+              jsonString = jsonString.replace(/Symbol\.for\([^)]+\)/g, 'null');
+
+              const transportData = JSON.parse(jsonString);
+
+              // Navigate to the actual state data
+              const potentialState = transportData.rehydrate || transportData.data || transportData;
+
+              // Check if this has Comment data
+              if (potentialState && typeof potentialState === 'object') {
+                const keys = Object.keys(potentialState);
+                const hasComments = keys.some(k => k.startsWith('Comment:'));
+
+                if (hasComments) {
+                  apolloState = potentialState;
+                  console.log(`Found ApolloSSRDataTransport state with ${keys.filter(k => k.startsWith('Comment:')).length} comment entries`);
+                  break;
+                }
+              }
+            } catch (e) {
+              console.log('Failed to parse ApolloSSRDataTransport:', (e as Error).message);
+              continue;
+            }
           }
         }
       }
@@ -353,6 +377,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (mainContent) {
       cleanedHtml = mainContent.outerHTML;
       console.log('Found main content container, using cleaned HTML');
+      console.log('Cleaned HTML length:', cleanedHtml.length, 'characters');
+      console.log('Cleaned HTML preview (first 500 chars):', cleanedHtml.substring(0, 500));
     } else {
       console.log('Could not find main content container, using full HTML');
     }

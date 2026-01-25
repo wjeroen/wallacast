@@ -24,9 +24,9 @@
 - [ ] **[P1]** Content display shows plain text with no formatting - should show proper headers, images, bold text, links etc. like Wallabag does
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
-- [ ] **[P2]** TTS narration improvements for LessWrong:
-  - Skip the author list outline that appears at the beginning (sidebar content being read)
-  - Fix vote numbers being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
+- [ ] **[P2]** TTS narration improvements:
+  - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
+  - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
 - [ ] **[P2]** Optimize slow database queries:
   - `SELECT audio_data FROM content_items WHERE id = $1` taking 300-600ms
