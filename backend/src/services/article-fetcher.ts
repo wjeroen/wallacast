@@ -7,6 +7,7 @@ export interface Comment {
   karma?: number;
   agree_votes?: number;
   disagree_votes?: number;
+  agreement_score?: number; // LessWrong uses this instead of separate agree/disagree
   content: string;
   replies?: Comment[];
 }
@@ -31,17 +32,43 @@ function extractCommentsFromApolloState(apolloState: any): Comment[] {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
 
+  // Helper to resolve references like { __ref: 'User:123' }
+  const resolveRef = (refObj: any) => {
+    if (refObj && refObj.__ref && apolloState[refObj.__ref]) {
+      return apolloState[refObj.__ref];
+    }
+    return refObj;
+  };
+
   // First pass: Create all comment objects
   for (const [key, value] of Object.entries(apolloState)) {
     if (key.startsWith('Comment:')) {
       const commentData = value as any;
+      const extendedScore = commentData.extendedScore || {};
+
+      // Resolve user reference if it's a reference object
+      let user = commentData.user;
+      if (user && user.__ref) {
+        user = resolveRef(user);
+      }
+
+      // Extract content: Prefer htmlBody for formatting, fallback to plaintextDescription
+      const content = commentData.htmlBody ||
+                     commentData.contents?.html ||
+                     commentData.body ||
+                     commentData.contents?.plaintextDescription ||
+                     '';
+
       const comment: Comment = {
-        username: commentData.user?.displayName || commentData.author || 'Anonymous',
+        username: user?.displayName || user?.slug || commentData.author || 'Anonymous',
         date: commentData.postedAt,
         karma: commentData.baseScore,
-        agree_votes: commentData.extendedScore?.agree,
-        disagree_votes: commentData.extendedScore?.disagree,
-        content: commentData.contents?.plaintextDescription || commentData.body || '',
+        // EA Forum uses separate agree/disagree
+        agree_votes: extendedScore.agree ?? extendedScore.agreeCount,
+        disagree_votes: extendedScore.disagree ?? extendedScore.disagreeCount,
+        // LessWrong uses single agreement score
+        agreement_score: extendedScore.agreement,
+        content: content,
         replies: [],
       };
       commentMap.set(key, comment);
@@ -154,7 +181,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       const scriptTags = doc.querySelectorAll('script');
       let apolloState: any = null;
 
-      // Find the script tag containing __APOLLO_STATE__
+      // Strategy 1: Look for classic window.__APOLLO_STATE__ (EA Forum often uses this)
       for (const script of Array.from(scriptTags)) {
         const scriptContent = script.textContent || '';
         if (scriptContent.includes('__APOLLO_STATE__')) {
@@ -162,15 +189,41 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           const match = scriptContent.match(/__APOLLO_STATE__\s*=\s*(\{.+\});?\s*$/s);
           if (match) {
             apolloState = JSON.parse(match[1]);
+            console.log('Found classic __APOLLO_STATE__');
             break;
           }
         }
       }
 
+      // Strategy 2: Look for ApolloSSRDataTransport (newer LessWrong uses this)
+      if (!apolloState) {
+        for (const script of Array.from(scriptTags)) {
+          const scriptContent = script.textContent || '';
+          if (scriptContent.includes('ApolloSSRDataTransport')) {
+            // Matches: (window[Symbol.for("ApolloSSRDataTransport")] ??= []).push({...})
+            // Extract the JSON object inside push()
+            const match = scriptContent.match(/\.push\s*\(\s*(\{[\s\S]*?\})\s*\)\s*;?\s*$/);
+            if (match) {
+              try {
+                const transportData = JSON.parse(match[1]);
+                // The state is often in 'rehydrate' property, or is the object itself
+                apolloState = transportData.rehydrate || transportData;
+                console.log('Found ApolloSSRDataTransport state');
+                break;
+              } catch (e) {
+                console.warn('Failed to parse ApolloSSRDataTransport JSON:', e);
+              }
+            }
+          }
+        }
+      }
+
       if (apolloState) {
-        console.log('Found Apollo state, extracting comments...');
+        console.log('Extracting comments from Apollo state...');
         comments = extractCommentsFromApolloState(apolloState);
         console.log(`Extracted ${comments.length} top-level comments from Apollo state`);
+      } else {
+        console.log('No Apollo state found in page');
       }
     } catch (error) {
       console.error('Error extracting comments from Apollo state:', error);

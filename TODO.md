@@ -19,6 +19,7 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
+- [ ] **[P2]** Remove clickable domain URL links for podcasts (and texts if shown) in library cards and fullscreen player - they're pointless since podcasts don't have source URLs to visit
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
 - [ ] **[P2]** Remember last-set speed toggle (one setting applies to all items)
@@ -26,7 +27,6 @@
 - [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
 - [ ] **[P2]** Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
-- [ ] **[P2]** EA Forum and Lesswrong comment extraction unreliable (Apollo state JSON parsing), sites might work slightly differently
 
 ### Performance & Optimization
 - [ ] **[P2]** Audio optimization:
@@ -75,26 +75,32 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 #### Content Tab (Do First - Saves Money!)
 - [ ] **[P1]** Content fetching overhaul - SAVES MONEY! MAJOR CHANGE!
-  - Use current built-in HTML fetcher for immediate display
-  - If Wallabag sync enabled: immediate automatic background fetch via Wallabag API
-  - LLM fallback for non-Wallabag users or when Wallabag fetch fails (must be done manually by user)
+  - **FREE content fetching**: HTML fetch (immediate) → Wallabag upgrade (background, if enabled) → NO automatic LLM
+  - **PAID audio generation** (optional in settings): Takes FREE content → LLM prepares for TTS narration → TTS → Whisper timestamps
   - Display titles, headers, images properly in content tab for items saved through wallacast
-  - For LLM fallback: instruct to include comment sections (except EA Forum/LessWrong which are fetched separately)
-  - Add model selection dropdown in settings with cost per token displayed next to each model
-  - EA Forum/LessWrong comments still fetched via Wallacast (Wallabag doesn't support these comments)
-  - TTS should read article content + EA/LW comments together
-- [ ] **[P1]** Change "Regenerate content" to "Refetch content" with a simple refresh button (useful when changes are made to an article) - NOTE: Not in dropdown menu, but in Content tab UI
+  - EA Forum/LessWrong comments still fetched via Wallacast for FREE (Wallabag doesn't support these comments)
+  - Audio generation waits for Wallabag upgrade to complete (if enabled), then uses best available content
+  - Manual "Generate audio" button uses latest AVAILABLE content (no refetch, just what's there)
+  - LLM prep is ONLY for making text sound natural when narrated, NOT for extraction
+- [ ] **[P1]** Fix EA Forum/LessWrong comment extraction issues:
+  - LessWrong: Missing comments entirely (uses ApolloSSRDataTransport instead of window.__APOLLO_STATE__)
+  - EA Forum: Missing authors (need to resolve user references) and content (need htmlBody not plaintextDescription)
+  - LessWrong uses single agreement_score, EA Forum uses separate agree_votes/disagree_votes
+  - Need to render HTML content with dangerouslySetInnerHTML for blockquotes/formatting
+- [x] **[P1]** Change "Regenerate content" to "Refetch from web" in library dropdown (2026-01-25)
 - [x] **[P1]** Display content just like Wallabag displays it, with nice headers and images etc. (current design with clickable words and no formatting will be used for read-along tab) (2026-01-24)
 
 #### Comment Tab (Do First)
 - [x] **[P1]** Create nicely organized comment section with clear UI showing karma and replies etc. (2026-01-24)
-- [x] **[P1]** Add refetch comments button that looks like a refresh button (2026-01-24) - NOTE: Button UI exists but not wired to backend yet
+- [x] **[P1]** Add refetch comments button that looks like a refresh button (2026-01-24)
+- [ ] **[P1]** Wire refetch button to actually update the display after refetching
 
 #### Read-along Tab (Do First Without Timesync)
-- [x] **[P1]** Create read-along tab that shows current content tab UI (clickable words, no formatting) (2026-01-24)
+- [x] **[P1]** Create read-along tab that shows Whisper transcript with clickable words (2026-01-24)
 - [ ] **[P4]** TTS should describe images in the article
-- [x] **[P1]** Add refresh button here as well to regenerate the text and audio to match any new content/comment refetches (2026-01-24) - NOTE: Button UI exists but not wired to backend yet
-- [ ] **[P6]** This should show the exact same text as the TTS - used to follow along with text-to-speech and implement function where clicking a word skips audio to that word (TIMESYNC - DO LATER)
+- [x] **[P1]** Add "Regenerate audio" button to generate new TTS + Whisper timestamps (2026-01-24)
+- [ ] **[P1]** Wire regenerate audio button to actually regenerate and update display
+- [ ] **[P2]** Fix Whisper timestamp seeking for podcasts - clicking words doesn't work yet
 - [ ] **[P6]** Don't make tab automatically follow the audio (expect too many annoyances and bugs) - instead add a button that jumps to where the audio currently is (TIMESYNC - DO LATER)
 - [ ] **[P6]** Ensure jump-to-current-position button works properly on various screen display sizes (TIMESYNC - DO LATER)
 

@@ -369,7 +369,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <div className="content-info">
                 <h3>{item.title}</h3>
                 {item.author && <p className="author">{item.author}</p>}
-                {item.url && (
+                {/* Only show domain URL for articles (not podcasts/texts) */}
+                {item.url && item.type === 'article' && (
                   <p className="content-source-link">
                     <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                       {getDomainFromUrl(item.url)}
