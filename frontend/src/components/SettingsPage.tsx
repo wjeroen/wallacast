@@ -87,6 +87,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       // Update form with loaded settings
       const loaded = settingsRes.data.settings;
+      console.log('Loaded settings from server:', loaded); // Debug log
+
       setFormData(prev => ({
         ...prev,
         ai_provider: loaded.ai_provider || 'openai',
@@ -94,14 +96,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_model: loaded.openai_model || 'gpt-4o-mini',
         openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
-        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts || 'true',
-        auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles || 'false', // Default FALSE to save money
+        // For boolean settings: check if value exists (even if 'false'), otherwise use default
+        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
+        auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
         wallabag_username: loaded.wallabag_username || '',
         wallabag_password: loaded.wallabag_password === '••••••••' ? '' : (loaded.wallabag_password || ''),
-        wallabag_sync_enabled: loaded.wallabag_sync_enabled || 'false',
+        wallabag_sync_enabled: loaded.wallabag_sync_enabled !== undefined && loaded.wallabag_sync_enabled !== null ? loaded.wallabag_sync_enabled : 'false',
       }));
     } catch (err) {
       setError('Failed to load settings');
@@ -121,17 +124,31 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setSaving(true);
       setError(null);
 
-      // Only send non-empty values, and don't send masked values
+      // Build settings to save
+      // For most settings: only send non-empty values and don't send masked secrets
+      // For boolean-like settings: always send to ensure 'false' values are saved
       const toSave: Record<string, string> = {};
       for (const [key, value] of Object.entries(formData)) {
-        if (value && value !== '••••••••') {
+        // Always include boolean settings (even when 'false')
+        const isBooleanSetting = key === 'auto_transcribe_podcasts' ||
+                                 key === 'auto_generate_audio_for_articles' ||
+                                 key === 'wallabag_sync_enabled';
+
+        if (isBooleanSetting) {
+          toSave[key] = value;
+        } else if (value && value !== '' && value !== '••••••••') {
+          // For other settings: only send if non-empty and not masked
           toSave[key] = value;
         }
       }
 
+      console.log('Saving settings:', toSave); // Debug log
       await userSettingsAPI.setBulk(toSave);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+
+      // Reload settings to confirm they were saved
+      await loadSettings();
     } catch (err) {
       setError('Failed to save settings');
       console.error(err);
