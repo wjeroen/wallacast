@@ -152,6 +152,18 @@ export function FullscreenPlayer({
       comment.karma !== undefined ||
       (comment.extendedScore && Object.keys(comment.extendedScore).length > 0);
 
+    // Build metadata string like "7 upvotes • 1 agree • 1 laugh"
+    const metadataParts: string[] = [];
+    if (comment.karma !== undefined && comment.karma !== null) {
+      metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
+    }
+    if (comment.extendedScore) {
+      Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
+        const label = reactionType.toLowerCase();
+        metadataParts.push(`${count} ${label}`);
+      });
+    }
+
     return (
       <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
         <div className="comment-header">
@@ -169,18 +181,9 @@ export function FullscreenPlayer({
             </span>
           )}
         </div>
-        {hasMetadata && (
+        {hasMetadata && metadataParts.length > 0 && (
           <div className="comment-metadata">
-            {comment.karma !== undefined && comment.karma !== null && (
-              <span className="comment-karma">Karma: {comment.karma}</span>
-            )}
-
-            {/* Dynamic reactions from extendedScore */}
-            {comment.extendedScore && Object.entries(comment.extendedScore).map(([reactionType, count]) => (
-              <span key={reactionType} className="comment-votes">
-                {reactionType.charAt(0).toUpperCase() + reactionType.slice(1)}: {count}
-              </span>
-            ))}
+            <span className="comment-votes">{metadataParts.join(' • ')}</span>
           </div>
         )}
 
