@@ -8,11 +8,11 @@ import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getOpenAIClientForUser } from './ai-providers.js';
 
 interface Comment {
+  id?: string;
   username: string;
   date?: string;
   karma?: number;
-  agree_votes?: number;
-  disagree_votes?: number;
+  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
   content: string;
   replies?: Comment[];
 }
@@ -583,6 +583,107 @@ export async function generateArticleAudio(
   }
 }
 
+/**
+ * Format a date naturally for TTS narration (e.g., "15th of January 2026")
+ */
+function formatDateForNarration(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    const day = date.getDate();
+    const month = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+
+    // Add ordinal suffix (1st, 2nd, 3rd, 4th, etc.)
+    const suffix = ['th', 'st', 'nd', 'rd'];
+    const v = day % 100;
+    const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+
+    return `${ordinalDay} of ${month} ${year}`;
+  } catch (e) {
+    return dateString; // Fallback to original if parsing fails
+  }
+}
+
+/**
+ * Format reactions from extendedScore for narration (e.g., "7 upvotes, 1 agree, 1 laugh")
+ */
+function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>): string {
+  const parts: string[] = [];
+
+  // Always include karma as "upvotes"
+  if (karma !== undefined && karma !== null) {
+    parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
+  }
+
+  // For LessWrong/EA Forum: only show agreement (simplify - ignore other reactions)
+  if (extendedScore && typeof extendedScore.agreement === 'number') {
+    parts.push(`${extendedScore.agreement} agreement`);
+  }
+
+  return parts.join(', ');
+}
+
+/**
+ * Convert HTML content to clean text for TTS narration
+ */
+function htmlToNarrationText(html: string): string {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM(html);
+  const doc = dom.window.document;
+
+  // Remove scripts, styles, and other non-content elements
+  const unwanted = doc.querySelectorAll('script, style, noscript, iframe');
+  unwanted.forEach(el => el.remove());
+
+  // Get text content
+  let text = doc.body.textContent || '';
+  // Clean up whitespace
+  text = text.replace(/\s+/g, ' ').trim();
+
+  return text;
+}
+
+/**
+ * Format structured comments for TTS narration
+ */
+function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string): string {
+  let narration = '';
+
+  for (const comment of comments) {
+    // Format metadata
+    const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore);
+    const date = comment.date ? formatDateForNarration(comment.date) : '';
+
+    // Build comment intro
+    let commentIntro = '';
+    if (isReply && replyTo) {
+      commentIntro = `A reply to ${replyTo} by ${comment.username}`;
+    } else {
+      commentIntro = `${comment.username}`;
+    }
+
+    if (date) {
+      commentIntro += ` on ${date}`;
+    }
+
+    if (reactions) {
+      commentIntro += ` with ${reactions}`;
+    }
+
+    // Convert HTML content to plain text
+    const commentText = htmlToNarrationText(comment.content);
+
+    narration += `${commentIntro}: ${commentText}\n\n`;
+
+    // Recursively add replies
+    if (comment.replies && comment.replies.length > 0) {
+      narration += formatCommentsForNarration(comment.replies, true, comment.username);
+    }
+  }
+
+  return narration;
+}
+
 export async function generateAudioForContent(contentId: number): Promise<{ audioUrl: string; warning?: string }> {
   try {
     // Get content item
@@ -636,27 +737,45 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
           ['extracting_content', 'extracting_article_text', 10, contentId]
         );
 
-        // Simple HTML to text extraction (no LLM, just strip tags)
-        const { JSDOM } = await import('jsdom');
-        const dom = new JSDOM(content.html_content);
-        const doc = dom.window.document;
+        // Convert HTML to text for narration
+        textToConvert = htmlToNarrationText(content.html_content);
 
-        // Remove scripts, styles, and other non-content elements
-        const unwanted = doc.querySelectorAll('script, style, noscript, iframe, nav, footer, header');
-        unwanted.forEach(el => el.remove());
+        console.log(`✓ Text extracted from HTML for article ${contentId} (${textToConvert.length} characters) - no LLM used`);
 
-        // Get text content
-        textToConvert = doc.body.textContent || '';
-        // Clean up whitespace
-        textToConvert = textToConvert.replace(/\s+/g, ' ').trim();
+        // Check if this is an EA Forum/LessWrong article with structured comments
+        const isEAForumOrLessWrong = content.url &&
+          (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
+
+        if (isEAForumOrLessWrong && content.comments) {
+          console.log(`[TTS] Found structured comments for ${content.url.includes('lesswrong') ? 'LessWrong' : 'EA Forum'} article`);
+
+          try {
+            // Parse structured comments from JSON
+            const comments = typeof content.comments === 'string'
+              ? JSON.parse(content.comments)
+              : content.comments;
+
+            if (comments && comments.length > 0) {
+              console.log(`[TTS] Formatting ${comments.length} structured comments for narration`);
+              const commentsNarration = formatCommentsForNarration(comments);
+
+              // Add comments section after main content
+              textToConvert += '\n\nComments section:\n\n' + commentsNarration;
+              console.log(`[TTS] ✓ Added ${comments.length} comments to narration`);
+            } else {
+              console.log(`[TTS] No comments found in structured data`);
+            }
+          } catch (e) {
+            console.error(`[TTS] Failed to parse structured comments:`, e);
+            // Continue without comments rather than failing
+          }
+        }
 
         // Update status to show we're ready for audio generation (no formatted content stored)
         await query(
           'UPDATE content_items SET generation_status = $1, current_operation = $2 WHERE id = $3',
           ['content_ready', 'audio_generation', contentId]
         );
-
-        console.log(`✓ Text extracted from HTML for article ${contentId} (${textToConvert.length} characters) - no LLM used`);
       }
     } else {
       textToConvert = content.content || '';
