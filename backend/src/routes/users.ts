@@ -10,11 +10,12 @@ router.use(requireAuth);
 // Known setting keys for validation
 const VALID_SETTING_KEYS = [
   // AI Provider settings
-  'ai_provider',           // 'openai', 'anthropic', 'google', etc.
+  'ai_provider',           // 'openai' (now acts as hybrid provider)
   'openai_api_key',
+  'deepinfra_api_key',     // NEW: DeepInfra key for cheaper audio
   'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
-  'openai_tts_model',      // 'gpt-4o-mini-tts', 'tts-1', etc.
-  'openai_tts_voice',      // 'alloy', 'echo', 'fable', etc.
+  'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
+  'openai_tts_voice',      // 'alloy', 'af_heart', etc.
   'anthropic_api_key',
   'anthropic_model',
   'google_api_key',
@@ -24,23 +25,24 @@ const VALID_SETTING_KEYS = [
   'wallabag_client_id',
   'wallabag_client_secret',
   'wallabag_username',
-  'wallabag_password',     // encrypted
-  'wallabag_access_token', // encrypted
-  'wallabag_refresh_token',// encrypted
-  'wallabag_token_expires_at', // ISO timestamp when access token expires
-  'wallabag_last_sync',     // ISO timestamp of last successful sync
+  'wallabag_password',
+  'wallabag_access_token',
+  'wallabag_refresh_token',
+  'wallabag_token_expires_at',
+  'wallabag_last_sync',
   'wallabag_sync_enabled',
   // App preferences
   'theme',
   'playback_speed',
   'auto_archive_after_listen',
-  'auto_transcribe_podcasts',          // Boolean: auto-transcribe podcast episodes (costs API credits)
-  'auto_generate_audio_for_articles',  // Boolean: auto-generate audio for new articles (costs API credits)
+  'auto_transcribe_podcasts',
+  'auto_generate_audio_for_articles',
 ];
 
 // Secret keys that should be masked in responses
 const SECRET_KEYS = [
   'openai_api_key',
+  'deepinfra_api_key',     // NEW: Mask this key
   'anthropic_api_key',
   'google_api_key',
   'wallabag_client_secret',
@@ -146,12 +148,12 @@ router.put('/settings', async (req, res) => {
     for (const [key, value] of Object.entries(settings)) {
       if (!VALID_SETTING_KEYS.includes(key)) {
         skippedKeys.push(key);
-        console.log(`[SETTINGS] ⚠️  Skipping unknown key: ${key}`);
+        // console.log(`[SETTINGS] ⚠️  Skipping unknown key: ${key}`);
         continue; // Skip unknown keys
       }
 
       savedKeys.push(key);
-      console.log(`[SETTINGS] ✓ Saving ${key} = ${typeof value === 'string' && value.length > 50 ? '[REDACTED]' : value}`);
+      // console.log(`[SETTINGS] ✓ Saving ${key} = ${typeof value === 'string' && value.length > 50 ? '[REDACTED]' : value}`);
 
       const isSecret = SECRET_KEYS.includes(key);
 
@@ -159,14 +161,13 @@ router.put('/settings', async (req, res) => {
         `INSERT INTO user_settings (user_id, setting_key, setting_value, is_secret)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, setting_key) DO UPDATE SET
-           setting_value = EXCLUDED.setting_value,
-           updated_at = NOW()`,
+         setting_value = EXCLUDED.setting_value,
+         updated_at = NOW()`,
         [req.user!.userId, key, value as string, isSecret]
       );
     }
 
-    console.log(`[SETTINGS] ✅ Saved ${savedKeys.length} settings${skippedKeys.length > 0 ? `, skipped ${skippedKeys.length} unknown keys: ${skippedKeys.join(', ')}` : ''}`);
-
+    console.log(`[SETTINGS] ✅ Saved ${savedKeys.length} settings`);
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving settings:', error);
@@ -193,18 +194,22 @@ router.delete('/settings/:key', async (req, res) => {
 
 // GET /api/users/ai-providers - Get available AI providers and their config
 router.get('/ai-providers', async (_req, res) => {
-  // Return available providers and their configuration options
-  // This makes it easy to add new providers later
   const providers = {
     openai: {
-      name: 'OpenAI',
+      name: 'OpenAI (Hybrid)',
       models: {
-        chat: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-        tts: ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'],
+        chat: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
+        // Added Kokoro to the list so it appears in dropdowns if the frontend uses this
+        tts: ['gpt-4o-mini-tts', 'tts-1', 'hexgrad/Kokoro-82M'],
       },
-      voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'coral'],
-      requiredSettings: ['openai_api_key'],
-      description: 'OpenAI GPT models for text processing and TTS',
+      voices: [
+        // OpenAI Voices
+        'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'coral',
+        // Kokoro Voices (DeepInfra)
+        'af_heart', 'af_bella', 'af_nicole', 'am_adam', 'am_michael'
+      ],
+      requiredSettings: ['openai_api_key'], // DeepInfra is optional but recommended
+      description: 'OpenAI for Chat. DeepInfra supported for cheaper Audio/TTS.',
     },
     anthropic: {
       name: 'Anthropic',
