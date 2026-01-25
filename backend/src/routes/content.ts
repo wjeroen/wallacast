@@ -149,8 +149,8 @@ router.post('/', async (req, res) => {
       const articleData = await fetchArticleContent(url);
       htmlContent = articleData.html;
 
-      // Use placeholder text - will be extracted properly in background
-      processedContent = '⏳ Content is being extracted and formatted for reading...';
+      // No placeholder - html_content is enough for display
+      processedContent = null;
 
       // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
@@ -333,52 +333,30 @@ router.patch('/:id', async (req, res) => {
                 ['fetching', 10, 'fetching_article', id]
               );
 
-              // REFETCH from the actual URL (not using stale html_content)
-              // This gets fresh content + EA Forum/LessWrong comments
+              // REFETCH from the actual URL (no LLM - just HTML and metadata)
               const articleData = await fetchArticleContent(url);
 
-              // Set status to extracting content
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-                ['extracting_content', 50, 'content_extraction', id]
-              );
-
-              // Extract readable content from HTML using LLM (with comments!)
-              const extractedResult = await extractArticleContent(
-                articleData.html,
-                articleData.comments_html,
-                parseInt(id, 10)
-              );
-
-              // Add Wallacast provenance marker to content
-              const markedContent = `<!-- wallacast-generated:${new Date().toISOString()} -->\n${extractedResult.content}`;
-
-              // Prepare comments JSON (prefer direct Apollo state extraction over LLM)
+              // Prepare comments JSON from Apollo state
               const commentsJson = articleData.comments && articleData.comments.length > 0
                 ? JSON.stringify(articleData.comments)
-                : (extractedResult.comments && extractedResult.comments.length > 0
-                  ? JSON.stringify(extractedResult.comments)
-                  : null);
+                : null;
 
-              // Update with new content + HTML + metadata + comments (keep Wallabag thumbnail!)
+              // Update with fresh HTML + metadata + comments (no LLM extraction!)
               await query(
                 `UPDATE content_items SET
-                  content = $1,
-                  html_content = $2,
-                  content_source = 'wallacast',
-                  author = COALESCE($3, author),
-                  published_at = COALESCE($4, published_at),
-                  karma = COALESCE($5, karma),
-                  agree_votes = COALESCE($6, agree_votes),
-                  disagree_votes = COALESCE($7, disagree_votes),
-                  comments = $8,
-                  generation_status = $9,
-                  generation_progress = $10,
+                  html_content = $1,
+                  author = COALESCE($2, author),
+                  published_at = COALESCE($3, published_at),
+                  karma = $4,
+                  agree_votes = $5,
+                  disagree_votes = $6,
+                  comments = $7,
+                  generation_status = 'completed',
+                  generation_progress = 100,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $11`,
+                WHERE id = $8`,
                 [
-                  markedContent,
                   articleData.html,
                   articleData.author || articleData.byline,
                   articleData.published_date,
@@ -386,15 +364,13 @@ router.patch('/:id', async (req, res) => {
                   articleData.agree_votes,
                   articleData.disagree_votes,
                   commentsJson,
-                  'completed',
-                  100,
                   id
                 ]
               );
 
-              console.log(`Content regenerated successfully for article ${id} (refetched from web)`);
+              console.log(`Content refetched successfully for article ${id} (no LLM)`);
             } catch (error) {
-              console.error('Content regeneration error:', error);
+              console.error('Content refetch error:', error);
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
                 ['failed', (error as Error).message || 'Failed to regenerate content', 0, id]
