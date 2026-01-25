@@ -148,7 +148,11 @@ export function FullscreenPlayer({
 
   // Recursive component to render comments with replies
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const hasMetadata = comment.karma !== undefined || comment.agree_votes !== undefined || comment.disagree_votes !== undefined;
+    const hasMetadata =
+      comment.karma !== undefined ||
+      comment.agree_votes !== undefined ||
+      comment.disagree_votes !== undefined ||
+      (comment as any).agreement_score !== undefined;
 
     return (
       <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
@@ -172,15 +176,28 @@ export function FullscreenPlayer({
             {comment.karma !== undefined && comment.karma !== null && (
               <span className="comment-karma">Karma: {comment.karma}</span>
             )}
-            {comment.agree_votes !== undefined && comment.agree_votes !== null && (
-              <span className="comment-votes">Agree: {comment.agree_votes}</span>
-            )}
-            {comment.disagree_votes !== undefined && comment.disagree_votes !== null && (
-              <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
+
+            {/* EA Forum: separate agree/disagree votes */}
+            {comment.agree_votes !== undefined && comment.disagree_votes !== undefined ? (
+              <>
+                <span className="comment-votes">Agree: {comment.agree_votes}</span>
+                <span className="comment-votes">Disagree: {comment.disagree_votes}</span>
+              </>
+            ) : (
+              /* LessWrong: single agreement score */
+              (comment as any).agreement_score !== undefined && (comment as any).agreement_score !== null && (
+                <span className="comment-votes">Agreement: {(comment as any).agreement_score}</span>
+              )
             )}
           </div>
         )}
-        <p className="comment-content">{comment.content}</p>
+
+        {/* Render HTML content (blockquotes, links, etc.) */}
+        <div
+          className="comment-content"
+          dangerouslySetInnerHTML={{ __html: comment.content }}
+        />
+
         {comment.replies && comment.replies.length > 0 && (
           <div className="comment-replies">
             {comment.replies.map((reply, idx) => (
@@ -201,7 +218,8 @@ export function FullscreenPlayer({
               <div className="content-header">
                 <h2>{content.title}</h2>
                 {content.author && <p className="content-author">By {content.author}</p>}
-                {content.url && (
+                {/* Only show domain URL for articles (not podcasts/texts) */}
+                {content.url && content.type === 'article' && (
                   <p className="content-source">
                     <a href={content.url} target="_blank" rel="noopener noreferrer">
                       {getDomainFromUrl(content.url)}

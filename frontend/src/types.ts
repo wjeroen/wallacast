@@ -4,6 +4,7 @@ export interface Comment {
   karma?: number;
   agree_votes?: number;
   disagree_votes?: number;
+  agreement_score?: number; // LessWrong uses this instead of separate agree/disagree
   content: string;
   replies?: Comment[];
 }
