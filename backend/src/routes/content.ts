@@ -2,7 +2,8 @@ import express from 'express';
 import path from 'path';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
-import { generateAudioForContent, extractArticleContent } from '../services/openai-tts.js';
+// CHANGED: Removed unused 'extractArticleContent' from import
+import { generateAudioForContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 
@@ -66,11 +67,9 @@ router.get('/:id', async (req, res) => {
 });
 
 // Serve audio from database (PUBLIC - no auth required for HTML5 audio player compatibility)
-// NOTE: This route is also registered in index.ts and will be handled there first
 router.get('/:id/audio', async (req, res) => {
   try {
     // Note: No user_id filter - audio URLs are public but content IDs are private
-    // This allows HTML5 <audio> elements to work without JWT tokens
     const result = await query(
       'SELECT audio_data FROM content_items WHERE id = $1',
       [req.params.id]
@@ -150,29 +149,22 @@ router.post('/', async (req, res) => {
       htmlContent = articleData.cleaned_html; // Use cleaned HTML (main content with formatting)
       processedContent = articleData.content; // Store plain text for search/indexing
 
-      // Keep full HTML for potential future use (stored in articleData.html but not used)
-
-      // Use fetched title if no title provided (treat 'Untitled' as empty for backwards compat)
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
       }
 
-      // Use fetched author/byline if available
       if (!finalAuthor && (articleData.author || articleData.byline)) {
         finalAuthor = articleData.author || articleData.byline;
       }
 
-      // Use fetched excerpt as description if available
       if (!finalDescription && articleData.excerpt) {
         finalDescription = articleData.excerpt;
       }
 
-      // Use fetched published date if available
       if (!finalPublishedAt && articleData.published_date) {
         finalPublishedAt = articleData.published_date;
       }
 
-      // Store EA Forum metadata if available
       if (articleData.karma !== undefined) {
         karma = articleData.karma;
       }
@@ -183,14 +175,12 @@ router.post('/', async (req, res) => {
         disagreeVotes = articleData.disagree_votes;
       }
 
-      // Store parsed comments from Apollo state (EA Forum/LessWrong)
       if (articleData.comments && articleData.comments.length > 0) {
         extractedComments = JSON.stringify(articleData.comments);
         console.log(`Extracted ${articleData.comments.length} comments from Apollo state`);
       }
     }
 
-    // Ensure we have a title (final fallback)
     if (!finalTitle || finalTitle === 'Untitled') {
       finalTitle = 'Untitled Article';
     }
@@ -205,22 +195,19 @@ router.post('/', async (req, res) => {
 
     const createdItem = result.rows[0];
 
-    // Auto-generate audio for articles (if no audio URL provided and user has it enabled)
+    // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
-      // Check user setting for auto audio generation (defaults to FALSE to save money)
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
-      const shouldAutoGenerate = autoGenerateAudio === 'true'; // Default to FALSE for cost savings
+      const shouldAutoGenerate = autoGenerateAudio === 'true';
 
       if (shouldAutoGenerate) {
         console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
-        // Set status to starting (will update to extracting_content immediately)
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
           ['starting', 0, 'initialization', createdItem.id]
         );
 
-        // Start generation in background (don't await)
         generateAudioForContent(createdItem.id)
           .then(async () => {
             await query(
@@ -235,27 +222,22 @@ router.post('/', async (req, res) => {
               ['failed', error.message || 'Failed to generate audio', 0, createdItem.id]
             );
           });
-      } else {
-        console.log(`Skipping auto audio generation for ${type} ${createdItem.id} (disabled in settings)`);
       }
     }
 
-    // Auto-generate transcript for podcast episodes (if has audio but no transcript)
-    // Check user setting to see if auto-transcription is enabled
+    // Auto-generate transcript for podcast episodes
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
       const autoTranscribe = await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
-      const shouldAutoTranscribe = autoTranscribe === null || autoTranscribe === 'true'; // Default to true for backwards compatibility
+      const shouldAutoTranscribe = autoTranscribe === null || autoTranscribe === 'true';
 
       if (shouldAutoTranscribe) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
 
-        // Set status to generating transcript
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
           ['generating_transcript', 0, 'transcript', createdItem.id]
         );
 
-        // Start transcription in background (don't await)
         transcribeWithTimestamps(audioUrlValue, req.user!.userId)
           .then(async (result) => {
             await query(
@@ -270,8 +252,6 @@ router.post('/', async (req, res) => {
               ['failed', error.message || 'Failed to transcribe', 0, createdItem.id]
             );
           });
-      } else {
-        console.log(`Auto-transcription disabled for user ${req.user!.userId}, skipping podcast episode ${createdItem.id}`);
       }
     }
 
@@ -299,7 +279,6 @@ router.patch('/:id', async (req, res) => {
       'duration',
     ];
 
-    // Special handling for removing audio
     if (updates.audio_data === null && updates.audio_url === null) {
       const contentResult = await query(
         'SELECT type FROM content_items WHERE id = $1 AND user_id = $2',
@@ -308,18 +287,14 @@ router.patch('/:id', async (req, res) => {
 
       if (contentResult.rows.length > 0) {
         const { type } = contentResult.rows[0];
-
-        // Only allow removing audio for articles and texts
         if (type === 'article' || type === 'text') {
           console.log(`Manually removing audio for ${type} ${id}`);
-          // Also clear duration when removing audio
           updates.duration = null;
           allowedFields.push('audio_data', 'audio_url', 'duration');
         }
       }
     }
 
-    // Special handling for regenerating content (articles only)
     if (updates.regenerate_content === true) {
       const contentResult = await query(
         'SELECT type, url, preview_picture FROM content_items WHERE id = $1 AND user_id = $2',
@@ -332,24 +307,19 @@ router.patch('/:id', async (req, res) => {
         if (type === 'article' && url) {
           console.log(`Regenerating content for article ${id} from URL:`, url);
 
-          // Start content regeneration in background
           (async () => {
             try {
-              // Set status to fetching
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
                 ['fetching', 10, 'fetching_article', id]
               );
 
-              // REFETCH from the actual URL (no LLM - just HTML and metadata)
               const articleData = await fetchArticleContent(url);
 
-              // Prepare comments JSON from Apollo state
               const commentsJson = articleData.comments && articleData.comments.length > 0
                 ? JSON.stringify(articleData.comments)
                 : null;
 
-              // Update with fresh HTML + metadata + comments (no LLM extraction!)
               await query(
                 `UPDATE content_items SET
                   html_content = $1,
@@ -366,8 +336,8 @@ router.patch('/:id', async (req, res) => {
                   updated_at = NOW()
                 WHERE id = $9`,
                 [
-                  articleData.cleaned_html, // Use cleaned HTML with formatting
-                  articleData.content, // Plain text for search
+                  articleData.cleaned_html,
+                  articleData.content,
                   articleData.author || articleData.byline,
                   articleData.published_date,
                   articleData.karma,
@@ -388,7 +358,6 @@ router.patch('/:id', async (req, res) => {
             }
           })();
 
-          // Set initial status
           updates.generation_status = 'extracting_content';
           updates.generation_progress = 0;
           allowedFields.push('generation_status', 'generation_progress');
@@ -397,7 +366,6 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
-    // Special handling for regenerating transcript (podcasts only)
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
         'SELECT type, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
@@ -410,16 +378,13 @@ router.patch('/:id', async (req, res) => {
         if (type === 'podcast_episode' && audio_url) {
           console.log(`Regenerating transcript for podcast ${id}`);
 
-          // Start transcription in background
           (async () => {
             try {
-              // Set status to generating transcript
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
                 ['generating_transcript', 0, 'transcript', id]
               );
 
-              // Regenerate transcript
               const result = await transcribeWithTimestamps(audio_url, req.user!.userId);
 
               await query(
@@ -437,7 +402,6 @@ router.patch('/:id', async (req, res) => {
             }
           })();
 
-          // Set initial status
           updates.generation_status = 'generating_transcript';
           updates.generation_progress = 0;
           allowedFields.push('generation_status', 'generation_progress');
@@ -446,7 +410,6 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
-    // Special handling for archiving: delete audio data to save space (unless favorited)
     if (updates.is_archived === true) {
       const contentResult = await query(
         'SELECT audio_data, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
@@ -456,23 +419,17 @@ router.patch('/:id', async (req, res) => {
       if (contentResult.rows.length > 0) {
         const { audio_data, type, is_starred } = contentResult.rows[0];
 
-        // Only delete audio for articles (not podcasts) and only if not favorited
         if (audio_data && (type === 'article' || type === 'text') && !is_starred) {
           const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
-
-          // Clear audio_data, audio_url, and duration from database
           updates.audio_data = null;
           updates.audio_url = null;
           updates.duration = null;
           allowedFields.push('audio_data', 'audio_url', 'duration');
-        } else if (audio_data && is_starred) {
-          console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
       }
     }
 
-    // Special handling for un-archiving: regenerate audio if it's missing
     if (updates.is_archived === false) {
       const contentResult = await query(
         'SELECT audio_url, type, html_content FROM content_items WHERE id = $1 AND user_id = $2',
@@ -482,18 +439,15 @@ router.patch('/:id', async (req, res) => {
       if (contentResult.rows.length > 0) {
         const { audio_url, type, html_content } = contentResult.rows[0];
 
-        // If un-archiving and audio is missing, trigger regeneration
         if (!audio_url && (type === 'article' || type === 'text') && html_content) {
           console.log(`Un-archiving article ${id}: triggering audio regeneration`);
 
-          // Start generation in background (don't await)
           generateAudioForContent(parseInt(id))
             .then(async () => {
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
                 ['completed', 100, id]
               );
-              console.log(`Audio regenerated for un-archived article ${id}`);
             })
             .catch(async (error) => {
               console.error('Auto audio regeneration error on un-archive:', error);
@@ -503,7 +457,6 @@ router.patch('/:id', async (req, res) => {
               );
             });
 
-          // Set status to show generation started
           updates.generation_status = 'starting';
           updates.generation_progress = 0;
           allowedFields.push('generation_status', 'generation_progress');
@@ -515,7 +468,6 @@ router.patch('/:id', async (req, res) => {
     const values = [];
     let paramCount = 1;
 
-    // Track if we're updating content fields (vs just playback state)
     const playbackOnlyFields = ['playback_position', 'playback_speed', 'last_played_at'];
     const updatingContentFields = Object.keys(updates).some(
       key => allowedFields.includes(key) && !playbackOnlyFields.includes(key)
@@ -533,8 +485,6 @@ router.patch('/:id', async (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    // Only update updated_at for content changes, not playback position updates
-    // Playback updates happen frequently (every few seconds) and shouldn't trigger sync
     if (updatingContentFields) {
       setClause.push(`updated_at = CURRENT_TIMESTAMP`);
     }
@@ -560,7 +510,6 @@ router.patch('/:id', async (req, res) => {
 // Delete content item
 router.delete('/:id', async (req, res) => {
   try {
-    // Get item first to check for wallabag_id
     const itemResult = await query(
       'SELECT wallabag_id FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
@@ -572,22 +521,18 @@ router.delete('/:id', async (req, res) => {
 
     const wallabagId = itemResult.rows[0].wallabag_id;
 
-    // Delete from Wallabag if synced (fire and forget - don't fail local delete if this fails)
     if (wallabagId) {
       const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
       deleteFromWallabag(req.user!.userId, wallabagId).catch(err => {
         console.error(`[Wallabag] Failed to delete from Wallabag (ID: ${wallabagId}):`, err);
       });
-      console.log(`[Wallabag] Queued deletion of Wallabag entry ${wallabagId}`);
     }
 
-    // Delete the database record (audio_data is automatically deleted)
-    const result = await query(
+    await query(
       'DELETE FROM content_items WHERE id = $1 AND user_id = $2 RETURNING id',
       [req.params.id, req.user!.userId]
     );
 
-    console.log(`Deleted content item ${req.params.id} (including audio data if present)`);
     res.json({ message: 'Content deleted successfully' });
   } catch (error) {
     console.error('Error deleting content item:', error);
@@ -595,7 +540,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Refetch content metadata and comments (no LLM, just re-scrape)
+// Refetch content metadata and comments
 router.post('/:id/refetch', async (req, res) => {
   try {
     const { id } = req.params;
@@ -615,20 +560,16 @@ router.post('/:id/refetch', async (req, res) => {
       return res.status(400).json({ error: 'Refetch only available for articles with URLs' });
     }
 
-    // Refetch in background
     (async () => {
       try {
         console.log(`Refetching metadata and comments for article ${id} from:`, url);
 
-        // Refetch from URL (gets fresh metadata + comments)
         const articleData = await fetchArticleContent(url);
 
-        // Prepare comments JSON
         const commentsJson = articleData.comments && articleData.comments.length > 0
           ? JSON.stringify(articleData.comments)
           : null;
 
-        // Update content, metadata, and comments
         await query(
           `UPDATE content_items SET
             html_content = $1,
@@ -642,8 +583,8 @@ router.post('/:id/refetch', async (req, res) => {
             updated_at = NOW()
           WHERE id = $9`,
           [
-            articleData.cleaned_html, // Use cleaned HTML with formatting
-            articleData.content, // Plain text for search
+            articleData.cleaned_html,
+            articleData.content,
             articleData.author || articleData.byline,
             articleData.published_date,
             articleData.karma,
@@ -654,7 +595,7 @@ router.post('/:id/refetch', async (req, res) => {
           ]
         );
 
-        console.log(`Refetch completed for article ${id}. Comments: ${articleData.comments?.length || 0}`);
+        console.log(`Refetch completed for article ${id}`);
       } catch (error) {
         console.error(`Refetch error for article ${id}:`, error);
       }
@@ -667,7 +608,7 @@ router.post('/:id/refetch', async (req, res) => {
   }
 });
 
-// Generate TTS for an article (async)
+// Generate TTS for an article
 router.post('/:id/generate-audio', async (req, res) => {
   try {
     const { id } = req.params;
@@ -688,7 +629,6 @@ router.post('/:id/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
     }
 
-    // Check if already generating (unless regenerating)
     if (!regenerate && contentItem.generation_status === 'generating_audio') {
       return res.status(409).json({
         error: 'Audio generation already in progress',
@@ -697,22 +637,17 @@ router.post('/:id/generate-audio', async (req, res) => {
       });
     }
 
-    // If regenerating, old audio data will be automatically overwritten in database
     if (regenerate && contentItem.audio_data) {
-      const oldAudioSizeMB = (contentItem.audio_data.length / 1024 / 1024).toFixed(2);
-      console.log(`Regenerating: Will replace ${oldAudioSizeMB} MB of existing audio data`);
+      console.log(`Regenerating: Will replace existing audio data`);
     }
 
-    // Set status to generating
     await query(
       'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
       ['generating_audio', 0, 'audio', id]
     );
 
-    // Start generation in background (don't await)
     generateAudioForContent(parseInt(id))
       .then(async (result) => {
-        // Update status to completed
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
           ['completed', 100, id]
@@ -720,14 +655,12 @@ router.post('/:id/generate-audio', async (req, res) => {
       })
       .catch(async (error) => {
         console.error('Background audio generation error:', error);
-        // Update status to failed
         await query(
           'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
           ['failed', error.message || 'Failed to generate audio', 0, id]
         );
       });
 
-    // Return immediately with status
     res.json({
       message: 'Audio generation started',
       generation_status: 'generating_audio',
