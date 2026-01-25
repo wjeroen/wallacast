@@ -203,14 +203,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const handleRegenerateContent = async (id: number) => {
+  const handleRefetchContent = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { regenerate_content: true } as any);
-      refreshItem(id);
+      await contentAPI.refetch(id);
+      // Wait a bit for backend to process, then refresh
+      setTimeout(() => refreshItem(id), 1000);
     } catch (error) {
-      console.error('Failed to regenerate content:', error);
-      alert('Failed to regenerate content');
+      console.error('Failed to refetch content:', error);
+      alert('Failed to refetch content');
     }
   };
 
@@ -449,9 +450,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                             )}
                           </>
                         )}
-                        {item.type === 'article' && (
-                          <button onClick={() => handleRegenerateContent(item.id)}>
-                            Regenerate content
+                        {item.type === 'article' && item.url && (
+                          <button onClick={() => handleRefetchContent(item.id)}>
+                            Refetch from web
                           </button>
                         )}
                         {item.type === 'podcast_episode' && (
