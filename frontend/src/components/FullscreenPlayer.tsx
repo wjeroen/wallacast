@@ -67,14 +67,91 @@ function isEAForumOrLessWrong(url: string): boolean {
 
 function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
+
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
+
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
+
+// Extracted CommentComponent to prevent re-creation on every render
+const CommentComponent = ({ 
+  comment, 
+  depth = 0, 
+  isLessWrong 
+}: { 
+  comment: Comment; 
+  depth?: number; 
+  isLessWrong: boolean;
+}) => {
+  const metadataParts: string[] = [];
+
+  if (comment.karma !== undefined && comment.karma !== null) {
+    metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
+  }
+
+  if (comment.extendedScore) {
+    if (isLessWrong) {
+      if (typeof comment.extendedScore.agreement === 'number') {
+        metadataParts.push(`${comment.extendedScore.agreement} agreement`);
+      }
+    } else {
+      Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
+        const label = reactionType.toLowerCase();
+        metadataParts.push(`${count} ${label}`);
+      });
+    }
+  }
+
+  const hasMetadata = metadataParts.length > 0;
+
+  return (
+    <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
+      <div className="comment-header">
+        <span className="comment-username">{comment.username}</span>
+        {comment.date && (
+          <span className="comment-date">
+            {' • '}
+            {(() => {
+              try {
+                return new Date(comment.date).toLocaleDateString();
+              } catch {
+                return comment.date;
+              }
+            })()}
+          </span>
+        )}
+      </div>
+      {hasMetadata && metadataParts.length > 0 && (
+        <div className="comment-metadata">
+          <span className="comment-votes">{metadataParts.join(' • ')}</span>
+        </div>
+      )}
+
+      <div
+        className="comment-content"
+        dangerouslySetInnerHTML={{ __html: comment.content }}
+      />
+
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="comment-replies">
+          {comment.replies.map((reply, idx) => (
+            <CommentComponent 
+              key={idx} 
+              comment={reply} 
+              depth={depth + 1} 
+              isLessWrong={isLessWrong} 
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export function FullscreenPlayer({
   content,
@@ -96,6 +173,7 @@ export function FullscreenPlayer({
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
 
+  // Parse comments from JSON string if available
   const parsedComments: Comment[] = useMemo(() => {
     if (!content?.comments) return [];
     try {
@@ -124,7 +202,6 @@ export function FullscreenPlayer({
   const activeWordIndex = useMemo(() => {
     if (!transcriptWords.length) return -1;
     // Find the last word that started before or at currentTime
-    // This is more stable than checking start <= t <= end because spoken words have gaps
     for (let i = transcriptWords.length - 1; i >= 0; i--) {
       if (currentTime >= transcriptWords[i].start) {
         return i;
@@ -148,55 +225,10 @@ export function FullscreenPlayer({
     }
   });
 
-  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const metadataParts: string[] = [];
-    if (comment.karma !== undefined && comment.karma !== null) {
-      metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
-    }
-    if (comment.extendedScore) {
-      const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-      if (isLessWrong) {
-        if (typeof comment.extendedScore.agreement === 'number') {
-          metadataParts.push(`${comment.extendedScore.agreement} agreement`);
-        }
-      } else {
-        Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
-          const label = reactionType.toLowerCase();
-          metadataParts.push(`${count} ${label}`);
-        });
-      }
-    }
-    const hasMetadata = metadataParts.length > 0;
-
-    return (
-      <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
-        <div className="comment-header">
-          <span className="comment-username">{comment.username}</span>
-          {comment.date && (
-            <span className="comment-date">
-              {' • '}
-              {(() => {
-                try { return new Date(comment.date).toLocaleDateString(); } catch { return comment.date; }
-              })()}
-            </span>
-          )}
-        </div>
-        {hasMetadata && metadataParts.length > 0 && (
-          <div className="comment-metadata">
-            <span className="comment-votes">{metadataParts.join(' • ')}</span>
-          </div>
-        )}
-        <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
-        {comment.replies && comment.replies.length > 0 && (
-          <div className="comment-replies">
-            {comment.replies.map((reply, idx) => (
-              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  // Calculate isLessWrong once for the comments tab
+  const isLessWrong = useMemo(() => {
+    return content.url ? content.url.includes('lesswrong.com') : false;
+  }, [content.url]);
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -222,7 +254,10 @@ export function FullscreenPlayer({
                 </button>
               )}
             </div>
-            <div className="article-content" dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }} />
+            <div
+              className="article-content"
+              dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+            />
           </div>
         );
 
@@ -240,7 +275,12 @@ export function FullscreenPlayer({
             {parsedComments.length > 0 ? (
               <div className="comments-list">
                 {parsedComments.map((comment, index) => (
-                  <CommentComponent key={index} comment={comment} depth={0} />
+                  <CommentComponent 
+                    key={index} 
+                    comment={comment} 
+                    depth={0} 
+                    isLessWrong={isLessWrong} 
+                  />
                 ))}
               </div>
             ) : (
@@ -291,7 +331,11 @@ export function FullscreenPlayer({
             {displayText ? (
               <p className="read-along-text">
                 {displayText.split(/\s+/).map((word, index) => (
-                  <span key={index} className="transcript-word" onClick={() => onTranscriptWordClick(index)}>
+                  <span
+                    key={index}
+                    className="transcript-word"
+                    onClick={() => onTranscriptWordClick(index)}
+                  >
                     {word}{' '}
                   </span>
                 ))}
@@ -307,10 +351,14 @@ export function FullscreenPlayer({
           <div className="tab-queue-display">
             <h3>Queue</h3>
             <p className="work-in-progress">🚧 Work in progress</p>
-            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>Queue functionality will be implemented soon.</p>
+            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
+              Queue functionality will be implemented soon. Stay tuned!
+            </p>
           </div>
         );
-      default: return null;
+
+      default:
+        return null;
     }
   };
 
@@ -319,7 +367,11 @@ export function FullscreenPlayer({
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {content.preview_picture && (
-            <img src={content.preview_picture} alt={content.title} className="fullscreen-thumbnail" />
+            <img
+              src={content.preview_picture}
+              alt={content.title}
+              className="fullscreen-thumbnail"
+            />
           )}
           <div>
             <h2 className="fullscreen-title">{content.title}</h2>
@@ -331,17 +383,37 @@ export function FullscreenPlayer({
                 </a>
               </p>
             )}
-            {content.author && <p className="fullscreen-author">{content.author}</p>}
+            {content.author && (
+              <p className="fullscreen-author">
+                {content.author}
+                {content.published_at && (
+                  <> • {new Date(content.published_at).toLocaleDateString()}</>
+                )}
+                {(content.karma !== undefined && content.karma !== null) && (
+                  <> • {content.karma} upvotes</>
+                )}
+              </p>
+            )}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
-          <button onClick={onMinimize} className="header-button" title="Minimize"><Minimize2 size={20} /></button>
-          <button onClick={onClose} className="header-button" title="Close"><X size={20} /></button>
+          <button onClick={onMinimize} className="header-button" title="Minimize">
+            <Minimize2 size={20} />
+          </button>
+          <button onClick={onClose} className="header-button" title="Close">
+            <X size={20} />
+          </button>
         </div>
       </div>
+
+      {/* Tabs */}
       <div className="fullscreen-tabs">
         {availableTabs.map((tab) => (
-          <button key={tab} className={`tab-button ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
+          <button
+            key={tab}
+            className={`tab-button ${activeTab === tab ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab)}
+          >
             {tab === 'content' && 'Content'}
             {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
             {tab === 'read-along' && 'Read-along'}
@@ -349,27 +421,53 @@ export function FullscreenPlayer({
           </button>
         ))}
       </div>
-      <div className="fullscreen-tab-content">{renderTabContent()}</div>
+
+      {/* Tab Content Area */}
+      <div className="fullscreen-tab-content">
+        {renderTabContent()}
+      </div>
+
+      {/* Player Controls */}
       <div className="fullscreen-player-controls">
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
-          <input type="range" min="0" max={duration || 0} value={currentTime} onChange={(e) => onSeek(parseFloat(e.target.value))} className="progress-slider" />
+          <input
+            type="range"
+            min="0"
+            max={duration || 0}
+            value={currentTime}
+            onChange={(e) => onSeek(parseFloat(e.target.value))}
+            className="progress-slider"
+          />
           <span className="time">{formatTime(duration)}</span>
         </div>
+
         <div className="fullscreen-playback-controls">
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
-            <RotateCcw className="seek-icon" /> <span className="seek-label">15</span>
+            <RotateCcw className="seek-icon" />
+            <span className="seek-label">15</span>
           </button>
+
           <button onClick={onPlayPause} className="play-pause-btn">
             {isPlaying ? <Pause size={32} /> : <Play size={32} />}
           </button>
+
           <button onClick={onSkipForward} title="Seek forward 30 seconds" className="seek-btn">
-            <RotateCw className="seek-icon" /> <span className="seek-label">30</span>
+            <RotateCw className="seek-icon" />
+            <span className="seek-label">30</span>
           </button>
         </div>
+
         <div className="fullscreen-player-options">
-          <button onClick={onToggleSpeed} className="option-toggle"><Gauge size={20} /><span>{playbackSpeed}x</span></button>
-          <button onClick={onToggleSleepTimer} className="option-toggle"><Clock size={20} /><span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span></button>
+          <button onClick={onToggleSpeed} className="option-toggle">
+            <Gauge size={20} />
+            <span>{playbackSpeed}x</span>
+          </button>
+
+          <button onClick={onToggleSleepTimer} className="option-toggle">
+            <Clock size={20} />
+            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+          </button>
         </div>
       </div>
     </div>
