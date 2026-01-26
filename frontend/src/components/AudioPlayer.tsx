@@ -28,19 +28,34 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   }, [isPlaying]);
 
   // ---------------------------------------------------------------------------
-  // DATA PARSING (The Fix)
+  // DATA PARSING (Robust Fix)
   // ---------------------------------------------------------------------------
   const parsedTranscriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
-    if (Array.isArray(content.transcript_words)) return content.transcript_words;
-    try {
-      // Force parsing if it's a string (which it is in your DB)
-      return typeof content.transcript_words === 'string'
-        ? JSON.parse(content.transcript_words)
-        : [];
-    } catch (e) {
-      return [];
+    
+    let result = content.transcript_words;
+
+    // 1. If it's already an array (PG auto-parsed it), return it
+    if (Array.isArray(result)) return result;
+
+    // 2. If it's a string, try to parse it
+    if (typeof result === 'string') {
+      try {
+        const parsed = JSON.parse(result);
+        
+        // 3. CRITICAL: Check if the RESULT is still a string (Double-JSON case)
+        if (typeof parsed === 'string') {
+          return JSON.parse(parsed); // Parse again to get the Array
+        }
+        
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        console.error('JSON Parse failed:', e);
+        return [];
+      }
     }
+    
+    return [];
   }, [content?.transcript_words]);
 
   const parsedTTSChunks = useMemo(() => {
