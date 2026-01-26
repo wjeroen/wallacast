@@ -417,15 +417,22 @@ router.patch('/:id', async (req, res) => {
       );
 
       if (contentResult.rows.length > 0) {
-        const { audio_data, type, is_starred } = contentResult.rows[0];
+        const { audio_data, type, is_starred: dbStarred } = contentResult.rows[0];
 
-        if (audio_data && (type === 'article' || type === 'text') && !is_starred) {
+        // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
+        // If updates.is_starred is present, use it. Otherwise use DB value.
+        const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
+
+        // Only delete audio for articles (not podcasts) and only if not favorited
+        if (audio_data && (type === 'article' || type === 'text') && !effectiveStarred) {
           const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
           updates.audio_data = null;
           updates.audio_url = null;
           updates.duration = null;
           allowedFields.push('audio_data', 'audio_url', 'duration');
+        } else if (audio_data && effectiveStarred) {
+          console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
       }
     }
