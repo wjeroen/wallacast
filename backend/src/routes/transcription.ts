@@ -10,8 +10,9 @@ router.post('/content/:id', async (req, res) => {
     const { id } = req.params;
     const { regenerate } = req.body;
 
+    // OPTIMIZED: Select only necessary columns, excluding audio_data
     const contentResult = await query(
-      'SELECT * FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, audio_url, transcript, transcript_words, generation_status, generation_progress FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
