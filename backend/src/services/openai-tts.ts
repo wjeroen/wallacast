@@ -478,8 +478,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       || `http://localhost:3001`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
+    // KEY FIX: Added 'transcript = NULL, transcript_words = NULL' to invalidate old cache
+    // This forces the player to use the new 'tts_chunks' immediately while waiting for Whisper
     await query(
-      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6 WHERE id = $7',
+      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL WHERE id = $7',
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
     );
 
