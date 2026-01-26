@@ -204,35 +204,50 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
   };
 
-  // Calculate active word index based on current time
+  // CALCULATE DRIFT CORRECTION RATIO
+  // If the transcript end time !== audio duration, we stretch/shrink the transcript to fit.
+  const normalizationRatio = useMemo(() => {
+    if (!content?.transcript_words || !duration || duration === 0) return 1;
+    
+    // Check Whisper Method
+    if (Array.isArray(content.transcript_words) && content.transcript_words.length > 0) {
+      const lastWord = content.transcript_words[content.transcript_words.length - 1];
+      if (lastWord.end > 0) {
+        // e.g. Audio is 300s, Transcript is 290s. Ratio = 1.034.
+        // We multiply transcript timestamps by 1.034 to sync them.
+        return duration / lastWord.end;
+      }
+    }
+    return 1;
+  }, [content?.transcript_words, duration]);
+
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
 
-    // Method 1: Whisper timestamps
+    // Method 1: Whisper timestamps with Rubber Band Normalization
     const transcriptWords = content.transcript_words;
     if (transcriptWords && Array.isArray(transcriptWords) && transcriptWords.length > 0) {
-      // Find the last word that has started (start <= currentTime)
-      // This keeps the word highlighted during gaps until the next one starts
       let idx = -1;
       for (let i = 0; i < transcriptWords.length; i++) {
-        if (transcriptWords[i].start <= currentTime) {
+        // Normalize the word's start time to match actual audio duration
+        const correctedStart = transcriptWords[i].start * normalizationRatio;
+        
+        if (correctedStart <= currentTime) {
           idx = i;
         } else {
-          // Since words are sorted, once we pass currentTime we can stop
           break;
         }
       }
       return idx;
     }
 
-    // Method 2: TTS Chunk interpolation
+    // Method 2: TTS Chunk interpolation (Usually reliable, no normalization needed)
     if (content.tts_chunks) {
       try {
         const chunks = typeof content.tts_chunks === 'string' 
           ? JSON.parse(content.tts_chunks) 
           : content.tts_chunks;
 
-        // Find current chunk
         const currentChunk = chunks.find((c: any) => 
           currentTime >= c.startTime && currentTime < (c.startTime + c.duration)
         );
@@ -245,49 +260,54 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           return currentChunk.startWord + offset;
         }
       } catch (e) {
-        // Fall through to fallback
+        // Fall through
       }
     }
 
     // Method 3: Linear Fallback
     const transcript = content.transcript || content.content || '';
-    // This regex must match the split logic in FullscreenPlayer exactly
     const words = transcript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/);
     if (words.length > 0 && duration > 0) {
       return Math.floor((currentTime / duration) * words.length);
     }
 
     return -1;
-  }, [currentTime, content, duration]);
+  }, [currentTime, content, duration, normalizationRatio]);
 
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
-    // Method 1: Use word-level timestamps from Whisper (most accurate)
+    // Method 1: Whisper timestamps with Normalization
     const transcriptWords = content.transcript_words;
     if (transcriptWords && Array.isArray(transcriptWords) && transcriptWords.length > 0 && wordIndex < transcriptWords.length) {
-      const timestamp = transcriptWords[wordIndex].start;
-      console.log('Using word timestamp:', { wordIndex, timestamp });
-      handleSeek(timestamp);
+      const originalTimestamp = transcriptWords[wordIndex].start;
+      // Apply the same ratio in reverse (stretch the timestamp to find the point in the actual audio)
+      const targetTime = originalTimestamp * normalizationRatio;
+      
+      console.log('Using normalized timestamp:', { 
+        wordIndex, 
+        originalTimestamp, 
+        normalizationRatio, 
+        targetTime 
+      });
+      
+      handleSeek(targetTime);
       return;
     }
 
-    // Method 2: Use TTS chunk metadata for articles (accurate per-chunk)
+    // Method 2: TTS Chunk interpolation
     if (content.tts_chunks) {
       try {
         const chunks = typeof content.tts_chunks === 'string' 
           ? JSON.parse(content.tts_chunks) 
           : content.tts_chunks;
           
-        // Find which chunk contains this word
         for (const chunk of chunks) {
           if (wordIndex >= chunk.startWord && wordIndex <= chunk.endWord) {
-            // Interpolate within this chunk
             const wordPosInChunk = wordIndex - chunk.startWord;
             const wordsInChunk = chunk.endWord - chunk.startWord + 1;
             const positionInChunk = (wordPosInChunk / wordsInChunk) * chunk.duration;
             const timestamp = chunk.startTime + positionInChunk;
-            console.log('Using TTS chunk interpolation:', { wordIndex, chunk: chunks.indexOf(chunk), timestamp });
             handleSeek(timestamp);
             return;
           }
@@ -297,11 +317,10 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       }
     }
 
-    // Method 3: Fall back to linear interpolation (least accurate)
+    // Method 3: Linear Fallback
     const transcript = content.transcript || content.content || '';
     const words = transcript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/);
     const estimatedPosition = (wordIndex / words.length) * duration;
-    console.log('Using linear interpolation:', { wordIndex, totalWords: words.length, duration, estimatedPosition });
     handleSeek(estimatedPosition);
   };
 
@@ -327,7 +346,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           duration={duration}
           playbackSpeed={playbackSpeed}
           sleepTimer={sleepTimer}
-          activeWordIndex={activeWordIndex} // Pass the calculated index
+          activeWordIndex={activeWordIndex}
           onPlayPause={togglePlay}
           onSeek={handleSeek}
           onSkipBackward={handleSkipBackward}
