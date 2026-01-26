@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -149,6 +149,36 @@ export function FullscreenPlayer({
     }
   });
 
+  // Scroll active word to center
+  const scrollToActive = useCallback(() => {
+    if (activeWordIndex >= 0) {
+      const element = document.getElementById(`word-${activeWordIndex}`);
+      if (element) {
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      }
+    }
+  }, [activeWordIndex]);
+
+  // Trigger scroll when switching to read-along tab
+  useEffect(() => {
+    if (activeTab === 'read-along') {
+      // Small timeout to ensure DOM is rendered before scrolling
+      setTimeout(scrollToActive, 100);
+    }
+  }, [activeTab, scrollToActive]);
+
+  const handleTabClick = (tab: TabType) => {
+    if (tab === 'read-along' && activeTab === 'read-along') {
+      // If already on read-along, clicking again centers the view
+      scrollToActive();
+    } else {
+      setActiveTab(tab);
+    }
+  };
+
   // Recursive component to render comments with replies
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
     // Build metadata string like "94 upvotes • 16 agreement"
@@ -289,16 +319,15 @@ export function FullscreenPlayer({
             {displayText ? (
               <p className="read-along-text">
                 {displayText.split(/\s+/).map((word, index) => {
-                  // KARAOKE LOGIC: 
-                  // Highlight all words that have been read (index <= activeWordIndex)
                   const isRead = index <= activeWordIndex;
                   return (
                     <span
                       key={index}
+                      id={`word-${index}`} // Assign ID for scrolling
                       className={`transcript-word ${isRead ? 'read' : ''}`}
                       style={{ 
-                        color: isRead ? '#60a5fa' : undefined, // Light blue for read words
-                        cursor: 'pointer'
+                        color: isRead ? '#60a5fa' : undefined, // Light blue (#60a5fa) for read words
+                        cursor: 'pointer' 
                       }}
                       onClick={() => onTranscriptWordClick(index)}
                     >
@@ -377,7 +406,7 @@ export function FullscreenPlayer({
           <button
             key={tab}
             className={`tab-button ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => handleTabClick(tab)}
           >
             {tab === 'content' && 'Content'}
             {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
