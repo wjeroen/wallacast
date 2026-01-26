@@ -37,11 +37,8 @@ type TabType = 'content' | 'comments' | 'read-along' | 'queue';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
-  // Remove CDATA wrapper
   let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Remove HTML tags
   cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  // Decode HTML entities
   cleaned = cleaned
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -49,7 +46,6 @@ function cleanHtml(text: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ');
-  // Clean up whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   return cleaned;
 }
@@ -71,11 +67,9 @@ function isEAForumOrLessWrong(url: string): boolean {
 
 function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
-
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-
   if (hours > 0) {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
@@ -102,7 +96,6 @@ export function FullscreenPlayer({
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
 
-  // Parse comments from JSON string if available
   const parsedComments: Comment[] = useMemo(() => {
     if (!content?.comments) return [];
     try {
@@ -116,7 +109,7 @@ export function FullscreenPlayer({
     }
   }, [content?.comments]);
 
-  // NEW: Parse transcript words for read-along highlighting
+  // Parse transcript words
   const transcriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
     try {
@@ -127,64 +120,52 @@ export function FullscreenPlayer({
     }
   }, [content?.transcript_words]);
 
-  // Determine which tabs are available
+  // Calculate active word index (Sticky logic: highlighting stays on until next word)
+  const activeWordIndex = useMemo(() => {
+    if (!transcriptWords.length) return -1;
+    // Find the last word that started before or at currentTime
+    // This is more stable than checking start <= t <= end because spoken words have gaps
+    for (let i = transcriptWords.length - 1; i >= 0; i--) {
+      if (currentTime >= transcriptWords[i].start) {
+        return i;
+      }
+    }
+    return -1;
+  }, [currentTime, transcriptWords]);
+
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
-
-    // Content tab for articles and texts only
-    if (content.type === 'article' || content.type === 'text') {
-      tabs.push('content');
-    }
-
-    // Comments tab for EA Forum/LessWrong articles (even if no comments yet)
-    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) {
-      tabs.push('comments');
-    }
-
-    // Read-along tab for all content types
+    if (content.type === 'article' || content.type === 'text') tabs.push('content');
+    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');
     tabs.push('read-along');
-
-    // Queue tab (always available but work in progress)
     tabs.push('queue');
-
     return tabs;
   }, [content.type, content.url, parsedComments.length]);
 
-  // Auto-select first available tab
   useState(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
       setActiveTab(availableTabs[0]);
     }
   });
 
-  // Recursive component to render comments with replies
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    // Build metadata string like "94 upvotes • 16 agreement"
     const metadataParts: string[] = [];
-
-    // Always show karma as "upvotes"
     if (comment.karma !== undefined && comment.karma !== null) {
       metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
     }
-
-    // Handle extended scores (reactions)
     if (comment.extendedScore) {
       const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-
       if (isLessWrong) {
-        // LessWrong: Only show 'agreement' score
         if (typeof comment.extendedScore.agreement === 'number') {
           metadataParts.push(`${comment.extendedScore.agreement} agreement`);
         }
       } else {
-        // EA Forum: Show ALL reactions
         Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
           const label = reactionType.toLowerCase();
           metadataParts.push(`${count} ${label}`);
         });
       }
     }
-
     const hasMetadata = metadataParts.length > 0;
 
     return (
@@ -195,11 +176,7 @@ export function FullscreenPlayer({
             <span className="comment-date">
               {' • '}
               {(() => {
-                try {
-                  return new Date(comment.date).toLocaleDateString();
-                } catch {
-                  return comment.date;
-                }
+                try { return new Date(comment.date).toLocaleDateString(); } catch { return comment.date; }
               })()}
             </span>
           )}
@@ -209,12 +186,7 @@ export function FullscreenPlayer({
             <span className="comment-votes">{metadataParts.join(' • ')}</span>
           </div>
         )}
-
-        <div
-          className="comment-content"
-          dangerouslySetInnerHTML={{ __html: comment.content }}
-        />
-
+        <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
         {comment.replies && comment.replies.length > 0 && (
           <div className="comment-replies">
             {comment.replies.map((reply, idx) => (
@@ -250,10 +222,7 @@ export function FullscreenPlayer({
                 </button>
               )}
             </div>
-            <div
-              className="article-content"
-              dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
-            />
+            <div className="article-content" dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }} />
           </div>
         );
 
@@ -281,23 +250,18 @@ export function FullscreenPlayer({
         );
 
       case 'read-along':
-        // Case 1: We have precise word timestamps from Whisper
         if (transcriptWords.length > 0) {
           return (
             <div className="tab-read-along-display">
-              <div className="read-along-header">
-                <h3>Read-along</h3>
-              </div>
+              <div className="read-along-header"><h3>Read-along</h3></div>
               <p className="read-along-text">
                 {transcriptWords.map((item: any, index: number) => {
-                  // Check if this word is active (current time is between start and end)
-                  const isActive = currentTime >= item.start && currentTime <= item.end;
-                  
+                  const isActive = index === activeWordIndex;
                   return (
                     <span
                       key={index}
                       className={`transcript-word ${isActive ? 'current-word' : ''}`}
-                      onClick={() => onTranscriptWordClick(item.start)} // Click to seek
+                      onClick={() => onTranscriptWordClick(item.start)}
                       style={{
                         backgroundColor: isActive ? 'rgba(37, 99, 235, 0.2)' : 'transparent',
                         borderRadius: '2px',
@@ -313,11 +277,7 @@ export function FullscreenPlayer({
             </div>
           );
         }
-
-        // Case 2: Fallback to plain text if no timestamps
-        const transcript = content.transcript || content.content || '';
-        const displayText = cleanHtml(transcript);
-
+        const displayText = cleanHtml(content.transcript || content.content || '');
         return (
           <div className="tab-read-along-display">
             <div className="read-along-header">
@@ -331,11 +291,7 @@ export function FullscreenPlayer({
             {displayText ? (
               <p className="read-along-text">
                 {displayText.split(/\s+/).map((word, index) => (
-                  <span
-                    key={index}
-                    className="transcript-word"
-                    onClick={() => onTranscriptWordClick(index)} // Approximate seeking
-                  >
+                  <span key={index} className="transcript-word" onClick={() => onTranscriptWordClick(index)}>
                     {word}{' '}
                   </span>
                 ))}
@@ -351,14 +307,10 @@ export function FullscreenPlayer({
           <div className="tab-queue-display">
             <h3>Queue</h3>
             <p className="work-in-progress">🚧 Work in progress</p>
-            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
-              Queue functionality will be implemented soon. Stay tuned!
-            </p>
+            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>Queue functionality will be implemented soon.</p>
           </div>
         );
-
-      default:
-        return null;
+      default: return null;
     }
   };
 
@@ -367,11 +319,7 @@ export function FullscreenPlayer({
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {content.preview_picture && (
-            <img
-              src={content.preview_picture}
-              alt={content.title}
-              className="fullscreen-thumbnail"
-            />
+            <img src={content.preview_picture} alt={content.title} className="fullscreen-thumbnail" />
           )}
           <div>
             <h2 className="fullscreen-title">{content.title}</h2>
@@ -383,37 +331,17 @@ export function FullscreenPlayer({
                 </a>
               </p>
             )}
-            {content.author && (
-              <p className="fullscreen-author">
-                {content.author}
-                {content.published_at && (
-                  <> • {new Date(content.published_at).toLocaleDateString()}</>
-                )}
-                {(content.karma !== undefined && content.karma !== null) && (
-                  <> • {content.karma} upvotes</>
-                )}
-              </p>
-            )}
+            {content.author && <p className="fullscreen-author">{content.author}</p>}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
-          <button onClick={onMinimize} className="header-button" title="Minimize">
-            <Minimize2 size={20} />
-          </button>
-          <button onClick={onClose} className="header-button" title="Close">
-            <X size={20} />
-          </button>
+          <button onClick={onMinimize} className="header-button" title="Minimize"><Minimize2 size={20} /></button>
+          <button onClick={onClose} className="header-button" title="Close"><X size={20} /></button>
         </div>
       </div>
-
-      {/* Tabs */}
       <div className="fullscreen-tabs">
         {availableTabs.map((tab) => (
-          <button
-            key={tab}
-            className={`tab-button ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab)}
-          >
+          <button key={tab} className={`tab-button ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
             {tab === 'content' && 'Content'}
             {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
             {tab === 'read-along' && 'Read-along'}
@@ -421,53 +349,27 @@ export function FullscreenPlayer({
           </button>
         ))}
       </div>
-
-      {/* Tab Content Area */}
-      <div className="fullscreen-tab-content">
-        {renderTabContent()}
-      </div>
-
-      {/* Player Controls */}
+      <div className="fullscreen-tab-content">{renderTabContent()}</div>
       <div className="fullscreen-player-controls">
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min="0"
-            max={duration || 0}
-            value={currentTime}
-            onChange={(e) => onSeek(parseFloat(e.target.value))}
-            className="progress-slider"
-          />
+          <input type="range" min="0" max={duration || 0} value={currentTime} onChange={(e) => onSeek(parseFloat(e.target.value))} className="progress-slider" />
           <span className="time">{formatTime(duration)}</span>
         </div>
-
         <div className="fullscreen-playback-controls">
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
-            <RotateCcw className="seek-icon" />
-            <span className="seek-label">15</span>
+            <RotateCcw className="seek-icon" /> <span className="seek-label">15</span>
           </button>
-
           <button onClick={onPlayPause} className="play-pause-btn">
             {isPlaying ? <Pause size={32} /> : <Play size={32} />}
           </button>
-
           <button onClick={onSkipForward} title="Seek forward 30 seconds" className="seek-btn">
-            <RotateCw className="seek-icon" />
-            <span className="seek-label">30</span>
+            <RotateCw className="seek-icon" /> <span className="seek-label">30</span>
           </button>
         </div>
-
         <div className="fullscreen-player-options">
-          <button onClick={onToggleSpeed} className="option-toggle">
-            <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
-          </button>
-
-          <button onClick={onToggleSleepTimer} className="option-toggle">
-            <Clock size={20} />
-            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-          </button>
+          <button onClick={onToggleSpeed} className="option-toggle"><Gauge size={20} /><span>{playbackSpeed}x</span></button>
+          <button onClick={onToggleSleepTimer} className="option-toggle"><Clock size={20} /><span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span></button>
         </div>
       </div>
     </div>
