@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, memo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import {
   Play,
   Pause,
@@ -21,7 +21,7 @@ interface FullscreenPlayerProps {
   playbackSpeed: number;
   sleepTimer: number | null;
   onPlayPause: () => void;
-  onSeek: (time: number) => void;
+  onSeek: (time: number) => void; // We will use this for clicking text
   onSkipBackward: () => void;
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
@@ -29,13 +29,13 @@ interface FullscreenPlayerProps {
   onToggleSleepTimer: () => void;
   onMinimize: () => void;
   onClose: () => void;
-  onTranscriptWordClick: (wordIndex: number) => void;
+  onTranscriptWordClick: (wordIndex: number) => void; // Unused in this new version
   onRefetch?: () => void;
 }
 
 type TabType = 'content' | 'comments' | 'read-along' | 'queue';
 
-// --- Types & Helpers ---
+// --- Helper Types & Functions ---
 
 interface TranscriptWord {
   word: string;
@@ -89,9 +89,9 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * OPTIMIZED SUB-COMPONENT: ReadAlongDisplay
- * This only re-renders when the *active sentence* changes, 
- * ignoring the high-frequency updates of 'currentTime'.
+ * OPTIMIZED COMPONENT: Sentence-based Read Along
+ * Uses memo to prevent re-rendering on every millisecond tick.
+ * Only re-renders when the active sentence index changes.
  */
 const ReadAlongDisplay = memo(({ 
   sentences, 
@@ -102,18 +102,6 @@ const ReadAlongDisplay = memo(({
   activeIndex: number; 
   onSentenceClick: (start: number) => void;
 }) => {
-  const activeRef = useRef<HTMLSpanElement>(null);
-
-  // Auto-scroll effect
-  useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    }
-  }, [activeIndex]);
-
   return (
     <div className="tab-read-along-display">
       <div className="read-along-header">
@@ -125,7 +113,6 @@ const ReadAlongDisplay = memo(({
           return (
             <span
               key={index}
-              ref={isActive ? activeRef : null}
               onClick={() => onSentenceClick(sentence.start)}
               style={{
                 backgroundColor: isActive ? 'rgba(251, 191, 36, 0.4)' : 'transparent', // Golden highlight
@@ -135,7 +122,7 @@ const ReadAlongDisplay = memo(({
                 cursor: 'pointer',
                 transition: 'background-color 0.2s ease',
                 display: 'inline',
-                boxDecorationBreak: 'clone', // Ensures highlight wraps correctly across lines
+                boxDecorationBreak: 'clone',
                 WebkitBoxDecorationBreak: 'clone'
               }}
             >
@@ -156,7 +143,7 @@ export function FullscreenPlayer({
   playbackSpeed,
   sleepTimer,
   onPlayPause,
-  onSeek,
+  onSeek, // Using this instead of onTranscriptWordClick for robustness
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
@@ -178,7 +165,7 @@ export function FullscreenPlayer({
     } catch (error) { return []; }
   }, [content?.comments]);
 
-  // Group words into sentences for better readability and performance
+  // Transform words into sentences
   const transcriptSentences = useMemo(() => {
     if (!content?.transcript_words) return [];
     try {
@@ -188,7 +175,7 @@ export function FullscreenPlayer({
 
       words.forEach((word) => {
         currentSentence.push(word);
-        // Check for sentence-ending punctuation
+        // Break on punctuation or newlines
         if (/[.!?]$/.test(word.word.trim()) || word.word.includes('\n')) {
           if (currentSentence.length > 0) {
             sentences.push({
@@ -202,7 +189,7 @@ export function FullscreenPlayer({
         }
       });
 
-      // Flush remaining
+      // Flush remaining words
       if (currentSentence.length > 0) {
         sentences.push({
           text: currentSentence.map(w => w.word).join(' '),
@@ -215,8 +202,7 @@ export function FullscreenPlayer({
     } catch (e) { return []; }
   }, [content?.transcript_words]);
 
-  // Determine active sentence index (Sticky logic)
-  // This runs often, but is fast math. The heavy rendering is memoized below.
+  // Efficiently find the active sentence
   const activeSentenceIndex = useMemo(() => {
     if (!transcriptSentences.length) return -1;
     // Iterate backwards to find the latest started sentence
@@ -255,10 +241,12 @@ export function FullscreenPlayer({
     if (comment.extendedScore) {
       const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
       if (isLessWrong) {
+        // LessWrong: prioritize 'agreement'
         if (typeof comment.extendedScore.agreement === 'number') {
           metadataParts.push(`${comment.extendedScore.agreement} agreement`);
         }
       } else {
+        // EA Forum: show all
         Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
           const label = reactionType.toLowerCase();
           metadataParts.push(`${count} ${label}`);
@@ -332,17 +320,15 @@ export function FullscreenPlayer({
 
       case 'read-along':
         if (transcriptSentences.length > 0) {
-          // Optimized render using memoized component
           return (
             <ReadAlongDisplay 
               sentences={transcriptSentences} 
               activeIndex={activeSentenceIndex} 
-              onSentenceClick={onTranscriptWordClick} 
+              onSentenceClick={onSeek} // Use onSeek to fix the "can't click" bug
             />
           );
         }
         
-        // Fallback for simple text
         const displayText = cleanHtml(content.transcript || content.content || '');
         return (
           <div className="tab-read-along-display">
