@@ -7,6 +7,8 @@ import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 // Import OpenAI for the "Scripting" phase (Chat) and "Speaking" phase (TTS)
 import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
+// Import transcription service
+import { transcribeWithTimestamps } from './transcription.js';
 
 interface Comment {
   id?: string;
@@ -75,8 +77,12 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
         ffmpeg()
           .input(concatListPath)
           .inputOptions(['-f concat', '-safe 0'])
-          // Re-encode to ensure consistent MP3 format (crucial for Kokoro/WAV inputs)
-          .output(outputFile)
+          // QUALITY FIX: Force re-encoding to high quality MP3
+          // This fixes Kokoro sounding "low res" by upsampling to standard 44.1kHz
+          .audioFrequency(44100)
+          .audioBitrate('192k')
+          .format('mp3')
+          .save(outputFile)
           .on('end', () => {
             fs.unlink(concatListPath).catch(console.error);
             resolve();
@@ -84,8 +90,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
           .on('error', (err) => {
             fs.unlink(concatListPath).catch(console.error);
             reject(err);
-          })
-          .run();
+          });
       })
       .catch(reject);
   });
@@ -152,8 +157,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
       commentIntro += `. ${reactions}`;
     }
 
-    // For comments, we use basic text stripping because they are usually simple text.
-    // (Running every comment through an LLM is too expensive/slow)
+    // For comments, we use basic text stripping
     const commentText = htmlToNarrationText(comment.content);
 
     narration += `${commentIntro}.\n"${commentText}"\n\n`;
@@ -169,7 +173,6 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
 /**
  * THE SCRIPTWRITER
  * Uses GPT-4o-mini to convert HTML into a "Radio Script".
- * Handles: Tables, Headers, Quotes, Image descriptions.
  */
 async function scriptArticleForListening(htmlContent: string, openai: any): Promise<string> {
   try {
@@ -185,7 +188,7 @@ Your goal is to rewrite the provided HTML article into a plain text script optim
 CRITICAL RULES:
  * CLEAN TEXT: Remove any text that's part of the website but not the article body (like footers, social media share buttons, navigation buttons, curated or recommended posts,...)
  * HEADERS: End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
- * LISTS: Do not rely on HTML tags for lists. Precede list items with transition words (e.g., "First," "Second," "Next") or number them explicitly in text (e.g., "Number one:").
+ * LISTS: Do not rely on HTML tags for lists. Precede list items with transition words (e.g., "First," "Second," "Next") or number them explicitly in text (e.g., "Number one:"). Read each entire list item or bullet point.
  * NUMBERS & DATES: Convert complex numbers and dates into spoken English. Write "13/10/2024" as "thirteenth October twenty twenty-four" and "1990s" as "nineteen nineties." Write out currency like "$5 million" as "five million dollars."
  * ABBREVIATIONS: Expand all abbreviations that are pronounced differently from how they are written (e.g., change "lbs" to "pounds,", "etc." to "etcetera", "St." to "Saint" or "Street" depending on context).
  * QUOTES: Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
@@ -193,7 +196,7 @@ CRITICAL RULES:
  * IMAGES: Locate the 'alt' text or context for <img> tags. Insert a brief narrative description such as: "An image displays [description]."
  * LINKS: Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
  * PARENTHESES: Remove parentheses. Incorporate the parenthetical text naturally into the sentence using commas or em dashes.
- * TONE: Preserve the author's original word choice for the body text. Do not summarize or change their words.
+ * TONE: Preserve the author's original word choice for the body text. Do not summarize, shorten, or change their words.
  * DON'T ADD AN INTRO/OUTRO: Output only the narration text.
  
 Input HTML follows.`
@@ -255,7 +258,7 @@ export async function generateArticleAudio(
           break;
         } catch (error: any) {
           if (error.status === 429 && retries > 1) {
-            console.log(`Rate limit hit, retrying in ${delay/1000}s...`);
+            console.log(`Rate limit hit, retrying...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
             retries--;
@@ -269,7 +272,6 @@ export async function generateArticleAudio(
 
       const buffer = Buffer.from(await response.arrayBuffer());
       
-      // Get duration
       const tempDir = getTempDir();
       await fs.mkdir(tempDir, { recursive: true });
       const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
@@ -301,12 +303,10 @@ export async function generateArticleAudio(
       for (let i = 0; i < textChunks.length; i++) {
         console.log(`Generating chunk ${i + 1}/${textChunks.length}...`);
         
-        // Update Progress
-        const chunkProgress = Math.round(((i + 1) / textChunks.length) * 90);
         if (options.contentId) {
           await query(
             'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
-            [chunkProgress, `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
+            [Math.round(((i + 1) / textChunks.length) * 90), `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
           );
         }
 
@@ -325,7 +325,7 @@ export async function generateArticleAudio(
             break;
           } catch (error: any) {
             if (error.status === 429 && retries > 1) {
-              console.log(`Rate limit hit, retrying in ${delay/1000}s...`);
+              console.log(`Rate limit hit, retrying...`);
               await new Promise(resolve => setTimeout(resolve, delay));
               delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
@@ -355,7 +355,6 @@ export async function generateArticleAudio(
         currentWordIndex += chunkWords;
         currentTime += duration;
         
-        // Small delay to be polite to the API
         if (i < textChunks.length - 1) await new Promise(resolve => setTimeout(resolve, 200));
       }
 
@@ -391,24 +390,19 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     // 1. Prepare Article Body
     let articleBodyScript = '';
-    
-    // We prefer html_content because it has the tags (headers, tables, images) needed for scripting
     const sourceContent = content.html_content || content.content || '';
 
     if (!sourceContent) throw new Error('No content to convert to audio');
 
-    // Run the Scriptwriter (LLM) on the body
-    console.log('[TTS] Running Scriptwriter to format text for audio (headers, tables, quotes)...');
+    console.log('[TTS] Running Scriptwriter to format HTML for audio (headers, tables, quotes)...');
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);
     
-    // Get a CHAT client (always OpenAI or compatible chat provider) to do the scripting
+    // Use Chat Client for scripting (always available if user has keys)
     const chatClient = await getOpenAIClientForUser(content.user_id);
-    if (chatClient) {
+    if (chatClient && sourceContent.includes('<')) { // Only script if it looks like HTML
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
     } else {
-        // Fallback if no chat key available (unlikely if they have TTS key, but possible)
-        console.warn('[TTS] No chat client available for scripting, falling back to raw text.');
-        articleBodyScript = htmlToNarrationText(sourceContent);
+        articleBodyScript = sourceContent.includes('<') ? htmlToNarrationText(sourceContent) : sourceContent;
     }
 
     // 2. Build Full Script (Intro + Body + Comments)
@@ -447,7 +441,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       contentId: contentId,
     });
 
-    // 4. Save
+    // 4. Save Audio
     let warning: string | undefined;
     if (chunks > 1) {
       const estimatedMinutes = Math.round(fullScript.length / 900);
@@ -455,7 +449,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     }
 
     const tempDir = getTempDir();
-    const tempFilePath = path.join(tempDir, `temp_duration_${contentId}.mp3`);
+    const tempFilePath = path.join(tempDir, `final_${contentId}.mp3`);
     let audioDuration = 0;
     try {
       await fs.writeFile(tempFilePath, audioBuffer);
@@ -474,6 +468,26 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     );
 
     console.log(`✓ Audio stored for content ${contentId}`);
+
+    // 5. Trigger Transcription (Post-Processing)
+    console.log('[TTS] Triggering auto-transcription for Read Along...');
+    // We update 'current_operation' to inform the user, but we keep 'generation_status' as 'ready' (or 'completed')
+    // so the user can play the audio immediately while transcription happens in bg.
+    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
+
+    // Use the first 224 chars of the script as a hint for Whisper to get names right
+    transcribeWithTimestamps(audioUrl, content.user_id, fullScript.slice(0, 224))
+      .then(async (transcriptResult) => {
+          console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
+          await query(
+            'UPDATE content_items SET transcript = $1, transcript_words = $2, current_operation = NULL WHERE id = $3',
+            [transcriptResult.text, JSON.stringify(transcriptResult.words), contentId]
+          );
+      })
+      .catch(err => {
+          console.error('[TTS] Auto-transcription failed:', err);
+      });
+
     return { audioUrl, warning };
 
   } catch (error) {
