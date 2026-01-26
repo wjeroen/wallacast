@@ -20,6 +20,7 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
+  activeWordIndex?: number; // Added prop
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onSkipBackward: () => void;
@@ -90,6 +91,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
+  activeWordIndex = -1, // Default to -1 if not provided
   onPlayPause,
   onSeek,
   onSkipBackward,
@@ -151,7 +153,7 @@ export function FullscreenPlayer({
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
     // Build metadata string like "94 upvotes • 16 agreement"
     const metadataParts: string[] = [];
-
+    
     // Always show karma as "upvotes"
     if (comment.karma !== undefined && comment.karma !== null) {
       metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
@@ -289,7 +291,8 @@ export function FullscreenPlayer({
                 {displayText.split(/\s+/).map((word, index) => (
                   <span
                     key={index}
-                    className="transcript-word"
+                    className={`transcript-word ${index === activeWordIndex ? 'active' : ''}`}
+                    style={index === activeWordIndex ? { backgroundColor: '#fef08a', color: '#000', padding: '0 2px', borderRadius: '2px' } : {}}
                     onClick={() => onTranscriptWordClick(index)}
                   >
                     {word}{' '}
