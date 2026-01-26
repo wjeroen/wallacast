@@ -16,7 +16,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
-  const [isExpanded, setIsExpanded] = useState(true); // Open fullscreen by default
+  const [isExpanded, setIsExpanded] = useState(true);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -28,24 +28,21 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   }, [isPlaying]);
 
   // ---------------------------------------------------------------------------
-  // DATA PREPARATION & PARSING
+  // DATA PARSING (The Fix)
   // ---------------------------------------------------------------------------
-
-  // Parse transcript_words safely (handles both Array and JSON string from DB)
   const parsedTranscriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
     if (Array.isArray(content.transcript_words)) return content.transcript_words;
     try {
+      // Force parsing if it's a string (which it is in your DB)
       return typeof content.transcript_words === 'string'
         ? JSON.parse(content.transcript_words)
         : [];
     } catch (e) {
-      console.error('[AudioPlayer] Failed to parse transcript_words:', e);
       return [];
     }
   }, [content?.transcript_words]);
 
-  // Parse tts_chunks safely
   const parsedTTSChunks = useMemo(() => {
     if (!content?.tts_chunks) return [];
     if (Array.isArray(content.tts_chunks)) return content.tts_chunks;
@@ -54,42 +51,13 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
         ? JSON.parse(content.tts_chunks)
         : [];
     } catch (e) {
-      console.error('[AudioPlayer] Failed to parse tts_chunks:', e);
       return [];
     }
   }, [content?.tts_chunks]);
 
-  // Debug Logging for Hypothesis Verification
-  useEffect(() => {
-    if (content) {
-      console.groupCollapsed(`[AudioPlayer] Loaded Content: ${content.id}`);
-      console.log('Raw transcript_words type:', typeof content.transcript_words);
-      console.log('Parsed transcript_words length:', parsedTranscriptWords.length);
-      console.log('Raw tts_chunks type:', typeof content.tts_chunks);
-      console.log('Parsed tts_chunks length:', parsedTTSChunks.length);
-      
-      if (parsedTranscriptWords.length > 0) {
-        console.log('✅ Method 1 (Whisper) Available');
-        const lastWord = parsedTranscriptWords[parsedTranscriptWords.length - 1];
-        console.log('   Whisper Duration:', lastWord.end);
-      } else {
-        console.warn('❌ Method 1 (Whisper) Unavailable (parsed array is empty)');
-      }
-
-      if (parsedTTSChunks.length > 0) {
-        console.log('✅ Method 2 (TTS Chunks) Available');
-      } else {
-        console.warn('❌ Method 2 (TTS Chunks) Unavailable');
-      }
-      
-      console.groupEnd();
-    }
-  }, [content, parsedTranscriptWords, parsedTTSChunks]);
-
   // ---------------------------------------------------------------------------
   // AUDIO SETUP
   // ---------------------------------------------------------------------------
-
   useEffect(() => {
     if (!content) return;
 
@@ -98,7 +66,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const startPosition = content.playback_position || 0;
 
       audio.src = content.audio_url || '';
-      // Ensure playback speed is one of the valid values
+      
       const validSpeeds = [1, 1.25, 1.5, 2];
       const loadedSpeed = content.playback_speed || 1;
       const normalizedSpeed = validSpeeds.includes(loadedSpeed) ? loadedSpeed : 1;
@@ -106,7 +74,6 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       audio.playbackRate = normalizedSpeed;
       setPlaybackSpeed(normalizedSpeed);
 
-      // Wait for metadata to load before setting position
       const handleLoadedMetadata = () => {
         if (startPosition > 0) {
           audio.currentTime = startPosition;
@@ -120,7 +87,6 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
             console.error('Failed to save duration:', error);
           });
         }
-
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
 
@@ -150,20 +116,18 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     };
   }, []);
 
-  // Auto-save position every 10 seconds during playback
+  // Auto-save position every 10 seconds
   useEffect(() => {
     if (!content) return;
-
     const interval = setInterval(() => {
       if (isPlayingRef.current && audioRef.current) {
         savePlaybackPosition(audioRef.current.currentTime);
       }
     }, 10000);
-
     return () => clearInterval(interval);
   }, [content]);
 
-  // Save position on component unmount (user closes player or switches content)
+  // Save position on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current && content) {
@@ -186,9 +150,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
 
   const togglePlay = () => {
     if (!audioRef.current) return;
-
     if (isPlaying) {
-      // Save position before pausing
       savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
     } else {
@@ -203,21 +165,14 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     setCurrentTime(time);
   };
 
-  const handleSkipBackward = () => {
-    handleSeek(Math.max(0, currentTime - 15));
-  };
-
-  const handleSkipForward = () => {
-    handleSeek(Math.min(duration, currentTime + 30));
-  };
+  const handleSkipBackward = () => handleSeek(Math.max(0, currentTime - 15));
+  const handleSkipForward = () => handleSeek(Math.min(duration, currentTime + 30));
 
   const handleSpeedChange = (speed: number) => {
     if (!audioRef.current) return;
     audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
-    if (content) {
-      contentAPI.update(content.id, { playback_speed: speed });
-    }
+    if (content) contentAPI.update(content.id, { playback_speed: speed });
   };
 
   const toggleSpeed = () => {
@@ -228,17 +183,13 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   };
 
   const toggleSleepTimer = () => {
-    // Clear existing timer if any
     if (sleepTimerRef.current) {
       clearTimeout(sleepTimerRef.current);
       sleepTimerRef.current = null;
     }
 
-    // Cycle through: null → 5 → 10 → 15 → 30 → 45 → 60 → null
     const timerOptions = [5, 10, 15, 30, 45, 60];
-    
     if (sleepTimer === null) {
-      // Start with 5 minutes
       setSleepTimer(5);
       sleepTimerRef.current = setTimeout(() => {
         if (audioRef.current) {
@@ -250,10 +201,8 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     } else {
       const currentIndex = timerOptions.indexOf(sleepTimer);
       if (currentIndex === timerOptions.length - 1) {
-        // Last option, turn off
         setSleepTimer(null);
       } else {
-        // Go to next option
         const nextTimer = timerOptions[currentIndex + 1];
         setSleepTimer(nextTimer);
         sleepTimerRef.current = setTimeout(() => {
@@ -268,19 +217,15 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   };
 
   // ---------------------------------------------------------------------------
-  // SYNC LOGIC
+  // SYNC CALCULATION
   // ---------------------------------------------------------------------------
 
-  // CALCULATE DRIFT CORRECTION RATIO
-  // If the transcript end time !== audio duration, we stretch/shrink the transcript to fit.
   const normalizationRatio = useMemo(() => {
     if (parsedTranscriptWords.length === 0 || !duration || duration === 0) return 1;
-    
-    // Check Whisper Method
     const lastWord = parsedTranscriptWords[parsedTranscriptWords.length - 1];
-    if (lastWord.end > 0) {
-      // e.g. Audio is 300s, Transcript is 290s. Ratio = 1.034.
-      // We multiply transcript timestamps by 1.034 to sync them.
+    
+    // Ensure lastWord.end is a valid number
+    if (lastWord && typeof lastWord.end === 'number' && lastWord.end > 0) {
       return duration / lastWord.end;
     }
     return 1;
@@ -289,12 +234,13 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
 
-    // Method 1: Whisper timestamps with Rubber Band Normalization
+    // Method 1: Whisper Timestamps (Primary)
     if (parsedTranscriptWords.length > 0) {
       let idx = -1;
       for (let i = 0; i < parsedTranscriptWords.length; i++) {
-        // Normalize the word's start time to match actual audio duration
-        const correctedStart = parsedTranscriptWords[i].start * normalizationRatio;
+        // Apply ratio correction
+        const wordStart = Number(parsedTranscriptWords[i].start);
+        const correctedStart = wordStart * normalizationRatio;
         
         if (correctedStart <= currentTime) {
           idx = i;
@@ -305,13 +251,12 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       return idx;
     }
 
-    // Method 2: TTS Chunk interpolation (Usually reliable, no normalization needed)
+    // Method 2: TTS Chunks
     if (parsedTTSChunks.length > 0) {
       try {
         const currentChunk = parsedTTSChunks.find((c: any) => 
           currentTime >= c.startTime && currentTime < (c.startTime + c.duration)
         );
-
         if (currentChunk) {
           const timeIntoChunk = currentTime - currentChunk.startTime;
           const progress = timeIntoChunk / currentChunk.duration;
@@ -319,9 +264,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           const offset = Math.floor(progress * totalWordsInChunk);
           return currentChunk.startWord + offset;
         }
-      } catch (e) {
-        console.error('Method 2 Error:', e);
-      }
+      } catch (e) { /* ignore */ }
     }
 
     // Method 3: Linear Fallback
@@ -337,24 +280,15 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
-    // Method 1: Whisper timestamps with Normalization
+    // Method 1 Click
     if (parsedTranscriptWords.length > 0 && wordIndex < parsedTranscriptWords.length) {
-      const originalTimestamp = parsedTranscriptWords[wordIndex].start;
-      // Apply the same ratio in reverse (stretch the timestamp to find the point in the actual audio)
+      const originalTimestamp = Number(parsedTranscriptWords[wordIndex].start);
       const targetTime = originalTimestamp * normalizationRatio;
-      
-      console.log('Using normalized timestamp (Method 1):', { 
-        wordIndex, 
-        originalTimestamp, 
-        normalizationRatio, 
-        targetTime 
-      });
-      
       handleSeek(targetTime);
       return;
     }
 
-    // Method 2: TTS Chunk interpolation
+    // Method 2 Click
     if (parsedTTSChunks.length > 0) {
       try {
         for (const chunk of parsedTTSChunks) {
@@ -367,32 +301,24 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
             return;
           }
         }
-      } catch (error) {
-        console.error('Failed to parse TTS chunks (Method 2 click):', error);
-      }
+      } catch (e) { /* ignore */ }
     }
 
-    // Method 3: Linear Fallback
+    // Method 3 Click
     const transcript = content.transcript || content.content || '';
     const words = transcript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/);
     const estimatedPosition = (wordIndex / words.length) * duration;
     handleSeek(estimatedPosition);
   };
 
-  const handleExpand = () => {
-    setIsExpanded(true);
-  };
-
-  const handleMinimize = () => {
-    setIsExpanded(false);
-  };
+  const handleExpand = () => setIsExpanded(true);
+  const handleMinimize = () => setIsExpanded(false);
 
   if (!content) return null;
 
   return (
     <>
       <audio ref={audioRef} />
-
       {isExpanded ? (
         <FullscreenPlayer
           content={content}
