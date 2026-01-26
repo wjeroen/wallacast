@@ -178,7 +178,7 @@ CRITICAL RULES:
  * TONE: Preserve the author's original word choice for the body text. Do not summarize or change their words.
  * DON'T ADD AN INTRO/OUTRO: Output only the narration text.
  
-[span_2](start_span)Input HTML follows.`[span_2](end_span)
+Input HTML follows.`
         },
         {
           role: 'user',
@@ -211,7 +211,7 @@ export async function generateArticleAudio(
     if (!openai) throw new Error('No AI API key set.');
 
     const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
-    [span_3](start_span)console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);[span_3](end_span)
+    console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);
 
     const allWords = articleText.split(/\s+/);
 
@@ -238,13 +238,15 @@ export async function generateArticleAudio(
         }
       }
 
+      if (!response) throw new Error('Failed to generate audio.');
+
       const buffer = Buffer.from(await response.arrayBuffer());
       const tempDir = getTempDir();
       await fs.mkdir(tempDir, { recursive: true });
       const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
       await fs.writeFile(tempFile, buffer);
       const duration = await getAudioDuration(tempFile);
-      await fs.unlink(tempFile).catch(() => {});
+      await fs.unlink(tempFile).catch((err) => console.warn('Cleanup error:', err));
 
       const chunkMetadata: ChunkMetadata[] = [{
         text: textChunks[0],
@@ -296,6 +298,8 @@ export async function generateArticleAudio(
           }
         }
 
+        if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
+
         const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
         await fs.writeFile(chunkFile, Buffer.from(await response.arrayBuffer()));
         chunkFiles.push(chunkFile);
@@ -313,7 +317,7 @@ export async function generateArticleAudio(
 
         currentWordIndex += chunkWords;
         currentTime += duration;
-        [span_4](start_span)if (i < textChunks.length - 1) await new Promise(resolve => setTimeout(resolve, 200));[span_4](end_span)
+        if (i < textChunks.length - 1) await new Promise(resolve => setTimeout(resolve, 200));
       }
 
       const outputFile = path.join(tempDir, `concatenated_${timestamp}.mp3`);
@@ -323,12 +327,12 @@ export async function generateArticleAudio(
 
       await concatenateAudioFiles(chunkFiles, outputFile);
       const finalBuffer = await fs.readFile(outputFile);
-      await fs.unlink(outputFile).catch(() => {});
-      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(() => {});
+      await fs.unlink(outputFile).catch((err) => console.warn('Cleanup error:', err));
+      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch((err) => console.warn('Cleanup error:', err));
 
       return { buffer: finalBuffer, chunks: textChunks.length, chunkMetadata };
     } catch (error) {
-      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(() => {});
+      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch((err) => console.warn('Cleanup error:', err));
       throw error;
     }
   } catch (error) {
@@ -346,7 +350,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     const sourceContent = content.html_content || content.content || '';
     if (!sourceContent) throw new Error('No content available');
 
-    [span_5](start_span)await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);[span_5](end_span)
+    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);
 
     const chatClient = await getOpenAIClientForUser(content.user_id);
     if (chatClient && sourceContent.includes('<')) { 
@@ -372,7 +376,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
        }
     }
 
-    [span_6](start_span)await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['synthesizing_audio', contentId]);[span_6](end_span)
+    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['synthesizing_audio', contentId]);
 
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
       contentId: contentId,
@@ -384,8 +388,10 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     try {
       await fs.writeFile(tempFilePath, audioBuffer);
       audioDuration = Math.floor(await getAudioDuration(tempFilePath));
-      await fs.unlink(tempFilePath).catch(() => {});
-    } catch (e) {}
+      await fs.unlink(tempFilePath).catch((err) => console.warn('Cleanup error:', err));
+    } catch (e) {
+      console.error('Duration check failed:', e);
+    }
 
     const backendUrl = process.env.BACKEND_URL || `http://localhost:3001`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
@@ -395,7 +401,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
     );
 
-    [span_7](start_span)await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);[span_7](end_span)
+    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
 
     transcribeWithTimestamps(audioUrl, content.user_id)
       .then(async (transcriptResult) => {
