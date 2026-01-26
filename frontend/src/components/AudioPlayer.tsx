@@ -27,6 +27,69 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
+  // ---------------------------------------------------------------------------
+  // DATA PREPARATION & PARSING
+  // ---------------------------------------------------------------------------
+
+  // Parse transcript_words safely (handles both Array and JSON string from DB)
+  const parsedTranscriptWords = useMemo(() => {
+    if (!content?.transcript_words) return [];
+    if (Array.isArray(content.transcript_words)) return content.transcript_words;
+    try {
+      return typeof content.transcript_words === 'string'
+        ? JSON.parse(content.transcript_words)
+        : [];
+    } catch (e) {
+      console.error('[AudioPlayer] Failed to parse transcript_words:', e);
+      return [];
+    }
+  }, [content?.transcript_words]);
+
+  // Parse tts_chunks safely
+  const parsedTTSChunks = useMemo(() => {
+    if (!content?.tts_chunks) return [];
+    if (Array.isArray(content.tts_chunks)) return content.tts_chunks;
+    try {
+      return typeof content.tts_chunks === 'string'
+        ? JSON.parse(content.tts_chunks)
+        : [];
+    } catch (e) {
+      console.error('[AudioPlayer] Failed to parse tts_chunks:', e);
+      return [];
+    }
+  }, [content?.tts_chunks]);
+
+  // Debug Logging for Hypothesis Verification
+  useEffect(() => {
+    if (content) {
+      console.groupCollapsed(`[AudioPlayer] Loaded Content: ${content.id}`);
+      console.log('Raw transcript_words type:', typeof content.transcript_words);
+      console.log('Parsed transcript_words length:', parsedTranscriptWords.length);
+      console.log('Raw tts_chunks type:', typeof content.tts_chunks);
+      console.log('Parsed tts_chunks length:', parsedTTSChunks.length);
+      
+      if (parsedTranscriptWords.length > 0) {
+        console.log('✅ Method 1 (Whisper) Available');
+        const lastWord = parsedTranscriptWords[parsedTranscriptWords.length - 1];
+        console.log('   Whisper Duration:', lastWord.end);
+      } else {
+        console.warn('❌ Method 1 (Whisper) Unavailable (parsed array is empty)');
+      }
+
+      if (parsedTTSChunks.length > 0) {
+        console.log('✅ Method 2 (TTS Chunks) Available');
+      } else {
+        console.warn('❌ Method 2 (TTS Chunks) Unavailable');
+      }
+      
+      console.groupEnd();
+    }
+  }, [content, parsedTranscriptWords, parsedTTSChunks]);
+
+  // ---------------------------------------------------------------------------
+  // AUDIO SETUP
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     if (!content) return;
 
@@ -204,33 +267,34 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // SYNC LOGIC
+  // ---------------------------------------------------------------------------
+
   // CALCULATE DRIFT CORRECTION RATIO
   // If the transcript end time !== audio duration, we stretch/shrink the transcript to fit.
   const normalizationRatio = useMemo(() => {
-    if (!content?.transcript_words || !duration || duration === 0) return 1;
+    if (parsedTranscriptWords.length === 0 || !duration || duration === 0) return 1;
     
     // Check Whisper Method
-    if (Array.isArray(content.transcript_words) && content.transcript_words.length > 0) {
-      const lastWord = content.transcript_words[content.transcript_words.length - 1];
-      if (lastWord.end > 0) {
-        // e.g. Audio is 300s, Transcript is 290s. Ratio = 1.034.
-        // We multiply transcript timestamps by 1.034 to sync them.
-        return duration / lastWord.end;
-      }
+    const lastWord = parsedTranscriptWords[parsedTranscriptWords.length - 1];
+    if (lastWord.end > 0) {
+      // e.g. Audio is 300s, Transcript is 290s. Ratio = 1.034.
+      // We multiply transcript timestamps by 1.034 to sync them.
+      return duration / lastWord.end;
     }
     return 1;
-  }, [content?.transcript_words, duration]);
+  }, [parsedTranscriptWords, duration]);
 
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
 
     // Method 1: Whisper timestamps with Rubber Band Normalization
-    const transcriptWords = content.transcript_words;
-    if (transcriptWords && Array.isArray(transcriptWords) && transcriptWords.length > 0) {
+    if (parsedTranscriptWords.length > 0) {
       let idx = -1;
-      for (let i = 0; i < transcriptWords.length; i++) {
+      for (let i = 0; i < parsedTranscriptWords.length; i++) {
         // Normalize the word's start time to match actual audio duration
-        const correctedStart = transcriptWords[i].start * normalizationRatio;
+        const correctedStart = parsedTranscriptWords[i].start * normalizationRatio;
         
         if (correctedStart <= currentTime) {
           idx = i;
@@ -242,13 +306,9 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
 
     // Method 2: TTS Chunk interpolation (Usually reliable, no normalization needed)
-    if (content.tts_chunks) {
+    if (parsedTTSChunks.length > 0) {
       try {
-        const chunks = typeof content.tts_chunks === 'string' 
-          ? JSON.parse(content.tts_chunks) 
-          : content.tts_chunks;
-
-        const currentChunk = chunks.find((c: any) => 
+        const currentChunk = parsedTTSChunks.find((c: any) => 
           currentTime >= c.startTime && currentTime < (c.startTime + c.duration)
         );
 
@@ -260,7 +320,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           return currentChunk.startWord + offset;
         }
       } catch (e) {
-        // Fall through
+        console.error('Method 2 Error:', e);
       }
     }
 
@@ -272,19 +332,18 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
 
     return -1;
-  }, [currentTime, content, duration, normalizationRatio]);
+  }, [currentTime, content, duration, normalizationRatio, parsedTranscriptWords, parsedTTSChunks]);
 
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
     // Method 1: Whisper timestamps with Normalization
-    const transcriptWords = content.transcript_words;
-    if (transcriptWords && Array.isArray(transcriptWords) && transcriptWords.length > 0 && wordIndex < transcriptWords.length) {
-      const originalTimestamp = transcriptWords[wordIndex].start;
+    if (parsedTranscriptWords.length > 0 && wordIndex < parsedTranscriptWords.length) {
+      const originalTimestamp = parsedTranscriptWords[wordIndex].start;
       // Apply the same ratio in reverse (stretch the timestamp to find the point in the actual audio)
       const targetTime = originalTimestamp * normalizationRatio;
       
-      console.log('Using normalized timestamp:', { 
+      console.log('Using normalized timestamp (Method 1):', { 
         wordIndex, 
         originalTimestamp, 
         normalizationRatio, 
@@ -296,13 +355,9 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
 
     // Method 2: TTS Chunk interpolation
-    if (content.tts_chunks) {
+    if (parsedTTSChunks.length > 0) {
       try {
-        const chunks = typeof content.tts_chunks === 'string' 
-          ? JSON.parse(content.tts_chunks) 
-          : content.tts_chunks;
-          
-        for (const chunk of chunks) {
+        for (const chunk of parsedTTSChunks) {
           if (wordIndex >= chunk.startWord && wordIndex <= chunk.endWord) {
             const wordPosInChunk = wordIndex - chunk.startWord;
             const wordsInChunk = chunk.endWord - chunk.startWord + 1;
@@ -313,7 +368,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           }
         }
       } catch (error) {
-        console.error('Failed to parse TTS chunks:', error);
+        console.error('Failed to parse TTS chunks (Method 2 click):', error);
       }
     }
 
