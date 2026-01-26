@@ -393,7 +393,8 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       console.error('Duration check failed:', e);
     }
 
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:3001`;
+    const port = process.env.PORT || '8080';
+    const backendUrl = process.env.BACKEND_URL || `http://localhost:${port}`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
     await query(
