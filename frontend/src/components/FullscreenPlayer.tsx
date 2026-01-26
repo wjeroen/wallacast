@@ -21,7 +21,7 @@ interface FullscreenPlayerProps {
   playbackSpeed: number;
   sleepTimer: number | null;
   onPlayPause: () => void;
-  onSeek: (time: number) => void; // We will use this for clicking text
+  onSeek: (time: number) => void;
   onSkipBackward: () => void;
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
@@ -29,7 +29,8 @@ interface FullscreenPlayerProps {
   onToggleSleepTimer: () => void;
   onMinimize: () => void;
   onClose: () => void;
-  onTranscriptWordClick: (wordIndex: number) => void; // Unused in this new version
+  // Removed onTranscriptWordClick from here to fix the build error
+  // We use onSeek directly now
   onRefetch?: () => void;
 }
 
@@ -143,14 +144,13 @@ export function FullscreenPlayer({
   playbackSpeed,
   sleepTimer,
   onPlayPause,
-  onSeek, // Using this instead of onTranscriptWordClick for robustness
+  onSeek, // Using this directly for clicks
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
   onToggleSleepTimer,
   onMinimize,
   onClose,
-  onTranscriptWordClick,
   onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
