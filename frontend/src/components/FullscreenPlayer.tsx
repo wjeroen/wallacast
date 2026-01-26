@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react';
+import { useState, useMemo, memo, useEffect, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -29,7 +29,6 @@ interface FullscreenPlayerProps {
   onToggleSleepTimer: () => void;
   onMinimize: () => void;
   onClose: () => void;
-  // Kept in interface so AudioPlayer.tsx doesn't break
   onTranscriptWordClick: (wordIndex: number) => void; 
   onRefetch?: () => void;
 }
@@ -42,13 +41,6 @@ interface TranscriptWord {
   word: string;
   start: number;
   end: number;
-}
-
-interface TranscriptSentence {
-  text: string;
-  start: number;
-  end: number;
-  words: TranscriptWord[];
 }
 
 function cleanHtml(text: string): string {
@@ -90,18 +82,17 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * OPTIMIZED COMPONENT: Sentence-based Read Along
- * Uses memo to prevent re-rendering on every millisecond tick.
- * Only re-renders when the active sentence index changes.
+ * MEMOIZED SUB-COMPONENT: Word-Based Read Along
+ * Only re-renders when the active word index changes.
  */
 const ReadAlongDisplay = memo(({ 
-  sentences, 
+  words, 
   activeIndex, 
-  onSentenceClick 
+  onWordClick 
 }: { 
-  sentences: TranscriptSentence[]; 
+  words: TranscriptWord[]; 
   activeIndex: number; 
-  onSentenceClick: (start: number) => void;
+  onWordClick: (start: number) => void;
 }) => {
   return (
     <div className="tab-read-along-display">
@@ -109,25 +100,21 @@ const ReadAlongDisplay = memo(({
         <h3>Read-along</h3>
       </div>
       <div className="read-along-text" style={{ lineHeight: '1.8', fontSize: '1.1rem' }}>
-        {sentences.map((sentence, index) => {
+        {words.map((item, index) => {
           const isActive = index === activeIndex;
           return (
             <span
               key={index}
-              onClick={() => onSentenceClick(sentence.start)}
+              onClick={() => onWordClick(item.start)}
               style={{
                 backgroundColor: isActive ? 'rgba(251, 191, 36, 0.4)' : 'transparent', // Golden highlight
                 borderRadius: '4px',
-                padding: '2px 4px',
-                margin: '0 2px',
+                padding: '2px 1px',
                 cursor: 'pointer',
-                transition: 'background-color 0.2s ease',
-                display: 'inline',
-                boxDecorationBreak: 'clone',
-                WebkitBoxDecorationBreak: 'clone'
+                transition: 'background-color 0.1s ease',
               }}
             >
-              {sentence.text}{' '}
+              {item.word}{' '}
             </span>
           );
         })}
@@ -151,8 +138,7 @@ export function FullscreenPlayer({
   onToggleSleepTimer,
   onMinimize,
   onClose,
-  // Removed onTranscriptWordClick from arguments to fix unused var error
-  // It is still in the Interface above, so AudioPlayer won't crash
+  onTranscriptWordClick, // Used implicitly via onSeek now, but kept for interface compatibility
   onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
@@ -167,54 +153,28 @@ export function FullscreenPlayer({
     } catch (error) { return []; }
   }, [content?.comments]);
 
-  // Transform words into sentences
-  const transcriptSentences = useMemo(() => {
+  // Parse words safely
+  const transcriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
     try {
-      const words: TranscriptWord[] = JSON.parse(content.transcript_words);
-      const sentences: TranscriptSentence[] = [];
-      let currentSentence: TranscriptWord[] = [];
-
-      words.forEach((word) => {
-        currentSentence.push(word);
-        // Break on punctuation or newlines
-        if (/[.!?]$/.test(word.word.trim()) || word.word.includes('\n')) {
-          if (currentSentence.length > 0) {
-            sentences.push({
-              text: currentSentence.map(w => w.word).join(' '),
-              start: currentSentence[0].start,
-              end: currentSentence[currentSentence.length - 1].end,
-              words: [...currentSentence]
-            });
-            currentSentence = [];
-          }
-        }
-      });
-
-      // Flush remaining words
-      if (currentSentence.length > 0) {
-        sentences.push({
-          text: currentSentence.map(w => w.word).join(' '),
-          start: currentSentence[0].start,
-          end: currentSentence[currentSentence.length - 1].end,
-          words: currentSentence
-        });
-      }
-      return sentences;
+      return JSON.parse(content.transcript_words) as TranscriptWord[];
     } catch (e) { return []; }
   }, [content?.transcript_words]);
 
-  // Efficiently find the active sentence
-  const activeSentenceIndex = useMemo(() => {
-    if (!transcriptSentences.length) return -1;
-    // Iterate backwards to find the latest started sentence
-    for (let i = transcriptSentences.length - 1; i >= 0; i--) {
-      if (currentTime >= transcriptSentences[i].start) {
+  // --- STICKY HIGHLIGHT LOGIC ---
+  // Find the LAST word that started before or at the current time.
+  // This ensures there are no gaps in highlighting between words.
+  const activeWordIndex = useMemo(() => {
+    if (!transcriptWords.length) return -1;
+    
+    // Binary search would be faster, but linear reverse scan is fine for <5000 words
+    for (let i = transcriptWords.length - 1; i >= 0; i--) {
+      if (currentTime >= transcriptWords[i].start) {
         return i;
       }
     }
     return -1;
-  }, [currentTime, transcriptSentences]);
+  }, [currentTime, transcriptWords]);
 
   // --- TABS LOGIC ---
 
@@ -243,12 +203,10 @@ export function FullscreenPlayer({
     if (comment.extendedScore) {
       const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
       if (isLessWrong) {
-        // LessWrong: prioritize 'agreement'
         if (typeof comment.extendedScore.agreement === 'number') {
           metadataParts.push(`${comment.extendedScore.agreement} agreement`);
         }
       } else {
-        // EA Forum: show all
         Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
           const label = reactionType.toLowerCase();
           metadataParts.push(`${count} ${label}`);
@@ -321,12 +279,12 @@ export function FullscreenPlayer({
         );
 
       case 'read-along':
-        if (transcriptSentences.length > 0) {
+        if (transcriptWords.length > 0) {
           return (
             <ReadAlongDisplay 
-              sentences={transcriptSentences} 
-              activeIndex={activeSentenceIndex} 
-              onSentenceClick={onSeek} 
+              words={transcriptWords} 
+              activeIndex={activeWordIndex} 
+              onWordClick={onSeek} // Clicking a word calls onSeek(word.start)
             />
           );
         }
