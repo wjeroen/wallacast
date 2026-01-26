@@ -20,7 +20,7 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
-  activeWordIndex?: number; // Added prop
+  activeWordIndex?: number;
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onSkipBackward: () => void;
@@ -91,7 +91,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
-  activeWordIndex = -1, // Default to -1 if not provided
+  activeWordIndex = -1,
   onPlayPause,
   onSeek,
   onSkipBackward,
@@ -288,16 +288,24 @@ export function FullscreenPlayer({
             </div>
             {displayText ? (
               <p className="read-along-text">
-                {displayText.split(/\s+/).map((word, index) => (
-                  <span
-                    key={index}
-                    className={`transcript-word ${index === activeWordIndex ? 'active' : ''}`}
-                    style={index === activeWordIndex ? { backgroundColor: '#fef08a', color: '#000', padding: '0 2px', borderRadius: '2px' } : {}}
-                    onClick={() => onTranscriptWordClick(index)}
-                  >
-                    {word}{' '}
-                  </span>
-                ))}
+                {displayText.split(/\s+/).map((word, index) => {
+                  // KARAOKE LOGIC: 
+                  // Highlight all words that have been read (index <= activeWordIndex)
+                  const isRead = index <= activeWordIndex;
+                  return (
+                    <span
+                      key={index}
+                      className={`transcript-word ${isRead ? 'read' : ''}`}
+                      style={{ 
+                        color: isRead ? '#60a5fa' : undefined, // Light blue for read words
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => onTranscriptWordClick(index)}
+                    >
+                      {word}{' '}
+                    </span>
+                  );
+                })}
               </p>
             ) : (
               <p className="no-content">No transcript available</p>
