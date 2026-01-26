@@ -6,7 +6,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  extendedScore?: Record<string, number>; // Dynamic reactions
+  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
   content: string;
   replies?: Comment[];
 }
@@ -142,12 +142,11 @@ function extractVariablesFromFunctionString(jsCode: string): any[] {
 
 // Recursively index all objects in the data blob by their ID/Cache Key
 function buildReferenceMap(obj: any, map: Map<string, any>) {
+  // CRITICAL FIX: typeof null is 'object', so explicitly check for null
   if (!obj || typeof obj !== 'object') return;
 
   // Apollo often uses keys like "Comment:123" or "_id"
   if (obj._id) {
-    // If it has an ID, store it
-    // We try to guess the cache key format. Usually "Typename:ID" or just "ID"
     map.set(obj._id, obj);
     if (obj.__typename) {
       map.set(`${obj.__typename}:${obj._id}`, obj);
@@ -157,8 +156,8 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   // Also scan for keys that look like cache IDs in the root object
   if (!Array.isArray(obj)) {
       for (const key in obj) {
-          // If the key looks like "Comment:abcdef", store that object
-          if (key.includes(':') && typeof obj[key] === 'object') {
+          // CRITICAL FIX: Check obj[key] is not null before adding
+          if (key.includes(':') && typeof obj[key] === 'object' && obj[key] !== null) {
               map.set(key, obj[key]);
           }
       }
@@ -187,11 +186,12 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
     buildReferenceMap(root, referenceMap);
   }
   
-  // 1b. Also collect all raw comments using the map or recursion
-  // We re-scan specifically for items that look like comments
+  // 1b. Collect raw comments
   referenceMap.forEach((val, key) => {
+      // CRITICAL FIX: Add null check for 'val' to prevent crashes
+      if (!val) return;
+
       if (val.__typename === 'Comment' || key.startsWith('Comment:')) {
-          // Use the clean ID if possible, else the key
           const id = val._id || key.split(':')[1] || key;
           rawCommentData.set(id, val);
       }
@@ -201,35 +201,31 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
 
   // 2. Convert raw data to Comment objects (Resolving references)
   for (const [id, raw] of rawCommentData.entries()) {
-    // Resolve full object if 'raw' is just a reference
     const commentData = resolveRef(raw, referenceMap);
     
-    // Resolve User
+    // Resolve User (References often hide here)
     let user = resolveRef(commentData.user, referenceMap);
     const username = user?.displayName || user?.slug || commentData.author || 'Anonymous';
 
-    // Resolve Content
+    // Resolve Content (Often in contents.html or body)
     let contentObj = resolveRef(commentData.contents, referenceMap);
     let content = '';
     if (contentObj) {
       content = contentObj.html || contentObj.plaintextMainText || '';
     } 
-    // Fallbacks for flat structures
     if (!content) content = commentData.htmlBody || commentData.body || '';
 
     // Extract Scores
-    let extendedScore = commentData.extendedScore || {};
+    const extendedScore = commentData.extendedScore || {};
     
-    // FIX FOR LESSWRONG: Normalize 'agreement' keys
+    // FIX FOR LESSWRONG: Non-destructive normalization
     if (isLessWrong) {
-        // Look for various agreement keys and normalize to 'agreement' for the frontend
-        const agreementVal = extendedScore.agreementScore || extendedScore.agreement || extendedScore.agree;
-        
-        // Reset extendedScore to strictly what the frontend wants for LW
-        extendedScore = {}; 
-        
-        if (typeof agreementVal === 'number') {
-            extendedScore.agreement = agreementVal;
+        // If 'agreement' is missing, try to find it in other common keys
+        if (extendedScore.agreement === undefined) {
+            const val = extendedScore.agreementScore || extendedScore.agree;
+            if (typeof val === 'number') {
+                extendedScore.agreement = val;
+            }
         }
     }
 
@@ -255,15 +251,14 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
       const parent = commentMap.get(commentData.parentCommentId);
       if (parent) {
         if (!parent.replies) parent.replies = [];
-        // Prevent duplicates
         if (!parent.replies.some(r => r.id === comment.id)) {
           parent.replies.push(comment);
         }
       } else {
-        comments.push(comment); // Orphan (or parent missing/deleted), treat as top-level
+        comments.push(comment);
       }
     } else {
-      comments.push(comment); // Top-level
+      comments.push(comment);
     }
   }
 
