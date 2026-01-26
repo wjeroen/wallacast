@@ -1,4 +1,4 @@
-import { useState, useMemo, memo, useEffect, useRef } from 'react';
+import { useState, useMemo, memo } from 'react';
 import {
   Play,
   Pause,
@@ -29,7 +29,7 @@ interface FullscreenPlayerProps {
   onToggleSleepTimer: () => void;
   onMinimize: () => void;
   onClose: () => void;
-  onTranscriptWordClick: (wordIndex: number) => void; 
+  onTranscriptWordClick: (wordIndex: number) => void;
   onRefetch?: () => void;
 }
 
@@ -82,8 +82,8 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * MEMOIZED SUB-COMPONENT: Word-Based Read Along
- * Only re-renders when the active word index changes.
+ * WORD-BASED READ ALONG (Old System + Performance Fix)
+ * Memoized to prevent re-rendering the whole text 60 times a second.
  */
 const ReadAlongDisplay = memo(({ 
   words, 
@@ -92,7 +92,7 @@ const ReadAlongDisplay = memo(({
 }: { 
   words: TranscriptWord[]; 
   activeIndex: number; 
-  onWordClick: (start: number) => void;
+  onWordClick: (index: number) => void;
 }) => {
   return (
     <div className="tab-read-along-display">
@@ -105,7 +105,7 @@ const ReadAlongDisplay = memo(({
           return (
             <span
               key={index}
-              onClick={() => onWordClick(item.start)}
+              onClick={() => onWordClick(index)}
               style={{
                 backgroundColor: isActive ? 'rgba(251, 191, 36, 0.4)' : 'transparent', // Golden highlight
                 borderRadius: '4px',
@@ -131,14 +131,14 @@ export function FullscreenPlayer({
   playbackSpeed,
   sleepTimer,
   onPlayPause,
-  onSeek, 
+  onSeek,
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
   onToggleSleepTimer,
   onMinimize,
   onClose,
-  onTranscriptWordClick, // Used implicitly via onSeek now, but kept for interface compatibility
+  onTranscriptWordClick, // Used correctly now
   onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
@@ -162,12 +162,12 @@ export function FullscreenPlayer({
   }, [content?.transcript_words]);
 
   // --- STICKY HIGHLIGHT LOGIC ---
-  // Find the LAST word that started before or at the current time.
-  // This ensures there are no gaps in highlighting between words.
+  // Calculates which word is active based on time.
+  // "Sticky" means it highlights the LAST word that started, keeping it lit until the next one starts.
   const activeWordIndex = useMemo(() => {
     if (!transcriptWords.length) return -1;
     
-    // Binary search would be faster, but linear reverse scan is fine for <5000 words
+    // Reverse scan to find the current word efficiently
     for (let i = transcriptWords.length - 1; i >= 0; i--) {
       if (currentTime >= transcriptWords[i].start) {
         return i;
@@ -284,7 +284,7 @@ export function FullscreenPlayer({
             <ReadAlongDisplay 
               words={transcriptWords} 
               activeIndex={activeWordIndex} 
-              onWordClick={onSeek} // Clicking a word calls onSeek(word.start)
+              onWordClick={onTranscriptWordClick} // Using the prop you passed in!
             />
           );
         }
