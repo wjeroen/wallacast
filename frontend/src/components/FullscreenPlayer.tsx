@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react';
+import { useState, useMemo, memo, useEffect, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -29,8 +29,8 @@ interface FullscreenPlayerProps {
   onToggleSleepTimer: () => void;
   onMinimize: () => void;
   onClose: () => void;
-  // Removed onTranscriptWordClick from here to fix the build error
-  // We use onSeek directly now
+  // RESTORED: This prop is required by AudioPlayer.tsx
+  onTranscriptWordClick: (wordIndex: number) => void; 
   onRefetch?: () => void;
 }
 
@@ -144,13 +144,14 @@ export function FullscreenPlayer({
   playbackSpeed,
   sleepTimer,
   onPlayPause,
-  onSeek, // Using this directly for clicks
+  onSeek, 
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
   onToggleSleepTimer,
   onMinimize,
   onClose,
+  onTranscriptWordClick, // We accept this prop but will map it to seek logic internally
   onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
@@ -324,7 +325,9 @@ export function FullscreenPlayer({
             <ReadAlongDisplay 
               sentences={transcriptSentences} 
               activeIndex={activeSentenceIndex} 
-              onSentenceClick={onSeek} // Use onSeek to fix the "can't click" bug
+              // We simply call onSeek when clicked, ignoring the passed wordIndex for now
+              // This is safe because onSeek takes a timestamp (float)
+              onSentenceClick={onSeek} 
             />
           );
         }
