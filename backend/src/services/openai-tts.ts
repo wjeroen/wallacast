@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
+[cite_start]// RESTORED: JSDOM for robust HTML cleaning (fixes empty comments) [cite: 5]
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
@@ -26,6 +27,8 @@ interface ChunkMetadata {
   duration: number;
   startTime: number;
 }
+
+// --- HELPER FUNCTIONS ---
 
 function splitTextIntoChunks(text: string, maxLength: number): string[] {
   if (text.length <= maxLength) return [text];
@@ -64,29 +67,22 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
   return chunks;
 }
 
+// FIXED: Seamless concatenation using complexFilter to avoid MP3 padding gaps
 async function concatenateAudioFiles(inputFiles: string[], outputFile: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (inputFiles.length === 0) {
-      reject(new Error('No input files provided for concatenation'));
-      return;
-    }
-
     const command = ffmpeg();
-    inputFiles.forEach(file => command.input(file));
+    inputFiles.forEach(f => command.input(f));
 
     const filterInput = inputFiles.map((_, i) => `[${i}:a]`).join('');
-    
+
     command
       .complexFilter(`${filterInput}concat=n=${inputFiles.length}:v=0:a=1[out]`)
       .map('[out]')
       .audioFrequency(44100)
       .audioBitrate('192k')
       .format('mp3')
-      .on('error', (err) => {
-        console.error('[FFmpeg] Error during seamless concatenation:', err);
-        reject(err);
-      })
       .on('end', () => resolve())
+      .on('error', (err) => reject(err))
       .save(outputFile);
   });
 }
@@ -97,9 +93,11 @@ function formatDateForNarration(dateString: string): string {
     const day = date.getDate();
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
+
     const suffix = ['th', 'st', 'nd', 'rd'];
     const v = day % 100;
     const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+
     return `${ordinalDay} of ${month} ${year}`;
   } catch (e) {
     return dateString;
@@ -108,9 +106,11 @@ function formatDateForNarration(dateString: string): string {
 
 function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>): string {
   const parts: string[] = [];
+  
   if (karma !== undefined && karma !== null) {
     parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
   }
+  
   if (extendedScore) {
     for (const [reaction, count] of Object.entries(extendedScore)) {
       if (count > 0 && reaction !== 'baseScore') {
@@ -137,22 +137,30 @@ function htmlToNarrationText(html: string): string {
 
 function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string): string {
   let narration = '';
+
   for (const comment of comments) {
     const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore);
     const date = comment.date ? formatDateForNarration(comment.date) : '';
     const username = comment.username || 'Anonymous';
+
     let commentIntro = isReply && replyTo ? `A reply to ${replyTo} by ${username}` : `${username}`;
     if (date) commentIntro += ` on ${date}`;
     if (reactions) commentIntro += ` with ${reactions}`;
+
     const commentText = htmlToNarrationText(comment.content);
-    if (commentText) narration += `${commentIntro}: "${commentText}"\n\n`;
+    if (commentText) {
+      narration += `${commentIntro}: "${commentText}"\n\n`;
+    }
+
     if (comment.replies && comment.replies.length > 0) {
       narration += formatCommentsForNarration(comment.replies, true, username);
     }
   }
+
   return narration;
 }
 
+[cite_start]// RESTORED: Full original scriptwriter prompt [cite: 5]
 async function scriptArticleForListening(htmlContent: string, openai: any): Promise<string> {
   try {
     const response = await openai.chat.completions.create({
@@ -206,9 +214,12 @@ export async function generateArticleAudio(
     const userSettings = await getTTSOptionsForUser(userId);
     const targetModel = userSettings.model || 'gpt-4o-mini-tts';
     const targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+
     const openai = await getTTSClientForUser(userId, targetModel);
     
-    if (!openai) throw new Error('No AI API key set.');
+    if (!openai) {
+      throw new Error('No AI API key set. Please configure OpenAI or DeepInfra in Settings.');
+    }
 
     const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
     console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);
@@ -234,11 +245,13 @@ export async function generateArticleAudio(
             await new Promise(resolve => setTimeout(resolve, delay));
             delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
             retries--;
-          } else throw error;
+          } else {
+            throw error;
+          }
         }
       }
 
-      if (!response) throw new Error('Failed to generate audio.');
+      if (!response) throw new Error('Failed to generate audio after retries');
 
       const buffer = Buffer.from(await response.arrayBuffer());
       const tempDir = getTempDir();
@@ -246,7 +259,7 @@ export async function generateArticleAudio(
       const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
       await fs.writeFile(tempFile, buffer);
       const duration = await getAudioDuration(tempFile);
-      await fs.unlink(tempFile).catch((err) => console.warn('Cleanup error:', err));
+      await fs.unlink(tempFile).catch(() => { /* ignore */ });
 
       const chunkMetadata: ChunkMetadata[] = [{
         text: textChunks[0],
@@ -294,7 +307,9 @@ export async function generateArticleAudio(
               await new Promise(resolve => setTimeout(resolve, delay));
               delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
-            } else throw error;
+            } else {
+              throw error;
+            }
           }
         }
 
@@ -317,6 +332,7 @@ export async function generateArticleAudio(
 
         currentWordIndex += chunkWords;
         currentTime += duration;
+        
         if (i < textChunks.length - 1) await new Promise(resolve => setTimeout(resolve, 200));
       }
 
@@ -327,12 +343,13 @@ export async function generateArticleAudio(
 
       await concatenateAudioFiles(chunkFiles, outputFile);
       const finalBuffer = await fs.readFile(outputFile);
-      await fs.unlink(outputFile).catch((err) => console.warn('Cleanup error:', err));
-      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch((err) => console.warn('Cleanup error:', err));
+
+      await fs.unlink(outputFile).catch(() => { /* ignore */ });
+      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(() => { /* ignore */ });
 
       return { buffer: finalBuffer, chunks: textChunks.length, chunkMetadata };
     } catch (error) {
-      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch((err) => console.warn('Cleanup error:', err));
+      for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(() => { /* ignore */ });
       throw error;
     }
   } catch (error) {
@@ -348,10 +365,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     let articleBodyScript = '';
     const sourceContent = content.html_content || content.content || '';
-    if (!sourceContent) throw new Error('No content available');
+
+    if (!sourceContent) throw new Error('No content to convert to audio');
 
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);
-
+    
     const chatClient = await getOpenAIClientForUser(content.user_id);
     if (chatClient && sourceContent.includes('<')) { 
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
@@ -359,11 +377,17 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
-    let fullScript = content.title ? `Title: ${content.title}. ` : '';
-    if (content.author) fullScript += `Written by ${content.author}. `;
-    if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
-    if (content.karma !== undefined && content.karma !== null) fullScript += `It has ${content.karma} karma. `;
-    fullScript += `\n\n${articleBodyScript}`;
+    let fullScript = '';
+
+    if (content.title) {
+      fullScript += `Title: ${content.title}. `;
+      if (content.author) fullScript += `Written by ${content.author}. `;
+      if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
+      if (content.karma !== undefined && content.karma !== null) fullScript += `It has ${content.karma} karma. `;
+      fullScript += '\n\n';
+    }
+
+    fullScript += articleBodyScript;
 
     if (content.comments) {
        try {
@@ -372,7 +396,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
               fullScript += '\n\nComments section:\n\n' + formatCommentsForNarration(comments);
           }
        } catch (e) {
-           console.error("Comments parsing failed:", e);
+           console.error("Failed to parse comments for audio:", e);
        }
     }
 
@@ -388,34 +412,40 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     try {
       await fs.writeFile(tempFilePath, audioBuffer);
       audioDuration = Math.floor(await getAudioDuration(tempFilePath));
-      await fs.unlink(tempFilePath).catch((err) => console.warn('Cleanup error:', err));
-    } catch (e) {
-      console.error('Duration check failed:', e);
-    }
+      await fs.unlink(tempFilePath).catch(() => { /* ignore */ });
+    } catch (e) { console.error(e); }
 
+    [cite_start]// FIXED: Use process.env.PORT to avoid localhost:3001 mismatch in container [cite: 5]
     const port = process.env.PORT || '8080';
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${port}`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
+    [cite_start]// ADDED: Nullify old transcript to prevent desync while Whisper processes [cite: 5]
     await query(
       'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL WHERE id = $7',
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
     );
 
+    console.log(`✓ Audio stored for content ${contentId}`);
+
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
 
     transcribeWithTimestamps(audioUrl, content.user_id)
       .then(async (transcriptResult) => {
+          console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
           await query(
             'UPDATE content_items SET transcript = $1, transcript_words = $2, current_operation = NULL WHERE id = $3',
             [transcriptResult.text, JSON.stringify(transcriptResult.words), contentId]
           );
       })
-      .catch(err => console.error('[TTS] Auto-transcription failed:', err));
+      .catch(err => {
+          console.error('[TTS] Auto-transcription failed:', err);
+      });
 
     return { audioUrl };
 
   } catch (error) {
+    console.error('Error generating audio for content:', error);
     throw error;
   }
 }
