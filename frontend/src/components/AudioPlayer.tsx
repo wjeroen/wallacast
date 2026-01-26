@@ -22,32 +22,28 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(isPlaying);
 
-  // Keep ref in sync with state
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
   // ---------------------------------------------------------------------------
-  // DATA PARSING (Robust Fix)
+  // 1. ROBUST DATA PARSING (Fixes the "Fallback to Linear" issue)
   // ---------------------------------------------------------------------------
   const parsedTranscriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
     
     let result = content.transcript_words;
 
-    // 1. If it's already an array (PG auto-parsed it), return it
+    // Handle already parsed array
     if (Array.isArray(result)) return result;
 
-    // 2. If it's a string, try to parse it
+    // Handle stringified JSON (and potential double-stringification)
     if (typeof result === 'string') {
       try {
         const parsed = JSON.parse(result);
-        
-        // 3. CRITICAL: Check if the RESULT is still a string (Double-JSON case)
         if (typeof parsed === 'string') {
-          return JSON.parse(parsed); // Parse again to get the Array
+          return JSON.parse(parsed); // Parse again
         }
-        
         return Array.isArray(parsed) ? parsed : [];
       } catch (e) {
         console.error('JSON Parse failed:', e);
@@ -80,7 +76,12 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      audio.src = content.audio_url || '';
+      // Cache busting to ensure we aren't playing an old file
+      const cacheBuster = content.updated_at 
+        ? new Date(content.updated_at).getTime() 
+        : Date.now();
+      const separator = content.audio_url?.includes('?') ? '&' : '?';
+      audio.src = content.audio_url ? `${content.audio_url}${separator}t=${cacheBuster}` : '';
       
       const validSpeeds = [1, 1.25, 1.5, 2];
       const loadedSpeed = content.playback_speed || 1;
@@ -94,13 +95,10 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           audio.currentTime = startPosition;
           setCurrentTime(startPosition);
         }
-
-        // If duration is missing from database, save it now
+        // We still save duration for the UI progress bar, but we won't use it for sync
         if ((!content.duration || content.duration === 0) && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
           const durationInSeconds = Math.floor(audio.duration);
-          contentAPI.update(content.id, { duration: durationInSeconds } as any).catch((error) => {
-            console.error('Failed to save duration:', error);
-          });
+          contentAPI.update(content.id, { duration: durationInSeconds } as any).catch(() => {});
         }
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
@@ -131,7 +129,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     };
   }, []);
 
-  // Auto-save position every 10 seconds
+  // Auto-save position
   useEffect(() => {
     if (!content) return;
     const interval = setInterval(() => {
@@ -142,7 +140,6 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     return () => clearInterval(interval);
   }, [content]);
 
-  // Save position on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current && content) {
@@ -158,9 +155,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
         playback_position: Math.floor(position),
         last_played_at: new Date().toISOString(),
       });
-    } catch (error) {
-      console.error('Failed to save playback position:', error);
-    }
+    } catch (error) { /* silent */ }
   };
 
   const togglePlay = () => {
@@ -232,41 +227,35 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   };
 
   // ---------------------------------------------------------------------------
-  // SYNC CALCULATION
+  // SYNC LOGIC (The Fix: NO Normalization)
   // ---------------------------------------------------------------------------
-
-  const normalizationRatio = useMemo(() => {
-    if (parsedTranscriptWords.length === 0 || !duration || duration === 0) return 1;
-    const lastWord = parsedTranscriptWords[parsedTranscriptWords.length - 1];
-    
-    // Ensure lastWord.end is a valid number
-    if (lastWord && typeof lastWord.end === 'number' && lastWord.end > 0) {
-      return duration / lastWord.end;
-    }
-    return 1;
-  }, [parsedTranscriptWords, duration]);
 
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
 
-    // Method 1: Whisper Timestamps (Primary)
+    // Method 1: Whisper Timestamps (TRUSTED)
+    // We ignore the browser's duration estimate completely for sync.
     if (parsedTranscriptWords.length > 0) {
       let idx = -1;
+      
+      // Optimization: Start search from the last known index if available (omitted for simplicity)
+      // Binary search could be better, but linear is fine for <10k words
       for (let i = 0; i < parsedTranscriptWords.length; i++) {
-        // Apply ratio correction
         const wordStart = Number(parsedTranscriptWords[i].start);
-        const correctedStart = wordStart * normalizationRatio;
         
-        if (correctedStart <= currentTime) {
+        // Strict comparison against RAW timestamps
+        if (wordStart <= currentTime) {
           idx = i;
         } else {
+          // As soon as we find a word in the future, we stop.
+          // The current 'idx' is the last word that passed the check.
           break;
         }
       }
       return idx;
     }
 
-    // Method 2: TTS Chunks
+    // Method 2: TTS Chunks (Fallback)
     if (parsedTTSChunks.length > 0) {
       try {
         const currentChunk = parsedTTSChunks.find((c: any) => 
@@ -282,7 +271,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       } catch (e) { /* ignore */ }
     }
 
-    // Method 3: Linear Fallback
+    // Method 3: Linear Fallback (Last Resort)
     const transcript = content.transcript || content.content || '';
     const words = transcript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/);
     if (words.length > 0 && duration > 0) {
@@ -290,16 +279,16 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
 
     return -1;
-  }, [currentTime, content, duration, normalizationRatio, parsedTranscriptWords, parsedTTSChunks]);
+  }, [currentTime, content, duration, parsedTranscriptWords, parsedTTSChunks]);
 
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
     // Method 1 Click
     if (parsedTranscriptWords.length > 0 && wordIndex < parsedTranscriptWords.length) {
-      const originalTimestamp = Number(parsedTranscriptWords[wordIndex].start);
-      const targetTime = originalTimestamp * normalizationRatio;
-      handleSeek(targetTime);
+      const timestamp = Number(parsedTranscriptWords[wordIndex].start);
+      console.log(`[Sync Debug] Clicking Word ${wordIndex}: Timestamp ${timestamp}s`);
+      handleSeek(timestamp);
       return;
     }
 
