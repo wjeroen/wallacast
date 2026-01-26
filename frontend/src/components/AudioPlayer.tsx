@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ContentItem } from '../types';
 import { contentAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
@@ -39,6 +39,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const validSpeeds = [1, 1.25, 1.5, 2];
       const loadedSpeed = content.playback_speed || 1;
       const normalizedSpeed = validSpeeds.includes(loadedSpeed) ? loadedSpeed : 1;
+      
       audio.playbackRate = normalizedSpeed;
       setPlaybackSpeed(normalizedSpeed);
 
@@ -110,7 +111,6 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
 
   const savePlaybackPosition = async (position: number) => {
     if (!content) return;
-
     try {
       await contentAPI.update(content.id, {
         playback_position: Math.floor(position),
@@ -152,7 +152,6 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     if (!audioRef.current) return;
     audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
-
     if (content) {
       contentAPI.update(content.id, { playback_speed: speed });
     }
@@ -174,6 +173,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
 
     // Cycle through: null → 5 → 10 → 15 → 30 → 45 → 60 → null
     const timerOptions = [5, 10, 15, 30, 45, 60];
+    
     if (sleepTimer === null) {
       // Start with 5 minutes
       setSleepTimer(5);
@@ -204,6 +204,62 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     }
   };
 
+  // Calculate active word index based on current time
+  const activeWordIndex = useMemo(() => {
+    if (!content) return -1;
+
+    // Method 1: Whisper timestamps
+    const transcriptWords = content.transcript_words;
+    if (transcriptWords && Array.isArray(transcriptWords) && transcriptWords.length > 0) {
+      // Find the last word that has started (start <= currentTime)
+      // This keeps the word highlighted during gaps until the next one starts
+      let idx = -1;
+      for (let i = 0; i < transcriptWords.length; i++) {
+        if (transcriptWords[i].start <= currentTime) {
+          idx = i;
+        } else {
+          // Since words are sorted, once we pass currentTime we can stop
+          break;
+        }
+      }
+      return idx;
+    }
+
+    // Method 2: TTS Chunk interpolation
+    if (content.tts_chunks) {
+      try {
+        const chunks = typeof content.tts_chunks === 'string' 
+          ? JSON.parse(content.tts_chunks) 
+          : content.tts_chunks;
+
+        // Find current chunk
+        const currentChunk = chunks.find((c: any) => 
+          currentTime >= c.startTime && currentTime < (c.startTime + c.duration)
+        );
+
+        if (currentChunk) {
+          const timeIntoChunk = currentTime - currentChunk.startTime;
+          const progress = timeIntoChunk / currentChunk.duration;
+          const totalWordsInChunk = currentChunk.endWord - currentChunk.startWord + 1;
+          const offset = Math.floor(progress * totalWordsInChunk);
+          return currentChunk.startWord + offset;
+        }
+      } catch (e) {
+        // Fall through to fallback
+      }
+    }
+
+    // Method 3: Linear Fallback
+    const transcript = content.transcript || content.content || '';
+    // This regex must match the split logic in FullscreenPlayer exactly
+    const words = transcript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/);
+    if (words.length > 0 && duration > 0) {
+      return Math.floor((currentTime / duration) * words.length);
+    }
+
+    return -1;
+  }, [currentTime, content, duration]);
+
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
 
@@ -219,7 +275,10 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     // Method 2: Use TTS chunk metadata for articles (accurate per-chunk)
     if (content.tts_chunks) {
       try {
-        const chunks = JSON.parse(content.tts_chunks as any);
+        const chunks = typeof content.tts_chunks === 'string' 
+          ? JSON.parse(content.tts_chunks) 
+          : content.tts_chunks;
+          
         // Find which chunk contains this word
         for (const chunk of chunks) {
           if (wordIndex >= chunk.startWord && wordIndex <= chunk.endWord) {
@@ -268,6 +327,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           duration={duration}
           playbackSpeed={playbackSpeed}
           sleepTimer={sleepTimer}
+          activeWordIndex={activeWordIndex} // Pass the calculated index
           onPlayPause={togglePlay}
           onSeek={handleSeek}
           onSkipBackward={handleSkipBackward}
