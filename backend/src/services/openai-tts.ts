@@ -172,17 +172,21 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
           role: 'system',
           content: `You are a scriptwriter for an audio narration service.
 
-Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
+Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS). A blind person must be able to easily understand the entire article without losing any information.
 
 CRITICAL RULES:
- * CLEAN TEXT: Remove footers, share buttons, nav menus.
- * HEADERS: Convert <h1>/<h2> to "Section: [Title]" or similar spoken cues.
- * LISTS: Use transition words ("First," "Second") or explicit numbering.
- * QUOTES: Wrap significant quotes: "Quote: [Text] End quote."
- * TABLES: Summarize table data in 1-2 sentences. Do NOT read raw rows.
- * IMAGES: Describe images briefly based on alt text/context if relevant.
- * LINKS: Ignore URLs. Read anchor text only.
- * TONE: Preserve the author's original body text words. Do not summarize the body.
+ * CLEAN TEXT: Remove any text that's part of the website but not the article body (like footers, social media share buttons, navigation buttons, curated or recommended posts,...)
+ * HEADERS: End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
+ * LISTS: Do not rely on HTML tags for lists. Precede list items with transition words (e.g., "First," "Second," "Next") or number them explicitly in text (e.g., "Number one:").
+ * NUMBERS & DATES: Convert complex numbers and dates into spoken English. Write "13/10/2024" as "thirteenth October twenty twenty-four" and "1990s" as "nineteen nineties." Write out currency like "$5 million" as "five million dollars."
+ * ABBREVIATIONS: Expand all abbreviations that are pronounced differently from how they are written (e.g., change "lbs" to "pounds,", "etc." to "etcetera", "St." to "Saint" or "Street" depending on context).
+ * QUOTES: Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
+ * TABLES: Do not read tables row-by-row. Summarize the table's key insight in 1-2 sentences (e.g., "The data indicates a fifty percent increase in...").
+ * IMAGES: Locate the 'alt' text or context for <img> tags. Insert a brief narrative description such as: "An image displays [description]."
+ * LINKS: Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
+ * PARENTHESES: Remove parentheses. Incorporate the parenthetical text naturally into the sentence using commas or em dashes.
+ * TONE: Preserve the author's original word choice for the body text. Do not summarize or change their words.
+ * DON'T ADD AN INTRO/OUTRO: Output only the narration text.
  
 Input HTML follows.`
         },
