@@ -7,7 +7,7 @@ export const PROCESSING_CONFIG = {
   tts: {
     // Maximum characters per chunk for OpenAI TTS API
     // OpenAI limit is 4096, using 3500 to leave buffer for encoding
-    chunkSize: 3500,
+    chunkSize: 10000,
 
     // Default voice for text-to-speech
     voice: 'alloy' as const,
