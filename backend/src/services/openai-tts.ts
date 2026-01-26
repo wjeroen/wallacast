@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
+// RESTORED: JSDOM for robust HTML cleaning (fixes empty comments)
+import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
@@ -75,6 +77,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
         ffmpeg()
           .input(concatListPath)
           .inputOptions(['-f concat', '-safe 0'])
+          // Keep Kokoro fix: Force 44.1kHz MP3 to avoid quality issues
           .audioFrequency(44100)
           .audioBitrate('192k')
           .format('mp3')
@@ -111,12 +114,18 @@ function formatDateForNarration(dateString: string): string {
 
 function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>): string {
   const parts: string[] = [];
+  
+  // RESTORED: Logic from openai-tts-1.ts (shows all votes properly)
   if (karma !== undefined && karma !== null) {
     parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
   }
+  
+  // Loop through ALL extended scores (agree, disagree, etc.)
+  // This fixes the missing "Agreement" and "Disagree" counts
   if (extendedScore) {
     for (const [reaction, count] of Object.entries(extendedScore)) {
       if (count > 0 && reaction !== 'baseScore') {
+        // Clean up key names if needed, but usually they are readable
         parts.push(`${count} ${reaction}`);
       }
     }
@@ -124,9 +133,27 @@ function formatReactionsForNarration(karma?: number, extendedScore?: Record<stri
   return parts.join(', ');
 }
 
+// RESTORED: JSDOM-based cleaning from openai-tts-1.ts
+// This fixes the "Empty Comments" issue caused by the weak Regex
 function htmlToNarrationText(html: string): string {
-  let text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  return text;
+  try {
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+
+    // Remove scripts, styles, and other non-content elements
+    const unwanted = doc.querySelectorAll('script, style, noscript, iframe');
+    unwanted.forEach(el => el.remove());
+
+    // Get text content (handles entities like &quot; correctly)
+    let text = doc.body.textContent || '';
+    
+    // Clean up whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    return text;
+  } catch (e) {
+    console.error('JSDOM parsing failed, falling back to regex:', e);
+    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
 }
 
 function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string): string {
@@ -137,10 +164,13 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
     const date = comment.date ? formatDateForNarration(comment.date) : '';
 
     let commentIntro = '';
+    // Fix: Handle potential missing username (though Fetcher usually handles this)
+    const username = comment.username || 'Anonymous';
+
     if (isReply && replyTo) {
-      commentIntro = `Reply to ${replyTo} by ${comment.username}`;
+      commentIntro = `A reply to ${replyTo} by ${username}`;
     } else {
-      commentIntro = `${comment.username}`;
+      commentIntro = `${username}`;
     }
 
     if (date) {
@@ -148,15 +178,19 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
     }
 
     if (reactions) {
-      commentIntro += `. ${reactions}`;
+      commentIntro += ` with ${reactions}`;
     }
 
+    // Convert HTML content to plain text using JSDOM
     const commentText = htmlToNarrationText(comment.content);
 
-    narration += `${commentIntro}.\n"${commentText}"\n\n`;
+    // Only add if there is actual text to read
+    if (commentText) {
+      narration += `${commentIntro}: "${commentText}"\n\n`;
+    }
 
     if (comment.replies && comment.replies.length > 0) {
-      narration += formatCommentsForNarration(comment.replies, true, comment.username);
+      narration += formatCommentsForNarration(comment.replies, true, username);
     }
   }
 
@@ -229,6 +263,7 @@ export async function generateArticleAudio(
 
     const allWords = articleText.split(/\s+/);
 
+    // --- CASE A: Single Chunk ---
     if (textChunks.length === 1) {
       console.log(`Single chunk (${textChunks[0].length} chars)`);
       let retries = PROCESSING_CONFIG.retry.maxAttempts;
@@ -278,6 +313,7 @@ export async function generateArticleAudio(
       return { buffer, chunks: 1, chunkMetadata };
     }
 
+    // --- CASE B: Multiple Chunks ---
     const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
     const chunkFiles: string[] = [];
@@ -387,7 +423,8 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     if (chatClient && sourceContent.includes('<')) { 
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
     } else {
-        articleBodyScript = sourceContent.includes('<') ? htmlToNarrationText(sourceContent) : sourceContent;
+        // Fallback: use JSDOM cleaner
+        articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
     let fullScript = '';
@@ -452,7 +489,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     console.log('[TTS] Triggering auto-transcription for Read Along...');
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
 
-    // Don't pass initialPrompt here - avoids duplication/skipping issues with Whisper
     transcribeWithTimestamps(audioUrl, content.user_id)
       .then(async (transcriptResult) => {
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
