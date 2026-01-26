@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
-[cite_start]// RESTORED: JSDOM for robust HTML cleaning (fixes empty comments) [cite: 5]
+ // RESTORED: JSDOM for robust HTML cleaning (fixes empty comments) [cite: 5]
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
@@ -160,7 +160,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
-[cite_start]// RESTORED: Full original scriptwriter prompt [cite: 5]
+ // RESTORED: Full original scriptwriter prompt [cite: 5]
 async function scriptArticleForListening(htmlContent: string, openai: any): Promise<string> {
   try {
     const response = await openai.chat.completions.create({
@@ -415,12 +415,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       await fs.unlink(tempFilePath).catch(() => { /* ignore */ });
     } catch (e) { console.error(e); }
 
-    [cite_start]// FIXED: Use process.env.PORT to avoid localhost:3001 mismatch in container [cite: 5]
+     // FIXED: Use process.env.PORT to avoid localhost:3001 mismatch in container [cite: 5]
     const port = process.env.PORT || '8080';
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${port}`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    [cite_start]// ADDED: Nullify old transcript to prevent desync while Whisper processes [cite: 5]
+     // ADDED: Nullify old transcript to prevent desync while Whisper processes [cite: 5]
     await query(
       'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL WHERE id = $7',
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
