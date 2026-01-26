@@ -66,7 +66,6 @@ function getDomainFromUrl(url: string): string {
 function isEAForumOrLessWrong(url: string): boolean {
   if (!url) return false;
   const domain = getDomainFromUrl(url);
-  
   return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
 }
 
@@ -117,6 +116,17 @@ export function FullscreenPlayer({
     }
   }, [content?.comments]);
 
+  // NEW: Parse transcript words for read-along highlighting
+  const transcriptWords = useMemo(() => {
+    if (!content?.transcript_words) return [];
+    try {
+      return JSON.parse(content.transcript_words);
+    } catch (error) {
+      console.error('Failed to parse transcript words:', error);
+      return [];
+    }
+  }, [content?.transcript_words]);
+
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
@@ -162,12 +172,12 @@ export function FullscreenPlayer({
       const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
 
       if (isLessWrong) {
-        // LessWrong: Only show 'agreement' score (simplify - ignore other reactions)
+        // LessWrong: Only show 'agreement' score
         if (typeof comment.extendedScore.agreement === 'number') {
           metadataParts.push(`${comment.extendedScore.agreement} agreement`);
         }
       } else {
-        // EA Forum (and others): Show ALL reactions
+        // EA Forum: Show ALL reactions
         Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
           const label = reactionType.toLowerCase();
           metadataParts.push(`${count} ${label}`);
@@ -200,7 +210,6 @@ export function FullscreenPlayer({
           </div>
         )}
 
-        {/* Render HTML content (blockquotes, links, etc.) */}
         <div
           className="comment-content"
           dangerouslySetInnerHTML={{ __html: comment.content }}
@@ -226,7 +235,6 @@ export function FullscreenPlayer({
               <div className="content-header">
                 <h2>{content.title}</h2>
                 {content.author && <p className="content-author">By {content.author}</p>}
-                {/* Only show domain URL for articles (not podcasts/texts) */}
                 {content.url && content.type === 'article' && (
                   <p className="content-source">
                     <a href={content.url} target="_blank" rel="noopener noreferrer">
@@ -248,6 +256,7 @@ export function FullscreenPlayer({
             />
           </div>
         );
+
       case 'comments':
         return (
           <div className="tab-comments-display">
@@ -270,14 +279,49 @@ export function FullscreenPlayer({
             )}
           </div>
         );
+
       case 'read-along':
+        // Case 1: We have precise word timestamps from Whisper
+        if (transcriptWords.length > 0) {
+          return (
+            <div className="tab-read-along-display">
+              <div className="read-along-header">
+                <h3>Read-along</h3>
+              </div>
+              <p className="read-along-text">
+                {transcriptWords.map((item: any, index: number) => {
+                  // Check if this word is active (current time is between start and end)
+                  const isActive = currentTime >= item.start && currentTime <= item.end;
+                  
+                  return (
+                    <span
+                      key={index}
+                      className={`transcript-word ${isActive ? 'current-word' : ''}`}
+                      onClick={() => onTranscriptWordClick(item.start)} // Click to seek
+                      style={{
+                        backgroundColor: isActive ? 'rgba(37, 99, 235, 0.2)' : 'transparent',
+                        borderRadius: '2px',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.1s'
+                      }}
+                    >
+                      {item.word}{' '}
+                    </span>
+                  );
+                })}
+              </p>
+            </div>
+          );
+        }
+
+        // Case 2: Fallback to plain text if no timestamps
         const transcript = content.transcript || content.content || '';
         const displayText = cleanHtml(transcript);
 
         return (
           <div className="tab-read-along-display">
             <div className="read-along-header">
-              <h3>Read-along</h3>
+              <h3>Read-along (Text Only)</h3>
               {content.type === 'article' && (
                 <button className="refetch-button" title="Regenerate audio">
                   <RefreshCw size={16} />
@@ -290,7 +334,7 @@ export function FullscreenPlayer({
                   <span
                     key={index}
                     className="transcript-word"
-                    onClick={() => onTranscriptWordClick(index)}
+                    onClick={() => onTranscriptWordClick(index)} // Approximate seeking
                   >
                     {word}{' '}
                   </span>
@@ -301,6 +345,7 @@ export function FullscreenPlayer({
             )}
           </div>
         );
+
       case 'queue':
         return (
           <div className="tab-queue-display">
@@ -311,6 +356,7 @@ export function FullscreenPlayer({
             </p>
           </div>
         );
+
       default:
         return null;
     }
