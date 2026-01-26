@@ -457,7 +457,7 @@ router.patch('/:id', async (req, res) => {
               );
             })
             .catch(async (error) => {
-              console.error('Auto audio regeneration error on un-archive:', error);
+              console.error('Auto audio generation error on un-archive:', error);
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
                 ['failed', error.message || 'Failed to regenerate audio', 0, id]
@@ -621,8 +621,9 @@ router.post('/:id/generate-audio', async (req, res) => {
     const { id } = req.params;
     const { regenerate } = req.body;
 
+    // OPTIMIZED: Select only necessary columns, excluding audio_data
     const contentResult = await query(
-      'SELECT * FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, generation_status, generation_progress, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -644,7 +645,8 @@ router.post('/:id/generate-audio', async (req, res) => {
       });
     }
 
-    if (regenerate && contentItem.audio_data) {
+    // CHANGED: Check audio_url instead of audio_data to avoid fetching BLOB
+    if (regenerate && contentItem.audio_url) {
       console.log(`Regenerating: Will replace existing audio data`);
     }
 
