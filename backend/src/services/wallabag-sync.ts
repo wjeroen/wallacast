@@ -137,10 +137,22 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
 
     for (const entry of entries) {
       try {
-        // Skip nosync entries
+        // Skip nosync entries AND delete them if they exist locally
         if (shouldSkip(entry)) {
-          console.log('[Wallabag Sync] Skipping entry', entry.id, '(has nosync tag)');
-          continue;
+          console.log('[Wallabag Sync] Entry', entry.id, 'has nosync tag');
+          
+          // Cleanup: Check if this item exists in Wallacast and delete it
+          const existing = await query(
+            'SELECT id FROM content_items WHERE wallabag_id = $1 AND user_id = $2',
+            [entry.id, userId]
+          );
+          
+          if (existing.rows.length > 0) {
+             console.log('[Wallabag Sync] Removing local item', existing.rows[0].id, 'because it now has nosync tag');
+             await query('DELETE FROM content_items WHERE id = $1', [existing.rows[0].id]);
+          }
+          
+          continue; // Skip processing this entry
         }
 
         // Determine content type
@@ -300,9 +312,6 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
               ]
             );
           }
-
-          // TODO: Optionally trigger TTS generation for new articles/texts
-          // TODO: Optionally trigger transcription for new podcasts (if audio URL accessible)
         }
 
         count++;
