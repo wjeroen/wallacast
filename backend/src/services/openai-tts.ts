@@ -415,9 +415,9 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       await fs.unlink(tempFilePath).catch(() => { /* ignore */ });
     } catch (e) { console.error(e); }
 
-     // FIXED: Use process.env.PORT to avoid localhost:3001 mismatch in container [cite: 5]
-    const port = process.env.PORT || '8080';
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${port}`;
+    const backendUrl = process.env.BACKEND_URL
+      || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
+      || `http://localhost:3001`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
      // ADDED: Nullify old transcript to prevent desync while Whisper processes [cite: 5]
