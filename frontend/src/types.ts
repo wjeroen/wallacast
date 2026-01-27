@@ -2,8 +2,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  agree_votes?: number;
-  disagree_votes?: number;
+  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
   content: string;
   replies?: Comment[];
 }

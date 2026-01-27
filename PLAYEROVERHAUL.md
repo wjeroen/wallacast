@@ -49,22 +49,35 @@ This document provides detailed instructions for implementing the Wallacast audi
 
 ---
 
-## Content Extraction: Wallabag-First Approach
+## Content Extraction: FREE Content, PAID Audio
 
 ### Current Problem
 
-The app uses GPT-5-mini to extract article content from HTML. This:
-- Costs money per article
-- Adds latency (API call)
-- Is unnecessary when Wallabag sync is enabled (Wallabag already provides clean content)
+The app uses LLM to extract article content from HTML automatically. This:
+- Costs money per article (~$0.005)
+- Runs even when user doesn't listen to the article
+- Wastes money on articles that are never played
 
-### Solution: Immediate HTML + Background Wallabag
+### Solution: Separate FREE Content from PAID Audio Generation
 
-Use a hybrid approach that prioritizes speed and quality:
+**Key principle**: Content fetching is ALWAYS FREE. Audio generation COSTS MONEY and is optional.
 
+**FREE Content Flow:**
 1. **Immediate display**: Use built-in HTML fetcher for instant content display
 2. **Background upgrade**: If Wallabag sync enabled, fetch through Wallabag API (superior parsing)
-3. **LLM fallback**: For non-Wallabag users or when Wallabag fetch fails
+3. **No LLM for extraction**: Content is displayed as-is from HTML/Wallabag
+
+**PAID Audio Flow (optional, triggered manually or by setting):**
+1. **Take FREE content**: Use the HTML/Wallabag content already fetched
+2. **LLM prep for narration**: Send to LLM with prompt "prepare this for TTS narration" (~$0.001-0.005)
+3. **TTS generation**: Convert prepped text to audio (~$0.06 for 4min)
+4. **Whisper timestamps**: Transcribe audio for read-along feature (~$0.024 for 4min)
+
+**Why this is better:**
+- User adds 10 articles, only listens to 3 → Save 70% on LLM costs
+- Content is always free and immediate
+- Audio quality is optimized for narration (LLM prep makes it sound natural)
+- User controls when to spend money (manual or auto-generate setting)
 
 **Why Wallabag is superior**: Wallabag uses php-readability plus ftr-site-config (manually curated rules for tricky domains). This handles edge cases better than any generic parser.
 
@@ -136,43 +149,57 @@ async function upgradeWithWallabag(
 }
 ```
 
-#### 3. LLM Fallback (For Non-Wallabag Users)
+#### 3. LLM Prep for Audio Generation (PAID, Optional)
 
-For users without Wallabag or when Wallabag fetch fails:
+**IMPORTANT**: LLM is NOT used for content extraction. It's ONLY used when generating audio.
+
+When user clicks "Generate audio" (manually or via auto-generate setting):
 
 ```typescript
-async function extractWithLLM(
-  html: string, 
-  url: string,
+async function prepareTextForTTS(
+  htmlContent: string,
+  comments: Comment[] | null,
   userId: number
-): Promise<ExtractedContent> {
+): Promise<string> {
   const userSettings = await getUserSettings(userId);
-  const model = userSettings.content_extraction_model || 'gpt-4o-mini';
-  
+  const model = userSettings.tts_prep_model || 'gpt-4o-mini';
+
+  // Combine content and comments
+  let fullText = htmlContent;
+  if (comments && comments.length > 0) {
+    fullText += '\n\n[Comments section]\n' + formatCommentsForTTS(comments);
+  }
+
   const response = await openai.chat.completions.create({
     model: model,
     messages: [{
       role: 'system',
-      content: `Extract the main article content from this HTML. Include:
-        - Title and headings (preserve hierarchy)
-        - Main text content
-        - Images with descriptions
-        - Comment sections if present (except for EA Forum/LessWrong)
-        
-        Format as clean HTML with proper semantic tags.`
+      content: `Prepare this article for natural text-to-speech narration:
+        - Remove navigation, ads, UI elements, and formatting artifacts
+        - Keep main content structure and flow
+        - Add natural transitions between sections
+        - Clean up awkward phrasing that would sound bad when read aloud
+        - Include image alt text where relevant (say "Image: [description]")
+        - Make it flow naturally as a spoken article
+
+        Return plain text optimized for audio narration.`
     }, {
       role: 'user',
-      content: html
+      content: fullText
     }],
     max_tokens: 16000
   });
-  
-  return {
-    content: response.choices[0].message.content,
-    model: model
-  };
+
+  return response.choices[0].message.content || '';
 }
 ```
+
+**Key points:**
+- This is called ONLY when generating audio (not when fetching content)
+- Uses latest available content (HTML or Wallabag, whichever is better)
+- Includes EA Forum/LessWrong comments in the audio
+- Output goes to TTS, then Whisper creates transcript for Read-along tab
+- User never sees the LLM-prepped text directly (they see Whisper transcript instead)
 
 #### 4. Model Selection in Settings
 
@@ -278,25 +305,42 @@ The Whisper implementation is **fully functional** but only auto-runs for podcas
 
 The fix is straightforward: call `transcribeWithTimestamps()` after article TTS completes, same as podcasts do.
 
-### Current Flow
+### Old Flow (Wasteful)
 
 ```
-Article HTML → GPT-5-mini extracts text → gpt-4o-mini-tts generates audio
-                                              ↓
-                                    Audio file saved, generation "complete"
-                                              ↓
-                                    transcript_words = NULL (no timestamps)
+Article added → Automatic LLM extraction ($$$) → TTS → No timestamps
+(Cost: ~$0.005 per article, even if never played)
 ```
 
-### New Flow
+### New Flow (Cost-Optimized)
 
+**Content fetching (FREE):**
 ```
-Article HTML → Readability extracts text → gpt-4o-mini-tts generates audio
+Article URL → HTML fetch (immediate, free) → Wallabag upgrade (background, free if enabled)
                                               ↓
-                                    Whisper transcribes the generated audio
-                                              ↓
-                                    Word timestamps stored in transcript_words
+                                    Display in Content tab (free)
 ```
+
+**Audio generation (PAID, optional):**
+```
+User clicks "Generate audio" (or auto-generate if enabled in settings)
+                                              ↓
+Take HTML/Wallabag content + EA/LW comments (already fetched, free)
+                                              ↓
+LLM: "Prepare for TTS narration" (~$0.001-0.005)
+                                              ↓
+gpt-4o-mini-tts generates audio (~$0.06 for 4min)
+                                              ↓
+Whisper transcribes audio with word timestamps (~$0.024 for 4min)
+                                              ↓
+Transcript displayed in Read-along tab (clickable words for seeking)
+```
+
+**Total cost per article:**
+- If never played: $0 (FREE)
+- If audio generated: ~$0.085-0.09 (only when needed)
+
+**Savings:** Add 10 articles, listen to 3 → Save $0.035 (70% reduction in LLM costs)
 
 ### Implementation Changes
 
@@ -504,19 +548,26 @@ function CommentsTab({ comments, onRefetch }: { comments: Comment[]; onRefetch: 
 
 ### Read-along Tab
 
-**Purpose**: Follow along with audio using clickable words.
+**Purpose**: Follow along with audio using clickable words for timestamp seeking.
+
+**What it displays**: Whisper transcript with word-level timestamps (NOT the LLM-prepped text).
+
+**Flow:**
+1. User generates audio → LLM preps text → TTS creates audio → Whisper transcribes audio
+2. Whisper transcript is what you see in Read-along tab (with clickable words)
+3. This is the actual narrated content, timestamped to the audio
 
 **Current state**:
-- **Podcasts**: This already works. The current player view shows clickable timestamped words from Whisper transcription. We're just moving it to a dedicated tab.
-- **Articles**: Doesn't work yet because Whisper isn't auto-run after TTS. Once Phase 2 is done, articles get this too.
+- **Podcasts**: Whisper already runs, but word-click seeking doesn't work yet (needs debugging)
+- **Articles**: Whisper needs to auto-run after TTS generation
 
 **Implementation**:
-- Display the transcript text (plain, no formatting)
+- Display the Whisper transcript text (plain, no formatting)
 - Each word is clickable
 - Clicking a word seeks audio to that position
 - "Jump to current position" button (floats in corner)
 - No auto-scroll (too buggy), manual jump only
-- "Regenerate audio" button (articles only) to re-generate TTS + timestamps
+- "Regenerate audio" button to re-generate TTS + Whisper timestamps using latest content
 
 **Word click handler** (already exists in codebase):
 
