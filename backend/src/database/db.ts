@@ -189,12 +189,15 @@ export async function initializeDatabase() {
     // After crashes or heavy writes, statistics can become stale, causing the
     // planner to choose slow sequential scans instead of fast index lookups.
     // ANALYZE is fast (reads a sample, not the whole table) and safe to run.
-    await client.query('ANALYZE content_items');
-    await client.query('ANALYZE users');
-    await client.query('ANALYZE user_sessions');
-    await client.query('ANALYZE user_settings');
-    await client.query('ANALYZE podcasts');
-    await client.query('ANALYZE podcast_subscriptions');
+    // Wrapped in try/catch: missing tables should NOT crash initialization.
+    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'podcast_subscriptions'];
+    for (const table of tablesToAnalyze) {
+      try {
+        await client.query(`ANALYZE ${table}`);
+      } catch (e) {
+        // Table might not exist yet — that's fine, skip it
+      }
+    }
 
     // Mark database as ready for queries
     databaseReady = true;
