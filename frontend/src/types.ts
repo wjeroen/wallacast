@@ -24,6 +24,7 @@ export interface ContentItem {
   duration?: number;
   file_size?: number;
   podcast_id?: number;
+  podcast_show_name?: string; // Display name of the podcast show for episodes
   episode_number?: number;
   published_at?: string;
   karma?: number; // EA Forum karma/upvotes

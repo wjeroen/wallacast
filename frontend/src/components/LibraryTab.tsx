@@ -383,6 +383,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 )}
                 <div className="metadata">
                   <span className="type">{item.type}</span>
+                  {item.type === 'podcast_episode' && item.podcast_show_name && (
+                    <span className="podcast-show">{item.podcast_show_name}</span>
+                  )}
                   {item.audio_url && <span className="badge">Audio</span>}
                   {item.transcript && <span className="badge">Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
