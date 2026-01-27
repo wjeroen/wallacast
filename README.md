@@ -117,6 +117,7 @@ Wallacast supports multiple users with complete data isolation:
   - `007_fix_podcast_multi_user.sql`: Fixes podcast subscriptions with composite unique constraint (feed_url, user_id)
   - `008_optimize_playback_updates.sql`: Adds composite index (id, user_id) to speed up playback position updates
   - `009_expand_podcast_language_column.sql`: Expands language column to VARCHAR(100) for longer language codes
+  - `010_fix_content_source_default.sql`: Fixes column default to 'wallacast' (wallabag-sync sets 'wallabag' explicitly)
 
 #### Middleware
 
@@ -221,6 +222,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/wallabag-sync.ts`**: Bidirectional sync logic between Wallacast and Wallabag
   - `syncFromWallabag()`: Pull articles from Wallabag, create/update in Wallacast
   - `syncToWallabag()`: Push Wallacast articles to Wallabag, handles creates and updates
+  - Auto-refetches EA Forum and LessWrong articles from the web after import (wallabag can't handle SPAs)
   - `fullSync()`: Orchestrates bidirectional sync (pull then push)
   - Conflict resolution: Wallacast always wins (uses `wallabag_updated_at` to detect changes)
   - Tracks sync state with `wallabag_id` and `wallabag_updated_at` fields on `content_items`

@@ -129,6 +129,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] Auto-refetch EA Forum/LessWrong articles from web after wallabag import (wallabag can't handle SPAs — misses comments, author, date) (2026-01-27)
+- [x] **FIX**: content_source showed 'wallabag' for all posts — POST route missing 'wallacast', column default was wrong. Migration 010 fixes existing data. (2026-01-27)
 - [x] **FIX**: EA Forum/LessWrong author+date missing - meta tags (og:author, article:published_time) don't work on SPAs. Now extracted from Apollo state Post objects with meta tag fallback for regular articles. (2026-01-27)
 - [x] **FIX**: Content provenance display - shows "Fetched by wallabag/wallacast" in content tab. Added content_source to GET API and refetch marks items as wallacast. (2026-01-27)
 - [x] **FIX**: Read-along tab shows proper status messages when no audio, audio generating, transcribing, or no transcript instead of broken clickable words. (2026-01-27)
