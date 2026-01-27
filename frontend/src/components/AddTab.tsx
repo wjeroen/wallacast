@@ -41,6 +41,13 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         data.url = url;
       } else if (contentType === 'text') {
         data.content = text;
+      } else if (contentType === 'podcast_episode') {
+        if (!url) {
+          setMessage('Audio URL is required for podcast episodes');
+          setLoading(false);
+          return;
+        }
+        data.audio_url = url;
       }
 
       const response = await contentAPI.create(data);

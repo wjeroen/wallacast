@@ -323,6 +323,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `tts_chunks`: TTS chunk metadata for seeking (JSON)
 - `duration`, `file_size`
 - `podcast_id`: FK to podcasts table
+- `podcast_show_name`: Denormalized podcast title (for direct display without querying podcasts table)
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
 - `comments`: Structured comments JSON (for EA Forum)
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
@@ -457,7 +458,9 @@ Key issues:
 
 ## Recent Improvements
 
-**January 2026:**
+**January 2026 (Latest):**
+- **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
+- **Add Tab Podcast Support**: Fixed podcast episode submission via Add Tab - now properly accepts direct audio URLs with episode titles
 - **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
 - **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
 - **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
