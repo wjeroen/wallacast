@@ -70,7 +70,7 @@ Wallacast supports multiple users with complete data isolation:
 | Audio player UI issues | `frontend/src/components/AudioPlayer.tsx` - UI rendering and controls |
 | Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
 | Generation stuck or failing | `backend/src/routes/content.ts` - Check status updates in PATCH endpoint and `backend/src/services/openai-tts.ts` - Check error handling |
-| Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 100-150 |
+| Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 133-147. Note: saves are debounced (3s minimum change) and effects depend on `content?.id` not `content` |
 | Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
 | Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
 | Wallabag sync not working | `backend/src/services/wallabag-service.ts` - OAuth and API client, `backend/src/services/wallabag-sync.ts` - Sync logic, `backend/src/routes/wallabag.ts` - Endpoints |
@@ -117,6 +117,7 @@ Wallacast supports multiple users with complete data isolation:
   - `007_fix_podcast_multi_user.sql`: Fixes podcast subscriptions with composite unique constraint (feed_url, user_id)
   - `008_optimize_playback_updates.sql`: Adds composite index (id, user_id) to speed up playback position updates
   - `009_expand_podcast_language_column.sql`: Expands language column to VARCHAR(100) for longer language codes
+  - `010_fix_content_source_default.sql`: Fixes column default to 'wallacast' (wallabag-sync sets 'wallabag' explicitly)
 
 #### Middleware
 
@@ -151,7 +152,7 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_content: true` re-extracts article content through GPT-4o-mini
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
-  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens.
+  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `DELETE /:id` - Delete content and clean up audio files
 
 - **`routes/podcasts.ts`**: Podcast subscription management (requires JWT auth, all queries filter by `user_id`)
@@ -203,7 +204,7 @@ Wallacast supports multiple users with complete data isolation:
   - `transcribeAudio()`: Basic transcription
   - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
-  - Handles large files by splitting into chunks, compresses audio before transcription if needed
+  - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
 
 - **`services/podcast-service.ts`**: RSS feed parsing
   - `parsePodcastFeed()`: Extracts podcast metadata from RSS
@@ -221,6 +222,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/wallabag-sync.ts`**: Bidirectional sync logic between Wallacast and Wallabag
   - `syncFromWallabag()`: Pull articles from Wallabag, create/update in Wallacast
   - `syncToWallabag()`: Push Wallacast articles to Wallabag, handles creates and updates
+  - Auto-refetches EA Forum and LessWrong articles from the web after import (wallabag can't handle SPAs)
   - `fullSync()`: Orchestrates bidirectional sync (pull then push)
   - Conflict resolution: Wallacast always wins (uses `wallabag_updated_at` to detect changes)
   - Tracks sync state with `wallabag_id` and `wallabag_updated_at` fields on `content_items`
@@ -455,6 +457,8 @@ The app implements several performance optimizations:
 - Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 
+**Critical fix (Jan 2026):** PATCH endpoint used `RETURNING *` which included the `audio_data` BYTEA column (10-50MB) in every response. Playback position saves every 10s were transferring the full audio blob, causing ~7GB/hour of data usage. Fixed by returning only needed columns. Playback-only updates now return just `id, playback_position, playback_speed, last_played_at`.
+
 **Result:** Query times reduced from 1-3 seconds to <100ms, instant UI feedback for all actions
 
 ## Known Issues / TODO
@@ -472,6 +476,8 @@ Key issues:
 - **Global Playback Speed**: Fixed speed toggle bug and moved to global browser localStorage preference instead of per-item database storage. Speed preference now persists across all content and browser sessions.
 - **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
 - **Add Tab Podcast Support**: Fixed podcast episode submission via Add Tab - now properly accepts direct audio URLs with episode titles
+- **CRITICAL: Fixed massive data leak in PATCH endpoint**: `RETURNING *` was including the full `audio_data` BYTEA blob (10-50MB) in every playback position save response. With saves every 10 seconds, this caused ~7GB/hour of network transfer. Fixed by returning only needed columns (playback-only updates return just 4 fields instead of the entire row with audio). Also fixed duplicate saves from React effect dependencies and cache-busting causing unnecessary audio re-downloads.
+- **Fixed Read-along transcript drift**: Highlighting gradually ran ahead of audio (~13s drift over 21 minutes). Root cause: display words were split from `content.transcript` by whitespace, producing a different word count than Whisper's `words` array (used for `activeWordIndex`). Fixed by using Whisper words directly for display, ensuring 1:1 index correspondence. Also fixed hardcoded `timeOffset += 900` in multi-chunk transcription to use actual chunk duration from ffprobe.
 - **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
 - **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
 - **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)

@@ -1,5 +1,6 @@
 import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
+import { fetchArticleContent } from './article-fetcher.js';
 
 /**
  * Wallabag Sync Service
@@ -287,12 +288,13 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             );
           } else {
             // Articles and texts
-            await query(
+            const insertResult = await query(
               `INSERT INTO content_items
                 (type, title, url, content, html_content, is_starred, is_archived, tags,
                  preview_picture, wallabag_id, wallabag_updated_at, content_source, user_id,
                  author, published_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              RETURNING id`,
               [
                 type,
                 entry.title,
@@ -311,6 +313,58 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.published_at,
               ]
             );
+
+            // Auto-refetch EA Forum and LessWrong articles from the web.
+            // Wallabag can't handle SPAs well — it misses comments, author, date,
+            // and proper formatting. Wallacast's article-fetcher does much better.
+            const entryUrl = entry.url || '';
+            const isEAForum = entryUrl.includes('forum.effectivealtruism.org');
+            const isLessWrong = entryUrl.includes('lesswrong.com');
+            if ((isEAForum || isLessWrong) && insertResult.rows[0]?.id) {
+              const newId = insertResult.rows[0].id;
+              const siteName = isEAForum ? 'EA Forum' : 'LessWrong';
+              console.log(`[Wallabag Sync] Auto-refetching ${siteName} article ${newId} from web...`);
+
+              // Fire-and-forget: don't block the sync loop
+              (async () => {
+                try {
+                  const articleData = await fetchArticleContent(entryUrl);
+                  const commentsJson = articleData.comments && articleData.comments.length > 0
+                    ? JSON.stringify(articleData.comments)
+                    : null;
+
+                  await query(
+                    `UPDATE content_items SET
+                      html_content = $1,
+                      content = $2,
+                      author = COALESCE($3, author),
+                      published_at = COALESCE($4, published_at),
+                      karma = $5,
+                      agree_votes = $6,
+                      disagree_votes = $7,
+                      comments = $8,
+                      content_source = 'wallacast',
+                      updated_at = NOW()
+                    WHERE id = $9`,
+                    [
+                      articleData.cleaned_html,
+                      articleData.content,
+                      articleData.author || articleData.byline,
+                      articleData.published_date,
+                      articleData.karma,
+                      articleData.agree_votes,
+                      articleData.disagree_votes,
+                      commentsJson,
+                      newId
+                    ]
+                  );
+                  console.log(`[Wallabag Sync] ✅ Auto-refetch complete for ${siteName} article ${newId}`);
+                } catch (refetchError) {
+                  console.error(`[Wallabag Sync] Auto-refetch failed for ${siteName} article ${newId}:`, refetchError);
+                  // Not critical — wallabag content is still available as fallback
+                }
+              })();
+            }
           }
         }
 
