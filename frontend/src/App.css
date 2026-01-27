@@ -80,7 +80,9 @@
   .sync-button {
     padding: 0.5rem;
   }
+}
 
+@media (max-width: 740px) {
   .filter-label {
     display: none;
   }

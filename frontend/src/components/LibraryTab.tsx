@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast } from 'lucide-react';
+import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -402,7 +402,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}
                 <div className="metadata">
-                  <span className="type">{item.type}</span>
+                  <span className="type" title={item.type}>
+                    {item.type === 'article' && <Newspaper size={16} />}
+                    {item.type === 'text' && <NotebookPen size={16} />}
+                    {item.type === 'podcast_episode' && <Podcast size={16} />}
+                    {item.type === 'pdf' && <FileText size={16} />}
+                  </span>
                   {item.audio_url && <span className="badge">Audio</span>}
                   {item.transcript && <span className="badge">Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
