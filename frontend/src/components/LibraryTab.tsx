@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -430,9 +430,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   </button>
                   <button
                     onClick={() => handleToggleArchive(item.id)}
-                    title="Toggle archive"
+                    title={item.is_archived ? "Restore from archive" : "Archive"}
+                    className={item.is_archived ? 'active' : ''}
                   >
-                    <Archive size={16} />
+                    {item.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
                   </button>
                   <button
                     onClick={() => handleDelete(item.id)}
