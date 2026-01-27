@@ -373,9 +373,21 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               )}
               <div className="content-info">
                 <h3>{item.title}</h3>
-                {item.author && <p className="author">{item.author}</p>}
+                {item.author && (
+                  <p className="author">
+                    {item.author}
+                    {item.published_at && (
+                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                    )}
+                  </p>
+                )}
                 {item.type === 'podcast_episode' && item.podcast_show_name && (
-                  <p className="podcast-show">{item.podcast_show_name}</p>
+                  <p className="author">
+                    {item.podcast_show_name}
+                    {item.published_at && (
+                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                    )}
+                  </p>
                 )}
                 {/* Only show domain URL for articles (not podcasts/texts) */}
                 {item.url && item.type === 'article' && (
