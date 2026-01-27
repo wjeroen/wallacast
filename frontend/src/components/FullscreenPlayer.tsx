@@ -275,6 +275,11 @@ export function FullscreenPlayer({
                     </a>
                   </p>
                 )}
+                {content.content_source && (
+                  <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                    Fetched by {content.content_source}
+                  </p>
+                )}
               </div>
               {content.url && onRefetch && (
                 <button className="refetch-button" title="Refetch content" onClick={onRefetch}>
