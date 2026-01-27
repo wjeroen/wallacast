@@ -80,6 +80,14 @@
   .sync-button {
     padding: 0.5rem;
   }
+
+  .filter-label {
+    display: none;
+  }
+
+  .filter-buttons button {
+    padding: 0.5rem;
+  }
 }
 
 .settings-btn {
