@@ -348,6 +348,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           playbackSpeed={playbackSpeed}
           sleepTimer={sleepTimer}
           activeWordIndex={activeWordIndex}
+          transcriptWords={parsedTranscriptWords}
           onPlayPause={togglePlay}
           onSeek={handleSeek}
           onSkipBackward={handleSkipBackward}
