@@ -129,6 +129,9 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **FIX**: EA Forum/LessWrong author+date missing - meta tags (og:author, article:published_time) don't work on SPAs. Now extracted from Apollo state Post objects with meta tag fallback for regular articles. (2026-01-27)
+- [x] **FIX**: Content provenance display - shows "Fetched by wallabag/wallacast" in content tab. Added content_source to GET API and refetch marks items as wallacast. (2026-01-27)
+- [x] **FIX**: Read-along tab shows proper status messages when no audio, audio generating, transcribing, or no transcript instead of broken clickable words. (2026-01-27)
 - [x] **FIX**: Read-along transcript drift - highlighting ran ~13 seconds ahead of audio by end of 21-minute content. Root cause: display split `content.transcript` by whitespace (different word count than Whisper's `words` array). Fixed by using Whisper words directly for display. Also fixed hardcoded `timeOffset += 900` to use actual chunk duration. (2026-01-27)
 - [x] **CRITICAL FIX**: Massive data leak - PATCH `RETURNING *` sent full audio blob (10-50MB) in every playback position save response, causing ~7GB/hour of data transfer. Fixed with explicit column lists. Also fixed duplicate saves and cache-busting audio re-downloads. (2026-01-27)
 - [x] **CRITICAL FIX**: Settings not saving - add auto_transcribe_podcasts and auto_generate_audio_for_articles to VALID_SETTING_KEYS (backend was silently skipping them!) (2026-01-25)
