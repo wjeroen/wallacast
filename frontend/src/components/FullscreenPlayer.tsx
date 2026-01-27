@@ -389,7 +389,7 @@ export function FullscreenPlayer({
               </p>
             )}
             {content.type === 'podcast_episode' && content.podcast_show_name && (
-              <p className="fullscreen-podcast-show">
+              <p className="fullscreen-author">
                 {content.podcast_show_name}
                 {content.published_at && (
                   <> • {new Date(content.published_at).toLocaleDateString()}</>
