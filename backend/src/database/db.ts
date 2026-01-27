@@ -185,6 +185,17 @@ export async function initializeDatabase() {
       console.log(`Reset ${resetResult.rowCount} stuck generation task(s) to failed status`);
     }
 
+    // Update table statistics so PostgreSQL's query planner picks optimal plans.
+    // After crashes or heavy writes, statistics can become stale, causing the
+    // planner to choose slow sequential scans instead of fast index lookups.
+    // ANALYZE is fast (reads a sample, not the whole table) and safe to run.
+    await client.query('ANALYZE content_items');
+    await client.query('ANALYZE users');
+    await client.query('ANALYZE user_sessions');
+    await client.query('ANALYZE user_settings');
+    await client.query('ANALYZE podcasts');
+    await client.query('ANALYZE podcast_subscriptions');
+
     // Mark database as ready for queries
     databaseReady = true;
     console.log('Database initialized successfully');
@@ -209,12 +220,15 @@ export async function query(text: string, params?: any[]) {
       const res = await poolInstance.query(text, params);
       const duration = Date.now() - start;
 
-      // Log query summary (only show full query text for slow queries > 100ms)
+      // Log query summary (only show full query text for slow queries > 500ms)
+      // Note: 100-300ms is normal latency for Railway's separate database service
+      // (network hop between app container and PostgreSQL container). Only flag
+      // queries that are genuinely slow beyond normal cloud infrastructure latency.
       const queryType = text.trim().split(/\s+/)[0].toUpperCase();
       const tableMatch = text.match(/(?:FROM|INTO|UPDATE)\s+(\w+)/i);
       const table = tableMatch ? tableMatch[1] : '?';
 
-      if (duration > 100) {
+      if (duration > 500) {
         console.log(`Slow query (${duration}ms): ${queryType} ${table}`, { text: text.substring(0, 100) + '...', rows: res.rowCount });
       } else if (queryType !== 'SELECT') {
         // Log non-SELECT queries (INSERT, UPDATE, DELETE are important)
