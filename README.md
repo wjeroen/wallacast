@@ -151,7 +151,7 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_content: true` re-extracts article content through GPT-4o-mini
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
-  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens.
+  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `DELETE /:id` - Delete content and clean up audio files
 
 - **`routes/podcasts.ts`**: Podcast subscription management (requires JWT auth, all queries filter by `user_id`)

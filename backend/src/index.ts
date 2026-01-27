@@ -57,26 +57,43 @@ app.use('/api/auth', requireDatabaseReady, authRouter);
 // Must be registered before protected /api/content routes to match first
 app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
   try {
-    // Note: No user_id filter - audio URLs are public but content IDs are private
-    const result = await query(
-      'SELECT audio_data FROM content_items WHERE id = $1',
-      [req.params.id]
-    );
-
-    if (result.rows.length === 0 || !result.rows[0].audio_data) {
-      return res.status(404).json({ error: 'Audio not found' });
-    }
-
-    const audioData = result.rows[0].audio_data;
-    const fileSize = audioData.length;
-
-    // Handle range requests for seeking/streaming
     const range = req.headers.range;
+
     if (range) {
+      // RANGE REQUEST: Use PostgreSQL substring() to read only the needed bytes
+      // instead of loading the entire blob (which could be 50-100MB for long audio).
+      // This makes seeking near-instant instead of 4-5 seconds.
+
+      // Step 1: Get file size without reading the blob (fast - no TOAST access)
+      const sizeResult = await query(
+        'SELECT COALESCE(file_size, length(audio_data)) as total_size FROM content_items WHERE id = $1 AND audio_data IS NOT NULL',
+        [req.params.id]
+      );
+
+      if (sizeResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Audio not found' });
+      }
+
+      const fileSize = sizeResult.rows[0].total_size;
       const parts = range.replace(/bytes=/, '').split('-');
       const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      // For open-ended ranges (bytes=0-), cap at 2MB chunks so initial playback
+      // starts fast. The browser will automatically request more as needed.
+      const maxChunk = 2 * 1024 * 1024; // 2MB
+      const end = parts[1]
+        ? Math.min(parseInt(parts[1], 10), fileSize - 1)
+        : Math.min(start + maxChunk - 1, fileSize - 1);
       const chunkSize = end - start + 1;
+
+      // Step 2: Read only the needed bytes (PostgreSQL substring is 1-based)
+      const chunkResult = await query(
+        'SELECT substring(audio_data FROM $2 FOR $3) as chunk FROM content_items WHERE id = $1',
+        [req.params.id, start + 1, chunkSize]
+      );
+
+      if (chunkResult.rows.length === 0 || !chunkResult.rows[0].chunk) {
+        return res.status(404).json({ error: 'Audio not found' });
+      }
 
       res.writeHead(206, {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
@@ -86,11 +103,21 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         'Cache-Control': 'public, max-age=31536000',
       });
 
-      res.end(audioData.slice(start, end + 1));
+      res.end(chunkResult.rows[0].chunk);
     } else {
-      // No range request - send full file
+      // NO RANGE REQUEST: Must send full file (rare - browsers usually use ranges)
+      const result = await query(
+        'SELECT audio_data FROM content_items WHERE id = $1',
+        [req.params.id]
+      );
+
+      if (result.rows.length === 0 || !result.rows[0].audio_data) {
+        return res.status(404).json({ error: 'Audio not found' });
+      }
+
+      const audioData = result.rows[0].audio_data;
       res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Length', fileSize);
+      res.setHeader('Content-Length', audioData.length);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Cache-Control', 'public, max-age=31536000');
 
