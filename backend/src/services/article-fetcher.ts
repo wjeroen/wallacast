@@ -175,37 +175,12 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   }
 }
 
-function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publishedDate?: string } {
-  const referenceMap = new Map<string, any>();
-
-  // Build Reference Map
-  for (const root of dataRoots) {
-    buildReferenceMap(root, referenceMap);
-  }
-
-  // Search for Post object in reference map
-  for (const [key, val] of referenceMap.entries()) {
-    if (!val) continue;
-
-    if (val.__typename === 'Post' || key.startsWith('Post:')) {
-      // Extract author from Post.user
-      let user = resolveRef(val.user, referenceMap);
-      const author = user?.displayName || user?.slug;
-
-      // Extract published date from Post.postedAt
-      const publishedDate = val.postedAt;
-
-      if (author || publishedDate) {
-        console.log(`[Metadata] Extracted from Apollo Post: author="${author}", date="${publishedDate}"`);
-        return { author, publishedDate };
-      }
-    }
-  }
-
-  return {};
+interface ExtractResult {
+  comments: Comment[];
+  postMeta?: { author?: string; publishedDate?: string };
 }
 
-function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Comment[] {
+function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): ExtractResult {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
   const rawCommentData = new Map<string, any>();
@@ -391,7 +366,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
 
     // --- Finalize ---
-    // Try meta tags first (works for EA Forum and other sites)
+    // Priority: Apollo state (works for EA Forum/LessWrong SPAs) > meta tags (works for regular articles)
     let author: string | undefined;
     if (postMeta?.author) {
       author = postMeta.author;
@@ -407,18 +382,6 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     } else {
       const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
       if (ogPublished) publishedDate = ogPublished;
-    }
-
-    // For LessWrong: Fall back to Apollo state extraction if meta tags are missing
-    if (isLessWrong && dataRoots.length > 0 && (!author || !publishedDate)) {
-      console.log(`[Metadata] Meta tags missing for LessWrong, trying Apollo extraction...`);
-      const apolloMetadata = extractPostMetadataFromData(dataRoots);
-      if (apolloMetadata.author && !author) {
-        author = apolloMetadata.author;
-      }
-      if (apolloMetadata.publishedDate && !publishedDate) {
-        publishedDate = apolloMetadata.publishedDate;
-      }
     }
 
     let cleanedHtml = html;
