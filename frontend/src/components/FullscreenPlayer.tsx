@@ -311,6 +311,12 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along':
+        // Show appropriate messages when audio/transcript aren't ready
+        const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
+        const isTranscribing = content.current_operation === 'transcribing';
+        const hasAudio = !!content.audio_url;
+        const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
+
         // FIX: Use Whisper words directly for display when available.
         // Previously, we split content.transcript by whitespace, which produced
         // a different word count than the Whisper words array. activeWordIndex
@@ -323,6 +329,18 @@ export function FullscreenPlayer({
           ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
           : fallbackText.split(/\s+/).filter(w => w.length > 0);
 
+        // Determine what message to show instead of the transcript
+        let readAlongMessage: string | null = null;
+        if (!hasAudio && isGenerating) {
+          readAlongMessage = 'Audio is being generated... The read-along transcript will appear once audio generation and transcription are complete.';
+        } else if (!hasAudio) {
+          readAlongMessage = 'No audio has been generated yet. Generate audio first to use the read-along feature.';
+        } else if (isTranscribing) {
+          readAlongMessage = 'Transcript is being generated... This may take a minute.';
+        } else if (!hasTranscript) {
+          readAlongMessage = 'No transcript available yet. The transcript is generated automatically after audio creation.';
+        }
+
         return (
           <div className="tab-read-along-display">
             <div className="read-along-header">
@@ -333,7 +351,9 @@ export function FullscreenPlayer({
                 </button>
               )}
             </div>
-            {displayWords.length > 0 ? (
+            {readAlongMessage ? (
+              <p className="no-content">{readAlongMessage}</p>
+            ) : displayWords.length > 0 ? (
               <p className="read-along-text">
                 {displayWords.map((word, index) => {
                   const isRead = index <= activeWordIndex;
