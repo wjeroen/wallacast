@@ -303,9 +303,12 @@ export function FullscreenPlayer({
           <div className="tab-content-display">
             <h3>Podcast Description</h3>
             {content.description ? (
-              <div className="article-content" style={{ marginTop: '1rem' }}>
-                {content.description}
-              </div>
+              <div 
+                className="article-content" 
+                style={{ marginTop: '1rem' }}
+                // This tells React to render the string as actual HTML
+                dangerouslySetInnerHTML={{ __html: content.description }}
+              />
             ) : (
               <p className="no-content">No description available</p>
             )}
