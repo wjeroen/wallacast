@@ -62,82 +62,112 @@ export async function closePool(): Promise<void> {
 }
 
 export async function initializeDatabase() {
+  const poolInstance = getPool();
+  // Use a dedicated client so we can set lock_timeout and statement_timeout
+  // that only apply to initialization, not to normal queries.
+  // This prevents migrations from hanging forever on locked tables
+  // (e.g., after a crash leaves dead transactions holding locks).
+  const client = await poolInstance.connect();
+
   try {
-    const poolInstance = getPool();
+    // Set timeouts: if a migration can't acquire a lock within 5s, fail fast
+    // so the retry loop in index.ts can try again instead of hanging forever
+    await client.query('SET lock_timeout = \'5s\'');
+    await client.query('SET statement_timeout = \'30s\'');
+
+    // Try to cancel any stuck queries from previous crashed sessions
+    // that might be holding locks on content_items (safe to ignore errors)
+    try {
+      const stuckResult = await client.query(`
+        SELECT pg_cancel_backend(pid)
+        FROM pg_stat_activity
+        WHERE state = 'active'
+        AND query LIKE '%content_items%'
+        AND query_start < NOW() - INTERVAL '30 seconds'
+        AND pid != pg_backend_pid()
+      `);
+      if (stuckResult.rowCount && stuckResult.rowCount > 0) {
+        console.log(`Cancelled ${stuckResult.rowCount} stuck query(s) from previous sessions`);
+      }
+    } catch (e) {
+      // Ignore - might not have permission, lock_timeout will handle it
+    }
+
+    console.log('Running database migrations...');
 
     // Run main schema
     const schemaPath = path.join(__dirname, 'schema.sql');
     const schema = await fs.readFile(schemaPath, 'utf-8');
-    await poolInstance.query(schema);
+    await client.query(schema);
 
     // Run migration for word timestamps
     const migrationPath = path.join(__dirname, 'add_word_timestamps.sql');
     const migration = await fs.readFile(migrationPath, 'utf-8');
-    await poolInstance.query(migration);
+    await client.query(migration);
 
     // Run migration for generation status tracking
     const statusMigrationPath = path.join(__dirname, 'add_generation_status.sql');
     const statusMigration = await fs.readFile(statusMigrationPath, 'utf-8');
-    await poolInstance.query(statusMigration);
+    await client.query(statusMigration);
 
     // Run migration for article metadata (karma, votes)
     const articleMetadataMigrationPath = path.join(__dirname, 'add_article_metadata.sql');
     const articleMetadataMigration = await fs.readFile(articleMetadataMigrationPath, 'utf-8');
-    await poolInstance.query(articleMetadataMigration);
+    await client.query(articleMetadataMigration);
 
     // Run migration for comments field
     const commentsFieldMigrationPath = path.join(__dirname, 'add_comments_field.sql');
     const commentsFieldMigration = await fs.readFile(commentsFieldMigrationPath, 'utf-8');
-    await poolInstance.query(commentsFieldMigration);
+    await client.query(commentsFieldMigration);
 
     // Run migration to add audio_data column for storing audio in database
     const audioDataMigrationPath = path.join(__dirname, 'migrations', '001_add_audio_data_column.sql');
     const audioDataMigration = await fs.readFile(audioDataMigrationPath, 'utf-8');
-    await poolInstance.query(audioDataMigration);
+    await client.query(audioDataMigration);
 
     // Run migration for Wallabag compatibility (renames + new fields)
     // IMPORTANT: Must run BEFORE 002_add_performance_indexes because 002 creates indexes on renamed columns
     const wallabagMigrationPath = path.join(__dirname, 'migrations', '004_wallabag_compatibility.sql');
     const wallabagMigration = await fs.readFile(wallabagMigrationPath, 'utf-8');
-    await poolInstance.query(wallabagMigration);
+    await client.query(wallabagMigration);
 
     // Run migration to add performance indexes (uses renamed columns from 004)
     const indexesMigrationPath = path.join(__dirname, 'migrations', '002_add_performance_indexes.sql');
     const indexesMigration = await fs.readFile(indexesMigrationPath, 'utf-8');
-    await poolInstance.query(indexesMigration);
+    await client.query(indexesMigration);
 
     // Run migration to remove unused is_read column
     const removeIsReadMigrationPath = path.join(__dirname, 'migrations', '003_remove_is_read_column.sql');
     const removeIsReadMigration = await fs.readFile(removeIsReadMigrationPath, 'utf-8');
-    await poolInstance.query(removeIsReadMigration);
+    await client.query(removeIsReadMigration);
 
     // Run migration to add users and user settings
     const usersMigrationPath = path.join(__dirname, 'migrations', '005_add_users.sql');
     const usersMigration = await fs.readFile(usersMigrationPath, 'utf-8');
-    await poolInstance.query(usersMigration);
+    await client.query(usersMigration);
 
     // Run migration to add content_source field for provenance tracking
     const contentSourceMigrationPath = path.join(__dirname, 'migrations', '006_add_content_source.sql');
     const contentSourceMigration = await fs.readFile(contentSourceMigrationPath, 'utf-8');
-    await poolInstance.query(contentSourceMigration);
+    await client.query(contentSourceMigration);
 
     // Run migration to fix podcast multi-user subscriptions
     const podcastMultiUserMigrationPath = path.join(__dirname, 'migrations', '007_fix_podcast_multi_user.sql');
     const podcastMultiUserMigration = await fs.readFile(podcastMultiUserMigrationPath, 'utf-8');
-    await poolInstance.query(podcastMultiUserMigration);
+    await client.query(podcastMultiUserMigration);
 
     // Run migration to optimize playback position updates
     const playbackOptimizationMigrationPath = path.join(__dirname, 'migrations', '008_optimize_playback_updates.sql');
     const playbackOptimizationMigration = await fs.readFile(playbackOptimizationMigrationPath, 'utf-8');
-    await poolInstance.query(playbackOptimizationMigration);
+    await client.query(playbackOptimizationMigration);
 
     // Run migration to expand podcast language column
     const expandLanguageMigrationPath = path.join(__dirname, 'migrations', '009_expand_podcast_language_column.sql');
     const expandLanguageMigration = await fs.readFile(expandLanguageMigrationPath, 'utf-8');
-    await poolInstance.query(expandLanguageMigration);
+    await client.query(expandLanguageMigration);
 
     // Reset any stuck generation statuses (server restart during generation)
-    const resetResult = await poolInstance.query(`
+    const resetResult = await client.query(`
       UPDATE content_items
       SET generation_status = 'failed',
           generation_error = 'Server restarted during generation',
@@ -156,6 +186,8 @@ export async function initializeDatabase() {
   } catch (error) {
     console.error('Error initializing database:', error);
     throw error;
+  } finally {
+    client.release();
   }
 }
 
