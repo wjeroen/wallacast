@@ -28,11 +28,6 @@ export interface ArticleContent {
   comments?: Comment[];
 }
 
-interface ExtractResult {
-  comments: Comment[];
-  postMeta?: { author?: string; publishedDate?: string };
-}
-
 /**
  * Helper to resolve Apollo references like { __ref: "User:123" }
  */
@@ -180,9 +175,7 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   }
 }
 
-/**
- * Dedicated metadata extractor (from file 3) to ensure Author/Date are found on LessWrong
- */
+// --- FILE 3 LOGIC: Metadata Extraction (Proven to work for LessWrong) ---
 function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publishedDate?: string } {
   const referenceMap = new Map<string, any>();
 
@@ -195,6 +188,7 @@ function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publi
   for (const [key, val] of referenceMap.entries()) {
     if (!val) continue;
 
+    // KEY DIFFERENCE: File 3 checks "key.startsWith('Post:')" which File 2 missed
     if (val.__typename === 'Post' || key.startsWith('Post:')) {
       // Extract author from Post.user
       let user = resolveRef(val.user, referenceMap);
@@ -204,7 +198,7 @@ function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publi
       const publishedDate = val.postedAt;
 
       if (author || publishedDate) {
-        console.log(`[Metadata] Extracted from Apollo Post (Backup Method): author="${author}", date="${publishedDate}"`);
+        console.log(`[Metadata] Extracted from Apollo Post: author="${author}", date="${publishedDate}"`);
         return { author, publishedDate };
       }
     }
@@ -213,7 +207,8 @@ function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publi
   return {};
 }
 
-function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): ExtractResult {
+// --- FILE 2 LOGIC: Comment Extraction (Proven to work better) ---
+function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Comment[] {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
   const rawCommentData = new Map<string, any>();
@@ -224,9 +219,7 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Extrac
     buildReferenceMap(root, referenceMap);
   }
 
-  // 1b. Collect raw comments AND scan for Post metadata
-  let postMeta: { author?: string; publishedDate?: string } | undefined;
-
+  // 1b. Collect raw comments (Pure comment logic from File 2)
   referenceMap.forEach((val, key) => {
       // CRITICAL FIX: Add null check for 'val' to prevent crashes
       if (!val) return;
@@ -234,17 +227,6 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Extrac
       if (val.__typename === 'Comment' || key.startsWith('Comment:')) {
           const id = val._id || key.split(':')[1] || key;
           rawCommentData.set(id, val);
-      }
-
-      // Extract Post metadata (author + date) from Apollo state (File 2 Method)
-      if (val.__typename === 'Post' && !postMeta) {
-          const user = resolveRef(val.user, referenceMap);
-          const author = user?.displayName || user?.slug || val.author;
-          const publishedDate = val.postedAt || val.createdAt;
-          if (author || publishedDate) {
-              postMeta = { author, publishedDate };
-              console.log(`[Comments] Found Post metadata (Main Method): author="${author}", date="${publishedDate}"`);
-          }
       }
   });
 
@@ -324,7 +306,7 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Extrac
   };
   comments.forEach(sortReplies);
 
-  return { comments, postMeta };
+  return comments;
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -338,7 +320,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Detect Site Type
     const isLessWrong = url.includes('lesswrong.com');
 
-    // --- Metadata (Pre-scan) ---
+    // --- Metadata (DOM / Meta Tags) ---
     let title = 'Untitled';
     const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
     if (ogTitle) {
@@ -357,10 +339,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (karmaText) karma = parseInt(karmaText);
     }
 
-    // --- Comment & Data Extraction ---
+    // --- Data Extraction ---
     let comments: Comment[] | undefined;
     let dataRoots: any[] = [];
-    let apolloMeta: { author?: string; publishedDate?: string } | undefined;
 
     try {
       const scriptTags = doc.querySelectorAll('script');
@@ -389,25 +370,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (dataRoots.length > 0) {
         console.log(`[Comments] Processing data roots...`);
         
-        // Use the robust comment extractor from file (2)
-        const result = extractCommentsFromData(dataRoots, isLessWrong);
-        comments = result.comments;
-        apolloMeta = result.postMeta;
-
-        // HYBRID FIX: If file (2) missed metadata, run the dedicated logic from file (3)
-        if ((!apolloMeta?.author || !apolloMeta?.publishedDate)) {
-           console.log(`[Metadata] Missing in primary scan, attempting backup extraction (File 3 method)...`);
-           const backupMeta = extractPostMetadataFromData(dataRoots);
-           
-           if (!apolloMeta) apolloMeta = {};
-           if (!apolloMeta.author && backupMeta.author) {
-             apolloMeta.author = backupMeta.author;
-           }
-           if (!apolloMeta.publishedDate && backupMeta.publishedDate) {
-             apolloMeta.publishedDate = backupMeta.publishedDate;
-           }
-        }
-
+        // 1. Extract Comments using File 2 Logic (Best for comments)
+        comments = extractCommentsFromData(dataRoots, isLessWrong);
         console.log(`[Comments] ✅ Final result: ${comments.length} top-level comments extracted`);
       }
     } catch (error) {
@@ -415,23 +379,26 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
 
     // --- Finalize Metadata ---
-    // Priority: Apollo Data (most accurate for SPAs) -> Meta Tags (fallback)
-    
+    // Try meta tags first
     let author: string | undefined;
-    if (apolloMeta?.author) {
-      author = apolloMeta.author;
-    } else {
-      const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                       doc.querySelector('meta[name="author"]')?.getAttribute('content');
-      if (ogAuthor) author = ogAuthor.trim();
-    }
+    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
+                     doc.querySelector('meta[name="author"]')?.getAttribute('content');
+    if (ogAuthor) author = ogAuthor.trim();
 
     let publishedDate: string | undefined;
-    if (apolloMeta?.publishedDate) {
-      publishedDate = apolloMeta.publishedDate;
-    } else {
-      const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
-      if (ogPublished) publishedDate = ogPublished;
+    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
+    if (ogPublished) publishedDate = ogPublished;
+
+    // For LessWrong: Fall back to Apollo state extraction (File 3 Logic) if meta tags are missing
+    if (isLessWrong && dataRoots.length > 0 && (!author || !publishedDate)) {
+      console.log(`[Metadata] Meta tags missing for LessWrong, trying Apollo extraction...`);
+      const apolloMetadata = extractPostMetadataFromData(dataRoots);
+      if (apolloMetadata.author && !author) {
+        author = apolloMetadata.author;
+      }
+      if (apolloMetadata.publishedDate && !publishedDate) {
+        publishedDate = apolloMetadata.publishedDate;
+      }
     }
 
     let cleanedHtml = html;
