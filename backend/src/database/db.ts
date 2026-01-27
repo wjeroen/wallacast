@@ -176,6 +176,16 @@ export async function initializeDatabase() {
     const fixContentSourceDefault = await fs.readFile(fixContentSourceDefaultPath, 'utf-8');
     await client.query(fixContentSourceDefault);
 
+    // Run migration to add podcast_show_name column
+    const podcastShowNameMigrationPath = path.join(__dirname, 'migrations', '010_add_podcast_show_name.sql');
+    const podcastShowNameMigration = await fs.readFile(podcastShowNameMigrationPath, 'utf-8');
+    await poolInstance.query(podcastShowNameMigration);
+
+    // Run migration to deprecate per-item playback_speed (now uses browser localStorage)
+    const deprecatePlaybackSpeedMigrationPath = path.join(__dirname, 'migrations', '011_deprecate_per_item_playback_speed.sql');
+    const deprecatePlaybackSpeedMigration = await fs.readFile(deprecatePlaybackSpeedMigrationPath, 'utf-8');
+    await poolInstance.query(deprecatePlaybackSpeedMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -304,31 +304,36 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               className={filter === 'articles' ? 'active' : ''}
               onClick={() => setFilter('articles')}
             >
-              Articles
+              <Newspaper size={16} />
+              <span className="filter-label">Articles</span>
             </button>
             <button
               className={filter === 'texts' ? 'active' : ''}
               onClick={() => setFilter('texts')}
             >
-              Texts
+              <NotebookPen size={16} />
+              <span className="filter-label">Texts</span>
             </button>
             <button
               className={filter === 'podcasts' ? 'active' : ''}
               onClick={() => setFilter('podcasts')}
             >
-              Podcasts
+              <Podcast size={16} />
+              <span className="filter-label">Podcasts</span>
             </button>
             <button
               className={filter === 'favorites' ? 'active' : ''}
               onClick={() => setFilter('favorites')}
             >
-              <Star size={16} /> Favorites
+              <Star size={16} />
+              <span className="filter-label">Favorites</span>
             </button>
             <button
               className={filter === 'archived' ? 'active' : ''}
               onClick={() => setFilter('archived')}
             >
-              <Archive size={16} /> Archived
+              <Archive size={16} />
+              <span className="filter-label">Archived</span>
             </button>
           </div>
         </div>
@@ -368,7 +373,22 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               )}
               <div className="content-info">
                 <h3>{item.title}</h3>
-                {item.author && <p className="author">{item.author}</p>}
+                {item.author && (
+                  <p className="author">
+                    {item.author}
+                    {item.published_at && (
+                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                    )}
+                  </p>
+                )}
+                {item.type === 'podcast_episode' && item.podcast_show_name && (
+                  <p className="author">
+                    {item.podcast_show_name}
+                    {item.published_at && (
+                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                    )}
+                  </p>
+                )}
                 {/* Only show domain URL for articles (not podcasts/texts) */}
                 {item.url && item.type === 'article' && (
                   <p className="content-source-link">
@@ -382,7 +402,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}
                 <div className="metadata">
-                  <span className="type">{item.type}</span>
+                  <span className="type" title={item.type}>
+                    {item.type === 'article' && <Newspaper size={16} />}
+                    {item.type === 'text' && <NotebookPen size={16} />}
+                    {item.type === 'podcast_episode' && <Podcast size={16} />}
+                    {item.type === 'pdf' && <FileText size={16} />}
+                  </span>
                   {item.audio_url && <span className="badge">Audio</span>}
                   {item.transcript && <span className="badge">Transcript</span>}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
@@ -405,9 +430,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   </button>
                   <button
                     onClick={() => handleToggleArchive(item.id)}
-                    title="Toggle archive"
+                    title={item.is_archived ? "Restore from archive" : "Archive"}
+                    className={item.is_archived ? 'active' : ''}
                   >
-                    <Archive size={16} />
+                    {item.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
                   </button>
                   <button
                     onClick={() => handleDelete(item.id)}

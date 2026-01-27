@@ -148,13 +148,24 @@ function htmlToNarrationText(html: string): string {
 
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
-    
-    // Clean up whitespace
+
+    // Remove emojis (for narration only - they don't render well in TTS)
+    // This regex matches:
+    // - Emoticons and symbols (U+1F300-U+1F9FF)
+    // - Miscellaneous symbols (U+2600-U+27BF)
+    // - Dingbats (U+2700-U+27BF)
+    // - Geometric shapes (U+25A0-U+25FF)
+    text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
+
+    // Clean up whitespace (including any gaps left by emoji removal)
     text = text.replace(/\s+/g, ' ').trim();
     return text;
   } catch (e) {
     console.error('JSDOM parsing failed, falling back to regex:', e);
-    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    let fallbackText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Also remove emojis in fallback
+    fallbackText = fallbackText.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
+    return fallbackText;
   }
 }
 

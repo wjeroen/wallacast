@@ -82,6 +82,16 @@
   }
 }
 
+@media (max-width: 740px) {
+  .filter-label {
+    display: none;
+  }
+
+  .filter-buttons button {
+    padding: 0.5rem;
+  }
+}
+
 .settings-btn {
   background: none;
   border: none;
@@ -701,7 +711,7 @@
 }
 
 .content-actions button.active {
-  color: #fbbf24;
+  color: #60a5fa;
 }
 
 .content-actions .delete-btn:hover {
