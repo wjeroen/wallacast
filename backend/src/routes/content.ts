@@ -500,7 +500,15 @@ router.patch('/:id', async (req, res) => {
     paramCount++;
     values.push(req.user!.userId);
 
-    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} RETURNING *`;
+    // CRITICAL FIX: Never use RETURNING * — it includes audio_data (BYTEA, 10-50MB),
+    // which was being sent in every response, causing ~7GB/hour of data transfer
+    // during playback (saves every 10s). For playback-only updates, return minimal data.
+    // For content updates, return the same columns as the list endpoint.
+    const returningClause = updatingContentFields
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes'
+      : 'RETURNING id, playback_position, playback_speed, last_played_at';
+
+    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
     const result = await query(sql, values);
 
     if (result.rows.length === 0) {
