@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
     );
 
@@ -199,10 +199,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, user_id)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
     );
 
     const createdItem = result.rows[0];
@@ -342,6 +342,7 @@ router.patch('/:id', async (req, res) => {
                   agree_votes = $6,
                   disagree_votes = $7,
                   comments = $8,
+                  content_source = 'wallacast',
                   generation_status = 'completed',
                   generation_progress = 100,
                   current_operation = NULL,
@@ -512,7 +513,15 @@ router.patch('/:id', async (req, res) => {
     paramCount++;
     values.push(req.user!.userId);
 
-    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} RETURNING *`;
+    // CRITICAL FIX: Never use RETURNING * — it includes audio_data (BYTEA, 10-50MB),
+    // which was being sent in every response, causing ~7GB/hour of data transfer
+    // during playback (saves every 10s). For playback-only updates, return minimal data.
+    // For content updates, return the same columns as the list endpoint.
+    const returningClause = updatingContentFields
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes'
+      : 'RETURNING id, playback_position, playback_speed, last_played_at';
+
+    const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
     const result = await query(sql, values);
 
     if (result.rows.length === 0) {
@@ -599,6 +608,7 @@ router.post('/:id/refetch', async (req, res) => {
             agree_votes = $6,
             disagree_votes = $7,
             comments = $8,
+            content_source = 'wallacast',
             updated_at = NOW()
           WHERE id = $9`,
           [
