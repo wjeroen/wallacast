@@ -303,6 +303,15 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along':
+        // Only show read-along if audio is available
+        if (!content.audio_url) {
+          return (
+            <div className="tab-read-along-display">
+              <p className="no-content">Generate audio to enable read-along</p>
+            </div>
+          );
+        }
+
         const transcript = content.transcript || content.content || '';
         const displayText = cleanHtml(transcript);
 
@@ -325,9 +334,9 @@ export function FullscreenPlayer({
                       key={index}
                       id={`word-${index}`} // Assign ID for scrolling
                       className={`transcript-word ${isRead ? 'read' : ''}`}
-                      style={{ 
+                      style={{
                         color: isRead ? '#60a5fa' : undefined, // Light blue (#60a5fa) for read words
-                        cursor: 'pointer' 
+                        cursor: 'pointer'
                       }}
                       onClick={() => onTranscriptWordClick(index)}
                     >

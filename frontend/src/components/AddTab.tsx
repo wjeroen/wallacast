@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, FileText, File, Mic } from 'lucide-react';
+import { Newspaper, NotebookPen, FileText, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
@@ -76,28 +76,28 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           className={contentType === 'article' ? 'active' : ''}
           onClick={() => setContentType('article')}
         >
-          <Link size={20} />
+          <Newspaper size={20} />
           <span>Article</span>
         </button>
         <button
           className={contentType === 'text' ? 'active' : ''}
           onClick={() => setContentType('text')}
         >
-          <FileText size={20} />
+          <NotebookPen size={20} />
           <span>Text</span>
         </button>
         <button
           className={contentType === 'pdf' ? 'active' : ''}
           onClick={() => setContentType('pdf')}
         >
-          <File size={20} />
+          <FileText size={20} />
           <span>PDF</span>
         </button>
         <button
           className={contentType === 'podcast_episode' ? 'active' : ''}
           onClick={() => setContentType('podcast_episode')}
         >
-          <Mic size={20} />
+          <Podcast size={20} />
           <span>Podcast</span>
         </button>
       </div>
