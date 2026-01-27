@@ -187,10 +187,10 @@ router.post('/', async (req, res) => {
 
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, comments, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
     );
 
     const createdItem = result.rows[0];
@@ -596,6 +596,7 @@ router.post('/:id/refetch', async (req, res) => {
             agree_votes = $6,
             disagree_votes = $7,
             comments = $8,
+            content_source = 'wallacast',
             updated_at = NOW()
           WHERE id = $9`,
           [

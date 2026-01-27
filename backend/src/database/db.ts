@@ -171,6 +171,11 @@ export async function initializeDatabase() {
     const expandLanguageMigration = await fs.readFile(expandLanguageMigrationPath, 'utf-8');
     await client.query(expandLanguageMigration);
 
+    // Fix content_source default: should be 'wallacast' not 'wallabag'
+    const fixContentSourceDefaultPath = path.join(__dirname, 'migrations', '010_fix_content_source_default.sql');
+    const fixContentSourceDefault = await fs.readFile(fixContentSourceDefaultPath, 'utf-8');
+    await client.query(fixContentSourceDefault);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
