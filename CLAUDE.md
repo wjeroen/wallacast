@@ -99,3 +99,14 @@ TODO.md is for **actionable tasks**, not documentation.
 - Backend: ES modules with .js extensions in imports
 - Frontend: Single CSS file (App.css), no CSS modules
 - Use existing patterns in the codebase rather than introducing new ones
+
+## Database Initialization Safety Rules (`backend/src/database/db.ts`)
+
+**CRITICAL: `initializeDatabase()` is the ONLY thing standing between the user and a working app.** If it crashes, the entire backend returns 503 "service starting up" for ALL requests. The user cannot log in or use the app at all.
+
+**Rules:**
+1. **NEVER add queries that reference specific tables without try/catch.** Tables may not exist yet (migrations create them). A bare `ANALYZE podcast_subscriptions` will crash if that table was never created.
+2. **NEVER add blocking operations without timeouts.** The function already uses `SET lock_timeout = '5s'` and `SET statement_timeout = '30s'` — respect this pattern.
+3. **Always test mentally: "What if this table/column doesn't exist?"** Use `IF EXISTS`, `IF NOT EXISTS`, or try/catch for any operation that depends on specific schema.
+4. **Migrations use `IF NOT EXISTS` / `DO $$ ... END $$` blocks** for safety. Follow this pattern.
+5. **After changing `db.ts`, verify the server can start from scratch** (imagine a fresh database with no tables). The function must handle that gracefully.

@@ -93,8 +93,12 @@ export async function transcribeWithTimestamps(
 
       let timeOffset = 0;
       for (let i = 0; i < chunkFiles.length; i++) {
-        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length} using model ${model}...`);
-        
+        // Get actual chunk duration instead of assuming hardcoded 900s.
+        // FFmpeg splitting may not produce exactly chunkDurationMinutes * 60
+        // due to MP3 frame alignment at the split boundary.
+        const chunkDuration = await getAudioDuration(chunkFiles[i]);
+        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length} (${chunkDuration.toFixed(1)}s) using model ${model}...`);
+
         const transcription = await client.audio.transcriptions.create({
           file: createReadStream(chunkFiles[i]),
           model: model,
@@ -105,7 +109,7 @@ export async function transcribeWithTimestamps(
 
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
         previousTranscript = transcription.text;
-        
+
         const chunkWords = (transcription as any).words || [];
         const adjustedWords = chunkWords.map((word: any) => ({
           ...word,
@@ -113,7 +117,7 @@ export async function transcribeWithTimestamps(
           end: word.end + timeOffset,
         }));
         allWords.push(...adjustedWords);
-        timeOffset += 900;
+        timeOffset += chunkDuration;
       }
     } else {
       let fileToTranscribe = audioPath;

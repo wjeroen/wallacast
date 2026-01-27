@@ -13,6 +13,12 @@ import {
 } from 'lucide-react';
 import type { ContentItem, Comment } from '../types';
 
+interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
 interface FullscreenPlayerProps {
   content: ContentItem;
   isPlaying: boolean;
@@ -21,6 +27,7 @@ interface FullscreenPlayerProps {
   playbackSpeed: number;
   sleepTimer: number | null;
   activeWordIndex?: number;
+  transcriptWords?: TranscriptWord[];
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onSkipBackward: () => void;
@@ -92,6 +99,7 @@ export function FullscreenPlayer({
   playbackSpeed,
   sleepTimer,
   activeWordIndex = -1,
+  transcriptWords = [],
   onPlayPause,
   onSeek,
   onSkipBackward,
@@ -267,6 +275,11 @@ export function FullscreenPlayer({
                     </a>
                   </p>
                 )}
+                {content.content_source && (
+                  <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                    Fetched by {content.content_source}
+                  </p>
+                )}
               </div>
               {content.url && onRefetch && (
                 <button className="refetch-button" title="Refetch content" onClick={onRefetch}>
@@ -303,8 +316,35 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along':
-        const transcript = content.transcript || content.content || '';
-        const displayText = cleanHtml(transcript);
+        // Show appropriate messages when audio/transcript aren't ready
+        const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
+        const isTranscribing = content.current_operation === 'transcribing';
+        const hasAudio = !!content.audio_url;
+        const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
+
+        // FIX: Use Whisper words directly for display when available.
+        // Previously, we split content.transcript by whitespace, which produced
+        // a different word count than the Whisper words array. activeWordIndex
+        // is an index into the Whisper array, so using it on differently-split
+        // display words caused gradual drift (transcript highlighting ran ahead).
+        const hasWhisperWords = transcriptWords.length > 0;
+        const fallbackTranscript = content.transcript || content.content || '';
+        const fallbackText = cleanHtml(fallbackTranscript);
+        const displayWords = hasWhisperWords
+          ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
+          : fallbackText.split(/\s+/).filter(w => w.length > 0);
+
+        // Determine what message to show instead of the transcript
+        let readAlongMessage: string | null = null;
+        if (!hasAudio && isGenerating) {
+          readAlongMessage = 'Audio is being generated... The read-along transcript will appear once audio generation and transcription are complete.';
+        } else if (!hasAudio) {
+          readAlongMessage = 'No audio has been generated yet. Generate audio first to use the read-along feature.';
+        } else if (isTranscribing) {
+          readAlongMessage = 'Transcript is being generated... This may take a minute.';
+        } else if (!hasTranscript) {
+          readAlongMessage = 'No transcript available yet. The transcript is generated automatically after audio creation.';
+        }
 
         return (
           <div className="tab-read-along-display">
@@ -316,18 +356,20 @@ export function FullscreenPlayer({
                 </button>
               )}
             </div>
-            {displayText ? (
+            {readAlongMessage ? (
+              <p className="no-content">{readAlongMessage}</p>
+            ) : displayWords.length > 0 ? (
               <p className="read-along-text">
-                {displayText.split(/\s+/).map((word, index) => {
+                {displayWords.map((word, index) => {
                   const isRead = index <= activeWordIndex;
                   return (
                     <span
                       key={index}
-                      id={`word-${index}`} // Assign ID for scrolling
+                      id={`word-${index}`}
                       className={`transcript-word ${isRead ? 'read' : ''}`}
-                      style={{ 
-                        color: isRead ? '#60a5fa' : undefined, // Light blue (#60a5fa) for read words
-                        cursor: 'pointer' 
+                      style={{
+                        color: isRead ? '#60a5fa' : undefined,
+                        cursor: 'pointer'
                       }}
                       onClick={() => onTranscriptWordClick(index)}
                     >
