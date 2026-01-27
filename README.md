@@ -325,12 +325,14 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `tts_chunks`: TTS chunk metadata for seeking (JSON)
 - `duration`, `file_size`
 - `podcast_id`: FK to podcasts table
+- `podcast_show_name`: Denormalized podcast title (for direct display without querying podcasts table)
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
 - `comments`: Structured comments JSON (for EA Forum)
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
-- `playback_position`, `playback_speed`, `last_played_at`
+- `playback_position`, `last_played_at`
+- `playback_speed`: **DEPRECATED** - per-item speed stored here but no longer used. Global speed preference now stored in browser localStorage instead.
 - `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
 
@@ -381,6 +383,16 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 - Audio endpoint is public for HTML5 player compatibility, supports byte-range requests for seeking
 - CORS is configured for single frontend URL only
 - If JWT_SECRET not set, sessions won't persist across server restarts (uses random secret)
+
+## Client-Side Storage (Browser localStorage)
+
+Some user preferences are stored locally in the browser for instant, offline-capable behavior:
+
+- **globalPlaybackSpeed**: Global audio playback speed preference (1, 1.25, 1.5, or 2x). Set when user changes speed, persists across browser sessions and all content items. Validated against known speeds list before use.
+
+This approach was chosen over database storage for better UX - users don't need to set speed per-item, and the preference is instantly available without waiting for API calls.
+
+---
 
 ## Content Processing Flows
 
@@ -454,14 +466,16 @@ The app implements several performance optimizations:
 See CODEBASE_CRITIQUE.md for detailed issues and fixes.
 
 Key issues:
-- Speed toggle UI inconsistent
 - EA Forum comment extraction unreliable
 - Queue functionality incomplete
 - Audio player should be smaller/persistent across tabs
 
 ## Recent Improvements
 
-**January 2026:**
+**January 2026 (Latest):**
+- **Global Playback Speed**: Fixed speed toggle bug and moved to global browser localStorage preference instead of per-item database storage. Speed preference now persists across all content and browser sessions.
+- **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
+- **Add Tab Podcast Support**: Fixed podcast episode submission via Add Tab - now properly accepts direct audio URLs with episode titles
 - **CRITICAL: Fixed massive data leak in PATCH endpoint**: `RETURNING *` was including the full `audio_data` BYTEA blob (10-50MB) in every playback position save response. With saves every 10 seconds, this caused ~7GB/hour of network transfer. Fixed by returning only needed columns (playback-only updates return just 4 fields instead of the entire row with audio). Also fixed duplicate saves from React effect dependencies and cache-busting causing unnecessary audio re-downloads.
 - **Fixed Read-along transcript drift**: Highlighting gradually ran ahead of audio (~13s drift over 21 minutes). Root cause: display words were split from `content.transcript` by whitespace, producing a different word count than Whisper's `words` array (used for `activeWordIndex`). Fixed by using Whisper words directly for display, ensuring 1:1 index correspondence. Also fixed hardcoded `timeOffset += 900` in multi-chunk transcription to use actual chunk duration from ffprobe.
 - **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms

@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     const { type, archived, starred } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
     );
 
@@ -142,6 +142,7 @@ router.post('/', async (req, res) => {
     let agreeVotes: number | null = null;
     let disagreeVotes: number | null = null;
     let extractedComments: any = null;
+    let podcastShowName: string | null = null;
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
@@ -185,12 +186,23 @@ router.post('/', async (req, res) => {
       finalTitle = 'Untitled Article';
     }
 
+    // Look up podcast show name if podcast_id is provided (for podcast episodes)
+    if (podcast_id) {
+      const podcastResult = await query(
+        'SELECT title FROM podcasts WHERE id = $1 AND user_id = $2',
+        [podcast_id, req.user!.userId]
+      );
+      if (podcastResult.rows.length > 0) {
+        podcastShowName = podcastResult.rows[0].title;
+      }
+    }
+
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
     );
 
     const createdItem = result.rows[0];

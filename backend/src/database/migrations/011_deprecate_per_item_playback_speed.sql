@@ -1,0 +1,13 @@
+-- DEPRECATION: playback_speed column is no longer used
+--
+-- Reason: Speed preference is now stored globally in browser localStorage
+-- instead of per-item in the database. This provides a better user experience
+-- where speed preference is remembered across all content items.
+--
+-- The column is retained for backward compatibility and historical data.
+-- If you need to reference old per-item speeds, they are still available
+-- in the playback_speed column of content_items.
+--
+-- No data changes needed - the column remains as-is for reference.
+
+-- Migration is documentation-only and can safely run on all deployments
