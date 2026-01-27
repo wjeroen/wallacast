@@ -201,6 +201,17 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
 
 async function scriptArticleForListening(htmlContent: string, openai: any): Promise<string> {
   try {
+    // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
+    // This reduces token count significantly before sending to LLM
+    const dom = new JSDOM(htmlContent);
+    const doc = dom.window.document;
+    
+    const junkSelectors = 'script, style, noscript, iframe, svg, path, input[type="hidden"], meta, link';
+    doc.querySelectorAll(junkSelectors).forEach(el => el.remove());
+    
+    // Use the cleaner HTML which retains structure but drops junk
+    const cleanHtml = doc.body.innerHTML || htmlContent;
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -231,7 +242,9 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
         },
         {
           role: 'user',
-          content: htmlContent.slice(0, 100000)
+          // UPDATED: Increased slice limit to 400k characters (approx 100k tokens)
+          // Safe for gpt-4o-mini's 128k context window
+          content: cleanHtml.slice(0, 400000)
         }
       ],
       max_completion_tokens: 16000,
