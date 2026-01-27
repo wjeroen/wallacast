@@ -70,7 +70,7 @@ Wallacast supports multiple users with complete data isolation:
 | Audio player UI issues | `frontend/src/components/AudioPlayer.tsx` - UI rendering and controls |
 | Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
 | Generation stuck or failing | `backend/src/routes/content.ts` - Check status updates in PATCH endpoint and `backend/src/services/openai-tts.ts` - Check error handling |
-| Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 100-150 |
+| Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 133-147. Note: saves are debounced (3s minimum change) and effects depend on `content?.id` not `content` |
 | Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
 | Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
 | Wallabag sync not working | `backend/src/services/wallabag-service.ts` - OAuth and API client, `backend/src/services/wallabag-sync.ts` - Sync logic, `backend/src/routes/wallabag.ts` - Endpoints |
@@ -443,6 +443,8 @@ The app implements several performance optimizations:
 - Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 
+**Critical fix (Jan 2026):** PATCH endpoint used `RETURNING *` which included the `audio_data` BYTEA column (10-50MB) in every response. Playback position saves every 10s were transferring the full audio blob, causing ~7GB/hour of data usage. Fixed by returning only needed columns. Playback-only updates now return just `id, playback_position, playback_speed, last_played_at`.
+
 **Result:** Query times reduced from 1-3 seconds to <100ms, instant UI feedback for all actions
 
 ## Known Issues / TODO
@@ -458,6 +460,7 @@ Key issues:
 ## Recent Improvements
 
 **January 2026:**
+- **CRITICAL: Fixed massive data leak in PATCH endpoint**: `RETURNING *` was including the full `audio_data` BYTEA blob (10-50MB) in every playback position save response. With saves every 10 seconds, this caused ~7GB/hour of network transfer. Fixed by returning only needed columns (playback-only updates return just 4 fields instead of the entire row with audio). Also fixed duplicate saves from React effect dependencies and cache-busting causing unnecessary audio re-downloads.
 - **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
 - **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
 - **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)

@@ -21,6 +21,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(isPlaying);
+  const lastSavedPositionRef = useRef<number>(-1);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -76,12 +77,12 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      // Cache busting to ensure we aren't playing an old file
-      const cacheBuster = content.updated_at 
-        ? new Date(content.updated_at).getTime() 
-        : Date.now();
+      // Cache busting: use file_size+duration so it only changes when audio is
+      // actually regenerated, not on every star/archive/update (which was causing
+      // full audio re-downloads and wasting massive bandwidth)
+      const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
       const separator = content.audio_url?.includes('?') ? '&' : '?';
-      audio.src = content.audio_url ? `${content.audio_url}${separator}t=${cacheBuster}` : '';
+      audio.src = content.audio_url ? `${content.audio_url}${separator}v=${cacheBuster}` : '';
       
       const validSpeeds = [1, 1.25, 1.5, 2];
       const loadedSpeed = content.playback_speed || 1;
@@ -129,34 +130,49 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     };
   }, []);
 
-  // Auto-save position
-  useEffect(() => {
+  const savePlaybackPosition = async (position: number) => {
     if (!content) return;
+    const floored = Math.floor(position);
+    // Skip save if position hasn't changed by at least 3 seconds (debounce)
+    if (lastSavedPositionRef.current >= 0 && Math.abs(floored - lastSavedPositionRef.current) < 3) {
+      return;
+    }
+    lastSavedPositionRef.current = floored;
+    try {
+      await contentAPI.update(content.id, {
+        playback_position: floored,
+        last_played_at: new Date().toISOString(),
+      });
+    } catch (error) { /* silent */ }
+  };
+
+  // Auto-save position every 10s during playback
+  // Depends on content?.id (not content) to prevent duplicate save/teardown
+  // when the content object reference changes but the item is the same
+  useEffect(() => {
+    if (!content?.id) return;
+    lastSavedPositionRef.current = -1; // Reset debounce on content change
     const interval = setInterval(() => {
       if (isPlayingRef.current && audioRef.current) {
         savePlaybackPosition(audioRef.current.currentTime);
       }
     }, 10000);
     return () => clearInterval(interval);
-  }, [content]);
+  }, [content?.id]);
 
+  // Save position on unmount or content change
   useEffect(() => {
     return () => {
       if (audioRef.current && content) {
-        savePlaybackPosition(audioRef.current.currentTime);
+        // Force save on unmount regardless of debounce
+        const floored = Math.floor(audioRef.current.currentTime);
+        contentAPI.update(content.id, {
+          playback_position: floored,
+          last_played_at: new Date().toISOString(),
+        }).catch(() => {});
       }
     };
-  }, [content]);
-
-  const savePlaybackPosition = async (position: number) => {
-    if (!content) return;
-    try {
-      await contentAPI.update(content.id, {
-        playback_position: Math.floor(position),
-        last_played_at: new Date().toISOString(),
-      });
-    } catch (error) { /* silent */ }
-  };
+  }, [content?.id]);
 
   const togglePlay = () => {
     if (!audioRef.current) return;

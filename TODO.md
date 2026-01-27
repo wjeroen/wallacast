@@ -27,10 +27,11 @@
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
   - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
-- [ ] **[P2]** Optimize slow database queries:
-  - `SELECT audio_data FROM content_items WHERE id = $1` taking 300-600ms
-  - `UPDATE content_items SET playback_position = $1, last_played_at = $2` taking 400-600ms
-  - Consider indexing, query optimization, or moving audio to separate table
+- [x] **[P2]** Optimize slow database queries and fix massive data leak (2026-01-27):
+  - Root cause: `RETURNING *` in PATCH included audio_data BYTEA (10-50MB) in every response
+  - Playback saves every 10s were transferring full audio blob (~7GB/hour!)
+  - Fixed: playback-only updates return minimal columns, content updates exclude audio_data
+  - Also fixed: duplicate saves from React effect deps, cache-busting causing audio re-downloads
 - [ ] **[P2]** Remove clickable domain URL links for podcasts (and texts if shown) in library cards and fullscreen player - they're pointless since podcasts don't have source URLs to visit
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
@@ -128,6 +129,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **CRITICAL FIX**: Massive data leak - PATCH `RETURNING *` sent full audio blob (10-50MB) in every playback position save response, causing ~7GB/hour of data transfer. Fixed with explicit column lists. Also fixed duplicate saves and cache-busting audio re-downloads. (2026-01-27)
 - [x] **CRITICAL FIX**: Settings not saving - add auto_transcribe_podcasts and auto_generate_audio_for_articles to VALID_SETTING_KEYS (backend was silently skipping them!) (2026-01-25)
 - [x] Add comprehensive logging to settings endpoint (shows which keys saved vs skipped, values, summary) (2026-01-25)
 - [x] **CRITICAL FIX**: LessWrong comments now extract with hybrid parser (handles both Direct Object and IIFE formats) (2026-01-25)
