@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight } from 'lucide-react';
+import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -304,31 +304,36 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               className={filter === 'articles' ? 'active' : ''}
               onClick={() => setFilter('articles')}
             >
-              Articles
+              <Newspaper size={16} />
+              <span className="filter-label">Articles</span>
             </button>
             <button
               className={filter === 'texts' ? 'active' : ''}
               onClick={() => setFilter('texts')}
             >
-              Texts
+              <NotebookPen size={16} />
+              <span className="filter-label">Texts</span>
             </button>
             <button
               className={filter === 'podcasts' ? 'active' : ''}
               onClick={() => setFilter('podcasts')}
             >
-              Podcasts
+              <Podcast size={16} />
+              <span className="filter-label">Podcasts</span>
             </button>
             <button
               className={filter === 'favorites' ? 'active' : ''}
               onClick={() => setFilter('favorites')}
             >
-              <Star size={16} /> Favorites
+              <Star size={16} />
+              <span className="filter-label">Favorites</span>
             </button>
             <button
               className={filter === 'archived' ? 'active' : ''}
               onClick={() => setFilter('archived')}
             >
-              <Archive size={16} /> Archived
+              <Archive size={16} />
+              <span className="filter-label">Archived</span>
             </button>
           </div>
         </div>
