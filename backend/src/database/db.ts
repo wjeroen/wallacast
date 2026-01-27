@@ -67,7 +67,9 @@ export async function initializeDatabase() {
   // that only apply to initialization, not to normal queries.
   // This prevents migrations from hanging forever on locked tables
   // (e.g., after a crash leaves dead transactions holding locks).
+  console.log('Connecting to database...');
   const client = await poolInstance.connect();
+  console.log('Database connection acquired');
 
   try {
     // Set timeouts: if a migration can't acquire a lock within 5s, fail fast
@@ -75,19 +77,22 @@ export async function initializeDatabase() {
     await client.query('SET lock_timeout = \'5s\'');
     await client.query('SET statement_timeout = \'30s\'');
 
-    // Try to cancel any stuck queries from previous crashed sessions
-    // that might be holding locks on content_items (safe to ignore errors)
+    // Try to terminate stuck sessions from previous crashed processes
+    // that might be holding locks on content_items. pg_terminate_backend
+    // kills the entire session (releases locks), not just the current query.
     try {
       const stuckResult = await client.query(`
-        SELECT pg_cancel_backend(pid)
+        SELECT pg_terminate_backend(pid)
         FROM pg_stat_activity
-        WHERE state = 'active'
+        WHERE pid != pg_backend_pid()
+        AND state != 'idle'
         AND query LIKE '%content_items%'
-        AND query_start < NOW() - INTERVAL '30 seconds'
-        AND pid != pg_backend_pid()
+        AND backend_start < NOW() - INTERVAL '30 seconds'
       `);
       if (stuckResult.rowCount && stuckResult.rowCount > 0) {
-        console.log(`Cancelled ${stuckResult.rowCount} stuck query(s) from previous sessions`);
+        console.log(`Terminated ${stuckResult.rowCount} stuck session(s) from previous crashes`);
+        // Brief pause to let PostgreSQL clean up the terminated sessions
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     } catch (e) {
       // Ignore - might not have permission, lock_timeout will handle it
