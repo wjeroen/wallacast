@@ -8,7 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
-import { wallabagAPI } from './api';
+import { wallabagAPI, contentAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -96,6 +96,21 @@ function App() {
     setCurrentContent(content);
   };
 
+  const handleRefetchContent = async () => {
+    if (!currentContent) return;
+
+    try {
+      await contentAPI.refetch(currentContent.id);
+      // Wait a bit for the backend to process, then reload
+      setTimeout(async () => {
+        const response = await contentAPI.getById(currentContent.id);
+        setCurrentContent(response.data);
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to refetch content:', error);
+    }
+  };
+
   // Callback for AddTab when content is added
   const handleContentAdded = (item: ContentItem) => {
     addItem(item);
@@ -138,21 +153,22 @@ function App() {
       <header className="app-header">
         <h1>Wallacast</h1>
 
-        {wallabagEnabled && (
-          <button
-            className="sync-button"
-            onClick={handleSync}
-            disabled={syncing}
-            title={lastSync ? `Last sync: ${new Date(lastSync).toLocaleString()}` : 'Never synced'}
-          >
-            <RefreshCw size={18} className={syncing ? 'spinning' : ''} />
-            <span className="sync-text">
-              {syncing ? 'Syncing...' : pendingChanges > 0 ? `Sync (${pendingChanges})` : 'Sync'}
-            </span>
-          </button>
-        )}
+        <div className="header-right">
+          {wallabagEnabled && (
+            <button
+              className="sync-button"
+              onClick={handleSync}
+              disabled={syncing}
+              title={lastSync ? `Last sync: ${new Date(lastSync).toLocaleString()}` : 'Never synced'}
+            >
+              <RefreshCw size={18} className={syncing ? 'spinning' : ''} />
+              <span className="sync-text">
+                {syncing ? 'Syncing...' : pendingChanges > 0 ? `Sync (${pendingChanges})` : 'Sync'}
+              </span>
+            </button>
+          )}
 
-        <div className="user-menu-container" ref={userMenuRef}>
+          <div className="user-menu-container" ref={userMenuRef}>
           <button
             className="user-menu-trigger"
             onClick={() => setShowUserMenu(!showUserMenu)}
@@ -186,6 +202,7 @@ function App() {
               </button>
             </div>
           )}
+          </div>
         </div>
       </header>
 
@@ -197,34 +214,38 @@ function App() {
         )}
       </main>
 
-      <nav className="bottom-nav">
-        <button
-          className={activeTab === 'feed' ? 'active' : ''}
-          onClick={() => setActiveTab('feed')}
-        >
-          <Rss size={24} />
-          <span>Feed</span>
-        </button>
-        <button
-          className={`add-button ${activeTab === 'add' ? 'active' : ''}`}
-          onClick={() => setActiveTab('add')}
-        >
-          <Plus size={32} />
-        </button>
-        <button
-          className={activeTab === 'library' ? 'active' : ''}
-          onClick={() => setActiveTab('library')}
-        >
-          <Library size={24} />
-          <span>Library</span>
-        </button>
-      </nav>
+      <div className="bottom-container">
+        {currentContent && (
+          <AudioPlayer
+            content={currentContent}
+            onClose={() => setCurrentContent(null)}
+            onRefetch={handleRefetchContent}
+          />
+        )}
 
-      {currentContent && (
-        <div className="player-container">
-          <AudioPlayer content={currentContent} onClose={() => setCurrentContent(null)} />
-        </div>
-      )}
+        <nav className="bottom-nav">
+          <button
+            className={activeTab === 'feed' ? 'active' : ''}
+            onClick={() => setActiveTab('feed')}
+          >
+            <Rss size={24} />
+            <span>Feed</span>
+          </button>
+          <button
+            className={`add-button ${activeTab === 'add' ? 'active' : ''}`}
+            onClick={() => setActiveTab('add')}
+          >
+            <Plus size={32} />
+          </button>
+          <button
+            className={activeTab === 'library' ? 'active' : ''}
+            onClick={() => setActiveTab('library')}
+          >
+            <Library size={24} />
+            <span>Library</span>
+          </button>
+        </nav>
+      </div>
     </div>
   );
 }

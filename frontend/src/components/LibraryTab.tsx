@@ -1,8 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical } from 'lucide-react';
+import { Star, Archive, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
+
+function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -194,14 +203,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const handleRegenerateContent = async (id: number) => {
+  const handleRefetchContent = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { regenerate_content: true } as any);
-      refreshItem(id);
+      await contentAPI.refetch(id);
+      // Wait a bit for backend to process, then refresh
+      setTimeout(() => refreshItem(id), 1000);
     } catch (error) {
-      console.error('Failed to regenerate content:', error);
-      alert('Failed to regenerate content');
+      console.error('Failed to refetch content:', error);
+      alert('Failed to refetch content');
     }
   };
 
@@ -359,6 +369,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <div className="content-info">
                 <h3>{item.title}</h3>
                 {item.author && <p className="author">{item.author}</p>}
+                {/* Only show domain URL for articles (not podcasts/texts) */}
+                {item.url && item.type === 'article' && (
+                  <p className="content-source-link">
+                    <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                      {getDomainFromUrl(item.url)}
+                      <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+                    </a>
+                  </p>
+                )}
                 {item.description && (
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 )}
@@ -432,9 +451,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                             )}
                           </>
                         )}
-                        {item.type === 'article' && (
-                          <button onClick={() => handleRegenerateContent(item.id)}>
-                            Regenerate content
+                        {item.type === 'article' && item.url && (
+                          <button onClick={() => handleRefetchContent(item.id)}>
+                            Refetch from web
                           </button>
                         )}
                         {item.type === 'podcast_episode' && (
