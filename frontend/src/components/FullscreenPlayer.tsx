@@ -34,7 +34,7 @@ interface FullscreenPlayerProps {
   onRefetch?: () => void;
 }
 
-type TabType = 'content' | 'comments' | 'read-along' | 'queue';
+type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -126,6 +126,11 @@ export function FullscreenPlayer({
     // Content tab for articles and texts only
     if (content.type === 'article' || content.type === 'text') {
       tabs.push('content');
+    }
+
+    // Description tab for podcasts only
+    if (content.type === 'podcast_episode') {
+      tabs.push('description');
     }
 
     // Comments tab for EA Forum/LessWrong articles (even if no comments yet)
@@ -280,6 +285,19 @@ export function FullscreenPlayer({
             />
           </div>
         );
+      case 'description':
+        return (
+          <div className="tab-content-display">
+            <h3>Podcast Description</h3>
+            {content.description ? (
+              <div className="article-content" style={{ marginTop: '1rem' }}>
+                {content.description}
+              </div>
+            ) : (
+              <p className="no-content">No description available</p>
+            )}
+          </div>
+        );
       case 'comments':
         return (
           <div className="tab-comments-display">
@@ -426,6 +444,7 @@ export function FullscreenPlayer({
             onClick={() => handleTabClick(tab)}
           >
             {tab === 'content' && 'Content'}
+            {tab === 'description' && 'Description'}
             {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
             {tab === 'read-along' && 'Read-along'}
             {tab === 'queue' && 'Queue'}
