@@ -8,7 +8,7 @@ import { getAudioDuration } from './audio-utils.js';
 import { getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 
-// --- QUEUE SYSTEM STATE ---
+// --- QUEUE SYSTEM ---
 const audioQueue: number[] = [];
 let isProcessingQueue = false;
 
@@ -33,11 +33,13 @@ export async function queueAudioGeneration(contentId: number): Promise<void> {
   audioQueue.push(contentId);
   console.log(`[TTS-Queue] Added content ${contentId} to queue. Position: ${audioQueue.length}`);
 
+  // Mark as queued in DB
   await query(
     'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_error = NULL WHERE id = $3', 
     ['generating_audio', 'queued', contentId]
   );
 
+  // Fire and forget processor
   processAudioQueue();
 }
 
@@ -79,79 +81,62 @@ async function processAudioQueue() {
   }
 }
 
-// --- INTERNAL WORKER FUNCTIONS ---
+// --- WORKER FUNCTIONS (Adapted from Original) ---
 
 function splitTextIntoChunks(text: string, maxLength: number): string[] {
   if (text.length <= maxLength) return [text];
-
   const chunks: string[] = [];
   let currentPos = 0;
-
   while (currentPos < text.length) {
     let chunkEnd = currentPos + maxLength;
-
     if (chunkEnd >= text.length) {
       chunks.push(text.slice(currentPos));
       break;
     }
-
     const chunk = text.slice(currentPos, chunkEnd);
     const lastPeriod = chunk.lastIndexOf('.');
     const lastQuestion = chunk.lastIndexOf('?');
     const lastExclamation = chunk.lastIndexOf('!');
     const lastSentenceEnd = Math.max(lastPeriod, lastQuestion, lastExclamation);
-
     if (lastSentenceEnd > maxLength * 0.5) {
       chunkEnd = currentPos + lastSentenceEnd + 1;
     } else {
       const lastSpace = chunk.lastIndexOf(' ');
       if (lastSpace > 0) chunkEnd = currentPos + lastSpace + 1;
     }
-
     chunks.push(text.slice(currentPos, chunkEnd).trim());
     currentPos = chunkEnd;
   }
-
   return chunks;
 }
 
 function cleanHtmlForTTS(html: string): string {
   const dom = new JSDOM(html);
   const doc = dom.window.document;
-
-  const removeSelectors = [
-    'sup', 'sub', 'code', 'pre', 'table', 'img', 'figure', 'video', 'iframe',
-    '.w-rich-text-figure-caption', 'figcaption', '.footnote', '.citation',
-    'style', 'script', 'noscript'
-  ];
-  
-  removeSelectors.forEach(sel => {
+  // Remove non-content elements
+  ['sup', 'sub', 'code', 'pre', 'table', 'img', 'figure', 'video', 'iframe', 'style', 'script', 'noscript'].forEach(sel => {
     doc.querySelectorAll(sel).forEach(el => el.remove());
   });
-
-  const blockElements = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'br'];
-  blockElements.forEach(tag => {
+  // Add pause markers for block elements
+  ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'br'].forEach(tag => {
     doc.querySelectorAll(tag).forEach(el => {
       el.innerHTML = ` ${el.innerHTML} . `; 
     });
   });
-
-  let text = doc.body.textContent || '';
-  
-  text = text
+  return (doc.body.textContent || '')
     .replace(/\s+/g, ' ')
     .replace(/\s+\./g, '.')
     .replace(/\.\./g, '.')
     .replace(/\[\d+\]/g, '')
     .trim();
-
-  return text;
 }
 
 async function generateChunkWithRetry(
   openai: any, 
   text: string, 
-  options: any, 
+  model: string, 
+  voice: string, 
+  speed: number, 
   chunkIndex: number, 
   totalChunks: number
 ): Promise<Buffer> {
@@ -164,40 +149,39 @@ async function generateChunkWithRetry(
       console.log(`[TTS] Generating chunk ${chunkIndex + 1}/${totalChunks} (Attempt ${attempt})...`);
       
       const mp3 = await openai.audio.speech.create({
-        model: options.model,
-        voice: options.voice,
+        model: model,
+        voice: voice,
         input: text,
-        speed: options.speed,
+        speed: speed,
       });
 
       const buffer = Buffer.from(await mp3.arrayBuffer());
-
-      if (buffer.length < 100) {
-        throw new Error(`Generated audio chunk is too small (${buffer.length} bytes)`);
-      }
-
+      if (buffer.length < 100) throw new Error(`Generated audio chunk is too small (${buffer.length} bytes)`);
       return buffer;
     } catch (error: any) {
       console.warn(`[TTS] Chunk ${chunkIndex + 1} failed (Attempt ${attempt}): ${error.message}`);
-      
       if (attempt === MAX_RETRIES) throw error;
-      
       await new Promise(r => setTimeout(r, 1000 * attempt));
     }
   }
   throw new Error('Unreachable');
 }
 
-async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
-  // FIX: Added await here because getOpenAIClientForUser is likely async
+/**
+ * Reverts to original logic: Fetches User Settings and merges them.
+ */
+async function generateArticleAudio(text: string, articleVoiceId: string, articleSpeed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
+  // 1. Fetch Client and Defaults (AWAITED - Critical for async DB access)
   const openai = await getOpenAIClientForUser(userId);
-  const defaults = await getTTSOptionsForUser(userId);
-  
-  const options = {
-    model: defaults.model,
-    voice: voiceId || defaults.voice,
-    speed: speed || 1.0
-  };
+  const userSettings = await getTTSOptionsForUser(userId) || {};
+
+  // 2. Merge Settings (Original Logic)
+  // Use article-specific settings if present, otherwise fall back to user settings, otherwise defaults.
+  const model = userSettings.model || 'tts-1'; // Safe fallback if DB is empty
+  const voice = articleVoiceId || userSettings.voice || 'alloy';
+  const speed = articleSpeed || userSettings.speed || 1.0;
+
+  console.log(`[TTS] Config - Model: ${model}, Voice: ${voice}, Speed: ${speed}`);
 
   const chunks = splitTextIntoChunks(text, 4000);
   const tempDir = getTempDir();
@@ -207,8 +191,7 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
 
   try {
     for (let i = 0; i < chunks.length; i++) {
-      const buffer = await generateChunkWithRetry(openai, chunks[i], options, i, chunks.length);
-      
+      const buffer = await generateChunkWithRetry(openai, chunks[i], model, voice, speed, i, chunks.length);
       const chunkPath = path.join(tempDir, `chunk_${Date.now()}_${i}.mp3`);
       await fs.writeFile(chunkPath, buffer);
       chunkFiles.push(chunkPath);
@@ -217,24 +200,25 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
       await query('UPDATE content_items SET generation_progress = $1 WHERE generation_status = $2', [progress, 'generating_audio']);
     }
 
+    // Merge chunks
+    console.log('[TTS] Merging chunks...');
     const outputFilename = `merged_${Date.now()}.mp3`;
     const outputPath = path.join(tempDir, outputFilename);
-
-    console.log('[TTS] Merging chunks...');
     
     await new Promise<void>((resolve, reject) => {
       const command = ffmpeg();
       chunkFiles.forEach(file => command.input(file));
-      
       command
         .on('error', (err) => reject(new Error(`FFmpeg merge error: ${err.message}`)))
         .on('end', () => resolve())
         .mergeToFile(outputPath, tempDir);
     });
 
+    // Get duration from FILE PATH (Fixed bug)
     const duration = await getAudioDuration(outputPath);
     const finalBuffer = await fs.readFile(outputPath);
 
+    // Cleanup
     await Promise.all([
       ...chunkFiles.map(f => fs.unlink(f).catch(() => {})),
       fs.unlink(outputPath).catch(() => {})
@@ -258,7 +242,6 @@ async function generateAudioForContent(contentId: number): Promise<void> {
   if (content.comments && content.comments.length > 0) {
     textToSpeak += " . Here are the top comments. ";
     const comments: Comment[] = content.comments.slice(0, 15);
-    
     comments.forEach((comment) => {
       const cleanComment = cleanHtmlForTTS(comment.content);
       if (cleanComment.length > 20) {
@@ -267,10 +250,11 @@ async function generateAudioForContent(contentId: number): Promise<void> {
     });
   }
 
+  // Pass raw values from DB. Logic is handled inside generateArticleAudio
   const { buffer: audioBuffer, duration: audioDuration } = await generateArticleAudio(
     textToSpeak, 
-    content.voice_id || 'alloy', 
-    content.playback_speed || 1.0, 
+    content.voice_id, 
+    content.playback_speed, 
     content.user_id
   );
 
@@ -284,6 +268,7 @@ async function generateAudioForContent(contentId: number): Promise<void> {
 
   console.log(`✓ Audio stored for content ${contentId}`);
 
+  // Trigger Transcription
   triggerTranscription(contentId, audioUrl, content.user_id);
 }
 
@@ -291,9 +276,7 @@ async function triggerTranscription(contentId: number, audioUrl: string, userId:
   try {
     console.log('[TTS] Triggering auto-transcription...');
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
-
     const result = await transcribeWithTimestamps(audioUrl, userId);
-    
     await query(
       'UPDATE content_items SET transcript = $1, transcript_words = $2, current_operation = NULL WHERE id = $3',
       [result.text, JSON.stringify(result.words), contentId]
