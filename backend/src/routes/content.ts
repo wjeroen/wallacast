@@ -2,8 +2,8 @@ import express from 'express';
 import path from 'path';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
-// CHANGED: Removed unused 'extractArticleContent' from import
-import { generateAudioForContent } from '../services/openai-tts.js';
+// CHANGED: Import the queue function instead of the direct generator
+import { queueAudioGeneration } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 
@@ -147,8 +147,8 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
-      htmlContent = articleData.cleaned_html; // Use cleaned HTML (main content with formatting)
-      processedContent = articleData.content; // Store plain text for search/indexing
+      htmlContent = articleData.cleaned_html; 
+      processedContent = articleData.content; 
 
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
@@ -186,7 +186,6 @@ router.post('/', async (req, res) => {
       finalTitle = 'Untitled Article';
     }
 
-    // Look up podcast show name if podcast_id is provided (for podcast episodes)
     if (podcast_id) {
       const podcastResult = await query(
         'SELECT title FROM podcasts WHERE id = $1 AND user_id = $2',
@@ -207,33 +206,14 @@ router.post('/', async (req, res) => {
 
     const createdItem = result.rows[0];
 
-    // Auto-generate audio for articles
+    // UPDATED: Use Queue for Auto-Generation
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
       if (shouldAutoGenerate) {
-        console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
-
-        await query(
-          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-          ['starting', 0, 'initialization', createdItem.id]
-        );
-
-        generateAudioForContent(createdItem.id)
-          .then(async () => {
-            await query(
-              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-              ['completed', 100, createdItem.id]
-            );
-          })
-          .catch(async (error) => {
-            console.error('Auto audio generation error:', error);
-            await query(
-              'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-              ['failed', error.message || 'Failed to generate audio', 0, createdItem.id]
-            );
-          });
+        console.log(`Auto-generating audio for ${type} ${createdItem.id} (Queued)`);
+        await queueAudioGeneration(createdItem.id);
       }
     }
 
@@ -431,9 +411,6 @@ router.patch('/:id', async (req, res) => {
 
       if (contentResult.rows.length > 0) {
         const { audio_data, type, is_starred: dbStarred } = contentResult.rows[0];
-
-        // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
-        // If updates.is_starred is present, use it. Otherwise use DB value.
         const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
 
         // Only delete audio for articles (not podcasts) and only if not favorited
@@ -459,25 +436,13 @@ router.patch('/:id', async (req, res) => {
       if (contentResult.rows.length > 0) {
         const { audio_url, type, html_content } = contentResult.rows[0];
 
+        // UPDATED: Use Queue for Un-archive regeneration
         if (!audio_url && (type === 'article' || type === 'text') && html_content) {
-          console.log(`Un-archiving article ${id}: triggering audio regeneration`);
+          console.log(`Un-archiving article ${id}: queueing audio regeneration`);
+          
+          await queueAudioGeneration(parseInt(id));
 
-          generateAudioForContent(parseInt(id))
-            .then(async () => {
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                ['completed', 100, id]
-              );
-            })
-            .catch(async (error) => {
-              console.error('Auto audio generation error on un-archive:', error);
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                ['failed', error.message || 'Failed to regenerate audio', 0, id]
-              );
-            });
-
-          updates.generation_status = 'starting';
+          updates.generation_status = 'generating_audio';
           updates.generation_progress = 0;
           allowedFields.push('generation_status', 'generation_progress');
         }
@@ -513,10 +478,6 @@ router.patch('/:id', async (req, res) => {
     paramCount++;
     values.push(req.user!.userId);
 
-    // CRITICAL FIX: Never use RETURNING * — it includes audio_data (BYTEA, 10-50MB),
-    // which was being sent in every response, causing ~7GB/hour of data transfer
-    // during playback (saves every 10s). For playback-only updates, return minimal data.
-    // For content updates, return the same columns as the list endpoint.
     const returningClause = updatingContentFields
       ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes'
       : 'RETURNING id, playback_position, playback_speed, last_played_at';
@@ -637,13 +598,13 @@ router.post('/:id/refetch', async (req, res) => {
   }
 });
 
-// Generate TTS for an article
+// Generate TTS for an article (UPDATED TO USE QUEUE)
 router.post('/:id/generate-audio', async (req, res) => {
   try {
     const { id } = req.params;
     const { regenerate } = req.body;
 
-    // OPTIMIZED: Select only necessary columns, excluding audio_data
+    // OPTIMIZED: Select only necessary columns
     const contentResult = await query(
       'SELECT id, type, generation_status, generation_progress, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
@@ -667,33 +628,15 @@ router.post('/:id/generate-audio', async (req, res) => {
       });
     }
 
-    // CHANGED: Check audio_url instead of audio_data to avoid fetching BLOB
     if (regenerate && contentItem.audio_url) {
       console.log(`Regenerating: Will replace existing audio data`);
     }
 
-    await query(
-      'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
-      ['generating_audio', 0, 'audio', id]
-    );
-
-    generateAudioForContent(parseInt(id))
-      .then(async (result) => {
-        await query(
-          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-          ['completed', 100, id]
-        );
-      })
-      .catch(async (error) => {
-        console.error('Background audio generation error:', error);
-        await query(
-          'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-          ['failed', error.message || 'Failed to generate audio', 0, id]
-        );
-      });
+    // Add to queue
+    await queueAudioGeneration(parseInt(id));
 
     res.json({
-      message: 'Audio generation started',
+      message: 'Audio generation queued',
       generation_status: 'generating_audio',
       generation_progress: 0
     });
