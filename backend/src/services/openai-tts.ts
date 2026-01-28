@@ -24,12 +24,7 @@ interface Comment {
 
 // --- PUBLIC QUEUE ENTRY POINT ---
 
-/**
- * Adds an article to the audio generation queue.
- * Returns immediately, allowing the UI to show "Generating..." state.
- */
 export async function queueAudioGeneration(contentId: number): Promise<void> {
-  // Prevent duplicate queuing
   if (audioQueue.includes(contentId)) {
     console.log(`[TTS-Queue] Content ${contentId} is already in the queue.`);
     return;
@@ -38,13 +33,11 @@ export async function queueAudioGeneration(contentId: number): Promise<void> {
   audioQueue.push(contentId);
   console.log(`[TTS-Queue] Added content ${contentId} to queue. Position: ${audioQueue.length}`);
 
-  // Mark as 'generating' in DB immediately so UI updates
   await query(
     'UPDATE content_items SET generation_status = $1, current_operation = $2, generation_error = NULL WHERE id = $3', 
     ['generating_audio', 'queued', contentId]
   );
 
-  // Trigger processor (fire-and-forget)
   processAudioQueue();
 }
 
@@ -63,13 +56,11 @@ async function processAudioQueue() {
       try {
         console.log(`[TTS-Queue] Starting job for content ${contentId}...`);
         
-        // Update DB status to 'processing'
         await query(
           'UPDATE content_items SET current_operation = $1 WHERE id = $2', 
           ['processing_audio', contentId]
         );
 
-        // Run the heavy job
         await generateAudioForContent(contentId);
         
         console.log(`[TTS-Queue] Job for content ${contentId} completed successfully.`);
@@ -77,7 +68,6 @@ async function processAudioQueue() {
       } catch (error: any) {
         console.error(`[TTS-Queue] Job for content ${contentId} failed:`, error);
         
-        // Update DB with failure
         await query(
           'UPDATE content_items SET generation_status = $1, generation_error = $2, current_operation = NULL WHERE id = $3',
           ['failed', error.message || 'Unknown error', contentId]
@@ -139,7 +129,6 @@ function cleanHtmlForTTS(html: string): string {
     doc.querySelectorAll(sel).forEach(el => el.remove());
   });
 
-  // Basic block element spacing
   const blockElements = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'br'];
   blockElements.forEach(tag => {
     doc.querySelectorAll(tag).forEach(el => {
@@ -149,21 +138,16 @@ function cleanHtmlForTTS(html: string): string {
 
   let text = doc.body.textContent || '';
   
-  // Clean up whitespace and punctuation
   text = text
     .replace(/\s+/g, ' ')
     .replace(/\s+\./g, '.')
     .replace(/\.\./g, '.')
-    .replace(/\[\d+\]/g, '') // remove reference numbers [1]
+    .replace(/\[\d+\]/g, '')
     .trim();
 
   return text;
 }
 
-/**
- * Robustly generates audio for a single article chunk.
- * Includes retries and validation.
- */
 async function generateChunkWithRetry(
   openai: any, 
   text: string, 
@@ -188,7 +172,6 @@ async function generateChunkWithRetry(
 
       const buffer = Buffer.from(await mp3.arrayBuffer());
 
-      // Validation: Check for empty or dangerously small files (likely error responses)
       if (buffer.length < 100) {
         throw new Error(`Generated audio chunk is too small (${buffer.length} bytes)`);
       }
@@ -199,25 +182,21 @@ async function generateChunkWithRetry(
       
       if (attempt === MAX_RETRIES) throw error;
       
-      // Exponential backoff
       await new Promise(r => setTimeout(r, 1000 * attempt));
     }
   }
   throw new Error('Unreachable');
 }
 
-/**
- * Generates audio and returns both the Buffer and the Duration.
- */
 async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
-  const openai = getOpenAIClientForUser(userId);
+  // FIX: Added await here because getOpenAIClientForUser is likely async
+  const openai = await getOpenAIClientForUser(userId);
   const defaults = await getTTSOptionsForUser(userId);
   
-  // FIX: Construct a new object to avoid accessing missing properties on 'defaults'
   const options = {
     model: defaults.model,
     voice: voiceId || defaults.voice,
-    speed: speed || 1.0 // Default to 1.0 since defaults doesn't have speed
+    speed: speed || 1.0
   };
 
   const chunks = splitTextIntoChunks(text, 4000);
@@ -227,21 +206,17 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
   console.log(`[TTS] Processing ${chunks.length} chunks...`);
 
   try {
-    // 1. Generate all chunks
     for (let i = 0; i < chunks.length; i++) {
-      // Use the retry wrapper
       const buffer = await generateChunkWithRetry(openai, chunks[i], options, i, chunks.length);
       
       const chunkPath = path.join(tempDir, `chunk_${Date.now()}_${i}.mp3`);
       await fs.writeFile(chunkPath, buffer);
       chunkFiles.push(chunkPath);
       
-      // Update progress in DB
       const progress = Math.round(((i + 1) / chunks.length) * 100);
       await query('UPDATE content_items SET generation_progress = $1 WHERE generation_status = $2', [progress, 'generating_audio']);
     }
 
-    // 2. Merge chunks using ffmpeg
     const outputFilename = `merged_${Date.now()}.mp3`;
     const outputPath = path.join(tempDir, outputFilename);
 
@@ -257,13 +232,9 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
         .mergeToFile(outputPath, tempDir);
     });
 
-    // FIX: Get duration from the file path string (not Buffer)
     const duration = await getAudioDuration(outputPath);
-    
-    // Read the file into a buffer to return it
     const finalBuffer = await fs.readFile(outputPath);
 
-    // Cleanup
     await Promise.all([
       ...chunkFiles.map(f => fs.unlink(f).catch(() => {})),
       fs.unlink(outputPath).catch(() => {})
@@ -272,26 +243,18 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
     return { buffer: finalBuffer, duration };
 
   } catch (error) {
-    // Cleanup on error
     chunkFiles.forEach(f => fs.unlink(f).catch(() => {}));
     throw error;
   }
 }
 
-/**
- * The actual worker function that does the heavy lifting.
- * Called by the queue processor.
- */
 async function generateAudioForContent(contentId: number): Promise<void> {
-  // 1. Fetch content
   const res = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
   if (res.rows.length === 0) throw new Error('Content not found');
   const content = res.rows[0];
 
-  // 2. Prepare text
   let textToSpeak = cleanHtmlForTTS(content.content || '');
 
-  // Add comments if available (limit to top 15)
   if (content.comments && content.comments.length > 0) {
     textToSpeak += " . Here are the top comments. ";
     const comments: Comment[] = content.comments.slice(0, 15);
@@ -304,7 +267,6 @@ async function generateAudioForContent(contentId: number): Promise<void> {
     });
   }
 
-  // 3. Generate Audio
   const { buffer: audioBuffer, duration: audioDuration } = await generateArticleAudio(
     textToSpeak, 
     content.voice_id || 'alloy', 
@@ -315,7 +277,6 @@ async function generateAudioForContent(contentId: number): Promise<void> {
   const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
   const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-  // 4. Save Result
   await query(
     'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, generation_status = $5, generation_progress = 100, current_operation = NULL WHERE id = $6',
     [audioBuffer, audioUrl, audioDuration, audioBuffer.length, 'completed', contentId]
@@ -323,11 +284,9 @@ async function generateAudioForContent(contentId: number): Promise<void> {
 
   console.log(`✓ Audio stored for content ${contentId}`);
 
-  // 5. Trigger Transcription (Async)
   triggerTranscription(contentId, audioUrl, content.user_id);
 }
 
-// Separated transcription trigger so it doesn't block the audio queue
 async function triggerTranscription(contentId: number, audioUrl: string, userId: number) {
   try {
     console.log('[TTS] Triggering auto-transcription...');
@@ -342,7 +301,6 @@ async function triggerTranscription(contentId: number, audioUrl: string, userId:
     console.log(`[TTS] Transcription saved for ${contentId}`);
   } catch (err) {
     console.error(`[TTS] Transcription failed for ${contentId}:`, err);
-    // Don't mark content as failed, just clear the operation flag
     await query('UPDATE content_items SET current_operation = NULL WHERE id = $1', [contentId]);
   }
 }
