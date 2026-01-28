@@ -175,7 +175,6 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   }
 }
 
-// --- FILE 3 LOGIC: Metadata Extraction (Proven to work for LessWrong) ---
 function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publishedDate?: string } {
   const referenceMap = new Map<string, any>();
 
@@ -188,7 +187,6 @@ function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publi
   for (const [key, val] of referenceMap.entries()) {
     if (!val) continue;
 
-    // KEY DIFFERENCE: File 3 checks "key.startsWith('Post:')" which File 2 missed
     if (val.__typename === 'Post' || key.startsWith('Post:')) {
       // Extract author from Post.user
       let user = resolveRef(val.user, referenceMap);
@@ -207,7 +205,6 @@ function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publi
   return {};
 }
 
-// --- FILE 2 LOGIC: Comment Extraction (Proven to work better) ---
 function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Comment[] {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
@@ -218,8 +215,8 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
   for (const root of dataRoots) {
     buildReferenceMap(root, referenceMap);
   }
-
-  // 1b. Collect raw comments (Pure comment logic from File 2)
+  
+  // 1b. Collect raw comments
   referenceMap.forEach((val, key) => {
       // CRITICAL FIX: Add null check for 'val' to prevent crashes
       if (!val) return;
@@ -320,7 +317,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Detect Site Type
     const isLessWrong = url.includes('lesswrong.com');
 
-    // --- Metadata (DOM / Meta Tags) ---
+    // --- Metadata ---
     let title = 'Untitled';
     const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
     if (ogTitle) {
@@ -339,7 +336,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (karmaText) karma = parseInt(karmaText);
     }
 
-    // --- Data Extraction ---
+    // --- Comment Extraction ---
     let comments: Comment[] | undefined;
     let dataRoots: any[] = [];
 
@@ -369,8 +366,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
       if (dataRoots.length > 0) {
         console.log(`[Comments] Processing data roots...`);
-        
-        // 1. Extract Comments using File 2 Logic (Best for comments)
+        // Pass the site flag to helper
         comments = extractCommentsFromData(dataRoots, isLessWrong);
         console.log(`[Comments] ✅ Final result: ${comments.length} top-level comments extracted`);
       }
@@ -378,8 +374,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       console.error('[Comments] ✗ Error extracting comments:', error);
     }
 
-    // --- Finalize Metadata ---
-    // Try meta tags first
+    // --- Finalize ---
+    // Try meta tags first (works for EA Forum and other sites)
     let author: string | undefined;
     const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
                      doc.querySelector('meta[name="author"]')?.getAttribute('content');
@@ -389,7 +385,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
     if (ogPublished) publishedDate = ogPublished;
 
-    // For LessWrong: Fall back to Apollo state extraction (File 3 Logic) if meta tags are missing
+    // For LessWrong: Fall back to Apollo state extraction if meta tags are missing
     if (isLessWrong && dataRoots.length > 0 && (!author || !publishedDate)) {
       console.log(`[Metadata] Meta tags missing for LessWrong, trying Apollo extraction...`);
       const apolloMetadata = extractPostMetadataFromData(dataRoots);
