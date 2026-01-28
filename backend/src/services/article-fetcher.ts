@@ -6,7 +6,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
+  extendedScore?: Record<string, number>;
   content: string;
   replies?: Comment[];
 }
@@ -29,7 +29,7 @@ export interface ArticleContent {
 }
 
 /**
- * Helper to resolve Apollo references like { __ref: "User:123" }
+ * Resolves Apollo references (e.g. { __ref: "User:123" })
  */
 function resolveRef(obj: any, referenceMap: Map<string, any>): any {
   if (!obj) return obj;
@@ -40,8 +40,55 @@ function resolveRef(obj: any, referenceMap: Map<string, any>): any {
 }
 
 /**
- * MASTER PARSER: Handles "Direct Object", "Function/IIFE", and "Reference" patterns
+ * Robustly extracts variables like 'rehydrate' or 'events' from minified JS strings.
+ * Handles "const rehydrate={" and "const rehydrate = {"
  */
+function extractVariablesFromFunctionString(jsCode: string): any[] {
+  const foundData: any[] = [];
+  // Regex to find variable assignments, tolerant of whitespace
+  // Matches: const rehydrate = { OR const rehydrate={
+  const variableRegex = /const\s+(rehydrate|events)\s*=\s*([{\[])/g;
+  
+  let match;
+  while ((match = variableRegex.exec(jsCode)) !== null) {
+    const startChar = match[2]; // '{' or '['
+    const startIndex = match.index + match[0].length - 1; // Start at the bracket
+    
+    // Bracket balancing
+    let open = 0;
+    let endIdx = -1;
+    let inStr = false;
+    let strChar = '';
+    let esc = false;
+
+    for (let i = startIndex; i < jsCode.length; i++) {
+      const c = jsCode[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (!inStr && (c === '"' || c === "'")) { inStr = true; strChar = c; continue; }
+      if (inStr) { if (c === strChar) inStr = false; continue; }
+
+      if (c === '{' || c === '[') open++;
+      if (c === '}' || c === ']') open--;
+
+      if (open === 0) {
+        endIdx = i + 1;
+        break;
+      }
+    }
+
+    if (endIdx !== -1) {
+      const jsonStr = jsCode.substring(startIndex, endIdx).replace(/:\s*undefined([,}])/g, ':null$1');
+      try {
+        foundData.push(JSON.parse(jsonStr));
+      } catch (e) {
+        // console.warn('JSON Parse failed', e);
+      }
+    }
+  }
+  return foundData;
+}
+
 function extractApolloSSRData(scriptContent: string): any[] {
   const results: any[] = [];
   const pushPattern = /\.push\s*\(\s*/g;
@@ -74,12 +121,14 @@ function extractApolloSSRData(scriptContent: string): any[] {
     if (endIndex !== -1) {
       let payloadString = scriptContent.substring(startIndex, endIndex).trim();
 
+      // Case A: Direct Object
       if (payloadString.startsWith('{') || payloadString.startsWith('[')) {
         try {
           const sanitized = payloadString.replace(/:\s*undefined([,}])/g, ':null$1');
           results.push(JSON.parse(sanitized));
-        } catch (e) { /* ignore parse errors */ }
+        } catch (e) { }
       }
+      // Case B: Function/IIFE (LessWrong uses this heavily)
       else if (payloadString.startsWith('(') || payloadString.startsWith('function')) {
         const extracted = extractVariablesFromFunctionString(payloadString);
         results.push(...extracted);
@@ -89,63 +138,9 @@ function extractApolloSSRData(scriptContent: string): any[] {
   return results;
 }
 
-function extractVariablesFromFunctionString(jsCode: string): any[] {
-  const foundData: any[] = [];
-  const targets = ['rehydrate', 'events'];
-
-  for (const target of targets) {
-    const marker = `const ${target} =`;
-    let idx = jsCode.indexOf(marker);
-    if (idx === -1) continue;
-    idx += marker.length;
-
-    let startIdx = -1;
-    for (let i = idx; i < jsCode.length; i++) {
-      if (jsCode[i] === '{' || jsCode[i] === '[') {
-        startIdx = i;
-        break;
-      }
-    }
-    if (startIdx === -1) continue;
-
-    let open = 0;
-    let endIdx = -1;
-    let inStr = false;
-    let strChar = '';
-    let esc = false;
-
-    for (let i = startIdx; i < jsCode.length; i++) {
-      const c = jsCode[i];
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (!inStr && (c === '"' || c === "'")) { inStr = true; strChar = c; continue; }
-      if (inStr) { if (c === strChar) inStr = false; continue; }
-
-      if (c === '{' || c === '[') open++;
-      if (c === '}' || c === ']') open--;
-
-      if (open === 0) {
-        endIdx = i + 1;
-        break;
-      }
-    }
-
-    if (endIdx !== -1) {
-      const jsonStr = jsCode.substring(startIdx, endIdx).replace(/:\s*undefined([,}])/g, ':null$1');
-      try {
-        foundData.push(JSON.parse(jsonStr));
-      } catch (e) { }
-    }
-  }
-  return foundData;
-}
-
-// Recursively index all objects in the data blob by their ID/Cache Key
 function buildReferenceMap(obj: any, map: Map<string, any>) {
-  // CRITICAL FIX: typeof null is 'object', so explicitly check for null
   if (!obj || typeof obj !== 'object') return;
 
-  // Apollo often uses keys like "Comment:123" or "_id"
   if (obj._id) {
     map.set(obj._id, obj);
     if (obj.__typename) {
@@ -153,17 +148,14 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
     }
   }
   
-  // Also scan for keys that look like cache IDs in the root object
   if (!Array.isArray(obj)) {
       for (const key in obj) {
-          // CRITICAL FIX: Check obj[key] is not null before adding
           if (key.includes(':') && typeof obj[key] === 'object' && obj[key] !== null) {
               map.set(key, obj[key]);
           }
       }
   }
 
-  // Iterate deeper
   if (Array.isArray(obj)) {
     obj.forEach(item => buildReferenceMap(item, map));
   } else {
@@ -175,39 +167,59 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   }
 }
 
-function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Comment[] {
+/**
+ * Unified extractor for Comments AND Post Metadata
+ */
+function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): { comments: Comment[], postMeta?: { author: string, publishedDate: string } } {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
   const rawCommentData = new Map<string, any>();
   const referenceMap = new Map<string, any>();
 
-  // 1. Build Reference Map (Index everything first!)
+  // 1. Index everything
   for (const root of dataRoots) {
     buildReferenceMap(root, referenceMap);
   }
-  
-  // 1b. Collect raw comments
-  referenceMap.forEach((val, key) => {
-      // CRITICAL FIX: Add null check for 'val' to prevent crashes
-      if (!val) return;
 
+  // 2. Find Main Post Metadata (Fix for missing Author/Date)
+  let postMeta: { author: string, publishedDate: string } | undefined;
+  
+  for (const val of referenceMap.values()) {
+    if (val && val.__typename === 'Post') {
+      // Logic: A valid post usually has a title AND (body OR contents reference)
+      const hasContent = val.htmlBody || val.body || val.contents;
+      
+      if (val.title && hasContent) {
+        const user = resolveRef(val.user || val.author, referenceMap);
+        const authorName = user?.displayName || user?.slug || user?.username || val.author || 'Unknown';
+        
+        postMeta = {
+          author: authorName,
+          publishedDate: val.postedAt
+        };
+        // If we found a post with a real title, we assume it's the main one.
+        break;
+      }
+    }
+  }
+
+  // 3. Identify Comments
+  referenceMap.forEach((val, key) => {
+      if (!val) return;
       if (val.__typename === 'Comment' || key.startsWith('Comment:')) {
           const id = val._id || key.split(':')[1] || key;
           rawCommentData.set(id, val);
       }
   });
 
-  console.log(`[Comments] Found ${rawCommentData.size} unique raw comments`);
-
-  // 2. Convert raw data to Comment objects (Resolving references)
+  // 4. Process Comments
   for (const [id, raw] of rawCommentData.entries()) {
     const commentData = resolveRef(raw, referenceMap);
     
-    // Resolve User (References often hide here)
     let user = resolveRef(commentData.user, referenceMap);
     const username = user?.displayName || user?.slug || commentData.author || 'Anonymous';
 
-    // Resolve Content (Often in contents.html or body)
+    // Content: Handle LW 'contents' reference or EA 'htmlBody'
     let contentObj = resolveRef(commentData.contents, referenceMap);
     let content = '';
     if (contentObj) {
@@ -215,17 +227,12 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
     } 
     if (!content) content = commentData.htmlBody || commentData.body || '';
 
-    // Extract Scores
     const extendedScore = commentData.extendedScore || {};
     
-    // FIX FOR LESSWRONG: Non-destructive normalization
     if (isLessWrong) {
-        // If 'agreement' is missing, try to find it in other common keys
         if (extendedScore.agreement === undefined) {
             const val = extendedScore.agreementScore || extendedScore.agree;
-            if (typeof val === 'number') {
-                extendedScore.agreement = val;
-            }
+            if (typeof val === 'number') extendedScore.agreement = val;
         }
     }
 
@@ -241,7 +248,7 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
     commentMap.set(id, comment);
   }
 
-  // 3. Build the Tree
+  // 5. Threading
   for (const [id, raw] of rawCommentData.entries()) {
     const commentData = resolveRef(raw, referenceMap);
     const comment = commentMap.get(id);
@@ -262,9 +269,8 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
     }
   }
 
-  // 4. Sort
+  // 6. Sort
   comments.sort((a, b) => (b.karma || 0) - (a.karma || 0));
-
   const sortReplies = (c: Comment) => {
     if (c.replies?.length) {
       c.replies.sort((a, b) => (b.karma || 0) - (a.karma || 0));
@@ -273,21 +279,18 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
   };
   comments.forEach(sortReplies);
 
-  return comments;
+  return { comments, postMeta };
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   try {
-    console.log(`[Fetcher] Fetching article from: ${url}`);
     const response = await fetch(url);
     const html = await response.text();
     const dom = new JSDOM(html);
     const doc = dom.window.document;
-
-    // Detect Site Type
     const isLessWrong = url.includes('lesswrong.com');
 
-    // --- Metadata ---
+    // --- Initial Metadata (Fallback) ---
     let title = 'Untitled';
     const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
     if (ogTitle) {
@@ -306,28 +309,26 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (karmaText) karma = parseInt(karmaText);
     }
 
-    // --- Comment Extraction ---
+    // --- Data Extraction ---
     let comments: Comment[] | undefined;
+    let apolloMeta: { author: string, publishedDate: string } | undefined;
     let dataRoots: any[] = [];
 
     try {
       const scriptTags = doc.querySelectorAll('script');
-      console.log(`[Comments] Found ${scriptTags.length} script tags, scanning...`);
-
+      
       for (const script of Array.from(scriptTags)) {
         const scriptContent = script.textContent || '';
 
-        // 1. Classic Apollo State
+        // Standard Apollo State
         if (scriptContent.includes('__APOLLO_STATE__')) {
           const match = scriptContent.match(/__APOLLO_STATE__\s*=\s*(\{.+\});?\s*$/s);
           if (match) {
-            try {
-              dataRoots.push(JSON.parse(match[1]));
-            } catch (e) { }
+            try { dataRoots.push(JSON.parse(match[1])); } catch (e) { }
           }
         }
-
-        // 2. ApolloSSRDataTransport
+        
+        // SSR Data Transport (LessWrong / EA Forum)
         if (scriptContent.includes('ApolloSSRDataTransport')) {
           const extracted = extractApolloSSRData(scriptContent);
           dataRoots.push(...extracted);
@@ -335,24 +336,31 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
 
       if (dataRoots.length > 0) {
-        console.log(`[Comments] Processing data roots...`);
-        // Pass the site flag to helper
-        comments = extractCommentsFromData(dataRoots, isLessWrong);
-        console.log(`[Comments] ✅ Final result: ${comments.length} top-level comments extracted`);
+        const result = extractCommentsFromData(dataRoots, isLessWrong);
+        comments = result.comments;
+        apolloMeta = result.postMeta;
       }
     } catch (error) {
-      console.error('[Comments] ✗ Error extracting comments:', error);
+      console.error('Extraction error:', error);
     }
 
-    // --- Finalize ---
+    // --- Finalize Metadata ---
     let author: string | undefined;
-    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                     doc.querySelector('meta[name="author"]')?.getAttribute('content');
-    if (ogAuthor) author = ogAuthor.trim();
+    if (apolloMeta?.author) {
+        author = apolloMeta.author;
+    } else {
+        const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
+                         doc.querySelector('meta[name="author"]')?.getAttribute('content');
+        if (ogAuthor) author = ogAuthor.trim();
+    }
 
     let publishedDate: string | undefined;
-    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
-    if (ogPublished) publishedDate = ogPublished;
+    if (apolloMeta?.publishedDate) {
+        publishedDate = apolloMeta.publishedDate;
+    } else {
+        const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
+        if (ogPublished) publishedDate = ogPublished;
+    }
 
     let cleanedHtml = html;
     const mainContent = doc.querySelector('.PostsPage-postContent') || doc.querySelector('article');
@@ -372,7 +380,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       comments,
     };
   } catch (error) {
-    console.error('[Fetcher] ✗ Error fetching article:', error);
+    console.error('Error fetching article:', error);
     throw new Error('Failed to fetch article content');
   }
 }
