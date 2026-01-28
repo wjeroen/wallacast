@@ -244,6 +244,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       );
     }
 
+    // UPDATED: Check for queued state
+    if (item.current_operation === 'queued') {
+      return (
+        <div className="generation-status generating" style={{ opacity: 0.8 }}>
+          <span>⏳ Queued...</span>
+        </div>
+      );
+    }
+
     let statusMessage = '';
     const progressPercent = item.generation_progress || 0;
 
@@ -337,6 +346,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </button>
           </div>
         </div>
+
         {bulkMode && selectedItems.size > 0 && (
           <div className="bulk-actions">
             <span className="bulk-count">{selectedItems.size} selected</span>
