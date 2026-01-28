@@ -40,6 +40,7 @@ interface GraphQLResponse {
         postedAt: string;
         baseScore: number;
         voteCount: number;
+        extendedScore: number | null; // Often a JSON string or object depending on API version
         user: {
           displayName: string;
           slug: string;
@@ -53,6 +54,7 @@ interface GraphQLResponse {
         htmlBody: string;
         postedAt: string;
         baseScore: number;
+        extendedScore: number | null;
         user: {
           displayName: string;
           slug: string;
@@ -60,6 +62,33 @@ interface GraphQLResponse {
         parentCommentId: string | null;
       }>;
     };
+  };
+}
+
+/**
+ * Helper to parse the extendedScore field which can be somewhat dynamic.
+ * On LessWrong: { agreement: 5, disagreement: 2 }
+ * On EA Forum: { like: 10, love: 5 } (schema varies)
+ */
+function parseExtendedScore(score: any): { agree?: number; disagree?: number; raw?: any } {
+  if (!score) return {};
+  
+  // Sometimes it's a JSON string, sometimes an object
+  let data = score;
+  if (typeof score === 'string') {
+    try {
+      data = JSON.parse(score);
+    } catch (e) {
+      return { raw: score };
+    }
+  }
+
+  // Map common keys to agree/disagree for your UI
+  // You can inspect 'data' to see exact EA Forum keys like 'love', 'creative', etc.
+  return {
+    agree: data.agreement ?? data.agree ?? data.upvotes,
+    disagree: data.disagreement ?? data.disagree ?? data.downvotes,
+    raw: data
   };
 }
 
@@ -78,6 +107,8 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   const apiEndpoint = `${baseUrl}/graphql`;
 
   // 2. Construct GraphQL Query
+  // CHANGED: Added 'extendedScore' to fetch reactions
+  // CHANGED: Switched view to 'postCommentsNew' to fix EA Forum random comments bug
   const query = `
     query GetPostAndComments($postId: String!) {
       post(input: {selector: {_id: $postId}}) {
@@ -88,6 +119,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           postedAt
           baseScore
           voteCount
+          extendedScore
           user {
             displayName
             slug
@@ -95,12 +127,13 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           pageUrl
         }
       }
-      comments(input: {terms: {view: "postCommentsTop", postId: $postId, limit: 500}}) {
+      comments(input: {terms: {view: "postCommentsNew", postId: $postId, limit: 500}}) {
         results {
           _id
           htmlBody
           postedAt
           baseScore
+          extendedScore
           parentCommentId
           user {
             displayName
@@ -111,15 +144,13 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   `;
 
-  // 3. Execute Fetch using got-scraping (Handles TLS Fingerprinting automatically)
-  // We strictly type the response as unknown first, then cast, to satisfy TS with got-scraping
+  // 3. Execute Fetch using got-scraping
   const response = await gotScraping.post(apiEndpoint, {
     json: {
       query,
       variables: { postId }
     },
     responseType: 'json',
-    // We add specific headers that GraphQL endpoints often require
     headers: {
       'Origin': baseUrl,
       'Referer': url,
@@ -134,17 +165,24 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
   const post = json.data.post.result;
   const rawComments = json.data.comments.results;
-  
+
+  // Process Post Extended Score
+  const postReactions = parseExtendedScore(post.extendedScore);
+
   // 4. Process Comments into a Tree
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
 
   rawComments.forEach(c => {
+    const commentReactions = parseExtendedScore(c.extendedScore);
+    
     commentMap.set(c._id, {
       id: c._id,
       username: c.user?.displayName || '[deleted]',
       date: c.postedAt,
       karma: c.baseScore,
+      // Pass the raw object so your frontend can choose what to render (e.g. "Love")
+      extendedScore: commentReactions.raw, 
       content: c.htmlBody, 
       replies: []
     });
@@ -175,7 +213,8 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     site_name: siteName,
     published_date: post.postedAt,
     karma: post.baseScore,
-    agree_votes: post.voteCount, 
+    agree_votes: postReactions.agree,
+    disagree_votes: postReactions.disagree,
     comments: rootComments,
     comments_html: '' 
   };
@@ -195,13 +234,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       return await fetchForumMagnumPost(url, isEAForum);
     } catch (error: any) {
       console.error(`[Fetcher] GraphQL fetch failed: ${error.message}`);
-      // Only fall back if it's NOT a 429/403 (if we are blocked, the scraper will likely also be blocked)
-      // But we'll try anyway just in case.
       console.log('[Fetcher] Attempting fallback to standard scraper...');
     }
   }
 
-  // --- STANDARD SCRAPER (Now powered by got-scraping for better stealth) ---
+  // --- STANDARD SCRAPER (got-scraping) ---
   
   try {
     const response = await gotScraping.get(url);
