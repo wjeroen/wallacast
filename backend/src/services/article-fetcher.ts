@@ -96,8 +96,6 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     
   const apiEndpoint = `${baseUrl}/graphql`;
 
-  // We use the standard "postCommentsTop" view but ensure strict parameter binding
-  // via variables to prevent the "random comments" issue.
   const query = `
     query GetPostAndComments($postId: String!, $terms: JSON) {
       post(input: {selector: {_id: $postId}}) {
@@ -133,44 +131,42 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   `;
 
-  // Explicitly disable HTTP2 to avoid common Cloudflare TLS fingerprinting issues with Node
+  // We use standard "postCommentsTop" but bind strictly to postId via variables
+  const variables = { 
+    postId,
+    terms: {
+      view: "postCommentsTop",
+      postId: postId,
+      limit: 500
+    }
+  };
+
+  // REVERTED: Using standard gotScraping defaults (HTTP2 enabled)
+  // This matches the "first implementation" that worked.
   const response = await gotScraping.post(apiEndpoint, {
-    json: {
-      query,
-      variables: { 
-        postId,
-        terms: {
-          view: "postCommentsTop",
-          postId: postId,
-          limit: 500
-        }
-      }
-    },
+    json: { query, variables },
     responseType: 'json',
-    http2: false, // CRITICAL: Disabling HTTP2 often bypasses the "Verifying browser" loop
     headers: {
       'Origin': baseUrl,
       'Referer': url,
-      'x-requested-with': 'XMLHttpRequest' // Helps look like a real frontend request
     },
-    retry: {
-      limit: 2,
-      methods: ['POST', 'GET'],
-      statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
-    }
+    retry: { limit: 2 }
   });
 
   const json = response.body as GraphQLResponse;
 
-  // Debug logging for failures
+  if (typeof json === 'string') {
+     // If we still get a string here, it's definitely a Cloudflare HTML page
+     throw new Error('Received HTML instead of JSON. The WAF is blocking this request.');
+  }
+
   if (!json.data || !json.data.post || !json.data.post.result) {
-    console.error(`[Fetcher] GraphQL Logic Failed. Response keys: ${Object.keys(json || {})}`);
+    console.error(`[Fetcher] GraphQL Logic Failed. Keys: ${Object.keys(json || {})}`);
     if (json.errors) console.error('[Fetcher] GraphQL Errors:', JSON.stringify(json.errors));
-    throw new Error('Post not found in GraphQL response (WAF or Invalid ID)');
+    throw new Error('Post not found in GraphQL response');
   }
 
   const post = json.data.post.result;
-  // Gracefully handle missing comments (API glitch) instead of crashing
   const rawComments = json.data.comments?.results || []; 
 
   const postReactions = parseExtendedScore(post.extendedScore);
@@ -178,7 +174,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
 
-  rawComments.forEach(c => {
+  rawComments.forEach((c: any) => {
     const commentReactions = parseExtendedScore(c.extendedScore);
     commentMap.set(c._id, {
       id: c._id,
@@ -191,7 +187,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     });
   });
 
-  rawComments.forEach(c => {
+  rawComments.forEach((c: any) => {
     const commentNode = commentMap.get(c._id)!;
     if (c.parentCommentId && commentMap.has(c.parentCommentId)) {
       const parent = commentMap.get(c.parentCommentId)!;
@@ -242,13 +238,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   // --- STANDARD SCRAPER ---
   
   try {
-    // Disable HTTP2 here as well for consistency
-    const response = await gotScraping.get(url, { http2: false });
+    // Revert to defaults here too (HTTP2 enabled)
+    const response = await gotScraping.get(url);
     const html = response.body;
     
-    // Check if we hit a Cloudflare Challenge page (HTML content but no article)
     if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
-      throw new Error('Hit Cloudflare WAF Challenge page');
+      throw new Error('Hit Cloudflare WAF Challenge page on Standard Scraper');
     }
 
     const dom = new JSDOM(html, { url });
