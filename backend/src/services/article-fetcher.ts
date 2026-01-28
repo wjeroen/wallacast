@@ -175,6 +175,36 @@ function buildReferenceMap(obj: any, map: Map<string, any>) {
   }
 }
 
+function extractPostMetadataFromData(dataRoots: any[]): { author?: string; publishedDate?: string } {
+  const referenceMap = new Map<string, any>();
+
+  // Build Reference Map
+  for (const root of dataRoots) {
+    buildReferenceMap(root, referenceMap);
+  }
+
+  // Search for Post object in reference map
+  for (const [key, val] of referenceMap.entries()) {
+    if (!val) continue;
+
+    if (val.__typename === 'Post' || key.startsWith('Post:')) {
+      // Extract author from Post.user
+      let user = resolveRef(val.user, referenceMap);
+      const author = user?.displayName || user?.slug;
+
+      // Extract published date from Post.postedAt
+      const publishedDate = val.postedAt;
+
+      if (author || publishedDate) {
+        console.log(`[Metadata] Extracted from Apollo Post: author="${author}", date="${publishedDate}"`);
+        return { author, publishedDate };
+      }
+    }
+  }
+
+  return {};
+}
+
 function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Comment[] {
   const comments: Comment[] = [];
   const commentMap = new Map<string, Comment>();
@@ -185,8 +215,10 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
   for (const root of dataRoots) {
     buildReferenceMap(root, referenceMap);
   }
-  
-  // 1b. Collect raw comments
+
+  // 1b. Collect raw comments AND scan for Post metadata
+  let postMeta: { author?: string; publishedDate?: string } | undefined;
+
   referenceMap.forEach((val, key) => {
       // CRITICAL FIX: Add null check for 'val' to prevent crashes
       if (!val) return;
@@ -194,6 +226,17 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
       if (val.__typename === 'Comment' || key.startsWith('Comment:')) {
           const id = val._id || key.split(':')[1] || key;
           rawCommentData.set(id, val);
+      }
+
+      // Extract Post metadata (author + date) from Apollo state
+      if (val.__typename === 'Post' && !postMeta) {
+          const user = resolveRef(val.user, referenceMap);
+          const author = user?.displayName || user?.slug || val.author;
+          const publishedDate = val.postedAt || val.createdAt;
+          if (author || publishedDate) {
+              postMeta = { author, publishedDate };
+              console.log(`[Comments] Found Post metadata: author="${author}", date="${publishedDate}"`);
+          }
       }
   });
 
@@ -273,7 +316,7 @@ function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): Commen
   };
   comments.forEach(sortReplies);
 
-  return comments;
+  return { comments, postMeta };
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -309,6 +352,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // --- Comment Extraction ---
     let comments: Comment[] | undefined;
     let dataRoots: any[] = [];
+    let postMeta: { author?: string; publishedDate?: string } | undefined;
 
     try {
       const scriptTags = doc.querySelectorAll('script');
@@ -337,7 +381,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (dataRoots.length > 0) {
         console.log(`[Comments] Processing data roots...`);
         // Pass the site flag to helper
-        comments = extractCommentsFromData(dataRoots, isLessWrong);
+        const result = extractCommentsFromData(dataRoots, isLessWrong);
+        comments = result.comments;
+        postMeta = result.postMeta;
         console.log(`[Comments] ✅ Final result: ${comments.length} top-level comments extracted`);
       }
     } catch (error) {
@@ -345,14 +391,35 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
 
     // --- Finalize ---
+    // Try meta tags first (works for EA Forum and other sites)
     let author: string | undefined;
-    const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                     doc.querySelector('meta[name="author"]')?.getAttribute('content');
-    if (ogAuthor) author = ogAuthor.trim();
+    if (postMeta?.author) {
+      author = postMeta.author;
+    } else {
+      const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
+                       doc.querySelector('meta[name="author"]')?.getAttribute('content');
+      if (ogAuthor) author = ogAuthor.trim();
+    }
 
     let publishedDate: string | undefined;
-    const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
-    if (ogPublished) publishedDate = ogPublished;
+    if (postMeta?.publishedDate) {
+      publishedDate = postMeta.publishedDate;
+    } else {
+      const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
+      if (ogPublished) publishedDate = ogPublished;
+    }
+
+    // For LessWrong: Fall back to Apollo state extraction if meta tags are missing
+    if (isLessWrong && dataRoots.length > 0 && (!author || !publishedDate)) {
+      console.log(`[Metadata] Meta tags missing for LessWrong, trying Apollo extraction...`);
+      const apolloMetadata = extractPostMetadataFromData(dataRoots);
+      if (apolloMetadata.author && !author) {
+        author = apolloMetadata.author;
+      }
+      if (apolloMetadata.publishedDate && !publishedDate) {
+        publishedDate = apolloMetadata.publishedDate;
+      }
+    }
 
     let cleanedHtml = html;
     const mainContent = doc.querySelector('.PostsPage-postContent') || doc.querySelector('article');
