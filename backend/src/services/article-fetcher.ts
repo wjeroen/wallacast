@@ -31,8 +31,8 @@ export interface ArticleContent {
 // --- NEW GRAPHQL LOGIC START ---
 
 interface GraphQLResponse {
-  data: {
-    post: {
+  data?: {
+    post?: {
       result: {
         _id: string;
         title: string;
@@ -40,7 +40,7 @@ interface GraphQLResponse {
         postedAt: string;
         baseScore: number;
         voteCount: number;
-        extendedScore: number | null; // Often a JSON string or object depending on API version
+        extendedScore: any;
         user: {
           displayName: string;
           slug: string;
@@ -48,32 +48,26 @@ interface GraphQLResponse {
         pageUrl: string;
       } | null;
     };
-    comments: {
+    comments?: {
       results: Array<{
         _id: string;
         htmlBody: string;
         postedAt: string;
         baseScore: number;
-        extendedScore: number | null;
+        extendedScore: any;
         user: {
           displayName: string;
           slug: string;
         } | null;
         parentCommentId: string | null;
       }>;
-    };
+    } | null;
   };
+  errors?: any[];
 }
 
-/**
- * Helper to parse the extendedScore field which can be somewhat dynamic.
- * On LessWrong: { agreement: 5, disagreement: 2 }
- * On EA Forum: { like: 10, love: 5 } (schema varies)
- */
 function parseExtendedScore(score: any): { agree?: number; disagree?: number; raw?: any } {
   if (!score) return {};
-  
-  // Sometimes it's a JSON string, sometimes an object
   let data = score;
   if (typeof score === 'string') {
     try {
@@ -82,9 +76,6 @@ function parseExtendedScore(score: any): { agree?: number; disagree?: number; ra
       return { raw: score };
     }
   }
-
-  // Map common keys to agree/disagree for your UI
-  // You can inspect 'data' to see exact EA Forum keys like 'love', 'creative', etc.
   return {
     agree: data.agreement ?? data.agree ?? data.upvotes,
     disagree: data.disagreement ?? data.disagree ?? data.downvotes,
@@ -93,7 +84,6 @@ function parseExtendedScore(score: any): { agree?: number; disagree?: number; ra
 }
 
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
-  // 1. Extract Post ID
   const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
     throw new Error('Could not extract Post ID from URL. Ensure URL format is /posts/ID/slug');
@@ -106,11 +96,10 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     
   const apiEndpoint = `${baseUrl}/graphql`;
 
-  // 2. Construct GraphQL Query
-  // CHANGED: Added 'extendedScore' to fetch reactions
-  // CHANGED: Switched view to 'postCommentsNew' to fix EA Forum random comments bug
+  // We use the standard "postCommentsTop" view but ensure strict parameter binding
+  // via variables to prevent the "random comments" issue.
   const query = `
-    query GetPostAndComments($postId: String!) {
+    query GetPostAndComments($postId: String!, $terms: JSON) {
       post(input: {selector: {_id: $postId}}) {
         result {
           _id
@@ -127,7 +116,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           pageUrl
         }
       }
-      comments(input: {terms: {view: "postCommentsNew", postId: $postId, limit: 500}}) {
+      comments(input: {terms: $terms}) {
         results {
           _id
           htmlBody
@@ -144,44 +133,58 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   `;
 
-  // 3. Execute Fetch using got-scraping
+  // Explicitly disable HTTP2 to avoid common Cloudflare TLS fingerprinting issues with Node
   const response = await gotScraping.post(apiEndpoint, {
     json: {
       query,
-      variables: { postId }
+      variables: { 
+        postId,
+        terms: {
+          view: "postCommentsTop",
+          postId: postId,
+          limit: 500
+        }
+      }
     },
     responseType: 'json',
+    http2: false, // CRITICAL: Disabling HTTP2 often bypasses the "Verifying browser" loop
     headers: {
       'Origin': baseUrl,
       'Referer': url,
+      'x-requested-with': 'XMLHttpRequest' // Helps look like a real frontend request
+    },
+    retry: {
+      limit: 2,
+      methods: ['POST', 'GET'],
+      statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524]
     }
   });
 
   const json = response.body as GraphQLResponse;
-  
+
+  // Debug logging for failures
   if (!json.data || !json.data.post || !json.data.post.result) {
-    throw new Error('Post not found in GraphQL response');
+    console.error(`[Fetcher] GraphQL Logic Failed. Response keys: ${Object.keys(json || {})}`);
+    if (json.errors) console.error('[Fetcher] GraphQL Errors:', JSON.stringify(json.errors));
+    throw new Error('Post not found in GraphQL response (WAF or Invalid ID)');
   }
 
   const post = json.data.post.result;
-  const rawComments = json.data.comments.results;
+  // Gracefully handle missing comments (API glitch) instead of crashing
+  const rawComments = json.data.comments?.results || []; 
 
-  // Process Post Extended Score
   const postReactions = parseExtendedScore(post.extendedScore);
 
-  // 4. Process Comments into a Tree
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
 
   rawComments.forEach(c => {
     const commentReactions = parseExtendedScore(c.extendedScore);
-    
     commentMap.set(c._id, {
       id: c._id,
       username: c.user?.displayName || '[deleted]',
       date: c.postedAt,
       karma: c.baseScore,
-      // Pass the raw object so your frontend can choose what to render (e.g. "Love")
       extendedScore: commentReactions.raw, 
       content: c.htmlBody, 
       replies: []
@@ -198,8 +201,6 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   });
 
-  // 5. Return ArticleContent
-  const siteName = isEAForum ? 'EA Forum' : 'LessWrong';
   const dom = new JSDOM(post.htmlBody);
   const textContent = dom.window.document.body.textContent || '';
 
@@ -210,7 +211,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     cleaned_html: post.htmlBody,
     author: post.user?.displayName || '[deleted]',
     byline: post.user?.displayName || '[deleted]',
-    site_name: siteName,
+    site_name: isEAForum ? 'EA Forum' : 'LessWrong',
     published_date: post.postedAt,
     karma: post.baseScore,
     agree_votes: postReactions.agree,
@@ -230,7 +231,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
   if (isLessWrong || isEAForum) {
     try {
-      console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API with TLS spoofing...`);
+      console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API...`);
       return await fetchForumMagnumPost(url, isEAForum);
     } catch (error: any) {
       console.error(`[Fetcher] GraphQL fetch failed: ${error.message}`);
@@ -238,12 +239,18 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
   }
 
-  // --- STANDARD SCRAPER (got-scraping) ---
+  // --- STANDARD SCRAPER ---
   
   try {
-    const response = await gotScraping.get(url);
+    // Disable HTTP2 here as well for consistency
+    const response = await gotScraping.get(url, { http2: false });
     const html = response.body;
     
+    // Check if we hit a Cloudflare Challenge page (HTML content but no article)
+    if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
+      throw new Error('Hit Cloudflare WAF Challenge page');
+    }
+
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
