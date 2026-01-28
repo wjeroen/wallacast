@@ -69,7 +69,6 @@ interface GraphQLResponse {
  */
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
   // 1. Extract Post ID from URL
-  // Matches: /posts/POST_ID/slug or /posts/POST_ID
   const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
     throw new Error('Could not extract Post ID from URL. Ensure URL format is /posts/ID/slug');
@@ -167,7 +166,6 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   // 5. Return ArticleContent
   const siteName = isEAForum ? 'EA Forum' : 'LessWrong';
   
-  // Clean the HTML slightly 
   const dom = new JSDOM(post.htmlBody);
   const textContent = dom.window.document.body.textContent || '';
 
@@ -189,7 +187,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
 // --- NEW GRAPHQL LOGIC END ---
 
-export async function fetchArticle(url: string): Promise<ArticleContent> {
+export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
   
   // Identify platform
@@ -256,8 +254,9 @@ export async function fetchArticle(url: string): Promise<ArticleContent> {
       }
     }
 
+    // Fix strict null check error here by OR-ing with undefined
     const publishedDate = 
-      doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
+      doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
     // Extract main content using Readability-like heuristics
     let contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
