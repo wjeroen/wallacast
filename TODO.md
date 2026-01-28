@@ -7,7 +7,8 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
-- [ ] **[P1]** Groq API compatibility (for Whisper) & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
+- [ ] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching
+- [ ] **[P3]** Groq API compatibility (for Whisper) & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [ ] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
