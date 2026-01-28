@@ -1,13 +1,11 @@
 import fs from 'fs/promises';
-import { createReadStream, existsSync } from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
-import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
+import { getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 
 // --- QUEUE SYSTEM STATE ---
@@ -22,14 +20,6 @@ interface Comment {
   extendedScore?: Record<string, number>;
   content: string;
   replies?: Comment[];
-}
-
-interface ChunkMetadata {
-  text: string;
-  startWord: number;
-  endWord: number;
-  duration: number;
-  startTime: number;
 }
 
 // --- PUBLIC QUEUE ENTRY POINT ---
@@ -216,9 +206,15 @@ async function generateChunkWithRetry(
   throw new Error('Unreachable');
 }
 
-async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<Buffer> {
+/**
+ * Generates audio and returns both the Buffer and the Duration.
+ */
+async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
   const openai = getOpenAIClientForUser(userId);
-  const options = getTTSOptionsForUser(userId);
+  
+  // FIX: Await the options promise
+  const options = await getTTSOptionsForUser(userId);
+  
   options.voice = voiceId || options.voice;
   options.speed = speed || options.speed;
 
@@ -259,6 +255,9 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
         .mergeToFile(outputPath, tempDir);
     });
 
+    // FIX: Calculate duration while file exists on disk (getAudioDuration expects a string path)
+    const duration = await getAudioDuration(outputPath);
+    
     const finalBuffer = await fs.readFile(outputPath);
 
     // Cleanup
@@ -267,7 +266,7 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
       fs.unlink(outputPath).catch(() => {})
     ]);
 
-    return finalBuffer;
+    return { buffer: finalBuffer, duration };
 
   } catch (error) {
     // Cleanup on error
@@ -303,14 +302,14 @@ async function generateAudioForContent(contentId: number): Promise<void> {
   }
 
   // 3. Generate Audio
-  const audioBuffer = await generateArticleAudio(
+  // FIX: Destructure the result
+  const { buffer: audioBuffer, duration: audioDuration } = await generateArticleAudio(
     textToSpeak, 
     content.voice_id || 'alloy', 
     content.playback_speed || 1.0, 
     content.user_id
   );
 
-  const audioDuration = await getAudioDuration(audioBuffer);
   const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8080}`;
   const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
@@ -323,7 +322,6 @@ async function generateAudioForContent(contentId: number): Promise<void> {
   console.log(`✓ Audio stored for content ${contentId}`);
 
   // 5. Trigger Transcription (Async)
-  // We mark it as 'transcribing' but don't block the queue for this
   triggerTranscription(contentId, audioUrl, content.user_id);
 }
 
