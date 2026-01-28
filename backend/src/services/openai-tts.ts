@@ -189,12 +189,13 @@ async function generateChunkWithRetry(
  * Worker Logic - Replicates original parameter handling
  */
 async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
-  // 1. Await the providers (Crucial Fix)
+  // 1. Await the providers (Crucial Fix for "undefined" errors)
   const openai = await getOpenAIClientForUser(userId);
   const dbOptions = await getTTSOptionsForUser(userId);
 
   // 2. Construct Options - SPREAD dbOptions to keep 'model' and other settings intact
-  const apiOptions = {
+  // FIX: Cast to 'any' to allow adding properties like 'speed' without TS errors
+  const apiOptions: any = {
     ...dbOptions, // This preserves the 'model' you set in settings
     input: text,  // Will be overwritten per chunk
   };
