@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
 
 export interface Comment {
@@ -27,9 +27,6 @@ export interface ArticleContent {
   comments_html?: string;
   comments?: Comment[];
 }
-
-// Mimic a real Chrome browser to avoid 429 Rate Limiting
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
 // --- NEW GRAPHQL LOGIC START ---
 
@@ -114,28 +111,22 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   `;
 
-  // 3. Execute Fetch with Browser-like Headers
-  const response = await fetch(apiEndpoint, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'User-Agent': USER_AGENT,
-      'Origin': baseUrl,
-      'Referer': url,
-      'Accept': 'application/json',
-      'Cache-Control': 'no-cache'
-    },
-    body: JSON.stringify({
+  // 3. Execute Fetch using got-scraping (Handles TLS Fingerprinting automatically)
+  // We strictly type the response as unknown first, then cast, to satisfy TS with got-scraping
+  const response = await gotScraping.post(apiEndpoint, {
+    json: {
       query,
       variables: { postId }
-    }),
+    },
+    responseType: 'json',
+    // We add specific headers that GraphQL endpoints often require
+    headers: {
+      'Origin': baseUrl,
+      'Referer': url,
+    }
   });
 
-  if (!response.ok) {
-    throw new Error(`GraphQL API error: ${response.status} ${response.statusText}`);
-  }
-
-  const json = (await response.json()) as GraphQLResponse;
+  const json = response.body as GraphQLResponse;
   
   if (!json.data || !json.data.post || !json.data.post.result) {
     throw new Error('Post not found in GraphQL response');
@@ -200,30 +191,22 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
   if (isLessWrong || isEAForum) {
     try {
-      console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API...`);
+      console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API with TLS spoofing...`);
       return await fetchForumMagnumPost(url, isEAForum);
-    } catch (error) {
-      console.error(`[Fetcher] GraphQL fetch failed, falling back to standard scraper: ${error}`);
+    } catch (error: any) {
+      console.error(`[Fetcher] GraphQL fetch failed: ${error.message}`);
+      // Only fall back if it's NOT a 429/403 (if we are blocked, the scraper will likely also be blocked)
+      // But we'll try anyway just in case.
+      console.log('[Fetcher] Attempting fallback to standard scraper...');
     }
   }
 
-  // --- STANDARD SCRAPER (EXISTING LOGIC) ---
+  // --- STANDARD SCRAPER (Now powered by got-scraping for better stealth) ---
   
   try {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Referer': 'https://www.google.com/',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
-    }
-
-    const html = await response.text();
+    const response = await gotScraping.get(url);
+    const html = response.body;
+    
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
