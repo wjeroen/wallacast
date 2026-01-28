@@ -305,8 +305,8 @@ export function FullscreenPlayer({
             {content.description ? (
               <div 
                 className="article-content" 
-                style={{ marginTop: '1rem' }}
-                // This tells React to render the string as actual HTML
+                // whiteSpace: 'pre-wrap' preserves newlines (\n) from the database
+                style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }} 
                 dangerouslySetInnerHTML={{ __html: content.description }}
               />
             ) : (
