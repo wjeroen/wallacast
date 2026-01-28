@@ -6,7 +6,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  extendedScore?: Record<string, number>; // Kept for TS compatibility
+  extendedScore?: Record<string, number>;
   content: string;
   replies?: Comment[];
 }
@@ -27,6 +27,9 @@ export interface ArticleContent {
   comments_html?: string;
   comments?: Comment[];
 }
+
+// Mimic a real Chrome browser to avoid 429 Rate Limiting
+const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
 // --- NEW GRAPHQL LOGIC START ---
 
@@ -63,21 +66,19 @@ interface GraphQLResponse {
   };
 }
 
-/**
- * Fetches data from LessWrong or EA Forum using their GraphQL API.
- * This is much more robust than scraping the DOM or SSR state.
- */
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
-  // 1. Extract Post ID from URL
+  // 1. Extract Post ID
   const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
     throw new Error('Could not extract Post ID from URL. Ensure URL format is /posts/ID/slug');
   }
   const postId = idMatch[1];
   
-  const apiEndpoint = isEAForum 
-    ? 'https://forum.effectivealtruism.org/graphql' 
-    : 'https://www.lesswrong.com/graphql';
+  const baseUrl = isEAForum 
+    ? 'https://forum.effectivealtruism.org' 
+    : 'https://www.lesswrong.com';
+    
+  const apiEndpoint = `${baseUrl}/graphql`;
 
   // 2. Construct GraphQL Query
   const query = `
@@ -97,7 +98,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           pageUrl
         }
       }
-      comments(input: {terms: {view: "postCommentsTop", postId: $postId, limit: 1000}}) {
+      comments(input: {terms: {view: "postCommentsTop", postId: $postId, limit: 500}}) {
         results {
           _id
           htmlBody
@@ -113,10 +114,17 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   `;
 
-  // 3. Execute Fetch
+  // 3. Execute Fetch with Browser-like Headers
   const response = await fetch(apiEndpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'User-Agent': USER_AGENT,
+      'Origin': baseUrl,
+      'Referer': url,
+      'Accept': 'application/json',
+      'Cache-Control': 'no-cache'
+    },
     body: JSON.stringify({
       query,
       variables: { postId }
@@ -134,13 +142,12 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   }
 
   const post = json.data.post.result;
-
-  // 4. Process Comments into a Tree
   const rawComments = json.data.comments.results;
+  
+  // 4. Process Comments into a Tree
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
 
-  // First pass: create Comment objects
   rawComments.forEach(c => {
     commentMap.set(c._id, {
       id: c._id,
@@ -152,7 +159,6 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     });
   });
 
-  // Second pass: link parents and children
   rawComments.forEach(c => {
     const commentNode = commentMap.get(c._id)!;
     if (c.parentCommentId && commentMap.has(c.parentCommentId)) {
@@ -165,7 +171,6 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
   // 5. Return ArticleContent
   const siteName = isEAForum ? 'EA Forum' : 'LessWrong';
-  
   const dom = new JSDOM(post.htmlBody);
   const textContent = dom.window.document.body.textContent || '';
 
@@ -190,18 +195,15 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
   
-  // Identify platform
   const isLessWrong = url.includes('lesswrong.com');
   const isEAForum = url.includes('forum.effectivealtruism.org');
 
-  // Route to the new GraphQL fetcher if applicable
   if (isLessWrong || isEAForum) {
     try {
       console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API...`);
       return await fetchForumMagnumPost(url, isEAForum);
     } catch (error) {
       console.error(`[Fetcher] GraphQL fetch failed, falling back to standard scraper: ${error}`);
-      // Fall through to standard scraper below if API fails 
     }
   }
 
@@ -210,7 +212,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   try {
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; Wallacast/1.0; +http://localhost:3000)',
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Referer': 'https://www.google.com/',
+        'Accept-Language': 'en-US,en;q=0.9'
       },
     });
 
@@ -222,13 +227,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
-    // Remove scripts and styles
     const scripts = doc.querySelectorAll('script');
     scripts.forEach(script => script.remove());
     const styles = doc.querySelectorAll('style');
     styles.forEach(style => style.remove());
 
-    // Extract metadata
     const title = 
       doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
       doc.querySelector('title')?.textContent ||
@@ -243,7 +246,6 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (authorMeta) {
       author = authorMeta;
     } else {
-      // Generic fallback selectors for author
       const authorSelectors = ['.author', '.byline', 'a[rel="author"]'];
       for (const selector of authorSelectors) {
         const el = doc.querySelector(selector);
@@ -254,11 +256,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
-    // Fix strict null check error here by OR-ing with undefined
     const publishedDate = 
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
-    // Extract main content using Readability-like heuristics
     let contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
     
     const cleanedHtml = contentEl.innerHTML;
