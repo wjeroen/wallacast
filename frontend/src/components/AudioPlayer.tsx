@@ -10,26 +10,11 @@ interface AudioPlayerProps {
   onRefetch?: () => void;
 }
 
-// Load global playback speed from localStorage
-const loadGlobalSpeed = (): number => {
-  const saved = localStorage.getItem('globalPlaybackSpeed');
-  if (!saved) return 1;
-
-  const parsed = parseFloat(saved);
-  const validSpeeds = [1, 1.25, 1.5, 2];
-  return validSpeeds.includes(parsed) ? parsed : 1;
-};
-
-// Save global playback speed to localStorage
-const saveGlobalSpeed = (speed: number) => {
-  localStorage.setItem('globalPlaybackSpeed', speed.toString());
-};
-
 export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState(loadGlobalSpeed());
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -121,7 +106,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
 
       audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     }
-  }, [content, playbackSpeed]);
+  }, [content]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -213,7 +198,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     if (!audioRef.current) return;
     audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
-    saveGlobalSpeed(speed);
+    if (content) contentAPI.update(content.id, { playback_speed: speed });
   };
 
   const toggleSpeed = () => {
