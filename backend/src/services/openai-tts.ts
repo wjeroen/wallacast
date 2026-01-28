@@ -211,12 +211,14 @@ async function generateChunkWithRetry(
  */
 async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
   const openai = getOpenAIClientForUser(userId);
+  const defaults = await getTTSOptionsForUser(userId);
   
-  // FIX: Await the options promise
-  const options = await getTTSOptionsForUser(userId);
-  
-  options.voice = voiceId || options.voice;
-  options.speed = speed || options.speed;
+  // FIX: Construct a new object to avoid accessing missing properties on 'defaults'
+  const options = {
+    model: defaults.model,
+    voice: voiceId || defaults.voice,
+    speed: speed || 1.0 // Default to 1.0 since defaults doesn't have speed
+  };
 
   const chunks = splitTextIntoChunks(text, 4000);
   const tempDir = getTempDir();
@@ -255,9 +257,10 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
         .mergeToFile(outputPath, tempDir);
     });
 
-    // FIX: Calculate duration while file exists on disk (getAudioDuration expects a string path)
+    // FIX: Get duration from the file path string (not Buffer)
     const duration = await getAudioDuration(outputPath);
     
+    // Read the file into a buffer to return it
     const finalBuffer = await fs.readFile(outputPath);
 
     // Cleanup
@@ -302,7 +305,6 @@ async function generateAudioForContent(contentId: number): Promise<void> {
   }
 
   // 3. Generate Audio
-  // FIX: Destructure the result
   const { buffer: audioBuffer, duration: audioDuration } = await generateArticleAudio(
     textToSpeak, 
     content.voice_id || 'alloy', 
