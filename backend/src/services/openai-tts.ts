@@ -152,7 +152,7 @@ function cleanHtmlForTTS(html: string): string {
 
 async function generateChunkWithRetry(
   openai: any, 
-  apiOptions: any, // Pass the FULL options object
+  apiOptions: any, 
   chunkIndex: number, 
   totalChunks: number
 ): Promise<Buffer> {
@@ -164,7 +164,6 @@ async function generateChunkWithRetry(
       attempt++;
       console.log(`[TTS] Generating chunk ${chunkIndex + 1}/${totalChunks} (Attempt ${attempt})...`);
       
-      // Use options exactly as constructed
       const mp3 = await openai.audio.speech.create(apiOptions);
 
       const buffer = Buffer.from(await mp3.arrayBuffer());
@@ -186,26 +185,27 @@ async function generateChunkWithRetry(
 }
 
 /**
- * Worker Logic - Replicates original parameter handling
+ * Worker Logic - RESTORED ORIGINAL PARAMETER HANDLING
  */
 async function generateArticleAudio(text: string, voiceId: string, speed: number, userId: number): Promise<{ buffer: Buffer, duration: number }> {
-  // 1. Await the providers (Crucial Fix for "undefined" errors)
   const openai = await getOpenAIClientForUser(userId);
   const dbOptions = await getTTSOptionsForUser(userId);
 
-  // 2. Construct Options - SPREAD dbOptions to keep 'model' and other settings intact
-  // FIX: Cast to 'any' to allow adding properties like 'speed' without TS errors
+  // CRITICAL FIX: Use 'any' to bypass TS checks.
+  // Spread dbOptions first. If 'speed' is not in dbOptions, it won't be here.
+  // This mimics the original behavior exactly.
   const apiOptions: any = {
-    ...dbOptions, // This preserves the 'model' you set in settings
-    input: text,  // Will be overwritten per chunk
+    ...dbOptions,
+    input: text
   };
 
-  // 3. Override only if specific values were passed
+  // Only set these if they actually exist (don't force defaults)
   if (voiceId) apiOptions.voice = voiceId;
   if (speed) apiOptions.speed = speed;
 
-  // Log what we are using to be sure
-  console.log(`[TTS] Configured with Model: ${apiOptions.model}, Voice: ${apiOptions.voice}`);
+  // Debug log to verify we aren't sending "speed: 1.0" or "model: undefined"
+  console.log(`[TTS] Payload Keys: ${Object.keys(apiOptions).join(', ')}`);
+  console.log(`[TTS] Model: ${apiOptions.model}, Voice: ${apiOptions.voice}`);
 
   const chunks = splitTextIntoChunks(text, 4000);
   const tempDir = getTempDir();
@@ -215,7 +215,7 @@ async function generateArticleAudio(text: string, voiceId: string, speed: number
 
   try {
     for (let i = 0; i < chunks.length; i++) {
-      // Create a chunk-specific options object
+      // Chunk specific override
       const chunkOptions = { ...apiOptions, input: chunks[i] };
       
       const buffer = await generateChunkWithRetry(openai, chunkOptions, i, chunks.length);
