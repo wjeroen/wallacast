@@ -710,8 +710,16 @@
   color: #e2e8f0;
 }
 
-.content-actions button.active {
-  color: #60a5fa;
+/* Yellow for the Star button */
+.content-actions button.active[title="Toggle star"] {
+  color: #fbbf24;
+  border-color: #fbbf24; /* Optional: adds a yellow border */
+}
+
+/* Blue for the Archive button */
+.content-actions button.active[title="Restore from archive"] {
+  color: #3b82f6;
+  border-color: #3b82f6; /* Optional: adds a blue border */
 }
 
 .content-actions .delete-btn:hover {
