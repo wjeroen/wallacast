@@ -6,7 +6,7 @@ export interface Comment {
   username: string;
   date?: string;
   karma?: number;
-  extendedScore?: Record<string, number>; // Dynamic reactions (agree, disagree, love, etc.)
+  extendedScore?: Record<string, number>; // Kept for TS compatibility
   content: string;
   replies?: Comment[];
 }
@@ -28,391 +28,256 @@ export interface ArticleContent {
   comments?: Comment[];
 }
 
-/**
- * Helper to resolve Apollo references like { __ref: "User:123" }
- */
-function resolveRef(obj: any, referenceMap: Map<string, any>): any {
-  if (!obj) return obj;
-  if (obj.__ref && referenceMap.has(obj.__ref)) {
-    return referenceMap.get(obj.__ref);
-  }
-  return obj;
+// --- NEW GRAPHQL LOGIC START ---
+
+interface GraphQLResponse {
+  data: {
+    post: {
+      result: {
+        _id: string;
+        title: string;
+        htmlBody: string;
+        postedAt: string;
+        baseScore: number;
+        voteCount: number;
+        user: {
+          displayName: string;
+          slug: string;
+        } | null;
+        pageUrl: string;
+      } | null;
+    };
+    comments: {
+      results: Array<{
+        _id: string;
+        htmlBody: string;
+        postedAt: string;
+        baseScore: number;
+        user: {
+          displayName: string;
+          slug: string;
+        } | null;
+        parentCommentId: string | null;
+      }>;
+    };
+  };
 }
 
 /**
- * MASTER PARSER: Handles "Direct Object", "Function/IIFE", and "Reference" patterns
+ * Fetches data from LessWrong or EA Forum using their GraphQL API.
+ * This is much more robust than scraping the DOM or SSR state.
  */
-function extractApolloSSRData(scriptContent: string): any[] {
-  const results: any[] = [];
-  const pushPattern = /\.push\s*\(\s*/g;
-  let match;
-
-  while ((match = pushPattern.exec(scriptContent)) !== null) {
-    const startIndex = match.index + match[0].length;
-    let openBrackets = 0;
-    let inString = false;
-    let stringChar = '';
-    let escape = false;
-    let endIndex = -1;
-
-    for (let i = startIndex; i < scriptContent.length; i++) {
-      const char = scriptContent[i];
-      if (escape) { escape = false; continue; }
-      if (char === '\\') { escape = true; continue; }
-      if (!inString && (char === '"' || char === "'")) { inString = true; stringChar = char; continue; }
-      if (inString) { if (char === stringChar) { inString = false; } continue; }
-
-      if (char === '{' || char === '[') openBrackets++;
-      if (char === '}' || char === ']') openBrackets--;
-
-      if (char === ')' && openBrackets <= 0) {
-        endIndex = i;
-        break;
-      }
-    }
-
-    if (endIndex !== -1) {
-      let payloadString = scriptContent.substring(startIndex, endIndex).trim();
-
-      if (payloadString.startsWith('{') || payloadString.startsWith('[')) {
-        try {
-          const sanitized = payloadString.replace(/:\s*undefined([,}])/g, ':null$1');
-          results.push(JSON.parse(sanitized));
-        } catch (e) { /* ignore parse errors */ }
-      }
-      else if (payloadString.startsWith('(') || payloadString.startsWith('function')) {
-        const extracted = extractVariablesFromFunctionString(payloadString);
-        results.push(...extracted);
-      }
-    }
+async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
+  // 1. Extract Post ID from URL
+  // Matches: /posts/POST_ID/slug or /posts/POST_ID
+  const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
+  if (!idMatch) {
+    throw new Error('Could not extract Post ID from URL. Ensure URL format is /posts/ID/slug');
   }
-  return results;
-}
-
-function extractVariablesFromFunctionString(jsCode: string): any[] {
-  const foundData: any[] = [];
-  const targets = ['rehydrate', 'events'];
-
-  for (const target of targets) {
-    const marker = `const ${target} =`;
-    let idx = jsCode.indexOf(marker);
-    if (idx === -1) continue;
-    idx += marker.length;
-
-    let startIdx = -1;
-    for (let i = idx; i < jsCode.length; i++) {
-      if (jsCode[i] === '{' || jsCode[i] === '[') {
-        startIdx = i;
-        break;
-      }
-    }
-    if (startIdx === -1) continue;
-
-    let open = 0;
-    let endIdx = -1;
-    let inStr = false;
-    let strChar = '';
-    let esc = false;
-
-    for (let i = startIdx; i < jsCode.length; i++) {
-      const c = jsCode[i];
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (!inStr && (c === '"' || c === "'")) { inStr = true; strChar = c; continue; }
-      if (inStr) { if (c === strChar) inStr = false; continue; }
-
-      if (c === '{' || c === '[') open++;
-      if (c === '}' || c === ']') open--;
-
-      if (open === 0) {
-        endIdx = i + 1;
-        break;
-      }
-    }
-
-    if (endIdx !== -1) {
-      const jsonStr = jsCode.substring(startIdx, endIdx).replace(/:\s*undefined([,}])/g, ':null$1');
-      try {
-        foundData.push(JSON.parse(jsonStr));
-      } catch (e) { }
-    }
-  }
-  return foundData;
-}
-
-// Recursively index all objects in the data blob by their ID/Cache Key
-function buildReferenceMap(obj: any, map: Map<string, any>) {
-  // CRITICAL FIX: typeof null is 'object', so explicitly check for null
-  if (!obj || typeof obj !== 'object') return;
-
-  // Apollo often uses keys like "Comment:123" or "_id"
-  if (obj._id) {
-    map.set(obj._id, obj);
-    if (obj.__typename) {
-      map.set(`${obj.__typename}:${obj._id}`, obj);
-    }
-  }
+  const postId = idMatch[1];
   
-  // Also scan for keys that look like cache IDs in the root object
-  if (!Array.isArray(obj)) {
-      for (const key in obj) {
-          // CRITICAL FIX: Check obj[key] is not null before adding
-          if (key.includes(':') && typeof obj[key] === 'object' && obj[key] !== null) {
-              map.set(key, obj[key]);
-          }
-      }
-  }
+  const apiEndpoint = isEAForum 
+    ? 'https://forum.effectivealtruism.org/graphql' 
+    : 'https://www.lesswrong.com/graphql';
 
-  // Iterate deeper
-  if (Array.isArray(obj)) {
-    obj.forEach(item => buildReferenceMap(item, map));
-  } else {
-    for (const key in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        buildReferenceMap(obj[key], map);
+  // 2. Construct GraphQL Query
+  const query = `
+    query GetPostAndComments($postId: String!) {
+      post(input: {selector: {_id: $postId}}) {
+        result {
+          _id
+          title
+          htmlBody
+          postedAt
+          baseScore
+          voteCount
+          user {
+            displayName
+            slug
+          }
+          pageUrl
+        }
+      }
+      comments(input: {terms: {view: "postCommentsTop", postId: $postId, limit: 1000}}) {
+        results {
+          _id
+          htmlBody
+          postedAt
+          baseScore
+          parentCommentId
+          user {
+            displayName
+            slug
+          }
+        }
       }
     }
-  }
-}
+  `;
 
-interface ExtractResult {
-  comments: Comment[];
-  postMeta?: { author?: string; publishedDate?: string };
-}
-
-function extractCommentsFromData(dataRoots: any[], isLessWrong: boolean): ExtractResult {
-  const comments: Comment[] = [];
-  const commentMap = new Map<string, Comment>();
-  const rawCommentData = new Map<string, any>();
-  const referenceMap = new Map<string, any>();
-
-  // 1. Build Reference Map (Index everything first!)
-  for (const root of dataRoots) {
-    buildReferenceMap(root, referenceMap);
-  }
-
-  // 1b. Collect raw comments AND scan for Post metadata
-  let postMeta: { author?: string; publishedDate?: string } | undefined;
-
-  referenceMap.forEach((val, key) => {
-      // CRITICAL FIX: Add null check for 'val' to prevent crashes
-      if (!val) return;
-
-      if (val.__typename === 'Comment' || key.startsWith('Comment:')) {
-          const id = val._id || key.split(':')[1] || key;
-          rawCommentData.set(id, val);
-      }
-
-      // Extract Post metadata (author + date) from Apollo state
-      if (val.__typename === 'Post' && !postMeta) {
-          const user = resolveRef(val.user, referenceMap);
-          const author = user?.displayName || user?.slug || val.author;
-          const publishedDate = val.postedAt || val.createdAt;
-          if (author || publishedDate) {
-              postMeta = { author, publishedDate };
-              console.log(`[Comments] Found Post metadata: author="${author}", date="${publishedDate}"`);
-          }
-      }
+  // 3. Execute Fetch
+  const response = await fetch(apiEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      variables: { postId }
+    }),
   });
 
-  console.log(`[Comments] Found ${rawCommentData.size} unique raw comments`);
-
-  // 2. Convert raw data to Comment objects (Resolving references)
-  for (const [id, raw] of rawCommentData.entries()) {
-    const commentData = resolveRef(raw, referenceMap);
-    
-    // Resolve User (References often hide here)
-    let user = resolveRef(commentData.user, referenceMap);
-    const username = user?.displayName || user?.slug || commentData.author || 'Anonymous';
-
-    // Resolve Content (Often in contents.html or body)
-    let contentObj = resolveRef(commentData.contents, referenceMap);
-    let content = '';
-    if (contentObj) {
-      content = contentObj.html || contentObj.plaintextMainText || '';
-    } 
-    if (!content) content = commentData.htmlBody || commentData.body || '';
-
-    // Extract Scores
-    const extendedScore = commentData.extendedScore || {};
-    
-    // FIX FOR LESSWRONG: Non-destructive normalization
-    if (isLessWrong) {
-        // If 'agreement' is missing, try to find it in other common keys
-        if (extendedScore.agreement === undefined) {
-            const val = extendedScore.agreementScore || extendedScore.agree;
-            if (typeof val === 'number') {
-                extendedScore.agreement = val;
-            }
-        }
-    }
-
-    const comment: Comment = {
-      id: id,
-      username: username,
-      date: commentData.postedAt,
-      karma: commentData.baseScore,
-      extendedScore: Object.keys(extendedScore).length > 0 ? extendedScore : undefined,
-      content: content,
-      replies: [],
-    };
-    commentMap.set(id, comment);
+  if (!response.ok) {
+    throw new Error(`GraphQL API error: ${response.status} ${response.statusText}`);
   }
 
-  // 3. Build the Tree
-  for (const [id, raw] of rawCommentData.entries()) {
-    const commentData = resolveRef(raw, referenceMap);
-    const comment = commentMap.get(id);
-    if (!comment) continue;
+  const json = (await response.json()) as GraphQLResponse;
+  
+  if (!json.data || !json.data.post || !json.data.post.result) {
+    throw new Error('Post not found in GraphQL response');
+  }
 
-    if (commentData.parentCommentId) {
-      const parent = commentMap.get(commentData.parentCommentId);
-      if (parent) {
-        if (!parent.replies) parent.replies = [];
-        if (!parent.replies.some(r => r.id === comment.id)) {
-          parent.replies.push(comment);
-        }
-      } else {
-        comments.push(comment);
-      }
+  const post = json.data.post.result;
+
+  // 4. Process Comments into a Tree
+  const rawComments = json.data.comments.results;
+  const commentMap = new Map<string, Comment>();
+  const rootComments: Comment[] = [];
+
+  // First pass: create Comment objects
+  rawComments.forEach(c => {
+    commentMap.set(c._id, {
+      id: c._id,
+      username: c.user?.displayName || '[deleted]',
+      date: c.postedAt,
+      karma: c.baseScore,
+      content: c.htmlBody, 
+      replies: []
+    });
+  });
+
+  // Second pass: link parents and children
+  rawComments.forEach(c => {
+    const commentNode = commentMap.get(c._id)!;
+    if (c.parentCommentId && commentMap.has(c.parentCommentId)) {
+      const parent = commentMap.get(c.parentCommentId)!;
+      parent.replies?.push(commentNode);
     } else {
-      comments.push(comment);
+      rootComments.push(commentNode);
     }
-  }
+  });
 
-  // 4. Sort
-  comments.sort((a, b) => (b.karma || 0) - (a.karma || 0));
+  // 5. Return ArticleContent
+  const siteName = isEAForum ? 'EA Forum' : 'LessWrong';
+  
+  // Clean the HTML slightly 
+  const dom = new JSDOM(post.htmlBody);
+  const textContent = dom.window.document.body.textContent || '';
 
-  const sortReplies = (c: Comment) => {
-    if (c.replies?.length) {
-      c.replies.sort((a, b) => (b.karma || 0) - (a.karma || 0));
-      c.replies.forEach(sortReplies);
-    }
+  return {
+    title: post.title,
+    content: textContent,
+    html: post.htmlBody,
+    cleaned_html: post.htmlBody,
+    author: post.user?.displayName || '[deleted]',
+    byline: post.user?.displayName || '[deleted]',
+    site_name: siteName,
+    published_date: post.postedAt,
+    karma: post.baseScore,
+    agree_votes: post.voteCount, 
+    comments: rootComments,
+    comments_html: '' 
   };
-  comments.forEach(sortReplies);
-
-  return { comments, postMeta };
 }
 
-export async function fetchArticleContent(url: string): Promise<ArticleContent> {
+// --- NEW GRAPHQL LOGIC END ---
+
+export async function fetchArticle(url: string): Promise<ArticleContent> {
+  console.log(`[Fetcher] Fetching article from: ${url}`);
+  
+  // Identify platform
+  const isLessWrong = url.includes('lesswrong.com');
+  const isEAForum = url.includes('forum.effectivealtruism.org');
+
+  // Route to the new GraphQL fetcher if applicable
+  if (isLessWrong || isEAForum) {
+    try {
+      console.log(`[Fetcher] Detected ${isLessWrong ? 'LessWrong' : 'EA Forum'}, using GraphQL API...`);
+      return await fetchForumMagnumPost(url, isEAForum);
+    } catch (error) {
+      console.error(`[Fetcher] GraphQL fetch failed, falling back to standard scraper: ${error}`);
+      // Fall through to standard scraper below if API fails 
+    }
+  }
+
+  // --- STANDARD SCRAPER (EXISTING LOGIC) ---
+  
   try {
-    console.log(`[Fetcher] Fetching article from: ${url}`);
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; Wallacast/1.0; +http://localhost:3000)',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+    }
+
     const html = await response.text();
-    const dom = new JSDOM(html);
+    const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
-    // Detect Site Type
-    const isLessWrong = url.includes('lesswrong.com');
+    // Remove scripts and styles
+    const scripts = doc.querySelectorAll('script');
+    scripts.forEach(script => script.remove());
+    const styles = doc.querySelectorAll('style');
+    styles.forEach(style => style.remove());
 
-    // --- Metadata ---
-    let title = 'Untitled';
-    const ogTitle = doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
-    if (ogTitle) {
-      title = ogTitle.replace(/ — EA Forum$/, '').replace(/ — LessWrong$/, '').trim();
-    } else {
-      const titleTag = doc.querySelector('title')?.textContent;
-      if (titleTag) {
-        title = titleTag.replace(/ — EA Forum$/, '').replace(/ — LessWrong$/, '').trim();
-      }
-    }
+    // Extract metadata
+    const title = 
+      doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+      doc.querySelector('title')?.textContent ||
+      'Untitled';
 
-    let karma: number | undefined;
-    const karmaElement = doc.querySelector('.PostsVoteDefault-voteScore');
-    if (karmaElement) {
-      const karmaText = karmaElement.textContent?.trim();
-      if (karmaText) karma = parseInt(karmaText);
-    }
+    const siteName = 
+      doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content') ||
+      new URL(url).hostname;
 
-    // --- Comment Extraction ---
-    let comments: Comment[] | undefined;
-    let dataRoots: any[] = [];
-    let postMeta: { author?: string; publishedDate?: string } | undefined;
-
-    try {
-      const scriptTags = doc.querySelectorAll('script');
-      console.log(`[Comments] Found ${scriptTags.length} script tags, scanning...`);
-
-      for (const script of Array.from(scriptTags)) {
-        const scriptContent = script.textContent || '';
-
-        // 1. Classic Apollo State
-        if (scriptContent.includes('__APOLLO_STATE__')) {
-          const match = scriptContent.match(/__APOLLO_STATE__\s*=\s*(\{.+\});?\s*$/s);
-          if (match) {
-            try {
-              dataRoots.push(JSON.parse(match[1]));
-            } catch (e) { }
-          }
-        }
-
-        // 2. ApolloSSRDataTransport
-        if (scriptContent.includes('ApolloSSRDataTransport')) {
-          const extracted = extractApolloSSRData(scriptContent);
-          dataRoots.push(...extracted);
-        }
-      }
-
-      if (dataRoots.length > 0) {
-        console.log(`[Comments] Processing data roots...`);
-        // Pass the site flag to helper
-        const result = extractCommentsFromData(dataRoots, isLessWrong);
-        comments = result.comments;
-        postMeta = result.postMeta;
-        console.log(`[Comments] ✅ Final result: ${comments.length} top-level comments extracted`);
-      }
-    } catch (error) {
-      console.error('[Comments] ✗ Error extracting comments:', error);
-    }
-
-    // --- Finalize ---
-    // Priority: Apollo state (works for EA Forum/LessWrong SPAs) > meta tags (works for regular articles)
     let author: string | undefined;
-    if (postMeta?.author) {
-      author = postMeta.author;
+    const authorMeta = doc.querySelector('meta[name="author"]')?.getAttribute('content');
+    if (authorMeta) {
+      author = authorMeta;
     } else {
-      const ogAuthor = doc.querySelector('meta[property="og:author"]')?.getAttribute('content') ||
-                       doc.querySelector('meta[name="author"]')?.getAttribute('content');
-      if (ogAuthor) author = ogAuthor.trim();
+      // Generic fallback selectors for author
+      const authorSelectors = ['.author', '.byline', 'a[rel="author"]'];
+      for (const selector of authorSelectors) {
+        const el = doc.querySelector(selector);
+        if (el) {
+          author = el.textContent?.trim();
+          break;
+        }
+      }
     }
 
-    let publishedDate: string | undefined;
-    if (postMeta?.publishedDate) {
-      publishedDate = postMeta.publishedDate;
-    } else {
-      const ogPublished = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
-      if (ogPublished) publishedDate = ogPublished;
-    }
+    const publishedDate = 
+      doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content');
 
-    let cleanedHtml = html;
-    const mainContent = doc.querySelector('.PostsPage-postContent') || doc.querySelector('article');
-    if (mainContent) {
-      cleanedHtml = mainContent.outerHTML;
-    }
+    // Extract main content using Readability-like heuristics
+    let contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
+    
+    const cleanedHtml = contentEl.innerHTML;
+    const textContent = contentEl.textContent || '';
 
     return {
       title,
-      content: extractTextFromHTML(cleanedHtml),
-      html: html,
+      content: textContent,
+      html: html, 
       cleaned_html: cleanedHtml,
       author,
       byline: author,
+      site_name: siteName,
       published_date: publishedDate,
-      karma,
-      comments,
     };
+
   } catch (error) {
     console.error('[Fetcher] ✗ Error fetching article:', error);
     throw new Error('Failed to fetch article content');
   }
-}
-
-function extractTextFromHTML(html: string): string {
-  let text = html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return text;
 }
