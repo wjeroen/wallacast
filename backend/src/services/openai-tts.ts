@@ -148,13 +148,19 @@ function htmlToNarrationText(html: string): string {
 
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
-    
-    // Clean up whitespace
+
+    // Remove emojis (for narration only - they don't render well in TTS)
+    text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
+
+    // Clean up whitespace (including any gaps left by emoji removal)
     text = text.replace(/\s+/g, ' ').trim();
     return text;
   } catch (e) {
     console.error('JSDOM parsing failed, falling back to regex:', e);
-    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    let fallbackText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Also remove emojis in fallback
+    fallbackText = fallbackText.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
+    return fallbackText;
   }
 }
 
@@ -280,26 +286,41 @@ export async function generateArticleAudio(
     console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);
 
     const allWords = articleText.split(/\s+/);
+    const tempDir = getTempDir();
+    await fs.mkdir(tempDir, { recursive: true });
 
     // --- CASE A: Single Chunk ---
     if (textChunks.length === 1) {
       console.log(`Single chunk (${textChunks[0].length} chars)`);
       let retries = PROCESSING_CONFIG.retry.maxAttempts;
       let delay = PROCESSING_CONFIG.retry.baseDelayMs;
-      let response: any = null;
+      let finalBuffer: Buffer | null = null;
+      let finalDuration = 0;
 
       while (retries > 0) {
+        const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
         try {
-          response = await openai.audio.speech.create({
+          const response = await openai.audio.speech.create({
             model: targetModel,
             voice: targetVoice as any,
             input: textChunks[0],
             response_format: 'mp3',
           });
+          
+          const buffer = Buffer.from(await response.arrayBuffer());
+          
+          // UPDATED: Validate buffer size (min 1KB) to catch empty responses
+          if (buffer.length < 1024) throw new Error('Response buffer too small');
+
+          await fs.writeFile(tempFile, buffer);
+          finalDuration = await getAudioDuration(tempFile);
+          finalBuffer = buffer;
+          await fs.unlink(tempFile).catch(() => {});
           break;
         } catch (error: any) {
-          if (error.status === 429 && retries > 1) {
-            console.log(`Rate limit hit, retrying...`);
+          await fs.unlink(tempFile).catch(() => {});
+          console.warn(`Single chunk attempt failed: ${error.message}`);
+          if (retries > 1) {
             await new Promise(resolve => setTimeout(resolve, delay));
             delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
             retries--;
@@ -309,31 +330,20 @@ export async function generateArticleAudio(
         }
       }
 
-      if (!response) throw new Error('Failed to generate audio after retries');
-
-      const buffer = Buffer.from(await response.arrayBuffer());
-      
-      const tempDir = getTempDir();
-      await fs.mkdir(tempDir, { recursive: true });
-      const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
-      await fs.writeFile(tempFile, buffer);
-      const duration = await getAudioDuration(tempFile);
-      await fs.unlink(tempFile).catch(console.error);
+      if (!finalBuffer) throw new Error('Failed to generate audio after retries');
 
       const chunkMetadata: ChunkMetadata[] = [{
         text: textChunks[0],
         startWord: 0,
         endWord: allWords.length - 1,
-        duration: duration,
+        duration: finalDuration,
         startTime: 0
       }];
 
-      return { buffer, chunks: 1, chunkMetadata };
+      return { buffer: finalBuffer, chunks: 1, chunkMetadata };
     }
 
     // --- CASE B: Multiple Chunks ---
-    const tempDir = getTempDir();
-    await fs.mkdir(tempDir, { recursive: true });
     const chunkFiles: string[] = [];
     const chunkMetadata: ChunkMetadata[] = [];
     const timestamp = Date.now();
@@ -353,48 +363,55 @@ export async function generateArticleAudio(
 
         let retries = PROCESSING_CONFIG.retry.maxAttempts;
         let delay = PROCESSING_CONFIG.retry.baseDelayMs;
-        let response: any = null;
+        let success = false;
+        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
 
-        while (retries > 0) {
+        while (retries > 0 && !success) {
           try {
-            response = await openai.audio.speech.create({
+            const response = await openai.audio.speech.create({
               model: targetModel,
               voice: targetVoice as any,
               input: textChunks[i],
               response_format: 'mp3',
             });
-            break;
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            
+            // UPDATED: Size validation to catch network stream truncation
+            if (buffer.length < 1024) throw new Error('Response buffer too small');
+
+            await fs.writeFile(chunkFile, buffer);
+
+            // UPDATED: Integrity check via ffprobe utility
+            const duration = await getAudioDuration(chunkFile);
+            const chunkWords = textChunks[i].split(/\s+/).length;
+
+            chunkFiles.push(chunkFile);
+            chunkMetadata.push({
+              text: textChunks[i],
+              startWord: currentWordIndex,
+              endWord: currentWordIndex + chunkWords - 1,
+              duration: duration,
+              startTime: currentTime
+            });
+
+            currentWordIndex += chunkWords;
+            currentTime += duration;
+            success = true;
+
           } catch (error: any) {
-            if (error.status === 429 && retries > 1) {
-              console.log(`Rate limit hit, retrying...`);
+            console.warn(`Chunk ${i + 1} failed: ${error.message}. Retries left: ${retries - 1}`);
+            await fs.unlink(chunkFile).catch(() => {});
+
+            if (retries > 1) {
               await new Promise(resolve => setTimeout(resolve, delay));
               delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
             } else {
-              throw error;
+              throw new Error(`Failed to generate valid chunk ${i + 1}: ${error.message}`);
             }
           }
         }
-
-        if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
-
-        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
-        await fs.writeFile(chunkFile, Buffer.from(await response.arrayBuffer()));
-        chunkFiles.push(chunkFile);
-
-        const duration = await getAudioDuration(chunkFile);
-        const chunkWords = textChunks[i].split(/\s+/).length;
-
-        chunkMetadata.push({
-          text: textChunks[i],
-          startWord: currentWordIndex,
-          endWord: currentWordIndex + chunkWords - 1,
-          duration: duration,
-          startTime: currentTime
-        });
-
-        currentWordIndex += chunkWords;
-        currentTime += duration;
         
         if (i < textChunks.length - 1) await new Promise(resolve => setTimeout(resolve, 200));
       }
@@ -441,7 +458,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     if (chatClient && sourceContent.includes('<')) { 
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
     } else {
-        // Fallback: use JSDOM cleaner
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
@@ -491,14 +507,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       await fs.unlink(tempFilePath).catch(() => {});
     } catch (e) { console.error(e); }
 
-    // FIXED: Use correct PORT for container/local environments to prevent ECONNREFUSED
     const port = process.env.PORT || '8080';
     const backendUrl = process.env.BACKEND_URL
       || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
       || `http://localhost:${port}`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    // UPDATED: Invalidate old transcript (sync fix)
     await query(
       'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL WHERE id = $7',
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
@@ -506,7 +520,6 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     console.log(`✓ Audio stored for content ${contentId}`);
 
-    // --- TRIGGER TRANSCRIPTION (No prompt passed to avoid skipping intro) ---
     console.log('[TTS] Triggering auto-transcription for Read Along...');
     await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
 
