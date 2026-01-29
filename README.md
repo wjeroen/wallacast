@@ -449,59 +449,20 @@ The app implements several performance optimizations:
 - Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 
-**Critical fix (Jan 2026):** PATCH endpoint used `RETURNING *` which included the `audio_data` BYTEA column (10-50MB) in every response. Playback position saves every 10s were transferring the full audio blob, causing ~7GB/hour of data usage. Fixed by returning only needed columns. Playback-only updates now return just `id, playback_position, playback_speed, last_played_at`.
+**Critical Performance Fix (January 2026):**
+The app had a catastrophic data leak that caused 80GB mobile data usage when away from WiFi. Root causes:
+- PATCH endpoint used `RETURNING *` which included the full `audio_data` BYTEA column (10-50MB) in every response
+- List queries included audio_data for all items instead of just metadata
+- Every click on an item fetched the full audio blob unnecessarily
+- Playback position saves every 10s were transferring the entire audio file
 
-**Result:** Query times reduced from 1-3 seconds to <100ms, instant UI feedback for all actions
+Fixed by using explicit column lists everywhere, excluding audio_data from list/update queries, only fetching it when actually playing audio.
 
-## Known Issues / TODO
+**Result:** App is now dramatically faster, clicking items is instant, mobile data usage reduced by ~99%, query times <100ms
 
-See CODEBASE_CRITIQUE.md for detailed issues and fixes.
+## Task Tracking
 
-Key issues:
-- Speed toggle setting not being saved
-- EA Forum & LessWrong post and comments extraction unreliable
-- Queue functionality incomplete
-- Audio player should be smaller/persistent across tabs
-
-## Recent Improvements
-
-**January 2026 (Latest):**
-- **Optional Auto-Generation**: Made auto-generating audio for articles and auto-transcribing podcasts optional in settings (both default to off). Major cost savings - users now explicitly choose when to spend API credits.
-- **Kokoro TTS via DeepInfra**: Added support for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra with intelligent routing based on model ID. Falls back to OpenAI if Kokoro not configured. Significantly cheaper than OpenAI TTS.
-- **Whisper via DeepInfra**: Added support for Whisper transcription (openai/whisper-large-v3-turbo) via DeepInfra. Automatically prefers DeepInfra if configured (cheaper), falls back to OpenAI whisper-1.
-- **GraphQL Article Fetching**: Implemented GraphQL API fetching for EA Forum and LessWrong using got-scraping with human-like headers. Replaces unreliable HTML scraping for these platforms. Fetches posts, comments, karma, reactions, and metadata directly from GraphQL endpoints.
-- **Quote Block Announcements in TTS**: TTS now announces blockquotes in comments with "Quote:" before and "End quote." after quoted text, making it clear when someone is quoting.
-- **LessWrong TTS Score Fix**: Fixed TTS reading internal backend scores (approvalVoteCount, agreementVoteCount). Now only reads user-visible scores (karma + agreement for LessWrong, all reactions for EA Forum), matching the UI display.
-- **Podcast Description HTML Preservation**: Podcast descriptions now preserve HTML formatting (line breaks, links, bold/italic) while blocking dangerous tags (scripts, iframes). Chapters display on separate lines instead of running together.
-- **Read-along Auto-scroll**: Added auto-scroll to center active word when switching to read-along tab, with manual re-center on tab re-click.
-- **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
-- **CRITICAL: Fixed massive data leak that caused 80GB mobile data usage**: The app was returning entire audio files (10-50MB BYTEA blobs) with every content list fetch and playback position update. This caused catastrophic mobile data usage (80GB when using app away from WiFi). Root causes:
-  - `RETURNING *` in PATCH included full audio_data blob in every playback save (every 10s = ~7GB/hour)
-  - List queries included audio_data for all items instead of just metadata
-  - Every click on an item fetched the full audio blob unnecessarily
-  - Fixed: Explicit column lists everywhere, audio_data only fetched when actually playing audio
-  - Result: App is now dramatically faster, mobile data usage reduced by ~99%, clicking items is instant
-- **Fixed Read-along transcript drift**: Highlighting gradually ran ahead of audio (~13s drift over 21 minutes). Root cause: display words were split from `content.transcript` by whitespace, producing a different word count than Whisper's `words` array (used for `activeWordIndex`). Fixed by using Whisper words directly for display, ensuring 1:1 index correspondence. Also fixed hardcoded `timeOffset += 900` in multi-chunk transcription to use actual chunk duration from ffprobe.
-- **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
-- **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
-- **Multi-User Podcast Subscriptions**: Fixed bug where only one user could subscribe to each podcast. Now uses composite unique constraint `(feed_url, user_id)`
-- **Wallabag Sync Complete**: Full bidirectional sync with conflict resolution, two-way delete, full refresh, and cleanup tools
-- **Comment Formatting Improvements**: TTS now formats dates as readable text (e.g., "15th of January 2026") and only mentions disagree votes when present
-
-**December 2025:**
-- Content provenance tracking (wallabag vs wallacast)
-- Multi-user authentication with JWT tokens
-- Per-user OpenAI API keys
-- Performance optimizations (query times reduced from 1-3s to <100ms)
-- Optimistic UI updates with Zustand store
-
-## Future Plans
-
-- Bulk podcast subscription import (OPML)
-- Edit text content after adding
-- Flemish-sounding Dutch TTS prompt
-- Fullscreen player mode for reading
-- Keyboard shortcuts for player
+See **TODO.md** for current tasks, bug fixes, and feature roadmap.
 
 ## Development
 

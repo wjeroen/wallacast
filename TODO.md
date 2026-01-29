@@ -187,6 +187,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Future Ideas (Nice to Have)
 
+- Fullscreen player mode for reading
+- Keyboard shortcuts for player
 - Share article with audio generation
 - Export to audiobook format (M4B with chapters)
 
