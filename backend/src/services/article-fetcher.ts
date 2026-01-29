@@ -83,18 +83,20 @@ function parseExtendedScore(score: any): { agree?: number; disagree?: number; ra
   };
 }
 
+// Helper to create a human-like delay
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
   const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
-    throw new Error('Could not extract Post ID from URL. Ensure URL format is /posts/ID/slug');
+    throw new Error('Post ID extraction failed from URL; check the /posts/ID/slug format');
   }
   const postId = idMatch[1];
-  
-  const baseUrl = isEAForum 
-    ? 'https://forum.effectivealtruism.org' 
-    : 'https://www.lesswrong.com';
-    
+  const baseUrl = isEAForum ? 'https://forum.effectivealtruism.org' : 'https://www.lesswrong.com';
   const apiEndpoint = `${baseUrl}/graphql`;
+
+  // Randomized wait between 1.5 and 4 seconds
+  await sleep(1500 + Math.random() * 2500);
 
   const query = `
     query GetPostAndComments($postId: String!, $terms: JSON) {
@@ -107,10 +109,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           baseScore
           voteCount
           extendedScore
-          user {
-            displayName
-            slug
-          }
+          user { displayName slug }
           pageUrl
         }
       }
@@ -122,57 +121,51 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
           baseScore
           extendedScore
           parentCommentId
-          user {
-            displayName
-            slug
-          }
+          user { displayName slug }
         }
       }
     }
   `;
 
-  // We use standard "postCommentsTop" but bind strictly to postId via variables
   const variables = { 
     postId,
-    terms: {
-      view: "postCommentsTop",
-      postId: postId,
-      limit: 500
-    }
+    terms: { view: "postCommentsTop", postId, limit: 500 }
   };
 
   const response = await gotScraping.post(apiEndpoint, {
-  json: { query, variables },
-  responseType: 'json',
-  headers: {
-    'Origin': baseUrl,
-    'Referer': url,
-    'Accept': 'application/json',
-    'Accept-Language': 'en-US,en;q=0.9',
-  },
-  // Sometimes disabling HTTP2 can bypass certain fingerprints if the server config is inconsistent
-  http2: false, 
-  retry: { limit: 2 }
-});
+    json: { query, variables },
+    responseType: 'json',
+    headerGeneratorOptions: {
+      browsers: [{ name: 'chrome', minVersion: 120 }],
+      devices: ['desktop'],
+      locales: ['en-US', 'en'],
+      operatingSystems: ['windows', 'macos'],
+    },
+    headers: {
+      'Origin': baseUrl,
+      'Referer': url,
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
+    },
+    retry: { limit: 2 }
+  });
 
   const json = response.body as GraphQLResponse;
 
   if (typeof json === 'string') {
-     // If we still get a string here, it's definitely a Cloudflare HTML page
-     throw new Error('Received HTML instead of JSON. The WAF is blocking this request.');
+     throw new Error('The WAF returned an HTML challenge instead of JSON data');
   }
 
   if (!json.data || !json.data.post || !json.data.post.result) {
-    console.error(`[Fetcher] GraphQL Logic Failed. Keys: ${Object.keys(json || {})}`);
-    if (json.errors) console.error('[Fetcher] GraphQL Errors:', JSON.stringify(json.errors));
-    throw new Error('Post not found in GraphQL response');
+    throw new Error('The GraphQL response does not contain the expected post data');
   }
 
   const post = json.data.post.result;
   const rawComments = json.data.comments?.results || []; 
-
   const postReactions = parseExtendedScore(post.extendedScore);
-
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
 
@@ -200,11 +193,9 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   });
 
   const dom = new JSDOM(post.htmlBody);
-  const textContent = dom.window.document.body.textContent || '';
-
   return {
     title: post.title,
-    content: textContent,
+    content: dom.window.document.body.textContent || '',
     html: post.htmlBody,
     cleaned_html: post.htmlBody,
     author: post.user?.displayName || '[deleted]',
