@@ -8,7 +8,7 @@
 
 ### Features to Implement
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
-- [ ] **[P5]** Groq API compatibility (DEPRIORITIZED - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
+- [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [ ] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
@@ -37,7 +37,7 @@
 - [ ] **[P2]** Remove clickable domain URL links for podcasts (and texts if shown) in library cards and fullscreen player - they're pointless since podcasts don't have source URLs to visit
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
-- [ ] **[P2]** Remember last-set speed toggle (one setting applies to all items)
+- [ ] **[P2]** Remember last-set speed toggle (one setting applies to all items) - NOTE: Currently went opposite direction (2026-01-28) - global speed localStorage was REMOVED, now saves per-item to database instead
 - [ ] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
 - [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
@@ -49,7 +49,7 @@
   - Use 96k bitrate
   - Location: backend/src/services/openai-tts.ts in concatenateAudioFiles
   - FFmpeg options: `-c:a libmp3lame -b:a 96k -ac 1`
-- [ ] **[P4]** Implement batch audio generation (queue multiple articles)
+- [ ] **[P4]** Implement batch audio generation (queue multiple articles) - NOTE: Attempted generation queuing implementation on 2026-01-29 but abandoned after multiple attempts (see commits "Fuck queuing", "Gave up on queue")
 - [ ] **[P4]** Add compression for stored audio (consider Opus codec)
 
 ### Technical Debt & Code Quality
@@ -72,7 +72,7 @@
 - [x] **[P1]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing (2026-01-24)
 
 #### Whisper Timestamps & Audio (P2-P3)
-- [ ] **[P2]** Fix Whisper timestamp seeking for podcasts - clicking words doesn't seek to correct position (investigate implementation). NOTE: Read-along auto-scroll implemented (2026-01-27), transcript drift fixed (2026-01-27)
+- [x] **[P2]** Fix Whisper timestamp seeking - clicking words now works correctly (2026-01-29). Read-along auto-scroll implemented (2026-01-27), transcript drift fixed (2026-01-27)
 - [ ] **[P2]** Fix podcast content provenance - shows "fetched by wallabag" incorrectly
 - [ ] **[P2]** Add HTTP caching headers to /api/content/:id/audio endpoint:
   - Set Cache-Control: public, max-age=31536000, immutable
@@ -116,7 +116,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [ ] **[P4]** TTS should describe images in the article
 - [x] **[P1]** Add "Regenerate audio" button to generate new TTS + Whisper timestamps (2026-01-24)
 - [ ] **[P1]** Wire regenerate audio button to actually regenerate and update display
-- [ ] **[P2]** Fix Whisper timestamp seeking for podcasts - clicking words doesn't work yet
+- [x] **[P2]** Fix Whisper timestamp seeking - clicking words works correctly now (2026-01-29)
 - [ ] **[P6]** Don't make tab automatically follow the audio (expect too many annoyances and bugs) - instead add a button that jumps to where the audio currently is (TIMESYNC - DO LATER)
 - [ ] **[P6]** Ensure jump-to-current-position button works properly on various screen display sizes (TIMESYNC - DO LATER)
 
@@ -132,6 +132,9 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Whisper Word Clicking**: Fixed read-along word clicking to seek correctly in podcasts and articles (2026-01-29)
+- [x] **Podcast Description HTML Rendering**: FullscreenPlayer now renders podcast descriptions as HTML with whiteSpace: 'pre-wrap' to preserve formatting (2026-01-28)
+- [x] **Per-Item Playback Speed**: Removed global playback speed from localStorage, now saves speed per-item to database (2026-01-28)
 - [x] **Kokoro TTS via DeepInfra**: Implemented intelligent routing for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra, falls back to OpenAI (2026-01-29)
 - [x] **Whisper via DeepInfra**: Implemented automatic preference for DeepInfra Whisper (openai/whisper-large-v3-turbo) with OpenAI fallback (2026-01-29)
 - [x] **GraphQL for EA Forum/LessWrong**: Replaced HTML scraping with GraphQL API fetching using got-scraping with human-like headers (2026-01-27)
