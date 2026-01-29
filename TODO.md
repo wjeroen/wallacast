@@ -7,8 +7,8 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
-- [ ] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching
-- [ ] **[P3]** Groq API compatibility (for Whisper) & custom transcription/TTS prompts in settings (pre-filled with a default prompt for new users) - SAVES MONEY!
+- [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
+- [ ] **[P5]** Groq API compatibility (DEPRIORITIZED - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [ ] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase)
@@ -28,6 +28,7 @@
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
   - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
+  - NOTE: Quote announcements (2026-01-29) and LessWrong score filtering (2026-01-29) already implemented
 - [x] **[P2]** Optimize slow database queries and fix massive data leak (2026-01-27):
   - Root cause: `RETURNING *` in PATCH included audio_data BYTEA (10-50MB) in every response
   - Playback saves every 10s were transferring full audio blob (~7GB/hour!)
@@ -71,7 +72,7 @@
 - [x] **[P1]** In fullscreen mode, add minimize button to make it smaller again - exiting/minimizing fullscreen does not stop the audio from playing (2026-01-24)
 
 #### Whisper Timestamps & Audio (P2-P3)
-- [ ] **[P2]** Fix Whisper timestamp seeking - clicking words doesn't seek to correct position (investigate implementation)
+- [ ] **[P2]** Fix Whisper timestamp seeking for podcasts - clicking words doesn't seek to correct position (investigate implementation). NOTE: Read-along auto-scroll implemented (2026-01-27), transcript drift fixed (2026-01-27)
 - [ ] **[P2]** Fix podcast content provenance - shows "fetched by wallabag" incorrectly
 - [ ] **[P2]** Add HTTP caching headers to /api/content/:id/audio endpoint:
   - Set Cache-Control: public, max-age=31536000, immutable
@@ -96,6 +97,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Audio generation waits for Wallabag upgrade to complete (if enabled), then uses best available content
   - Manual "Generate audio" button uses latest AVAILABLE content (no refetch, just what's there)
   - LLM prep is ONLY for making text sound natural when narrated, NOT for extraction
+  - NOTE: GraphQL fetching for EA Forum/LessWrong implemented (2026-01-27), LLM already only used for TTS prep not extraction
 - [x] **[P1]** Fix EA Forum/LessWrong comment extraction issues (2026-01-25):
   - LessWrong: Fixed with robust JavaScript tokenizer for ApolloSSRDataTransport parsing
   - EA Forum: Fixed by resolving both user AND contents references
@@ -130,6 +132,13 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Kokoro TTS via DeepInfra**: Implemented intelligent routing for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra, falls back to OpenAI (2026-01-29)
+- [x] **Whisper via DeepInfra**: Implemented automatic preference for DeepInfra Whisper (openai/whisper-large-v3-turbo) with OpenAI fallback (2026-01-29)
+- [x] **GraphQL for EA Forum/LessWrong**: Replaced HTML scraping with GraphQL API fetching using got-scraping with human-like headers (2026-01-27)
+- [x] **Quote Block Announcements**: TTS now says "Quote:" and "End quote." around blockquotes in comments (2026-01-29)
+- [x] **LessWrong TTS Score Fix**: Fixed TTS reading internal scores - now only reads user-visible karma + agreement for LessWrong (2026-01-29)
+- [x] **Podcast Description HTML**: Preserved HTML formatting in podcast descriptions while sanitizing dangerous tags - chapters now show on separate lines (2026-01-29)
+- [x] **Read-along Auto-scroll**: Added auto-scroll to center active word when switching to read-along tab (2026-01-27)
 - [x] Auto-refetch EA Forum/LessWrong articles from web after wallabag import (wallabag can't handle SPAs — misses comments, author, date) (2026-01-27)
 - [x] **FIX**: content_source showed 'wallabag' for all posts — POST route missing 'wallacast', column default was wrong. Migration 010 fixes existing data. (2026-01-27)
 - [x] **FIX**: EA Forum/LessWrong author+date missing - meta tags (og:author, article:published_time) don't work on SPAs. Now extracted from Apollo state Post objects with meta tag fallback for regular articles. (2026-01-27)
