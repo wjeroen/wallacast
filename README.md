@@ -466,6 +466,7 @@ Key issues:
 ## Recent Improvements
 
 **January 2026 (Latest):**
+- **Optional Auto-Generation**: Made auto-generating audio for articles and auto-transcribing podcasts optional in settings (both default to off). Major cost savings - users now explicitly choose when to spend API credits.
 - **Kokoro TTS via DeepInfra**: Added support for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra with intelligent routing based on model ID. Falls back to OpenAI if Kokoro not configured. Significantly cheaper than OpenAI TTS.
 - **Whisper via DeepInfra**: Added support for Whisper transcription (openai/whisper-large-v3-turbo) via DeepInfra. Automatically prefers DeepInfra if configured (cheaper), falls back to OpenAI whisper-1.
 - **GraphQL Article Fetching**: Implemented GraphQL API fetching for EA Forum and LessWrong using got-scraping with human-like headers. Replaces unreliable HTML scraping for these platforms. Fetches posts, comments, karma, reactions, and metadata directly from GraphQL endpoints.
@@ -474,7 +475,12 @@ Key issues:
 - **Podcast Description HTML Preservation**: Podcast descriptions now preserve HTML formatting (line breaks, links, bold/italic) while blocking dangerous tags (scripts, iframes). Chapters display on separate lines instead of running together.
 - **Read-along Auto-scroll**: Added auto-scroll to center active word when switching to read-along tab, with manual re-center on tab re-click.
 - **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
-- **CRITICAL: Fixed massive data leak in PATCH endpoint**: `RETURNING *` was including the full `audio_data` BYTEA blob (10-50MB) in every playback position save response. With saves every 10 seconds, this caused ~7GB/hour of network transfer. Fixed by returning only needed columns (playback-only updates return just 4 fields instead of the entire row with audio). Also fixed duplicate saves from React effect dependencies and cache-busting causing unnecessary audio re-downloads.
+- **CRITICAL: Fixed massive data leak that caused 80GB mobile data usage**: The app was returning entire audio files (10-50MB BYTEA blobs) with every content list fetch and playback position update. This caused catastrophic mobile data usage (80GB when using app away from WiFi). Root causes:
+  - `RETURNING *` in PATCH included full audio_data blob in every playback save (every 10s = ~7GB/hour)
+  - List queries included audio_data for all items instead of just metadata
+  - Every click on an item fetched the full audio blob unnecessarily
+  - Fixed: Explicit column lists everywhere, audio_data only fetched when actually playing audio
+  - Result: App is now dramatically faster, mobile data usage reduced by ~99%, clicking items is instant
 - **Fixed Read-along transcript drift**: Highlighting gradually ran ahead of audio (~13s drift over 21 minutes). Root cause: display words were split from `content.transcript` by whitespace, producing a different word count than Whisper's `words` array (used for `activeWordIndex`). Fixed by using Whisper words directly for display, ensuring 1:1 index correspondence. Also fixed hardcoded `timeOffset += 900` in multi-chunk transcription to use actual chunk duration from ffprobe.
 - **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
 - **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
