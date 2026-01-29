@@ -387,11 +387,26 @@ export async function generateArticleAudio(
           }
         }
 
-        if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
+        // ... inside the loop, after getting 'response' ...
 
-        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
-        await fs.writeFile(chunkFile, Buffer.from(await response.arrayBuffer()));
-        chunkFiles.push(chunkFile);
+if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
+
+const arrayBuffer = await response.arrayBuffer();
+const buffer = Buffer.from(arrayBuffer);
+
+// CHECK: If buffer is too small, it's not valid audio.
+if (buffer.length < 1024) {
+  // Convert buffer to string to see if it contains an error message
+  const errorContent = buffer.toString('utf-8').slice(0, 200);
+  console.error(`[TTS] Critical: Received invalid buffer (${buffer.length} bytes) for chunk ${i}. Content preview: ${errorContent}`);
+  throw new Error(`API returned invalid audio data for chunk ${i}`);
+}
+
+const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
+await fs.writeFile(chunkFile, buffer);
+chunkFiles.push(chunkFile);
+
+// ... proceed to getAudioDuration ...
 
         const duration = await getAudioDuration(chunkFile);
         const chunkWords = textChunks[i].split(/\s+/).length;
