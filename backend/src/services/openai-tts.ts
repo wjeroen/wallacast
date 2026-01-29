@@ -148,24 +148,13 @@ function htmlToNarrationText(html: string): string {
 
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
-
-    // Remove emojis (for narration only - they don't render well in TTS)
-    // This regex matches:
-    // - Emoticons and symbols (U+1F300-U+1F9FF)
-    // - Miscellaneous symbols (U+2600-U+27BF)
-    // - Dingbats (U+2700-U+27BF)
-    // - Geometric shapes (U+25A0-U+25FF)
-    text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
-
-    // Clean up whitespace (including any gaps left by emoji removal)
+    
+    // Clean up whitespace
     text = text.replace(/\s+/g, ' ').trim();
     return text;
   } catch (e) {
     console.error('JSDOM parsing failed, falling back to regex:', e);
-    let fallbackText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    // Also remove emojis in fallback
-    fallbackText = fallbackText.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
-    return fallbackText;
+    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 }
 
@@ -387,26 +376,11 @@ export async function generateArticleAudio(
           }
         }
 
-        // ... inside the loop, after getting 'response' ...
+        if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
 
-if (!response) throw new Error(`Failed to generate chunk ${i + 1}`);
-
-const arrayBuffer = await response.arrayBuffer();
-const buffer = Buffer.from(arrayBuffer);
-
-// CHECK: If buffer is too small, it's not valid audio.
-if (buffer.length < 1024) {
-  // Convert buffer to string to see if it contains an error message
-  const errorContent = buffer.toString('utf-8').slice(0, 200);
-  console.error(`[TTS] Critical: Received invalid buffer (${buffer.length} bytes) for chunk ${i}. Content preview: ${errorContent}`);
-  throw new Error(`API returned invalid audio data for chunk ${i}`);
-}
-
-const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
-await fs.writeFile(chunkFile, buffer);
-chunkFiles.push(chunkFile);
-
-// ... proceed to getAudioDuration ...
+        const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
+        await fs.writeFile(chunkFile, Buffer.from(await response.arrayBuffer()));
+        chunkFiles.push(chunkFile);
 
         const duration = await getAudioDuration(chunkFile);
         const chunkWords = textChunks[i].split(/\s+/).length;
