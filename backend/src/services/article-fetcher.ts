@@ -141,17 +141,19 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     }
   };
 
-  // REVERTED: Using standard gotScraping defaults (HTTP2 enabled)
-  // This matches the "first implementation" that worked.
   const response = await gotScraping.post(apiEndpoint, {
-    json: { query, variables },
-    responseType: 'json',
-    headers: {
-      'Origin': baseUrl,
-      'Referer': url,
-    },
-    retry: { limit: 2 }
-  });
+  json: { query, variables },
+  responseType: 'json',
+  headers: {
+    'Origin': baseUrl,
+    'Referer': url,
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+  },
+  // Sometimes disabling HTTP2 can bypass certain fingerprints if the server config is inconsistent
+  http2: false, 
+  retry: { limit: 2 }
+});
 
   const json = response.body as GraphQLResponse;
 
