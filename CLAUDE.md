@@ -38,9 +38,28 @@ Update README.md if you changed:
    - Processing flows
    - API endpoints
 
-## Task Management with TODO.md
+## Task Management: TODO.md vs TodoWrite Tool
 
-TODO.md is the **primary task list** for Wallacast development. It's designed to help you track work and give the user visibility into progress.
+There are TWO different task tracking systems. **Use the right one for the job:**
+
+### TODO.md (Project-Level Tasks)
+**This is the PRIMARY task list** for Wallacast development. It persists across all sessions and gives the user visibility into project progress.
+
+- **File location**: `/home/user/wallacast/TODO.md`
+- **Scope**: Project-wide tasks, bugs, features, roadmap
+- **Persistence**: Survives across all Claude sessions (it's a file in the repo)
+- **When to use**: When tracking work that relates to the overall project
+- **How to update**: Edit the TODO.md file directly using the Read/Edit tools
+
+### TodoWrite Tool (Session-Level Tasks)
+A **temporary** task tracker for the current conversation only.
+
+- **Scope**: Breaking down work within THIS conversation/session
+- **Persistence**: Only lasts for this conversation (disappears after session ends)
+- **When to use**: Planning multi-step work within a single session (e.g., "I need to do X, Y, Z in this session")
+- **How to update**: Use the TodoWrite tool
+
+**IMPORTANT:** When doing project work, always check and update TODO.md first. The TodoWrite tool is just for organizing your thoughts within a conversation.
 
 ### When to Update TODO.md
 
