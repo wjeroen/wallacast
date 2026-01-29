@@ -114,21 +114,27 @@ function formatDateForNarration(dateString: string): string {
   }
 }
 
-function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>): string {
+function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false): string {
   const parts: string[] = [];
-  
-  // RESTORED: Logic from openai-tts-1.ts (shows all votes properly)
+
+  // Always show karma as "upvotes"
   if (karma !== undefined && karma !== null) {
     parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
   }
-  
-  // Loop through ALL extended scores (agree, disagree, etc.)
-  // This fixes the missing "Agreement" and "Disagree" counts
+
+  // Handle extended scores (reactions) - same logic as FullscreenPlayer.tsx
   if (extendedScore) {
-    for (const [reaction, count] of Object.entries(extendedScore)) {
-      if (count > 0 && reaction !== 'baseScore') {
-        // Clean up key names if needed, but usually they are readable
-        parts.push(`${count} ${reaction}`);
+    if (isLessWrong) {
+      // LessWrong: Only show 'agreement' score (ignore internal fields like approvalVoteCount)
+      if (typeof extendedScore.agreement === 'number') {
+        parts.push(`${extendedScore.agreement} agreement`);
+      }
+    } else {
+      // EA Forum (and others): Show ALL reactions
+      for (const [reaction, count] of Object.entries(extendedScore)) {
+        if (count > 0 && reaction !== 'baseScore') {
+          parts.push(`${count} ${reaction}`);
+        }
       }
     }
   }
@@ -146,8 +152,25 @@ function htmlToNarrationText(html: string): string {
     const unwanted = doc.querySelectorAll('script, style, noscript, iframe');
     unwanted.forEach(el => el.remove());
 
+    // Mark quote blocks with special delimiters before text extraction
+    // This preserves quote structure in the narration
+    const blockquotes = doc.querySelectorAll('blockquote');
+    blockquotes.forEach(blockquote => {
+      // Create text nodes for "Quote" and "End quote" markers
+      const quoteStart = doc.createTextNode(' <<<QUOTE>>> ');
+      const quoteEnd = doc.createTextNode(' <<<ENDQUOTE>>> ');
+
+      // Insert markers before and after the blockquote content
+      blockquote.insertBefore(quoteStart, blockquote.firstChild);
+      blockquote.appendChild(quoteEnd);
+    });
+
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
+
+    // Replace quote markers with spoken announcements
+    text = text.replace(/<<<QUOTE>>>/g, 'Quote:');
+    text = text.replace(/<<<ENDQUOTE>>>/g, 'End quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
@@ -164,11 +187,11 @@ function htmlToNarrationText(html: string): string {
   }
 }
 
-function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string): string {
+function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string, isLessWrong: boolean = false): string {
   let narration = '';
 
   for (const comment of comments) {
-    const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore);
+    const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore, isLessWrong);
     const date = comment.date ? formatDateForNarration(comment.date) : '';
 
     let commentIntro = '';
@@ -198,7 +221,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
     }
 
     if (comment.replies && comment.replies.length > 0) {
-      narration += formatCommentsForNarration(comment.replies, true, username);
+      narration += formatCommentsForNarration(comment.replies, true, username, isLessWrong);
     }
   }
 
@@ -478,7 +501,8 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
               console.log(`[TTS] Formatting ${comments.length} comments for narration`);
-              fullScript += '\n\nComments section:\n\n' + formatCommentsForNarration(comments);
+              const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
+              fullScript += '\n\nComments section:\n\n' + formatCommentsForNarration(comments, false, undefined, isLessWrong);
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);

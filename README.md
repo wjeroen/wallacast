@@ -16,10 +16,11 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Frontend | React, Vite, TypeScript |
 | Database | PostgreSQL |
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
-| TTS | OpenAI gpt-4o-mini-tts (per-user API keys) |
-| Transcription | OpenAI Whisper (whisper-1, gpt-4o-mini-transcribe) |
-| Content Extraction | GPT-4o-mini (HTML → readable text), GPT-5-mini (comment extraction) |
-| Audio Processing | FFmpeg (chunking, concatenation) |
+| TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
+| Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
+| TTS Preparation | GPT-4o-mini (prepares content for natural narration - not for extraction) |
+| Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
+| Audio Processing | FFmpeg (chunking, concatenation, optimization) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
 ## Authentication & Multi-User System
@@ -63,7 +64,7 @@ Wallacast supports multiple users with complete data isolation:
 
 | Problem | Where to look |
 |---------|---------------|
-| TTS says wrong things / bad formatting | `backend/src/services/openai-tts.ts` - Check the system prompts in `extractArticleContent()` around lines 77-107 and 176-210 |
+| TTS says wrong things / bad formatting | `backend/src/services/openai-tts.ts` - Check the system prompts in `extractArticleContent()` and `formatCommentsForNarration()`. Also check `htmlToNarrationText()` for quote announcements and `formatReactionsForNarration()` for score filtering |
 | Comments not extracted correctly | `backend/src/services/openai-tts.ts` - Comment extraction prompt around lines 176-250 |
 | Audio player UI issues | `frontend/src/components/AudioPlayer.tsx` - UI rendering and controls |
 | Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
@@ -182,20 +183,24 @@ Wallacast supports multiple users with complete data isolation:
   - `verifyAccessToken()`, `verifyRefreshToken()`: JWT verification
   - `bootstrapFirstUser()`: Assigns orphaned content to first user on startup
 
-- **`services/ai-providers.ts`**: Per-user API key management
-  - `getOpenAIClientForUser(userId)`: Returns OpenAI client with user's API key or null
+- **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
+  - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
+  - `getTTSClientForUser(userId, modelId)`: Intelligent router - returns DeepInfra client for Kokoro models, OpenAI client otherwise
+  - `getTranscriptionClientForUser(userId)`: Prefers DeepInfra Whisper if configured (cheaper), falls back to OpenAI
+  - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
-  - No global API keys - each user must configure their own
+  - No global API keys - each user must configure their own (OpenAI and/or DeepInfra)
 
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
-- **`services/article-fetcher.ts`**: Fetches article HTML, extracts metadata (title, author, date). Has specific selectors for EA Forum (karma, votes, comments section). Returns raw HTML for GPT extraction
+- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
-- **`services/openai-tts.ts`**: Main TTS service (requires per-user OpenAI API key)
-  - `extractArticleContent()`: Uses GPT-4o-mini to extract readable text from HTML, also extracts structured comments with metadata
-  - `generateArticleAudio()`: Generates TTS audio using gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
-  - `generateAudioForContent()`: Orchestrates the full pipeline (extract content → generate TTS → save to DB with `user_id`)
+- **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
+  - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
+  - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
+  - `generateAudioForContent()`: Orchestrates the full pipeline (prepare content → generate TTS → save to DB with `user_id`)
+  - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement)
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
@@ -444,47 +449,20 @@ The app implements several performance optimizations:
 - Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 
-**Critical fix (Jan 2026):** PATCH endpoint used `RETURNING *` which included the `audio_data` BYTEA column (10-50MB) in every response. Playback position saves every 10s were transferring the full audio blob, causing ~7GB/hour of data usage. Fixed by returning only needed columns. Playback-only updates now return just `id, playback_position, playback_speed, last_played_at`.
+**Critical Performance Fix (January 2026):**
+The app had a catastrophic data leak that caused 80GB mobile data usage when away from WiFi. Root causes:
+- PATCH endpoint used `RETURNING *` which included the full `audio_data` BYTEA column (10-50MB) in every response
+- List queries included audio_data for all items instead of just metadata
+- Every click on an item fetched the full audio blob unnecessarily
+- Playback position saves every 10s were transferring the entire audio file
 
-**Result:** Query times reduced from 1-3 seconds to <100ms, instant UI feedback for all actions
+Fixed by using explicit column lists everywhere, excluding audio_data from list/update queries, only fetching it when actually playing audio.
 
-## Known Issues / TODO
+**Result:** App is now dramatically faster, clicking items is instant, mobile data usage reduced by ~99%, query times <100ms
 
-See CODEBASE_CRITIQUE.md for detailed issues and fixes.
+## Task Tracking
 
-Key issues:
-- Speed toggle setting not being saved
-- EA Forum & LessWrong post and comments extraction unreliable
-- Queue functionality incomplete
-- Audio player should be smaller/persistent across tabs
-
-## Recent Improvements
-
-**January 2026 (Latest):**
-- **Podcast Show Names**: Added `podcast_show_name` column to `content_items` for direct access to podcast titles without requiring podcasts table
-- **CRITICAL: Fixed massive data leak in PATCH endpoint**: `RETURNING *` was including the full `audio_data` BYTEA blob (10-50MB) in every playback position save response. With saves every 10 seconds, this caused ~7GB/hour of network transfer. Fixed by returning only needed columns (playback-only updates return just 4 fields instead of the entire row with audio). Also fixed duplicate saves from React effect dependencies and cache-busting causing unnecessary audio re-downloads.
-- **Fixed Read-along transcript drift**: Highlighting gradually ran ahead of audio (~13s drift over 21 minutes). Root cause: display words were split from `content.transcript` by whitespace, producing a different word count than Whisper's `words` array (used for `activeWordIndex`). Fixed by using Whisper words directly for display, ensuring 1:1 index correspondence. Also fixed hardcoded `timeOffset += 900` in multi-chunk transcription to use actual chunk duration from ffprobe.
-- **Playback Position Optimization**: Added composite index (id, user_id) to speed up playback position updates from ~900ms to <100ms
-- **GPT-5-mini Integration**: Upgraded comment extraction from GPT-4o-mini to GPT-5-mini for faster, cheaper processing with `reasoning_effort: 'low'` parameter
-- **Smart Audio Regeneration**: Fixed audio regeneration to reuse existing content from content regeneration instead of re-extracting from HTML (saves API calls, preserves comments)
-- **Multi-User Podcast Subscriptions**: Fixed bug where only one user could subscribe to each podcast. Now uses composite unique constraint `(feed_url, user_id)`
-- **Wallabag Sync Complete**: Full bidirectional sync with conflict resolution, two-way delete, full refresh, and cleanup tools
-- **Comment Formatting Improvements**: TTS now formats dates as readable text (e.g., "15th of January 2026") and only mentions disagree votes when present
-
-**December 2025:**
-- Content provenance tracking (wallabag vs wallacast)
-- Multi-user authentication with JWT tokens
-- Per-user OpenAI API keys
-- Performance optimizations (query times reduced from 1-3s to <100ms)
-- Optimistic UI updates with Zustand store
-
-## Future Plans
-
-- Bulk podcast subscription import (OPML)
-- Edit text content after adding
-- Flemish-sounding Dutch TTS prompt
-- Fullscreen player mode for reading
-- Keyboard shortcuts for player
+See **TODO.md** for current tasks, bug fixes, and feature roadmap.
 
 ## Development
 

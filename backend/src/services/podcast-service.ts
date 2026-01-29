@@ -270,13 +270,23 @@ function cleanDescription(description: string): string {
   // Decode common HTML entities FIRST (so &lt;p&gt; becomes <p>)
   cleaned = cleanHtmlEntities(cleaned);
 
-  // THEN remove HTML tags (now <p> will be properly stripped)
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+  // Remove dangerous/unwanted HTML tags (XSS prevention)
+  // This keeps safe formatting tags while blocking scripts, iframes, etc.
+  const dangerousTags = [
+    'script', 'style', 'iframe', 'object', 'embed',
+    'form', 'input', 'button', 'meta', 'link', 'base'
+  ];
 
-  // Clean up whitespace
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  dangerousTags.forEach(tag => {
+    // Remove both opening and closing tags (with any attributes)
+    const regex = new RegExp(`<${tag}[^>]*>.*?</${tag}>|<${tag}[^>]*/>|<${tag}[^>]*>`, 'gis');
+    cleaned = cleaned.replace(regex, '');
+  });
 
-  return cleaned;
+  // Normalize line breaks: Convert <br>, <br/>, <br /> to consistent <br>
+  cleaned = cleaned.replace(/<br\s*\/?>/gi, '<br>');
+
+  return cleaned.trim();
 }
 
 function cleanHtmlEntities(text: string): string {
