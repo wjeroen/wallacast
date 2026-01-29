@@ -152,8 +152,25 @@ function htmlToNarrationText(html: string): string {
     const unwanted = doc.querySelectorAll('script, style, noscript, iframe');
     unwanted.forEach(el => el.remove());
 
+    // Mark quote blocks with special delimiters before text extraction
+    // This preserves quote structure in the narration
+    const blockquotes = doc.querySelectorAll('blockquote');
+    blockquotes.forEach(blockquote => {
+      // Create text nodes for "Quote" and "End quote" markers
+      const quoteStart = doc.createTextNode(' <<<QUOTE>>> ');
+      const quoteEnd = doc.createTextNode(' <<<ENDQUOTE>>> ');
+
+      // Insert markers before and after the blockquote content
+      blockquote.insertBefore(quoteStart, blockquote.firstChild);
+      blockquote.appendChild(quoteEnd);
+    });
+
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
+
+    // Replace quote markers with spoken announcements
+    text = text.replace(/<<<QUOTE>>>/g, 'Quote:');
+    text = text.replace(/<<<ENDQUOTE>>>/g, 'End quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
