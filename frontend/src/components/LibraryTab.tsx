@@ -409,7 +409,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     {item.type === 'pdf' && <FileText size={16} />}
                   </span>
                   {item.audio_url && <span className="badge">Audio</span>}
-                  {item.type === 'podcast_episode' && item.transcript && (
+                  {item.type === 'podcast_episode' && item.transcript_words && (
                     <span className="badge transcript">Transcript</span>
                   )}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
