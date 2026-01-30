@@ -839,9 +839,6 @@
   margin-bottom: 0.25rem;
   color: #e2e8f0;
   padding-right: 5rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .metadata {
