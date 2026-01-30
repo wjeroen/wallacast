@@ -375,7 +375,7 @@ export function FullscreenPlayer({
           <div className="tab-read-along-display">
             <div className="read-along-header">
               <h3>Read-along</h3>
-              {content.type === 'article' && (
+              {(content.type === 'article' || content.type === 'text') && (
                 <button className="refetch-button regenerate-audio-btn" title="Regenerate audio">
                   <RefreshCw size={16} />
                   <span className="refetch-text-full">Regenerate audio</span>

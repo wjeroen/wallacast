@@ -226,6 +226,9 @@
 .podcast-list,
 .episodes-list,
 .search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   width: 100%;
   margin-bottom: 2rem;
 }
@@ -322,7 +325,6 @@
 /* Feed Tab - Selected Podcast View */
 .selected-podcast-view {
   width: 100%;
-  margin-top: -1rem;
 }
 
 .show-all-btn {
@@ -757,6 +759,7 @@
   border: 1px solid #334155;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
 }
 
 .content-card:hover {
@@ -805,6 +808,7 @@
   font-size: 1rem;
   margin-bottom: 0.25rem;
   color: #e2e8f0;
+  padding-right: 5rem;
 }
 
 .metadata {
@@ -826,7 +830,9 @@
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  align-self: flex-start;
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
 }
 
 .content-actions button {
@@ -1469,6 +1475,7 @@
   .add-tab,
   .library-tab {
     padding: 0.5rem;
+    padding-bottom: 5rem;
   }
 
   .filter-buttons {

@@ -414,7 +414,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   )}
                   {item.playback_position > 0 && item.duration && item.duration > 0 && (
                     <span className="progress">
-                      {Math.round((item.playback_position / item.duration) * 100)}%
+                      {Math.round((item.playback_position / item.duration) * 100)}% complete
                     </span>
                   )}
                   {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
