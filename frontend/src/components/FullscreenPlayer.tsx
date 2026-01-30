@@ -280,15 +280,17 @@ export function FullscreenPlayer({
                     </a>
                   </p>
                 )}
-                {content.content_source && (
+                {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source}
                   </p>
                 )}
               </div>
               {content.url && onRefetch && (
-                <button className="refetch-button" title="Refetch content" onClick={onRefetch}>
+                <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
                   <RefreshCw size={16} />
+                  <span className="refetch-text-full">Refetch from web</span>
+                  <span className="refetch-text-short">Refetch</span>
                 </button>
               )}
             </div>
@@ -320,8 +322,10 @@ export function FullscreenPlayer({
             <div className="comments-header">
               <h3>Comments ({parsedComments.length})</h3>
               {onRefetch && (
-                <button className="refetch-button" title="Refetch comments" onClick={onRefetch}>
+                <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
                   <RefreshCw size={16} />
+                  <span className="refetch-text-full">Refetch from web</span>
+                  <span className="refetch-text-short">Refetch</span>
                 </button>
               )}
             </div>
@@ -372,8 +376,10 @@ export function FullscreenPlayer({
             <div className="read-along-header">
               <h3>Read-along</h3>
               {content.type === 'article' && (
-                <button className="refetch-button" title="Regenerate audio">
+                <button className="refetch-button regenerate-audio-btn" title="Regenerate audio">
                   <RefreshCw size={16} />
+                  <span className="refetch-text-full">Regenerate audio</span>
+                  <span className="refetch-text-short">Audio</span>
                 </button>
               )}
             </div>
