@@ -267,6 +267,7 @@
   color: #64748b;
   cursor: pointer;
   transition: color 0.2s;
+  line-height: 0;
 }
 
 .search-results-close:hover {
