@@ -239,37 +239,29 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0;
-  background: none;
-  border: none;
-  color: #cbd5e1;
-  cursor: pointer;
   margin-bottom: 0;
-}
-
-.search-results-header:hover {
-  color: #e2e8f0;
 }
 
 .search-results-header h3 {
   margin: 0;
   font-size: 1.25rem;
+  color: #cbd5e1;
 }
 
-.search-results-header svg {
+.search-results-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
   color: #64748b;
+  cursor: pointer;
   transition: color 0.2s;
 }
 
-.search-results-header:hover svg {
-  color: #94a3b8;
-}
-
-.search-results h3 {
-  width: 100%;
-  margin-bottom: 0.75rem;
-  font-size: 1.25rem;
-  color: #cbd5e1;
+.search-results-close:hover {
+  color: #e2e8f0;
 }
 
 .podcast-details,
@@ -838,7 +830,11 @@
   font-size: 1rem;
   margin-bottom: 0.25rem;
   color: #e2e8f0;
-  padding-right: 5rem;
+}
+
+/* Library tab titles need to avoid the 4 action buttons */
+.library-tab .content-info h3 {
+  max-width: calc(100% - 10rem);
 }
 
 .metadata {
