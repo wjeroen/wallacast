@@ -38,7 +38,7 @@
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
 - [ ] **[P2]** Remember last-set speed toggle (like Spotify - one global setting that remembers last used speed across all items) - NOTE: Gemini implemented the OPPOSITE (per-item speed in database) on 2026-01-28, need to revert and implement correctly as global setting
-- [ ] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
+- [x] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons) (2026-01-30)
 - [x] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards) (2026-01-30)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
 - [ ] **[P2]** Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
@@ -132,17 +132,24 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
-- [x] **Feed Tab UI Overhaul**: Major redesign of Feed tab (2026-01-30):
+- [x] **Feed Tab & Library Tab UI Improvements** (2026-01-30):
   - Collapsible "Subscribed Podcasts" section (collapsed by default) - chevron icon immediately after text
   - Matched duration format to Library tab (`1h 23m` instead of `1:23:45`)
   - Matched metadata layout (podcast name + date on same line)
   - Added "Show All Podcasts" button when viewing a specific podcast's episodes
   - Expanded podcast card view shows full description when selected
-  - "Load More" button to see more than 20 episodes
+  - "Load More" button to see more episodes (API now returns up to 100 instead of 20)
   - Fixed card gaps (display flex + gap)
   - Feed tab uses 80x80 thumbnails, Library tab uses 100x100
   - Added dark blue "Transcript" badge for podcasts in Library tab (checks transcript_words field)
   - Added bottom padding (5rem) to Feed and Library tabs to avoid tab bar overlap
+  - Card action buttons moved to top-right (align-self: flex-start)
+  - Metadata order: Audio badge, Transcript badge, % progress, duration
+  - Fixed spacing between search bar, sections, and items
+  - Refetch buttons now show text: "Refetch from web" (or "Refetch" on mobile)
+  - Read-along button shows "Regenerate audio" (or "Audio" on mobile)
+  - Only show "Fetched by wallacast" for articles, not texts
+  - Reduced gap between title and content in fullscreen player content tab
 - [x] **Feed Tab HTML Cleanup**: Fixed HTML tags showing in podcast descriptions in Feed tab - added cleanHtml() to strip tags and decode entities, matching Library tab behavior (2026-01-30)
 - [x] **Feed Tab Button Styling**: Changed "Add to Library" button to icon-only style matching Library tab action buttons (2026-01-30)
 - [x] **CRITICAL: Fixed 80GB mobile data usage**: App was returning entire audio files (10-50MB blobs) with every click and playback update. Fixed by using explicit column lists, excluding audio_data from list queries. App is now dramatically faster and mobile data usage reduced by ~99% (2026-01-27)
