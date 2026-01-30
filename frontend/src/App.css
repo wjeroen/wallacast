@@ -235,9 +235,39 @@
 
 .podcast-list h3,
 .episodes-list h3,
+.search-results-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #cbd5e1;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.search-results-header:hover {
+  color: #e2e8f0;
+}
+
+.search-results-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.search-results-header svg {
+  color: #64748b;
+  transition: color 0.2s;
+}
+
+.search-results-header:hover svg {
+  color: #94a3b8;
+}
+
 .search-results h3 {
   width: 100%;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   font-size: 1.25rem;
   color: #cbd5e1;
 }
@@ -809,6 +839,9 @@
   margin-bottom: 0.25rem;
   color: #e2e8f0;
   padding-right: 5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .metadata {
