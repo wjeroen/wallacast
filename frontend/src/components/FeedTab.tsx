@@ -200,13 +200,16 @@ export function FeedTab() {
       {/* Search Results */}
       {searchResults.length > 0 && (
         <div className="search-results">
-          <button
-            className="search-results-header"
-            onClick={() => { setSearchResults([]); setSearchQuery(''); }}
-          >
+          <div className="search-results-header">
             <h3>Search Results</h3>
-            <X size={20} />
-          </button>
+            <button
+              className="search-results-close"
+              onClick={() => { setSearchResults([]); setSearchQuery(''); }}
+              title="Close search results"
+            >
+              <X size={20} />
+            </button>
+          </div>
           {searchResults.map((podcast, index) => (
             <div key={index} className="content-card">
               {podcast.preview_picture && (
