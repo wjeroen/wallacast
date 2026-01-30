@@ -54,6 +54,7 @@ Wallacast supports multiple users with complete data isolation:
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player | `frontend/src/components/AudioPlayer.tsx` |
+| Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
 | Settings UI | `frontend/src/components/SettingsPage.tsx` |
@@ -260,7 +261,13 @@ Wallacast supports multiple users with complete data isolation:
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
-- **`components/FeedTab.tsx`**: Podcast discovery and management. iTunes search, subscription list, episode preview, add-to-library functionality
+- **`components/FeedTab.tsx`**: Podcast discovery and management
+  - **Search**: iTunes podcast search with subscribe button
+  - **Subscribed Podcasts**: Collapsible section (collapsed by default) showing all subscriptions with unsubscribe option
+  - **Latest Episodes**: Shows 20 most recent episodes across all subscribed podcasts
+  - **Podcast Detail View**: Click a podcast to see expanded card with full description + that podcast's episodes. "Show All Episodes" button to return to full feed
+  - **Add to Library**: Plus button on each episode adds it to library (same styling as Library tab)
+  - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
 - **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
 
