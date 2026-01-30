@@ -8,6 +8,8 @@
 
 ### Features to Implement
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
+- [ ] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs)
+- [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
