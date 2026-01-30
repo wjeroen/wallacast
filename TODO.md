@@ -139,15 +139,15 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Added "Show All Podcasts" button when viewing a specific podcast's episodes
   - Expanded podcast card view shows full description when selected
   - "Load More" button to see more episodes (API now returns up to 100 instead of 20)
-  - Fixed card gaps (display flex + gap)
+  - Fixed card gaps (display flex + gap) including search results
   - Feed tab uses 80x80 thumbnails, Library tab uses 100x100
   - Added dark blue "Transcript" badge for podcasts in Library tab (checks transcript_words field)
-  - Added bottom padding (5rem) to Feed and Library tabs to avoid tab bar overlap
-  - Card action buttons moved to top-right (align-self: flex-start)
-  - Metadata order: Audio badge, Transcript badge, % progress, duration
+  - Added bottom padding (5rem) to Feed and Library tabs (including mobile)
+  - Card action buttons moved to top-right (position: absolute) - only title has reduced width
+  - Metadata order: Audio badge, Transcript badge, % complete, duration
   - Fixed spacing between search bar, sections, and items
   - Refetch buttons now show text: "Refetch from web" (or "Refetch" on mobile)
-  - Read-along button shows "Regenerate audio" (or "Audio" on mobile)
+  - Read-along tab shows "Regenerate audio" for articles AND texts
   - Only show "Fetched by wallacast" for articles, not texts
   - Reduced gap between title and content in fullscreen player content tab
 - [x] **Feed Tab HTML Cleanup**: Fixed HTML tags showing in podcast descriptions in Feed tab - added cleanHtml() to strip tags and decode entities, matching Library tab behavior (2026-01-30)
