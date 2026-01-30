@@ -243,6 +243,101 @@
   width: 100%;
 }
 
+/* Feed Tab - Collapsible Subscribed Podcasts Section */
+.subscribed-podcasts-section {
+  margin-bottom: 1.5rem;
+}
+
+.subscribed-podcasts-section .section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.subscribed-podcasts-section .section-header:hover {
+  background: #334155;
+  border-color: #475569;
+}
+
+.subscribed-podcasts-section .section-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.subscribed-podcasts-section .podcast-list {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
+/* Feed Tab - Episodes Section */
+.episodes-section {
+  width: 100%;
+}
+
+.episodes-section h3 {
+  margin-bottom: 1rem;
+  font-size: 1.25rem;
+  color: #cbd5e1;
+}
+
+/* Feed Tab - Selected Podcast View */
+.selected-podcast-view {
+  width: 100%;
+}
+
+.show-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  margin-bottom: 1rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.375rem;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.875rem;
+}
+
+.show-all-btn:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.selected-podcast-card {
+  margin-bottom: 1.5rem;
+  border-color: #3b82f6;
+}
+
+.selected-podcast-card .thumbnail {
+  width: 100px;
+  height: 100px;
+}
+
+.selected-podcast-description {
+  max-height: none !important;
+  -webkit-line-clamp: unset !important;
+}
+
+/* Feed Tab - Podcast list cards */
+.podcast-list-card {
+  cursor: pointer;
+}
+
+.podcast-list-card:hover {
+  border-color: #3b82f6;
+}
+
 .podcast-card,
 .episode-card {
   display: flex;
@@ -656,8 +751,8 @@
 }
 
 .content-card .thumbnail {
-  width: 100px;
-  height: 100px;
+  width: 80px;
+  height: 80px;
   object-fit: cover;
   border-radius: 0.375rem;
   flex-shrink: 0;
