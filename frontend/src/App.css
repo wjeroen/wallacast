@@ -249,6 +249,7 @@
   padding: 0;
   margin-bottom: 0;
   color: #cbd5e1;
+  line-height: 1.75rem;
 }
 
 .search-results-header h3 {
@@ -829,6 +830,14 @@
   height: 80px;
 }
 
+/* Library tab thumbnails shrink on mobile (keeps 100x100 resolution, displays smaller) */
+@media (max-width: 640px) {
+  .library-tab .content-card .thumbnail {
+    width: 80px;
+    height: 80px;
+  }
+}
+
 .content-info {
   flex: 1;
   min-width: 0;
@@ -844,7 +853,7 @@
 /* Library tab titles need max-width to avoid the 4 action buttons */
 .library-tab .content-info h3 {
   padding-right: 0;
-  max-width: calc(100% - 12rem);
+  max-width: calc(100% - 11rem);
 }
 
 .metadata {
