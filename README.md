@@ -286,6 +286,7 @@ Wallacast supports multiple users with complete data isolation:
   - Transcript display with word-click-to-seek (for podcasts with timestamps)
   - Comments section display (for EA Forum articles)
   - Playback position persistence: Auto-saves every 10s during playback, on pause, and on component unmount
+  - **Refetch button**: The "Refetch from web" button in the Content and Comments tabs refetches BOTH content AND comments together from the original URL (calls `POST /api/content/:id/refetch`). This is useful when article content or comments have been updated.
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
