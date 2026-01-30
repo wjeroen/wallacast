@@ -133,7 +133,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 ## Completed Recently ✅
 
 - [x] **Feed Tab UI Overhaul**: Major redesign of Feed tab (2026-01-30):
-  - Collapsible "Subscribed Podcasts" section (collapsed by default) - text-style header with chevron icon on right
+  - Collapsible "Subscribed Podcasts" section (collapsed by default) - chevron icon immediately after text
   - Matched duration format to Library tab (`1h 23m` instead of `1:23:45`)
   - Matched metadata layout (podcast name + date on same line)
   - Added "Show All Podcasts" button when viewing a specific podcast's episodes
@@ -141,7 +141,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - "Load More" button to see more than 20 episodes
   - Fixed card gaps (display flex + gap)
   - Feed tab uses 80x80 thumbnails, Library tab uses 100x100
-  - Added dark blue "Transcript" badge for podcasts in Library tab
+  - Added dark blue "Transcript" badge for podcasts in Library tab (checks transcript_words field)
+  - Added bottom padding (5rem) to Feed and Library tabs to avoid tab bar overlap
 - [x] **Feed Tab HTML Cleanup**: Fixed HTML tags showing in podcast descriptions in Feed tab - added cleanHtml() to strip tags and decode entities, matching Library tab behavior (2026-01-30)
 - [x] **Feed Tab Button Styling**: Changed "Add to Library" button to icon-only style matching Library tab action buttons (2026-01-30)
 - [x] **CRITICAL: Fixed 80GB mobile data usage**: App was returning entire audio files (10-50MB blobs) with every click and playback update. Fixed by using explicit column lists, excluding audio_data from list queries. App is now dramatically faster and mobile data usage reduced by ~99% (2026-01-27)

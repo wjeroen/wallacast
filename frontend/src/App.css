@@ -178,6 +178,7 @@
   width: 100%;
   max-width: 100%;
   padding: 1rem;
+  padding-bottom: 5rem;
 }
 
 .search-bar {
@@ -249,17 +250,15 @@
 }
 
 .subscribed-podcasts-section .section-header {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  gap: 0.5rem;
   padding: 0;
   background: none;
   border: none;
   color: #cbd5e1;
   cursor: pointer;
   margin-bottom: 1rem;
-  font-size: 1.25rem;
 }
 
 .subscribed-podcasts-section .section-header:hover {
@@ -324,6 +323,7 @@
 /* Feed Tab - Selected Podcast View */
 .selected-podcast-view {
   width: 100%;
+  margin-top: -1rem;
 }
 
 .show-all-btn {
@@ -331,7 +331,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   background: #1e293b;
   border: 1px solid #334155;
   border-radius: 0.375rem;
@@ -638,6 +638,7 @@
   width: 100%;
   max-width: 100%;
   padding: 1rem;
+  padding-bottom: 5rem;
 }
 
 .library-header {
