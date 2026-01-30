@@ -32,9 +32,12 @@ function formatDuration(seconds: number): string {
   return `${minutes}m`;
 }
 
+const EPISODES_PER_PAGE = 20;
+
 export function FeedTab() {
   const [podcasts, setPodcasts] = useState<Podcast[]>([]);
-  const [episodes, setEpisodes] = useState<any[]>([]);
+  const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
+  const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(EPISODES_PER_PAGE);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +63,7 @@ export function FeedTab() {
     try {
       // Load episodes from all subscribed podcasts
       const podcastsResponse = await podcastAPI.getAll();
-      const allEpisodes: any[] = [];
+      const episodes: any[] = [];
 
       for (const podcast of podcastsResponse.data) {
         try {
@@ -70,15 +73,16 @@ export function FeedTab() {
             podcast_id: podcast.id,
             podcast_title: podcast.title,
           }));
-          allEpisodes.push(...episodesWithPodcast);
+          episodes.push(...episodesWithPodcast);
         } catch (error) {
           console.error(`Failed to load episodes for podcast ${podcast.id}:`, error);
         }
       }
 
-      // Sort by published date and take the 20 most recent
-      allEpisodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
-      setEpisodes(allEpisodes.slice(0, 20));
+      // Sort by published date
+      episodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+      setAllEpisodes(episodes);
+      setVisibleEpisodeCount(EPISODES_PER_PAGE);
     } catch (error) {
       console.error('Failed to load episodes:', error);
     }
@@ -135,16 +139,21 @@ export function FeedTab() {
         podcast_id: podcast.id,
         podcast_title: podcast.title,
       }));
-      setEpisodes(episodesWithPodcast);
+      setAllEpisodes(episodesWithPodcast);
+      setVisibleEpisodeCount(EPISODES_PER_PAGE);
       setSelectedPodcast(podcast);
     } catch (error) {
       console.error('Failed to load podcast episodes:', error);
     }
   };
 
-  const handleShowAllEpisodes = () => {
+  const handleShowAllPodcasts = () => {
     setSelectedPodcast(null);
     loadLatestEpisodes();
+  };
+
+  const handleLoadMore = () => {
+    setVisibleEpisodeCount(prev => prev + EPISODES_PER_PAGE);
   };
 
   const handleAddToLibrary = async (episode: any) => {
@@ -165,6 +174,9 @@ export function FeedTab() {
       setAddingToLibrary(null);
     }
   };
+
+  const visibleEpisodes = allEpisodes.slice(0, visibleEpisodeCount);
+  const hasMoreEpisodes = allEpisodes.length > visibleEpisodeCount;
 
   return (
     <div className="feed-tab">
@@ -215,9 +227,9 @@ export function FeedTab() {
       {selectedPodcast ? (
         <div className="selected-podcast-view">
           {/* Back / Show All button */}
-          <button className="show-all-btn" onClick={handleShowAllEpisodes}>
+          <button className="show-all-btn" onClick={handleShowAllPodcasts}>
             <ArrowLeft size={16} />
-            Show All Episodes
+            Show All Podcasts
           </button>
 
           {/* Expanded Podcast Card */}
@@ -248,7 +260,7 @@ export function FeedTab() {
           {/* Episodes for selected podcast */}
           <div className="episodes-section">
             <h3>Episodes</h3>
-            {episodes.map((episode, index) => (
+            {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || index} className="content-card">
                 {episode.preview_picture && (
                   <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
@@ -274,6 +286,11 @@ export function FeedTab() {
                 </div>
               </div>
             ))}
+            {hasMoreEpisodes && (
+              <button className="load-more-btn" onClick={handleLoadMore}>
+                Load More
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -284,8 +301,8 @@ export function FeedTab() {
               className="section-header"
               onClick={() => setPodcastsExpanded(!podcastsExpanded)}
             >
-              {podcastsExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
               <h3>Subscribed Podcasts ({podcasts.length})</h3>
+              {podcastsExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
             </button>
 
             {podcastsExpanded && (
@@ -321,7 +338,7 @@ export function FeedTab() {
           {/* Latest Episodes */}
           <div className="episodes-section">
             <h3>Latest Episodes</h3>
-            {episodes.map((episode, index) => (
+            {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || index} className="content-card">
                 {episode.preview_picture && (
                   <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
@@ -352,6 +369,11 @@ export function FeedTab() {
                 </div>
               </div>
             ))}
+            {hasMoreEpisodes && (
+              <button className="load-more-btn" onClick={handleLoadMore}>
+                Load More
+              </button>
+            )}
           </div>
         </>
       )}
