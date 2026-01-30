@@ -286,7 +286,7 @@ export function FullscreenPlayer({
                   </p>
                 )}
               </div>
-              {content.url && onRefetch && (
+              {content.type === 'article' && content.url && onRefetch && (
                 <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
                   <RefreshCw size={16} />
                   <span className="refetch-text-full">Refetch from web</span>
@@ -438,7 +438,7 @@ export function FullscreenPlayer({
           )}
           <div>
             <h2 className="fullscreen-title">{content.title}</h2>
-            {content.url && (
+            {content.type === 'article' && content.url && (
               <p className="fullscreen-source-link">
                 <a href={content.url} target="_blank" rel="noopener noreferrer">
                   {getDomainFromUrl(content.url)}
