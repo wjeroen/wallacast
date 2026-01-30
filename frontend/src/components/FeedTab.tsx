@@ -3,6 +3,25 @@ import { Search, Plus, X } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast } from '../types';
 
+function cleanHtml(text: string): string {
+  if (!text) return '';
+  // Remove CDATA wrapper
+  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  // Remove HTML tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
+  // Decode HTML entities
+  cleaned = cleaned
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+  // Clean up whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  return cleaned;
+}
+
 export function FeedTab() {
   const [podcasts, setPodcasts] = useState<Podcast[]>([]);
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -161,7 +180,7 @@ export function FeedTab() {
                 <h4>{podcast.title}</h4>
                 <p className="author">{podcast.author}</p>
                 {podcast.description && (
-                  <p className="description">{podcast.description.slice(0, 150)}...</p>
+                  <p className="description">{cleanHtml(podcast.description).slice(0, 150)}...</p>
                 )}
               </div>
               <button onClick={() => handleSubscribe(podcast.feed_url)}>
@@ -211,7 +230,7 @@ export function FeedTab() {
           <div className="podcast-details">
             <h4>{podcasts.find(p => p.id === selectedPodcast)?.title}</h4>
             {podcasts.find(p => p.id === selectedPodcast)?.description && (
-              <p className="podcast-description">{podcasts.find(p => p.id === selectedPodcast)?.description}</p>
+              <p className="podcast-description">{cleanHtml(podcasts.find(p => p.id === selectedPodcast)?.description || '')}</p>
             )}
           </div>
         )}
@@ -226,7 +245,7 @@ export function FeedTab() {
                 <p className="podcast-name">{episode.podcast_title}</p>
               )}
               {episode.description && (
-                <p className="description">{episode.description.slice(0, 200)}...</p>
+                <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
               )}
               <div className="episode-meta">
                 {episode.duration && (
@@ -237,14 +256,15 @@ export function FeedTab() {
                 )}
               </div>
             </div>
-            <button
-              className="add-to-library-btn"
-              onClick={() => handleAddToLibrary(episode)}
-              disabled={addingToLibrary === episode.audio_url}
-            >
-              <Plus size={16} />
-              {addingToLibrary === episode.audio_url ? 'Adding...' : 'Add to Library'}
-            </button>
+            <div className="content-actions">
+              <button
+                onClick={() => handleAddToLibrary(episode)}
+                disabled={addingToLibrary === episode.audio_url}
+                title={addingToLibrary === episode.audio_url ? 'Adding...' : 'Add to Library'}
+              >
+                <Plus size={16} />
+              </button>
+            </div>
           </div>
         ))}
       </div>

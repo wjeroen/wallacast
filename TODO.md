@@ -39,7 +39,7 @@
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
 - [ ] **[P2]** Remember last-set speed toggle (like Spotify - one global setting that remembers last used speed across all items) - NOTE: Gemini implemented the OPPOSITE (per-item speed in database) on 2026-01-28, need to revert and implement correctly as global setting
 - [ ] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons)
-- [ ] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards)
+- [x] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards) (2026-01-30)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
 - [ ] **[P2]** Change TTS prompt so Dutch sounds Flemish - modify TTS instructions in openai-tts.ts: `const instructions = options.instructions || 'Read this article clearly and naturally. If the content is in Dutch, use a Belgian/Flemish accent and pronunciation. Focus on the main content. Use appropriate pacing and emphasis for readability.';` (worth testing if OpenAI's TTS model supports Dutch regional accents)
 
@@ -132,6 +132,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Feed Tab HTML Cleanup**: Fixed HTML tags showing in podcast descriptions in Feed tab - added cleanHtml() to strip tags and decode entities, matching Library tab behavior (2026-01-30)
+- [x] **Feed Tab Button Styling**: Changed "Add to Library" button to icon-only style matching Library tab action buttons (2026-01-30)
 - [x] **CRITICAL: Fixed 80GB mobile data usage**: App was returning entire audio files (10-50MB blobs) with every click and playback update. Fixed by using explicit column lists, excluding audio_data from list queries. App is now dramatically faster and mobile data usage reduced by ~99% (2026-01-27)
 - [x] **Whisper Word Clicking**: Fixed read-along word clicking to seek correctly in podcasts and articles (2026-01-29)
 - [x] **Podcast Description HTML Rendering**: FullscreenPlayer now renders podcast descriptions as HTML with whiteSpace: 'pre-wrap' to preserve formatting (2026-01-28)
