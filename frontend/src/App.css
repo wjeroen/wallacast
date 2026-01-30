@@ -234,18 +234,26 @@
 }
 
 .podcast-list h3,
-.episodes-list h3,
-.search-results-header {
+.episodes-list h3 {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0;
 }
 
+/* Search Results Header - matches .subscribed-podcasts-section .section-header */
+.search-results-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  margin-bottom: 0;
+  color: #cbd5e1;
+}
+
 .search-results-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #cbd5e1;
 }
 
 .search-results-close {
@@ -261,7 +269,7 @@
 }
 
 .search-results-close:hover {
-  color: #e2e8f0;
+  color: #94a3b8;
 }
 
 .podcast-details,
@@ -830,11 +838,13 @@
   font-size: 1rem;
   margin-bottom: 0.25rem;
   color: #e2e8f0;
+  padding-right: 5rem;
 }
 
-/* Library tab titles need to avoid the 4 action buttons */
+/* Library tab titles need max-width to avoid the 4 action buttons */
 .library-tab .content-info h3 {
-  max-width: calc(100% - 10rem);
+  padding-right: 0;
+  max-width: calc(100% - 12rem);
 }
 
 .metadata {
