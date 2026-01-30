@@ -144,8 +144,8 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
 
     const episodes = [];
 
-    for (const itemXml of itemMatches.slice(0, 20)) {
-      // Limit to 20 most recent
+    for (const itemXml of itemMatches.slice(0, 100)) {
+      // Limit to 100 most recent
       const title = extractXMLTag(itemXml, 'title');
       const description = extractXMLTag(itemXml, 'description');
       const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
@@ -200,8 +200,8 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
 
     const episodes = [];
 
-    for (const itemXml of itemMatches.slice(0, 20)) {
-      // Limit to 20 most recent
+    for (const itemXml of itemMatches.slice(0, 100)) {
+      // Limit to 100 most recent
       const title = extractXMLTag(itemXml, 'title');
       const description = extractXMLTag(itemXml, 'description');
       const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
