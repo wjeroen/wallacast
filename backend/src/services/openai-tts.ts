@@ -85,8 +85,8 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
     command
       .complexFilter(`${filterInput}concat=n=${inputFiles.length}:v=0:a=1[out]`)
       .map('[out]')
-      .audioFrequency(44100)
-      .audioBitrate('192k')
+      .audioFrequency(24000)
+      .audioBitrate('96k')
       .format('mp3')
       .on('end', () => resolve())
       .on('error', (err) => {
