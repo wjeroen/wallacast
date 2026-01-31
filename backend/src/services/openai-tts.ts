@@ -152,6 +152,31 @@ function htmlToNarrationText(html: string): string {
     const unwanted = doc.querySelectorAll('script, style, noscript, iframe');
     unwanted.forEach(el => el.remove());
 
+    // Handle links: Replace with anchor text + domain name
+    const links = doc.querySelectorAll('a[href]');
+    links.forEach(link => {
+      const anchorText = link.textContent?.trim() || '';
+      const href = link.getAttribute('href') || '';
+
+      // Extract domain name from URL
+      let domainText = '';
+      try {
+        const url = new URL(href, 'https://example.com'); // Base URL for relative links
+        const hostname = url.hostname;
+        // Remove www. prefix if present
+        const domain = hostname.replace(/^www\./, '');
+        // Only use the main domain (before first slash of path)
+        domainText = `, link to ${domain}`;
+      } catch (e) {
+        // If URL parsing fails, use generic text
+        domainText = ', a link is shown here';
+      }
+
+      // Replace the link element with anchor text + domain description
+      const textNode = doc.createTextNode(anchorText + domainText);
+      link.replaceWith(textNode);
+    });
+
     // Mark quote blocks with special delimiters before text extraction
     // This preserves quote structure in the narration
     const blockquotes = doc.querySelectorAll('blockquote');
