@@ -218,7 +218,6 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
   const isLessWrong = url.includes('lesswrong.com');
   const isEAForum = url.includes('forum.effectivealtruism.org');
-  const isSubstackDomain = url.includes('.substack.com') || url.includes('substack.com/');
 
   // Use GraphQL for EA Forum/LessWrong
   if (isLessWrong || isEAForum) {
@@ -231,118 +230,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     }
   }
 
-  // Use got-scraping for *.substack.com domains (bypasses Cloudflare bot detection)
-  if (isSubstackDomain) {
-    console.log('[Fetcher] Detected Substack domain, using got-scraping with browser-like headers');
-    // Randomized wait between 1 and 3 seconds
-    await sleep(1000 + Math.random() * 2000);
-
-    try {
-      const response = await gotScraping.get(url, {
-        headerGeneratorOptions: {
-          browsers: [{ name: 'chrome', minVersion: 120 }],
-          devices: ['desktop'],
-          locales: ['en-US', 'en'],
-          operatingSystems: ['windows', 'macos'],
-        },
-        retry: { limit: 2 }
-      });
-
-      const html = response.body;
-      console.log(`[Fetcher] Received ${html.length} bytes of HTML via got-scraping`);
-
-      if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
-        console.log('[Fetcher] ⚠️ Cloudflare challenge detected even with got-scraping');
-        throw new Error('Hit Cloudflare WAF Challenge page');
-      }
-
-      console.log('[Fetcher] ✓ No Cloudflare challenge detected, parsing content');
-
-      const dom = new JSDOM(html, { url });
-      const doc = dom.window.document;
-
-      // Remove scripts and styles globally
-      const scripts = doc.querySelectorAll('script');
-      scripts.forEach(script => script.remove());
-      const styles = doc.querySelectorAll('style');
-      styles.forEach(style => style.remove());
-
-      // Extract metadata from meta tags
-      const title =
-        doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
-        doc.querySelector('title')?.textContent ||
-        'Untitled';
-
-      const siteName =
-        doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content') ||
-        new URL(url).hostname;
-
-      let author: string | undefined;
-      const authorMeta = doc.querySelector('meta[name="author"]')?.getAttribute('content');
-      if (authorMeta) {
-        author = authorMeta;
-      } else {
-        const authorSelectors = ['.author', '.byline', 'a[rel="author"]'];
-        for (const selector of authorSelectors) {
-          const el = doc.querySelector(selector);
-          if (el) {
-            author = el.textContent?.trim();
-            break;
-          }
-        }
-      }
-
-      const publishedDate =
-        doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
-
-      // Substack-specific content selection
-      let contentEl = doc.querySelector('.available-content .body.markup') ||
-                      doc.querySelector('.body.markup') ||
-                      doc.querySelector('.available-content');
-
-      if (!contentEl) {
-        contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
-      }
-
-      // Clean up UI noise
-      if (contentEl) {
-        contentEl.querySelectorAll('.post-ufi, .ufi, .pencraft-ufi').forEach(el => el.remove());
-        contentEl.querySelectorAll('.post-footer, .pencraft-footer').forEach(el => el.remove());
-        contentEl.querySelectorAll('.image-link-expand, .pencraft-image-expand').forEach(el => el.remove());
-        contentEl.querySelectorAll('.post-header').forEach(el => el.remove());
-
-        // Remove Previous/Next navigation buttons
-        contentEl.querySelectorAll('button, a').forEach(el => {
-          const text = el.textContent?.trim() || '';
-          if (/^(←\s*)?previous(\s*→)?$/i.test(text) || /^(←\s*)?next(\s*→)?$/i.test(text)) {
-            el.remove();
-          }
-        });
-      }
-
-      const cleanedHtml = contentEl.innerHTML;
-      const textContent = contentEl.textContent || '';
-
-      return {
-        title,
-        content: textContent,
-        html: html,
-        cleaned_html: cleanedHtml,
-        author,
-        byline: author,
-        site_name: siteName,
-        published_date: publishedDate,
-      };
-
-    } catch (error) {
-      console.error('[Fetcher] ✗ got-scraping failed for Substack:', error);
-      throw new Error('Failed to fetch Substack article');
-    }
-  }
-
-  // --- STANDARD SCRAPER for other sites ---
+  // --- STANDARD SCRAPER for all other sites (including Substack) ---
   try {
-    console.log('[Fetcher] Using simple fetch with no headers for standard scraping');
+    console.log('[Fetcher] Using simple fetch for standard scraping');
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -353,12 +243,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const html = await response.text();
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
 
+    // Log if potential Cloudflare challenge but continue anyway
     if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
-      console.log('[Fetcher] ⚠️ Cloudflare challenge detected in response');
-      throw new Error('Hit Cloudflare WAF Challenge page on Standard Scraper');
+      console.log('[Fetcher] ⚠️ Potential Cloudflare challenge detected, but attempting to parse anyway');
     }
-
-    console.log('[Fetcher] ✓ No Cloudflare challenge detected, parsing content');
 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
