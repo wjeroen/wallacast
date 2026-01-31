@@ -177,22 +177,10 @@ export function FeedTab() {
     console.log('Feed type:', feed.type);
 
     try {
-      const url = `/api/podcasts/preview-by-url?url=${encodeURIComponent(feed.feed_url)}`;
-      console.log('Fetching from:', url);
+      const response = await podcastAPI.getPreviewByUrl(feed.feed_url);
+      console.log('Episodes returned:', response.data.length, response.data);
 
-      const response = await fetch(url);
-      console.log('Response status:', response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Error response:', errorText);
-        throw new Error('Failed to load preview');
-      }
-
-      const data = await response.json();
-      console.log('Episodes returned:', data.length, data);
-
-      const episodesWithPodcast = data.map((ep: any) => ({
+      const episodesWithPodcast = response.data.map((ep: any) => ({
         ...ep,
         podcast_id: null,
         podcast_title: feed.title,
@@ -205,9 +193,10 @@ export function FeedTab() {
       console.log('Setting selected search result:', feed.title);
       setSelectedSearchResult(feed);
       console.log('=== Done ===');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load feed preview:', error);
-      alert(`Failed to load preview: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to load preview';
+      alert(`Failed to load preview: ${errorMsg}`);
     }
   };
 
