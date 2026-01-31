@@ -230,20 +230,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   }
 
   // --- STANDARD SCRAPER ---
-  // Use simple fetch (not got-scraping) to avoid triggering Cloudflare on sites like Substack
+  // Use simple fetch with NO headers (like old code) to avoid triggering Cloudflare
 
   try {
-    console.log('[Fetcher] Using simple fetch (node-fetch) for standard scraping');
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-      },
-    });
+    console.log('[Fetcher] Using simple fetch with no headers for standard scraping');
+    const response = await fetch(url);
 
     if (!response.ok) {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
