@@ -7,6 +7,7 @@ export interface PodcastSearchResult {
   feed_url: string;
   preview_picture?: string;
   description?: string;
+  type?: 'podcast' | 'newsletter';
 }
 
 export interface PodcastEpisode {
@@ -37,6 +38,7 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
       feed_url: result.feedUrl,
       preview_picture: result.artworkUrl600 || result.artworkUrl100,
       description: result.description,
+      type: 'podcast',
     }));
   } catch (error) {
     console.error('Error searching podcasts:', error);
@@ -74,6 +76,7 @@ export async function searchRSSByUrl(url: string): Promise<PodcastSearchResult[]
       feed_url: feedUrl,
       preview_picture: details.preview_picture,
       description: details.description,
+      type: details.type,
     }];
   } catch (error) {
     console.error('Error fetching RSS feed:', error);
