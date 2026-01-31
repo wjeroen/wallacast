@@ -363,8 +363,8 @@ export function FeedTab() {
                 )}
                 <div className="metadata">
                   <span className="type">
-                    {podcast.type === 'podcast' && <Podcast size={16} />}
-                    {podcast.type === 'newsletter' && <Newspaper size={16} />}
+                    {podcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />
+                    {podcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />
                   </span>
                 </div>
               </div>
@@ -402,8 +402,8 @@ export function FeedTab() {
               )}
               <div className="metadata">
                 <span className="type">
-                  {selectedSearchResult.type === 'podcast' && <Podcast size={16} />}
-                  {selectedSearchResult.type === 'newsletter' && <Newspaper size={16} />}
+                  {selectedSearchResult.type === 'podcast' && <Podcast size={16} className="icon-podcast" />
+                  {selectedSearchResult.type === 'newsletter' && <Newspaper size={16} className="icon-article" />
                 </span>
               </div>
             </div>
@@ -437,8 +437,8 @@ export function FeedTab() {
                   )}
                   <div className="metadata">
                     <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
-                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />
+                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />
                     </span>
                     {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
                   </div>
@@ -487,8 +487,8 @@ export function FeedTab() {
               )}
               <div className="metadata">
                 <span className="type">
-                  {selectedPodcast.type === 'podcast' && <Podcast size={16} />}
-                  {selectedPodcast.type === 'newsletter' && <Newspaper size={16} />}
+                  {selectedPodcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />
+                  {selectedPodcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />
                 </span>
               </div>
             </div>
@@ -522,8 +522,8 @@ export function FeedTab() {
                   )}
                   <div className="metadata">
                     <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
-                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />
+                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />
                     </span>
                     {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
                   </div>
@@ -574,8 +574,8 @@ export function FeedTab() {
                       <p className="author">{podcast.author}</p>
                       <div className="metadata">
                         <span className="type">
-                          {podcast.type === 'podcast' && <Podcast size={16} />}
-                          {podcast.type === 'newsletter' && <Newspaper size={16} />}
+                          {podcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />
+                          {podcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />
                         </span>
                       </div>
                     </div>
@@ -613,8 +613,8 @@ export function FeedTab() {
                   )}
                   <div className="metadata">
                     <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
-                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />
+                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />
                     </span>
                     {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
                   </div>
