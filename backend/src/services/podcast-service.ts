@@ -149,22 +149,37 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
 
 export async function fetchPodcastDetails(feedUrl: string) {
   try {
-    const response = await fetch(feedUrl);
+    // FIX: Added User-Agent to avoid blocking by Vox/Cloudflare
+    const response = await fetch(feedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+      }
+    });
+
+    if (!response.ok) {
+       throw new Error(`Failed to fetch feed: ${response.status} ${response.statusText}`);
+    }
+
     const xml = await response.text();
 
     // Validate it's actually an RSS/Atom feed
     if (!xml.includes('<rss') && !xml.includes('<feed') && !xml.includes('<?xml')) {
-      throw new Error('URL is not a valid RSS feed. For Substack newsletters, try adding /feed to the URL (e.g., newsletter.substack.com/feed)');
+      throw new Error('URL is not a valid RSS feed. For Substack newsletters, try adding /feed to the URL');
     }
 
-    // Basic RSS parsing - in production, use a proper XML parser like fast-xml-parser
+    // Parse Feed Metadata
     const title = extractXMLTag(xml, 'title');
     const author = extractXMLTag(xml, 'itunes:author') || extractXMLTag(xml, 'author');
-    const description = extractXMLTag(xml, 'description');
+    
+    // FIX: Support both RSS <description> and Atom <subtitle>
+    const description = extractXMLTag(xml, 'description') || extractXMLTag(xml, 'subtitle');
+    
     // Try multiple image tag formats
     const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href') ||
       extractNestedXMLTag(xml, 'image', 'url') ||
       extractXMLAttribute(xml, 'media:thumbnail', 'url');
+      
     const website_url = extractXMLTag(xml, 'link');
     const category = extractXMLTag(xml, 'itunes:category');
     const language = extractXMLTag(xml, 'language');
@@ -189,8 +204,8 @@ export async function fetchPodcastDetails(feedUrl: string) {
 }
 
 function detectFeedType(xml: string): 'podcast' | 'newsletter' {
-  // Look at first few items to see if they have AUDIO enclosures (not just any enclosure)
-  const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+  // FIX: Check for both <item> (RSS) and <entry> (Atom)
+  const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
   let audioCount = 0;
   let totalCount = 0;
@@ -213,20 +228,25 @@ function detectFeedType(xml: string): 'podcast' | 'newsletter' {
 
 export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, userId: number): Promise<any[]> {
   try {
-    const response = await fetch(feedUrl);
+    // FIX: Added User-Agent
+    const response = await fetch(feedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
     const xml = await response.text();
 
-    // Extract episodes from RSS feed
-    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+    // FIX: Extract items using updated regex for Atom/RSS
+    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
     const episodes = [];
 
     for (const itemXml of itemMatches.slice(0, 20)) {
       // Limit to 20 most recent
       const title = extractXMLTag(itemXml, 'title');
-      const description = extractXMLTag(itemXml, 'description');
+      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
       const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
-      const pubDate = extractXMLTag(itemXml, 'pubDate');
+      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
 
       if (!title || !audioUrl) continue;
@@ -269,30 +289,42 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
 
 export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
   try {
-    const response = await fetch(feedUrl);
+    // FIX: Added User-Agent
+    const response = await fetch(feedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
     const xml = await response.text();
 
-    // Extract episodes/articles from RSS feed
-    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+    // FIX: Extract items using updated regex for Atom/RSS
+    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
     const episodes = [];
 
     for (const itemXml of itemMatches.slice(0, 20)) {
       // Limit to 20 most recent
       const title = extractXMLTag(itemXml, 'title');
-      const description = extractXMLTag(itemXml, 'description');
+      
+      // FIX: Prioritize summary/description to avoid full articles. 
+      // RSS uses 'description', Atom uses 'summary'. 
+      // We purposefully avoid 'content:encoded' or 'content' to keep it brief.
+      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+      
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
-      const pubDate = extractXMLTag(itemXml, 'pubDate');
+      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
-      const link = extractXMLTag(itemXml, 'link') || extractXMLTag(itemXml, 'guid');
+      
+      // RSS uses <link>URL</link>, Atom uses <link href="URL" />
+      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href'); 
 
       // Extract item-level thumbnail
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
         extractXMLAttribute(itemXml, 'media:content', 'url') ||
         extractNestedXMLTag(itemXml, 'image', 'url') ||
-        // If enclosure is an image, use it as thumbnail
+        // If enclosure is an image, use it as thumbnail (Substack)
         (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
       if (!title) continue;
@@ -333,7 +365,10 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
   }
 }
 
+// --- Helper Functions ---
+
 function extractXMLTag(xml: string, tag: string): string {
+  // Regex modified to be robust against attributes in tags
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = xml.match(regex);
   if (!match) return '';
@@ -346,6 +381,7 @@ function extractXMLTag(xml: string, tag: string): string {
 }
 
 function extractXMLAttribute(xml: string, tag: string, attr: string): string {
+  // Regex to capture attribute value
   const regex = new RegExp(`<${tag}[^>]*${attr}="([^"]*)"`, 'i');
   const match = xml.match(regex);
   return match ? match[1] : '';
