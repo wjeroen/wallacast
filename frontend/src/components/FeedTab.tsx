@@ -3,6 +3,14 @@ import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspap
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast as PodcastType } from '../types';
 
+// --- SIMPLE CACHE (Lives outside component to survive tab switching) ---
+const feedCache = {
+  episodes: [] as any[],
+  podcasts: [] as PodcastType[],
+  timestamp: 0
+};
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 function cleanHtml(text: string): string {
   if (!text) return '';
   // Remove CDATA wrapper
@@ -44,8 +52,8 @@ function looksLikeUrl(query: string): boolean {
 }
 
 export function FeedTab() {
-  const [podcasts, setPodcasts] = useState<PodcastType[]>([]);
-  const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
+  const [podcasts, setPodcasts] = useState<PodcastType[]>(feedCache.podcasts);
+  const [allEpisodes, setAllEpisodes] = useState<any[]>(feedCache.episodes);
   const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(EPISODES_PER_PAGE);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PodcastType[]>([]);
@@ -57,45 +65,78 @@ export function FeedTab() {
   const [podcastsExpanded, setPodcastsExpanded] = useState(false);
 
   useEffect(() => {
-    loadPodcasts();
-    loadLatestEpisodes();
+    // Check if cache is valid (exists and is less than 5 mins old)
+    const isCacheValid = feedCache.episodes.length > 0 && (Date.now() - feedCache.timestamp < CACHE_DURATION);
+    
+    if (isCacheValid) {
+      // Use cached data immediately
+      setPodcasts(feedCache.podcasts);
+      setAllEpisodes(feedCache.episodes);
+    } else {
+      // Cache expired or empty, fetch fresh
+      fetchFreshData();
+    }
   }, []);
 
-  const loadPodcasts = async () => {
+  const fetchFreshData = async () => {
+    // Only show loading state if we don't have cached data to show
+    if (allEpisodes.length === 0) setLoading(true);
+    
     try {
+      // 1. Get Subscriptions
       const response = await podcastAPI.getAll();
-      setPodcasts(response.data);
-    } catch (error) {
-      console.error('Failed to load podcasts:', error);
-    }
-  };
+      const subs = response.data;
+      setPodcasts(subs);
+      feedCache.podcasts = subs; // Update cache
 
-  const loadLatestEpisodes = async () => {
-    try {
-      // Load episodes from all subscribed podcasts
-      const podcastsResponse = await podcastAPI.getAll();
-      const episodes: any[] = [];
+      // 2. Parallel Fetching (The Speed Fix)
+      // We create an array of promises and fire them ALL at once
+      const episodePromises = subs.map((podcast) => 
+        podcastAPI.getPreviewEpisodes(podcast.id)
+          .then(res => ({
+             status: 'fulfilled', 
+             data: res.data, 
+             podcast 
+          }))
+          .catch(err => ({ 
+             status: 'rejected', 
+             err, 
+             podcast 
+          }))
+      );
 
-      for (const podcast of podcastsResponse.data) {
-        try {
-          const episodesResponse = await podcastAPI.getPreviewEpisodes(podcast.id);
-          const episodesWithPodcast = episodesResponse.data.map((ep: any) => ({
-            ...ep,
-            podcast_id: podcast.id,
-            podcast_title: podcast.title,
-          }));
-          episodes.push(...episodesWithPodcast);
-        } catch (error) {
-          console.error(`Failed to load episodes for podcast ${podcast.id}:`, error);
+      // Wait for all requests to finish (or fail)
+      const results = await Promise.all(episodePromises);
+
+      // 3. Aggregate Results
+      const aggregatedEpisodes: any[] = [];
+
+      results.forEach((result: any) => {
+        if (result.status === 'fulfilled' && Array.isArray(result.data)) {
+           const taggedEpisodes = result.data.map((ep: any) => ({
+             ...ep,
+             podcast_id: result.podcast.id,
+             podcast_title: result.podcast.title,
+           }));
+           aggregatedEpisodes.push(...taggedEpisodes);
+        } else {
+           console.warn(`Failed to load episodes for ${result.podcast?.title}`);
         }
-      }
+      });
 
-      // Sort by published date
-      episodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
-      setAllEpisodes(episodes);
-      setVisibleEpisodeCount(EPISODES_PER_PAGE);
+      // 4. Sort and Store
+      aggregatedEpisodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+      
+      setAllEpisodes(aggregatedEpisodes);
+      
+      // Update Cache
+      feedCache.episodes = aggregatedEpisodes;
+      feedCache.timestamp = Date.now();
+
     } catch (error) {
-      console.error('Failed to load episodes:', error);
+      console.error('Failed to load feed:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -120,7 +161,9 @@ export function FeedTab() {
   const handleSubscribe = async (feedUrl: string) => {
     try {
       await podcastAPI.subscribe(feedUrl);
-      loadPodcasts();
+      // Invalidate cache so we fetch the new podcast next time
+      feedCache.timestamp = 0; 
+      fetchFreshData();
       setSearchQuery('');
       setSearchResults([]);
     } catch (error) {
@@ -136,10 +179,23 @@ export function FeedTab() {
 
     try {
       await podcastAPI.unsubscribe(podcastId);
-      loadPodcasts();
+      
+      // Manually remove from local state and cache to avoid full reload
+      const newPodcasts = podcasts.filter(p => p.id !== podcastId);
+      const newEpisodes = allEpisodes.filter(ep => ep.podcast_id !== podcastId);
+      
+      setPodcasts(newPodcasts);
+      setAllEpisodes(newEpisodes);
+      
+      // Update cache
+      feedCache.podcasts = newPodcasts;
+      feedCache.episodes = newEpisodes;
+
       if (selectedPodcast?.id === podcastId) {
         setSelectedPodcast(null);
-        loadLatestEpisodes();
+        // If we were viewing the podcast we just unsubscribed from, go back to main feed
+        setAllEpisodes(newEpisodes);
+        setVisibleEpisodeCount(EPISODES_PER_PAGE);
       }
     } catch (error) {
       console.error('Failed to unsubscribe:', error);
@@ -154,6 +210,7 @@ export function FeedTab() {
         podcast_id: podcast.id,
         podcast_title: podcast.title,
       }));
+      // We set the main view to just this podcast's episodes
       setAllEpisodes(episodesWithPodcast);
       setVisibleEpisodeCount(EPISODES_PER_PAGE);
       setSelectedPodcast(podcast);
@@ -164,7 +221,9 @@ export function FeedTab() {
 
   const handleShowAllPodcasts = () => {
     setSelectedPodcast(null);
-    loadLatestEpisodes();
+    // Restore the full feed from cache
+    setAllEpisodes(feedCache.episodes);
+    setVisibleEpisodeCount(EPISODES_PER_PAGE);
   };
 
   const handleShowAllSearchResults = () => {
