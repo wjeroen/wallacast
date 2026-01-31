@@ -317,6 +317,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
       // Remove post headers if they're in the content (we extract metadata separately)
       contentEl.querySelectorAll('.post-header').forEach(el => el.remove());
+
+      // Remove Previous/Next navigation buttons (Substack articles)
+      // Look for buttons/links with text that's exactly "Previous" or "Next" (with optional arrows/whitespace)
+      contentEl.querySelectorAll('button, a').forEach(el => {
+        const text = el.textContent?.trim() || '';
+        // Match "Previous", "Next", with optional arrows like "← Previous" or "Next →"
+        if (/^(←\s*)?previous(\s*→)?$/i.test(text) || /^(←\s*)?next(\s*→)?$/i.test(text)) {
+          el.remove();
+        }
+      });
     }
 
     const cleanedHtml = contentEl.innerHTML;
