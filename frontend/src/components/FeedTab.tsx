@@ -270,7 +270,7 @@ export function FeedTab() {
       setAddingToLibrary(itemKey);
 
       if (episode.item_type === 'article') {
-        // RSS article (from newsletter/blog)
+        // RSS article (from newsletter / blog)
         await contentAPI.create({
           type: 'article',
           title: episode.title,
@@ -278,6 +278,7 @@ export function FeedTab() {
           url: episode.url,
           podcast_id: episode.podcast_id,
           published_at: episode.published_at,
+          preview_picture: episode.preview_picture, // <--- ADDED THIS
         });
       } else {
         // Podcast episode
@@ -289,6 +290,7 @@ export function FeedTab() {
           podcast_id: episode.podcast_id,
           published_at: episode.published_at,
           duration: episode.duration,
+          preview_picture: episode.preview_picture, // <--- ADDED THIS
         });
       }
       setAddingToLibrary(null);
