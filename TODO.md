@@ -8,7 +8,7 @@
 
 ### Features to Implement
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
-- [ ] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs)
+- [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
@@ -134,6 +134,17 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Substack and RSS Feed Subscriptions** (2026-01-31):
+  - Smart URL detection in search bar (detects URLs vs search terms automatically)
+  - Subscribe to newsletters (Substack, blogs) alongside podcasts
+  - Auto-detect feed type (podcast vs newsletter) based on audio enclosures
+  - Preview feed content before subscribing (click to browse episodes/articles)
+  - Feed type icons (microphone for podcasts, newspaper for newsletters)
+  - Renamed sections: "Subscribed Podcasts" → "Subscriptions", "Latest Episodes" → "Recent Updates"
+  - Auto-fix Substack URLs (adds /feed if missing, removes trailing slashes)
+  - Database: Added `type` column to podcasts table (podcast/newsletter/blog)
+  - Backend: RSS parser handles both audio enclosures and article links
+  - New endpoint: `/api/podcasts/preview-by-url` for previewing feeds
 - [x] **Feed Tab & Library Tab UI Improvements** (2026-01-30):
   - Collapsible "Subscribed Podcasts" section (collapsed by default) - chevron icon immediately after text
   - Matched duration format to Library tab (`1h 23m` instead of `1:23:45`)
