@@ -6,7 +6,8 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via OpenAI TTS
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via OpenAI Whisper
-- **Unified Library**: Both content types appear in one library with playback position tracking
+- **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
+- **Unified Library**: All content types appear in one library with playback position tracking
 
 ## Tech Stack
 
@@ -198,13 +199,14 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
-- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
+- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). Substack-specific optimizations: targets `.body.markup` for cleaner content, removes UI chrome (social buttons, navigation footers, Previous/Next buttons). Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent()`: Orchestrates the full pipeline (prepare content → generate TTS → save to DB with `user_id`)
-  - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement)
+  - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)
+  - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
@@ -214,13 +216,14 @@ Wallacast supports multiple users with complete data isolation:
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
 
 - **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs)
-  - `searchPodcasts()`: Search iTunes podcast directory
-  - `searchRSSByUrl()`: Fetch and parse any RSS feed by URL (auto-fixes Substack URLs)
-  - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter)
-  - `detectFeedType()`: Analyzes feed items for audio enclosures to classify as podcast or newsletter
+  - `searchPodcasts()`: Search iTunes podcast directory (returns podcast feeds only)
+  - `searchRSSByUrl()`: Fetch and parse any RSS feed by URL (auto-fixes Substack URLs by adding /feed suffix)
+  - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter) based on MIME types
+  - `detectFeedType()`: Analyzes feed items - checks if enclosures are `audio/*` (podcast) or `image/*` (newsletter)
   - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
-  - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio and text items)
-  - Simple regex-based XML parsing (no library)
+  - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio podcast episodes and text newsletter articles)
+  - `extractNestedXMLTag()`: Handles nested XML structures like Substack's `<image><url>...</url></image>`
+  - Simple regex-based XML parsing (no XML library) with support for both attributes and nested tags
 
 - **`services/wallabag-service.ts`**: Wallabag API client (requires per-user credentials)
   - `testConnection()`: Validates Wallabag credentials (URL, client ID/secret, username/password)
@@ -268,13 +271,14 @@ Wallacast supports multiple users with complete data isolation:
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management
-  - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack)
-  - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" to go back
+  - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
+  - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" button clears preview and returns to search results
   - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons and unsubscribe option
   - **Recent Updates**: Shows 20 most recent episodes/articles across all subscribed feeds
   - **Feed Detail View**: Click a feed to see expanded card with full description + that feed's content. "Show All Subscriptions" button to return to full list
-  - **Feed Type Icons**: Microphone icon for podcasts, newspaper icon for newsletters/blogs
+  - **Feed Type Icons**: Podcast icon (microphone) for podcasts, Newspaper icon for newsletters. Link icon in search bar when URL detected
   - **Add to Library**: Plus button on each episode/article adds it to library (respects auto-generate audio setting for articles)
+  - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
 - **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
