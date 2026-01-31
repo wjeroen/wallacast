@@ -144,16 +144,24 @@ router.get('/:id/preview-episodes', async (req, res) => {
 router.get('/preview-by-url', async (req, res) => {
   try {
     const { url } = req.query;
+    console.log('=== Preview by URL endpoint called ===');
+    console.log('URL param:', url);
 
     if (!url || typeof url !== 'string') {
+      console.error('Invalid URL parameter');
       return res.status(400).json({ error: 'Feed URL required' });
     }
 
+    console.log('Fetching episodes from:', url);
     const episodes = await getPreviewEpisodes(url);
+    console.log('Episodes fetched:', episodes.length);
+
     res.json(episodes);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching preview by URL:', error);
-    res.status(500).json({ error: 'Failed to fetch preview' });
+    const errorMessage = error?.message || 'Failed to fetch preview';
+    console.error('Error message:', errorMessage);
+    res.status(500).json({ error: errorMessage });
   }
 });
 

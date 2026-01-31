@@ -186,7 +186,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
 }
 
 function detectFeedType(xml: string): 'podcast' | 'newsletter' {
-  // Look at first few items to see if they have audio enclosures
+  // Look at first few items to see if they have AUDIO enclosures (not just any enclosure)
   const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
 
   let audioCount = 0;
@@ -194,13 +194,16 @@ function detectFeedType(xml: string): 'podcast' | 'newsletter' {
 
   for (const itemXml of itemMatches.slice(0, 10)) { // Check first 10 items
     totalCount++;
-    const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
-    if (audioUrl) {
+    const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+    const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
+
+    // Only count as audio if the enclosure type starts with 'audio/'
+    if (enclosureUrl && enclosureType && enclosureType.startsWith('audio/')) {
       audioCount++;
     }
   }
 
-  // If more than 50% of items have audio enclosures, it's a podcast
+  // If more than 50% of items have AUDIO enclosures, it's a podcast
   // Otherwise it's a newsletter/blog
   return audioCount > totalCount / 2 ? 'podcast' : 'newsletter';
 }
@@ -275,7 +278,8 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       // Limit to 100 most recent
       const title = extractXMLTag(itemXml, 'title');
       const description = extractXMLTag(itemXml, 'description');
-      const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+      const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+      const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
       const pubDate = extractXMLTag(itemXml, 'pubDate');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
       const link = extractXMLTag(itemXml, 'link') || extractXMLTag(itemXml, 'guid');
@@ -283,18 +287,24 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       // Extract item-level thumbnail
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
-        extractXMLTag(itemXml, 'image url');
+        extractXMLAttribute(itemXml, 'media:content', 'url') ||
+        extractXMLTag(itemXml, 'image url') ||
+        // If enclosure is an image, use it as thumbnail
+        (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
       if (!title) continue;
 
-      // For podcasts: require audio_url
+      // Check if enclosure is actually audio (not an image)
+      const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
+
+      // For podcasts: require audio enclosure with audio/* mime type
       // For newsletters: require link (article URL)
-      if (audioUrl) {
+      if (isAudioEnclosure) {
         // Podcast episode
         episodes.push({
           title: cleanHtmlEntities(title),
           description: cleanDescription(description),
-          audio_url: audioUrl,
+          audio_url: enclosureUrl,
           published_at: pubDate ? new Date(pubDate) : new Date(),
           duration: parseDuration(duration),
           item_type: 'podcast_episode',
