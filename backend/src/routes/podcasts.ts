@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes } from '../services/podcast-service.js';
+import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes } from '../services/podcast-service.js';
 
 const router = express.Router();
 
@@ -18,7 +18,16 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Search for podcasts
+// Helper function to detect if query looks like a URL
+function looksLikeUrl(query: string): boolean {
+  return (
+    query.includes('://') ||
+    (query.includes('.') && !query.includes(' ')) ||
+    query.startsWith('www.')
+  );
+}
+
+// Search for podcasts or RSS feeds
 router.get('/search', async (req, res) => {
   try {
     const { q } = req.query;
@@ -27,11 +36,19 @@ router.get('/search', async (req, res) => {
       return res.status(400).json({ error: 'Search query required' });
     }
 
-    const results = await searchPodcasts(q);
-    res.json(results);
+    // Detect if query is a URL or search term
+    if (looksLikeUrl(q)) {
+      // Treat as URL - fetch RSS feed directly
+      const results = await searchRSSByUrl(q);
+      res.json(results);
+    } else {
+      // Treat as search term - use iTunes API
+      const results = await searchPodcasts(q);
+      res.json(results);
+    }
   } catch (error) {
     console.error('Error searching podcasts:', error);
-    res.status(500).json({ error: 'Failed to search podcasts' });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to search' });
   }
 });
 
@@ -120,6 +137,23 @@ router.get('/:id/preview-episodes', async (req, res) => {
   } catch (error) {
     console.error('Error fetching preview episodes:', error);
     res.status(500).json({ error: 'Failed to fetch preview episodes' });
+  }
+});
+
+// Get preview episodes from feed URL (without subscription)
+router.get('/preview-by-url', async (req, res) => {
+  try {
+    const { url } = req.query;
+
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'Feed URL required' });
+    }
+
+    const episodes = await getPreviewEpisodes(url);
+    res.json(episodes);
+  } catch (error) {
+    console.error('Error fetching preview by URL:', error);
+    res.status(500).json({ error: 'Failed to fetch preview' });
   }
 });
 
