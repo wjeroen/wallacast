@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Mic, Newspaper } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
-import type { Podcast } from '../types';
+import type { Podcast as PodcastType } from '../types';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -44,14 +44,15 @@ function looksLikeUrl(query: string): boolean {
 }
 
 export function FeedTab() {
-  const [podcasts, setPodcasts] = useState<Podcast[]>([]);
+  const [podcasts, setPodcasts] = useState<PodcastType[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
   const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(EPISODES_PER_PAGE);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<Podcast[]>([]);
+  const [searchResults, setSearchResults] = useState<PodcastType[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
-  const [selectedSearchResult, setSelectedSearchResult] = useState<Podcast | null>(null);
+  const [selectedPodcast, setSelectedPodcast] = useState<PodcastType | null>(null);
+  const [selectedSearchResult, setSelectedSearchResult] = useState<PodcastType | null>(null);
   const [addingToLibrary, setAddingToLibrary] = useState<string | null>(null);
   const [podcastsExpanded, setPodcastsExpanded] = useState(false);
 
@@ -102,11 +103,15 @@ export function FeedTab() {
     if (!searchQuery.trim()) return;
 
     setLoading(true);
+    setSearchError(null);
     try {
       const response = await podcastAPI.search(searchQuery);
       setSearchResults(response.data);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Search failed:', error);
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to search';
+      setSearchError(errorMsg);
+      setSearchResults([]);
     } finally {
       setLoading(false);
     }
@@ -141,7 +146,7 @@ export function FeedTab() {
     }
   };
 
-  const loadPodcastEpisodes = async (podcast: Podcast) => {
+  const loadPodcastEpisodes = async (podcast: PodcastType) => {
     try {
       const response = await podcastAPI.getPreviewEpisodes(podcast.id);
       const episodesWithPodcast = response.data.map((ep: any) => ({
@@ -166,22 +171,43 @@ export function FeedTab() {
     setSelectedSearchResult(null);
   };
 
-  const loadSearchResultEpisodes = async (feed: Podcast) => {
+  const loadSearchResultEpisodes = async (feed: PodcastType) => {
+    console.log('=== Loading search result episodes ===');
+    console.log('Feed URL:', feed.feed_url);
+    console.log('Feed type:', feed.type);
+
     try {
-      const response = await fetch(`/api/podcasts/preview-by-url?url=${encodeURIComponent(feed.feed_url)}`);
-      if (!response.ok) throw new Error('Failed to load preview');
+      const url = `/api/podcasts/preview-by-url?url=${encodeURIComponent(feed.feed_url)}`;
+      console.log('Fetching from:', url);
+
+      const response = await fetch(url);
+      console.log('Response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        throw new Error('Failed to load preview');
+      }
 
       const data = await response.json();
+      console.log('Episodes returned:', data.length, data);
+
       const episodesWithPodcast = data.map((ep: any) => ({
         ...ep,
-        podcast_id: null, // Not subscribed yet
+        podcast_id: null,
         podcast_title: feed.title,
       }));
+
+      console.log('Setting episodes:', episodesWithPodcast.length);
       setAllEpisodes(episodesWithPodcast);
       setVisibleEpisodeCount(EPISODES_PER_PAGE);
+
+      console.log('Setting selected search result:', feed.title);
       setSelectedSearchResult(feed);
+      console.log('=== Done ===');
     } catch (error) {
       console.error('Failed to load feed preview:', error);
+      alert(`Failed to load preview: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -234,7 +260,7 @@ export function FeedTab() {
       {/* Search Bar */}
       <div className="search-bar">
         <div className="search-input-group">
-          {isUrl ? <Search size={20} /> : <Search size={20} />}
+          {isUrl ? <Link size={20} /> : <Search size={20} />}
           <input
             type="text"
             placeholder="Search podcasts or paste RSS feed..."
@@ -247,6 +273,13 @@ export function FeedTab() {
           </button>
         </div>
       </div>
+
+      {/* Search Error */}
+      {searchError && (
+        <div className="search-error" style={{ padding: '1rem', margin: '1rem 0', backgroundColor: '#fee', borderRadius: '8px', color: '#c00' }}>
+          {searchError}
+        </div>
+      )}
 
       {/* Search Results */}
       {searchResults.length > 0 && !selectedSearchResult && (
@@ -273,17 +306,16 @@ export function FeedTab() {
               )}
               <div className="content-info">
                 <h3>{podcast.title}</h3>
-                <p className="author">
-                  {podcast.author}
-                  {podcast.type && (
-                    <span className="metadata">
-                      {podcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
-                    </span>
-                  )}
-                </p>
+                <p className="author">{podcast.author}</p>
                 {podcast.description && (
                   <p className="description">{cleanHtml(podcast.description).slice(0, 150)}...</p>
                 )}
+                <div className="metadata">
+                  <span className="type">
+                    {podcast.type === 'podcast' && <Podcast size={16} />}
+                    {podcast.type === 'newsletter' && <Newspaper size={16} />}
+                  </span>
+                </div>
               </div>
               <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => handleSubscribe(podcast.feed_url)} title="Subscribe">
@@ -311,19 +343,18 @@ export function FeedTab() {
             )}
             <div className="content-info">
               <h3>{selectedSearchResult.title}</h3>
-              <p className="author">
-                {selectedSearchResult.author}
-                {selectedSearchResult.type && (
-                  <span className="metadata">
-                    {selectedSearchResult.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
-                  </span>
-                )}
-              </p>
+              <p className="author">{selectedSearchResult.author}</p>
               {selectedSearchResult.description && (
                 <p className="description selected-podcast-description">
                   {cleanHtml(selectedSearchResult.description)}
                 </p>
               )}
+              <div className="metadata">
+                <span className="type">
+                  {selectedSearchResult.type === 'podcast' && <Podcast size={16} />}
+                  {selectedSearchResult.type === 'newsletter' && <Newspaper size={16} />}
+                </span>
+              </div>
             </div>
             <div className="content-actions">
               <button
@@ -349,15 +380,17 @@ export function FeedTab() {
                   <p className="author">
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
-                    {episode.item_type && (
-                      <span className="metadata">
-                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
-                      </span>
-                    )}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}
+                  <div className="metadata">
+                    <span className="type">
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
+                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                    </span>
+                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
+                  </div>
                 </div>
                 <div className="content-actions">
                   <button
@@ -395,19 +428,18 @@ export function FeedTab() {
             )}
             <div className="content-info">
               <h3>{selectedPodcast.title}</h3>
-              <p className="author">
-                {selectedPodcast.author}
-                {selectedPodcast.type && (
-                  <span className="metadata">
-                    {selectedPodcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
-                  </span>
-                )}
-              </p>
+              <p className="author">{selectedPodcast.author}</p>
               {selectedPodcast.description && (
                 <p className="description selected-podcast-description">
                   {cleanHtml(selectedPodcast.description)}
                 </p>
               )}
+              <div className="metadata">
+                <span className="type">
+                  {selectedPodcast.type === 'podcast' && <Podcast size={16} />}
+                  {selectedPodcast.type === 'newsletter' && <Newspaper size={16} />}
+                </span>
+              </div>
             </div>
             <div className="content-actions">
               <button
@@ -433,15 +465,17 @@ export function FeedTab() {
                   <p className="author">
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
-                    {episode.item_type && (
-                      <span className="metadata">
-                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
-                      </span>
-                    )}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}
+                  <div className="metadata">
+                    <span className="type">
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
+                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                    </span>
+                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
+                  </div>
                 </div>
                 <div className="content-actions">
                   <button
@@ -486,14 +520,13 @@ export function FeedTab() {
                     )}
                     <div className="content-info">
                       <h3>{podcast.title}</h3>
-                      <p className="author">
-                        {podcast.author}
-                        {podcast.type && (
-                          <span className="metadata">
-                            {podcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
-                          </span>
-                        )}
-                      </p>
+                      <p className="author">{podcast.author}</p>
+                      <div className="metadata">
+                        <span className="type">
+                          {podcast.type === 'podcast' && <Podcast size={16} />}
+                          {podcast.type === 'newsletter' && <Newspaper size={16} />}
+                        </span>
+                      </div>
                     </div>
                     <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -523,20 +556,17 @@ export function FeedTab() {
                   <p className="author">
                     {episode.podcast_title}
                     {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString()}</>}
-                    {episode.item_type && (
-                      <span className="metadata">
-                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
-                      </span>
-                    )}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}
-                  {episode.duration && (
-                    <div className="metadata">
-                      <span className="duration">{formatDuration(episode.duration)}</span>
-                    </div>
-                  )}
+                  <div className="metadata">
+                    <span className="type">
+                      {episode.item_type === 'podcast_episode' && <Podcast size={16} />}
+                      {episode.item_type === 'article' && <Newspaper size={16} />}
+                    </span>
+                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
+                  </div>
                 </div>
                 <div className="content-actions">
                   <button

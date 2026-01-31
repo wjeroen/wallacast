@@ -149,11 +149,19 @@ export async function fetchPodcastDetails(feedUrl: string) {
     const response = await fetch(feedUrl);
     const xml = await response.text();
 
+    // Validate it's actually an RSS/Atom feed
+    if (!xml.includes('<rss') && !xml.includes('<feed') && !xml.includes('<?xml')) {
+      throw new Error('URL is not a valid RSS feed. For Substack newsletters, try adding /feed to the URL (e.g., newsletter.substack.com/feed)');
+    }
+
     // Basic RSS parsing - in production, use a proper XML parser like fast-xml-parser
     const title = extractXMLTag(xml, 'title');
     const author = extractXMLTag(xml, 'itunes:author') || extractXMLTag(xml, 'author');
     const description = extractXMLTag(xml, 'description');
-    const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href');
+    // Try multiple image tag formats
+    const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href') ||
+      extractXMLTag(xml, 'image url') ||
+      extractXMLAttribute(xml, 'media:thumbnail', 'url');
     const website_url = extractXMLTag(xml, 'link');
     const category = extractXMLTag(xml, 'itunes:category');
     const language = extractXMLTag(xml, 'language');
@@ -272,6 +280,11 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       const duration = extractXMLTag(itemXml, 'itunes:duration');
       const link = extractXMLTag(itemXml, 'link') || extractXMLTag(itemXml, 'guid');
 
+      // Extract item-level thumbnail
+      const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
+        extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
+        extractXMLTag(itemXml, 'image url');
+
       if (!title) continue;
 
       // For podcasts: require audio_url
@@ -285,6 +298,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
           published_at: pubDate ? new Date(pubDate) : new Date(),
           duration: parseDuration(duration),
           item_type: 'podcast_episode',
+          preview_picture,
         });
       } else if (link) {
         // Newsletter article
@@ -294,6 +308,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
           url: link,
           published_at: pubDate ? new Date(pubDate) : new Date(),
           item_type: 'article',
+          preview_picture,
         });
       }
     }
