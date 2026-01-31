@@ -44,6 +44,43 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
   }
 }
 
+export async function searchRSSByUrl(url: string): Promise<PodcastSearchResult[]> {
+  try {
+    // Normalize URL: add /feed if it looks like a Substack domain
+    let feedUrl = url.trim();
+
+    // Auto-fix Substack URLs
+    if (feedUrl.includes('substack.com')) {
+      // Remove trailing slash if present
+      feedUrl = feedUrl.replace(/\/$/, '');
+
+      // If it ends with /feed/, remove the trailing slash
+      if (feedUrl.endsWith('/feed/')) {
+        feedUrl = feedUrl.slice(0, -1);
+      }
+
+      // If it doesn't end with /feed, add it
+      if (!feedUrl.endsWith('/feed')) {
+        feedUrl = feedUrl + '/feed';
+      }
+    }
+
+    // Fetch feed details
+    const details = await fetchPodcastDetails(feedUrl);
+
+    return [{
+      title: details.title,
+      author: details.author,
+      feed_url: feedUrl,
+      preview_picture: details.preview_picture,
+      description: details.description,
+    }];
+  } catch (error) {
+    console.error('Error fetching RSS feed:', error);
+    throw new Error('Could not load RSS feed. Make sure the URL is correct. For Substack newsletters, use: yourname.substack.com/feed');
+  }
+}
+
 export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
     // Check if this user has this podcast (even if unsubscribed)
@@ -60,9 +97,9 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
       const result = await query(
         `UPDATE podcasts
          SET title = $1, author = $2, description = $3, website_url = $4,
-             preview_picture = $5, category = $6, language = $7,
+             preview_picture = $5, category = $6, language = $7, type = $8,
              is_subscribed = true, updated_at = CURRENT_TIMESTAMP
-         WHERE feed_url = $8 AND user_id = $9
+         WHERE feed_url = $9 AND user_id = $10
          RETURNING *`,
         [
           podcastDetails.title,
@@ -72,6 +109,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
           podcastDetails.preview_picture,
           podcastDetails.category,
           podcastDetails.language?.substring(0, 100) || null,
+          podcastDetails.type,
           feedUrl,
           userId,
         ]
@@ -82,8 +120,8 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
     // New podcast - insert it
     const result = await query(
       `INSERT INTO podcasts
-       (title, author, description, feed_url, website_url, preview_picture, category, language, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (title, author, description, feed_url, website_url, preview_picture, category, language, type, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         podcastDetails.title,
@@ -94,6 +132,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
         podcastDetails.preview_picture,
         podcastDetails.category,
         podcastDetails.language?.substring(0, 100) || null,
+        podcastDetails.type,
         userId,
       ]
     );
@@ -119,6 +158,9 @@ export async function fetchPodcastDetails(feedUrl: string) {
     const category = extractXMLTag(xml, 'itunes:category');
     const language = extractXMLTag(xml, 'language');
 
+    // Detect feed type: podcast (has audio enclosures) vs newsletter/blog (text only)
+    const type = detectFeedType(xml);
+
     return {
       title: cleanHtmlEntities(title),
       author: cleanHtmlEntities(author),
@@ -127,11 +169,32 @@ export async function fetchPodcastDetails(feedUrl: string) {
       website_url,
       category: cleanHtmlEntities(category),
       language,
+      type,
     };
   } catch (error) {
     console.error('Error fetching podcast details:', error);
     throw error;
   }
+}
+
+function detectFeedType(xml: string): 'podcast' | 'newsletter' {
+  // Look at first few items to see if they have audio enclosures
+  const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+
+  let audioCount = 0;
+  let totalCount = 0;
+
+  for (const itemXml of itemMatches.slice(0, 10)) { // Check first 10 items
+    totalCount++;
+    const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+    if (audioUrl) {
+      audioCount++;
+    }
+  }
+
+  // If more than 50% of items have audio enclosures, it's a podcast
+  // Otherwise it's a newsletter/blog
+  return audioCount > totalCount / 2 ? 'podcast' : 'newsletter';
 }
 
 export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, userId: number): Promise<any[]> {
@@ -195,7 +258,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
     const response = await fetch(feedUrl);
     const xml = await response.text();
 
-    // Extract episodes from RSS feed
+    // Extract episodes/articles from RSS feed
     const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
 
     const episodes = [];
@@ -207,16 +270,32 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const pubDate = extractXMLTag(itemXml, 'pubDate');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
+      const link = extractXMLTag(itemXml, 'link') || extractXMLTag(itemXml, 'guid');
 
-      if (!title || !audioUrl) continue;
+      if (!title) continue;
 
-      episodes.push({
-        title: cleanHtmlEntities(title),
-        description: cleanDescription(description),
-        audio_url: audioUrl,
-        published_at: pubDate ? new Date(pubDate) : new Date(),
-        duration: parseDuration(duration),
-      });
+      // For podcasts: require audio_url
+      // For newsletters: require link (article URL)
+      if (audioUrl) {
+        // Podcast episode
+        episodes.push({
+          title: cleanHtmlEntities(title),
+          description: cleanDescription(description),
+          audio_url: audioUrl,
+          published_at: pubDate ? new Date(pubDate) : new Date(),
+          duration: parseDuration(duration),
+          item_type: 'podcast_episode',
+        });
+      } else if (link) {
+        // Newsletter article
+        episodes.push({
+          title: cleanHtmlEntities(title),
+          description: cleanDescription(description),
+          url: link,
+          published_at: pubDate ? new Date(pubDate) : new Date(),
+          item_type: 'article',
+        });
+      }
     }
 
     return episodes;

@@ -58,6 +58,7 @@ export interface Podcast {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   category?: string;
   language?: string;
+  type?: 'podcast' | 'newsletter' | 'blog';  // RSS feed type
   is_subscribed: boolean;
   last_fetched_at?: string;
   created_at: string;

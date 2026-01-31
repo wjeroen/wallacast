@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Mic, Newspaper } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast } from '../types';
 
@@ -34,6 +34,15 @@ function formatDuration(seconds: number): string {
 
 const EPISODES_PER_PAGE = 20;
 
+// Helper function to detect if query looks like a URL
+function looksLikeUrl(query: string): boolean {
+  return (
+    query.includes('://') ||
+    (query.includes('.') && !query.includes(' ')) ||
+    query.startsWith('www.')
+  );
+}
+
 export function FeedTab() {
   const [podcasts, setPodcasts] = useState<Podcast[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
@@ -42,6 +51,7 @@ export function FeedTab() {
   const [searchResults, setSearchResults] = useState<Podcast[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedPodcast, setSelectedPodcast] = useState<Podcast | null>(null);
+  const [selectedSearchResult, setSelectedSearchResult] = useState<Podcast | null>(null);
   const [addingToLibrary, setAddingToLibrary] = useState<string | null>(null);
   const [podcastsExpanded, setPodcastsExpanded] = useState(false);
 
@@ -152,22 +162,60 @@ export function FeedTab() {
     loadLatestEpisodes();
   };
 
+  const handleShowAllSearchResults = () => {
+    setSelectedSearchResult(null);
+  };
+
+  const loadSearchResultEpisodes = async (feed: Podcast) => {
+    try {
+      const response = await fetch(`/api/podcasts/preview-by-url?url=${encodeURIComponent(feed.feed_url)}`);
+      if (!response.ok) throw new Error('Failed to load preview');
+
+      const data = await response.json();
+      const episodesWithPodcast = data.map((ep: any) => ({
+        ...ep,
+        podcast_id: null, // Not subscribed yet
+        podcast_title: feed.title,
+      }));
+      setAllEpisodes(episodesWithPodcast);
+      setVisibleEpisodeCount(EPISODES_PER_PAGE);
+      setSelectedSearchResult(feed);
+    } catch (error) {
+      console.error('Failed to load feed preview:', error);
+    }
+  };
+
   const handleLoadMore = () => {
     setVisibleEpisodeCount(prev => prev + EPISODES_PER_PAGE);
   };
 
   const handleAddToLibrary = async (episode: any) => {
     try {
-      setAddingToLibrary(episode.audio_url);
-      await contentAPI.create({
-        type: 'podcast_episode',
-        title: episode.title,
-        description: episode.description,
-        audio_url: episode.audio_url,
-        podcast_id: episode.podcast_id,
-        published_at: episode.published_at,
-        duration: episode.duration,
-      });
+      const itemKey = episode.audio_url || episode.url;
+      setAddingToLibrary(itemKey);
+
+      if (episode.item_type === 'article') {
+        // RSS article (from newsletter/blog)
+        await contentAPI.create({
+          type: 'article',
+          title: episode.title,
+          description: episode.description,
+          url: episode.url,
+          podcast_id: episode.podcast_id,
+          published_at: episode.published_at,
+        });
+      } else {
+        // Podcast episode
+        await contentAPI.create({
+          type: 'podcast_episode',
+          title: episode.title,
+          description: episode.description,
+          audio_url: episode.audio_url,
+          podcast_id: episode.podcast_id,
+          published_at: episode.published_at,
+          duration: episode.duration,
+        });
+      }
       setAddingToLibrary(null);
     } catch (error) {
       console.error('Failed to add to library:', error);
@@ -178,27 +226,30 @@ export function FeedTab() {
   const visibleEpisodes = allEpisodes.slice(0, visibleEpisodeCount);
   const hasMoreEpisodes = allEpisodes.length > visibleEpisodeCount;
 
+  const isUrl = looksLikeUrl(searchQuery);
+  const buttonText = loading ? 'Loading...' : 'Search';
+
   return (
     <div className="feed-tab">
       {/* Search Bar */}
       <div className="search-bar">
         <div className="search-input-group">
-          <Search size={20} />
+          {isUrl ? <Search size={20} /> : <Search size={20} />}
           <input
             type="text"
-            placeholder="Search for podcasts..."
+            placeholder="Search podcasts or paste RSS feed..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
           />
           <button onClick={handleSearch} disabled={loading}>
-            {loading ? 'Searching...' : 'Search'}
+            {buttonText}
           </button>
         </div>
       </div>
 
       {/* Search Results */}
-      {searchResults.length > 0 && (
+      {searchResults.length > 0 && !selectedSearchResult && (
         <div className="search-results">
           <div className="search-results-header">
             <h3>Search Results</h3>
@@ -211,18 +262,30 @@ export function FeedTab() {
             </button>
           </div>
           {searchResults.map((podcast, index) => (
-            <div key={index} className="content-card">
+            <div
+              key={index}
+              className="content-card podcast-list-card"
+              onClick={() => loadSearchResultEpisodes(podcast)}
+              style={{ cursor: 'pointer' }}
+            >
               {podcast.preview_picture && (
                 <img src={podcast.preview_picture} alt={podcast.title} className="thumbnail" />
               )}
               <div className="content-info">
                 <h3>{podcast.title}</h3>
-                <p className="author">{podcast.author}</p>
+                <p className="author">
+                  {podcast.author}
+                  {podcast.type && (
+                    <span className="metadata">
+                      {podcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
+                    </span>
+                  )}
+                </p>
                 {podcast.description && (
                   <p className="description">{cleanHtml(podcast.description).slice(0, 150)}...</p>
                 )}
               </div>
-              <div className="content-actions">
+              <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => handleSubscribe(podcast.feed_url)} title="Subscribe">
                   <Plus size={16} />
                 </button>
@@ -232,13 +295,97 @@ export function FeedTab() {
         </div>
       )}
 
+      {/* Selected Search Result Preview */}
+      {selectedSearchResult && (
+        <div className="selected-podcast-view">
+          {/* Back button */}
+          <button className="show-all-btn" onClick={handleShowAllSearchResults}>
+            <ArrowLeft size={16} />
+            Show All Search Results
+          </button>
+
+          {/* Expanded Feed Card */}
+          <div className="content-card selected-podcast-card">
+            {selectedSearchResult.preview_picture && (
+              <img src={selectedSearchResult.preview_picture} alt={selectedSearchResult.title} className="thumbnail" />
+            )}
+            <div className="content-info">
+              <h3>{selectedSearchResult.title}</h3>
+              <p className="author">
+                {selectedSearchResult.author}
+                {selectedSearchResult.type && (
+                  <span className="metadata">
+                    {selectedSearchResult.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
+                  </span>
+                )}
+              </p>
+              {selectedSearchResult.description && (
+                <p className="description selected-podcast-description">
+                  {cleanHtml(selectedSearchResult.description)}
+                </p>
+              )}
+            </div>
+            <div className="content-actions">
+              <button
+                onClick={() => handleSubscribe(selectedSearchResult.feed_url)}
+                className="subscribe-btn"
+                title="Subscribe"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* Episodes/Articles preview */}
+          <div className="episodes-section">
+            <h3>Preview</h3>
+            {visibleEpisodes.map((episode, index) => (
+              <div key={episode.audio_url || episode.url || index} className="content-card">
+                {episode.preview_picture && (
+                  <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
+                )}
+                <div className="content-info">
+                  <h3>{episode.title}</h3>
+                  <p className="author">
+                    {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
+                    {episode.duration && <> • {formatDuration(episode.duration)}</>}
+                    {episode.item_type && (
+                      <span className="metadata">
+                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
+                      </span>
+                    )}
+                  </p>
+                  {episode.description && (
+                    <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
+                  )}
+                </div>
+                <div className="content-actions">
+                  <button
+                    onClick={() => handleAddToLibrary(episode)}
+                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
+                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {hasMoreEpisodes && (
+              <button className="load-more-btn" onClick={handleLoadMore}>
+                Load More
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Selected Podcast View - Expanded card with episodes below */}
-      {selectedPodcast ? (
+      {selectedPodcast && !selectedSearchResult ? (
         <div className="selected-podcast-view">
           {/* Back / Show All button */}
           <button className="show-all-btn" onClick={handleShowAllPodcasts}>
             <ArrowLeft size={16} />
-            Show All Podcasts
+            Show All Subscriptions
           </button>
 
           {/* Expanded Podcast Card */}
@@ -248,7 +395,14 @@ export function FeedTab() {
             )}
             <div className="content-info">
               <h3>{selectedPodcast.title}</h3>
-              <p className="author">{selectedPodcast.author}</p>
+              <p className="author">
+                {selectedPodcast.author}
+                {selectedPodcast.type && (
+                  <span className="metadata">
+                    {selectedPodcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
+                  </span>
+                )}
+              </p>
               {selectedPodcast.description && (
                 <p className="description selected-podcast-description">
                   {cleanHtml(selectedPodcast.description)}
@@ -268,9 +422,9 @@ export function FeedTab() {
 
           {/* Episodes for selected podcast */}
           <div className="episodes-section">
-            <h3>Episodes</h3>
+            <h3>{selectedPodcast.type === 'podcast' ? 'Episodes' : 'Articles'}</h3>
             {visibleEpisodes.map((episode, index) => (
-              <div key={episode.audio_url || index} className="content-card">
+              <div key={episode.audio_url || episode.url || index} className="content-card">
                 {episode.preview_picture && (
                   <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
                 )}
@@ -279,6 +433,11 @@ export function FeedTab() {
                   <p className="author">
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
+                    {episode.item_type && (
+                      <span className="metadata">
+                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
+                      </span>
+                    )}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
@@ -287,8 +446,8 @@ export function FeedTab() {
                 <div className="content-actions">
                   <button
                     onClick={() => handleAddToLibrary(episode)}
-                    disabled={addingToLibrary === episode.audio_url}
-                    title={addingToLibrary === episode.audio_url ? 'Adding...' : 'Add to Library'}
+                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
+                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
                   >
                     <Plus size={16} />
                   </button>
@@ -302,15 +461,15 @@ export function FeedTab() {
             )}
           </div>
         </div>
-      ) : (
+      ) : !selectedSearchResult && (
         <>
-          {/* Collapsible Subscribed Podcasts Section */}
+          {/* Collapsible Subscriptions Section */}
           <div className="subscribed-podcasts-section">
             <button
               className="section-header"
               onClick={() => setPodcastsExpanded(!podcastsExpanded)}
             >
-              <h3>Subscribed Podcasts ({podcasts.length})</h3>
+              <h3>Subscriptions ({podcasts.length})</h3>
               {podcastsExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
             </button>
 
@@ -327,7 +486,14 @@ export function FeedTab() {
                     )}
                     <div className="content-info">
                       <h3>{podcast.title}</h3>
-                      <p className="author">{podcast.author}</p>
+                      <p className="author">
+                        {podcast.author}
+                        {podcast.type && (
+                          <span className="metadata">
+                            {podcast.type === 'podcast' ? <Mic size={14} /> : <Newspaper size={14} />}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="content-actions" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -344,11 +510,11 @@ export function FeedTab() {
             )}
           </div>
 
-          {/* Latest Episodes */}
+          {/* Recent Updates */}
           <div className="episodes-section">
-            <h3>Latest Episodes</h3>
+            <h3>Recent Updates</h3>
             {visibleEpisodes.map((episode, index) => (
-              <div key={episode.audio_url || index} className="content-card">
+              <div key={episode.audio_url || episode.url || index} className="content-card">
                 {episode.preview_picture && (
                   <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
                 )}
@@ -357,6 +523,11 @@ export function FeedTab() {
                   <p className="author">
                     {episode.podcast_title}
                     {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString()}</>}
+                    {episode.item_type && (
+                      <span className="metadata">
+                        {episode.item_type === 'podcast_episode' ? <Mic size={14} /> : <Newspaper size={14} />}
+                      </span>
+                    )}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
@@ -370,8 +541,8 @@ export function FeedTab() {
                 <div className="content-actions">
                   <button
                     onClick={() => handleAddToLibrary(episode)}
-                    disabled={addingToLibrary === episode.audio_url}
-                    title={addingToLibrary === episode.audio_url ? 'Adding...' : 'Add to Library'}
+                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
+                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
                   >
                     <Plus size={16} />
                   </button>
