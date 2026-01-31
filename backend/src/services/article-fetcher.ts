@@ -1,5 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
+import fetch from 'node-fetch';
 
 export interface Comment {
   id: string;
@@ -229,12 +230,21 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   }
 
   // --- STANDARD SCRAPER ---
-  
+  // Use simple fetch (not got-scraping) to avoid triggering Cloudflare on sites like Substack
+
   try {
-    // Revert to defaults here too (HTTP2 enabled)
-    const response = await gotScraping.get(url);
-    const html = response.body;
-    
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const html = await response.text();
+
     if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
       throw new Error('Hit Cloudflare WAF Challenge page on Standard Scraper');
     }
