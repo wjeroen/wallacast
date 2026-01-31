@@ -160,7 +160,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
     const description = extractXMLTag(xml, 'description');
     // Try multiple image tag formats
     const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href') ||
-      extractXMLTag(xml, 'image url') ||
+      extractNestedXMLTag(xml, 'image', 'url') ||
       extractXMLAttribute(xml, 'media:thumbnail', 'url');
     const website_url = extractXMLTag(xml, 'link');
     const category = extractXMLTag(xml, 'itunes:category');
@@ -288,7 +288,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
         extractXMLAttribute(itemXml, 'media:content', 'url') ||
-        extractXMLTag(itemXml, 'image url') ||
+        extractNestedXMLTag(itemXml, 'image', 'url') ||
         // If enclosure is an image, use it as thumbnail
         (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
@@ -346,6 +346,15 @@ function extractXMLAttribute(xml: string, tag: string, attr: string): string {
   const regex = new RegExp(`<${tag}[^>]*${attr}="([^"]*)"`, 'i');
   const match = xml.match(regex);
   return match ? match[1] : '';
+}
+
+function extractNestedXMLTag(xml: string, parentTag: string, childTag: string): string {
+  const parentRegex = new RegExp(`<${parentTag}[^>]*>([\\s\\S]*?)<\\/${parentTag}>`, 'i');
+  const parentMatch = xml.match(parentRegex);
+  if (!parentMatch) return '';
+
+  const parentContent = parentMatch[1];
+  return extractXMLTag(parentContent, childTag);
 }
 
 function parseDuration(duration: string): number | null {
