@@ -194,7 +194,7 @@ function htmlToNarrationText(html: string): string {
     let text = doc.body.textContent || '';
 
     // Replace quote markers with spoken announcements
-    text = text.replace(/<<<QUOTE>>>/g, 'Quote:');
+    text = text.replace(/<<<QUOTE>>>/g, 'Start quote:');
     text = text.replace(/<<<ENDQUOTE>>>/g, 'End quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
