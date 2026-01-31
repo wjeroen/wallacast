@@ -135,6 +135,12 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Substack Article Fetching Fix** (2026-01-31):
+  - Fixed Cloudflare false positive detection blocking Substack articles
+  - Removed special handling for Substack domains (was using got-scraping unnecessarily)
+  - Simplified to use basic fetch for ALL sites except EA Forum/LessWrong (which need GraphQL)
+  - Changed Cloudflare detection from fatal error to warning (logs but continues parsing)
+  - Result: All Substack domains now work (both *.substack.com and custom domains)
 - [x] **Substack and RSS Feed Subscriptions + Improvements** (2026-01-31):
   - Smart URL detection in search bar (detects URLs vs search terms automatically, shows Link icon for URLs)
   - Subscribe to newsletters (Substack, blogs) alongside podcasts
@@ -149,7 +155,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Fixed navigation bug: "Show All Search Results" now properly clears preview episodes
   - Improved Substack article extraction: targets `.body.markup` for cleaner content
   - Removes UI chrome: social buttons (`.post-ufi`), navigation footers, Previous/Next buttons
-  - Dual article fetcher: got-scraping for EA Forum/LessWrong GraphQL, simple fetch for other sites (avoids Cloudflare)
+  - Dual article fetcher: got-scraping for EA Forum/LessWrong GraphQL, simple fetch for other sites
   - TTS comment improvements: URLs read as domain names ("link to example.com") instead of full URLs
   - Comment processing: emojis removed, quotes announced, links replaced with domain references
   - Thumbnail extraction: handles nested XML tags (`<image><url>...</url></image>`) and image enclosures
@@ -180,7 +186,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **Kokoro TTS via DeepInfra**: Implemented intelligent routing for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra, falls back to OpenAI (2026-01-29)
 - [x] **Whisper via DeepInfra**: Implemented automatic preference for DeepInfra Whisper (openai/whisper-large-v3-turbo) with OpenAI fallback (2026-01-29)
 - [x] **GraphQL for EA Forum/LessWrong**: Replaced HTML scraping with GraphQL API fetching using got-scraping with human-like headers (2026-01-27)
-- [x] **Quote Block Announcements**: TTS now says "Quote:" and "End quote." around blockquotes in comments (2026-01-29)
+- [x] **Quote Block Announcements**: TTS now says "Start quote:" and "End quote." around blockquotes in comments and articles (2026-01-31)
 - [x] **LessWrong TTS Score Fix**: Fixed TTS reading internal scores - now only reads user-visible karma + agreement for LessWrong (2026-01-29)
 - [x] **Podcast Description HTML**: Preserved HTML formatting in podcast descriptions while sanitizing dangerous tags - chapters now show on separate lines (2026-01-29)
 - [x] **Read-along Auto-scroll**: Added auto-scroll to center active word when switching to read-along tab (2026-01-27)
