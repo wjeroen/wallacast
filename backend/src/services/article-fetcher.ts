@@ -254,17 +254,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
+    // Remove scripts and styles globally
     const scripts = doc.querySelectorAll('script');
     scripts.forEach(script => script.remove());
     const styles = doc.querySelectorAll('style');
     styles.forEach(style => style.remove());
 
-    const title = 
+    // Extract metadata from meta tags
+    const title =
       doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
       doc.querySelector('title')?.textContent ||
       'Untitled';
 
-    const siteName = 
+    const siteName =
       doc.querySelector('meta[property="og:site_name"]')?.getAttribute('content') ||
       new URL(url).hostname;
 
@@ -283,11 +285,40 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
-    const publishedDate = 
+    const publishedDate =
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
-    let contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
-    
+    // Smart content selection
+    let contentEl;
+
+    // Substack-specific selectors (more precise)
+    if (url.includes('substack.com')) {
+      console.log('[Fetcher] Detected Substack, using specific content selectors');
+      contentEl = doc.querySelector('.available-content .body.markup') ||
+                  doc.querySelector('.body.markup') ||
+                  doc.querySelector('.available-content');
+    }
+
+    // Fallback to generic selectors
+    if (!contentEl) {
+      contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
+    }
+
+    // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
+    if (contentEl) {
+      // Remove social interaction bars (like/comment/share buttons)
+      contentEl.querySelectorAll('.post-ufi, .ufi, .pencraft-ufi').forEach(el => el.remove());
+
+      // Remove navigation footers
+      contentEl.querySelectorAll('.post-footer, .pencraft-footer').forEach(el => el.remove());
+
+      // Remove image overlays (restack/expand buttons on images)
+      contentEl.querySelectorAll('.image-link-expand, .pencraft-image-expand').forEach(el => el.remove());
+
+      // Remove post headers if they're in the content (we extract metadata separately)
+      contentEl.querySelectorAll('.post-header').forEach(el => el.remove());
+    }
+
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
 

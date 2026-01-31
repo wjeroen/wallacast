@@ -169,6 +169,7 @@ export function FeedTab() {
 
   const handleShowAllSearchResults = () => {
     setSelectedSearchResult(null);
+    setAllEpisodes([]);
   };
 
   const loadSearchResultEpisodes = async (feed: PodcastType) => {
