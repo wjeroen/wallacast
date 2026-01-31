@@ -22,6 +22,7 @@ export interface ArticleContent {
   byline?: string;
   site_name?: string;
   published_date?: string;
+  lead_image_url?: string; // <--- ADDED THIS TO FIX BUILD ERROR
   karma?: number;
   agree_votes?: number;
   disagree_votes?: number;
@@ -285,6 +286,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const publishedDate =
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
+    // --- ADDED IMAGE EXTRACTION HERE ---
+    const leadImageUrl =
+      doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ||
+      doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') ||
+      undefined;
+
     // Smart content selection
     let contentEl;
 
@@ -322,7 +329,6 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       contentEl.querySelectorAll('.header-anchor-parent').forEach(el => el.remove());
 
       // Remove Previous/Next navigation buttons (Substack articles)
-      // Look for buttons/links with text that's exactly "Previous" or "Next" (with optional arrows/whitespace)
       contentEl.querySelectorAll('button, a').forEach(el => {
         const text = el.textContent?.trim() || '';
         // Match "Previous", "Next", with optional arrows like "← Previous" or "Next →"
@@ -344,6 +350,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       byline: author,
       site_name: siteName,
       published_date: publishedDate,
+      lead_image_url: leadImageUrl, // <--- RETURN EXTRACTED IMAGE
     };
 
   } catch (error) {
