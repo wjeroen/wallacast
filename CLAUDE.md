@@ -3,6 +3,12 @@
 ## TL;DR
 The user is a coding noob. ELI5 (Explain Like I'm 5) frequently when discussing technical concepts, code changes, and tradeoffs. Always make sure to update the README.md and TODO.md when making changes.
 
+## User's Working Environment
+The user primarily works on **mobile** and deploys via Railway, so they **do not have access to browser developer tools**. When debugging:
+- Add `console.log()` statements to backend code - these show up in Railway logs
+- Prefer backend logging over frontend console debugging
+- Railway logs are the primary debugging tool
+
 ## After Every Prompt, Before Making Any Changes
 Ex. When Solving a Bug or Implementing a Feature
 
