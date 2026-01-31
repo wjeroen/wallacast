@@ -233,21 +233,32 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   // Use simple fetch (not got-scraping) to avoid triggering Cloudflare on sites like Substack
 
   try {
+    console.log('[Fetcher] Using simple fetch (node-fetch) for standard scraping');
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
       },
     });
 
     if (!response.ok) {
+      console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
     const html = await response.text();
+    console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
 
     if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
+      console.log('[Fetcher] ⚠️ Cloudflare challenge detected in response');
       throw new Error('Hit Cloudflare WAF Challenge page on Standard Scraper');
     }
+
+    console.log('[Fetcher] ✓ No Cloudflare challenge detected, parsing content');
 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
