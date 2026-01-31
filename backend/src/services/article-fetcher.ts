@@ -230,11 +230,26 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   }
 
   // --- STANDARD SCRAPER ---
-  // Use simple fetch with NO headers (like old code) to avoid triggering Cloudflare
+  // Use simple fetch for non-EA/LW sites
+  // For substack.com domains: add minimal headers + delay to avoid bot detection
 
   try {
-    console.log('[Fetcher] Using simple fetch with no headers for standard scraping');
-    const response = await fetch(url);
+    const isSubstackDomain = url.includes('.substack.com') || url.includes('substack.com/');
+
+    if (isSubstackDomain) {
+      console.log('[Fetcher] Detected Substack domain, adding delay and minimal headers');
+      // Randomized wait between 1 and 3 seconds (like LessWrong)
+      await sleep(1000 + Math.random() * 2000);
+    } else {
+      console.log('[Fetcher] Using simple fetch with no headers for standard scraping');
+    }
+
+    const response = await fetch(url, isSubstackDomain ? {
+      headers: {
+        // MINIMAL headers - just identify as a browser, nothing fancy
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    } : undefined);
 
     if (!response.ok) {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
