@@ -403,9 +403,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 )}
                 <div className="metadata">
                   <span className="type" title={item.type}>
-                    {item.type === 'article' && <Newspaper size={16} />}
-                    {item.type === 'text' && <NotebookPen size={16} />}
-                    {item.type === 'podcast_episode' && <Podcast size={16} />}
+                    {item.type === 'article' && <Newspaper size={16} className="icon-article" />
+                    {item.type === 'text' && <NotebookPen size={16} className="icon-text" />
+                    {item.type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />
                     {item.type === 'pdf' && <FileText size={16} />}
                   </span>
                   {item.audio_url && <span className="badge">Audio</span>}
