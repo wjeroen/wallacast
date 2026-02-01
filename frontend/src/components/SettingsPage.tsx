@@ -578,7 +578,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   </div>
                   {wallabagStatus.lastSync && (
                     <div>
-                      <strong>Last Sync:</strong> {new Date(wallabagStatus.lastSync).toLocaleString()}
+                      <strong>Last Sync:</strong> {new Date(wallabagStatus.lastSync).toLocaleString('en-GB')}
                     </div>
                   )}
                   {wallabagStatus.pendingChanges > 0 && (
