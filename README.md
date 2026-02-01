@@ -21,7 +21,8 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | GPT-4o-mini (prepares content for natural narration - not for extraction) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
-| Audio Processing | FFmpeg (chunking, concatenation, optimization) |
+| Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
+| RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
 ## Authentication & Multi-User System
