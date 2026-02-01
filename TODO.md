@@ -135,6 +135,29 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Audio Quality Optimization** (2026-02-01):
+  - Reduced audio frequency from 44.1kHz to 24kHz (optimized for speech)
+  - Reduced bitrate from 192kbps to 96kbps (smaller files, still excellent quality for TTS)
+  - Result: ~70% smaller audio files with no perceptible quality loss for speech
+- [x] **RSS/Atom Feed Improvements** (2026-02-01):
+  - Added full Atom feed support (in addition to RSS 2.0)
+  - Fixed HTML entity decoding in descriptions (&#8217; → ', &#163; → £, &#8212; → —)
+  - Now properly decodes ALL HTML entities including numeric ones using JSDOM
+  - Fixed RSS feed thumbnails appearing in Library tab
+- [x] **Feed Type Icon Colors** (2026-02-01):
+  - Podcast icon: Purple (#a855f7)
+  - Article/Newsletter icon: Blue (#3b82f6) - matches app's border/button blue
+  - Text icon: Green (#10b981)
+  - Icons now visually distinct and color-coded by content type
+- [x] **Fetch Timestamp Display** (2026-02-01):
+  - Added "Fetched by Wallacast/Wallabag on (date)" in fullscreen player
+  - Shows which service fetched the content and when
+  - Updates when you refetch articles from web
+  - Helps track content freshness
+- [x] **Substack UI Cleanup** (2026-02-01):
+  - Removed email subscription widgets from article display
+  - Removed header anchor link buttons (those link icons next to headings)
+  - Cleaner reading experience for Substack articles
 - [x] **Substack Article Fetching Fix** (2026-01-31):
   - Fixed Cloudflare false positive detection blocking Substack articles
   - Removed special handling for Substack domains (was using got-scraping unnecessarily)
