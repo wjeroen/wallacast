@@ -231,7 +231,7 @@ export function FullscreenPlayer({
               {' • '}
               {(() => {
                 try {
-                  return new Date(comment.date).toLocaleDateString();
+                  return new Date(comment.date).toLocaleDateString('en-GB');
                 } catch {
                   return comment.date;
                 }
@@ -282,7 +282,7 @@ export function FullscreenPlayer({
                 )}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Fetched by {content.content_source}
+                    Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
                   </p>
                 )}
               </div>
@@ -450,7 +450,7 @@ export function FullscreenPlayer({
               <p className="fullscreen-author">
                 {content.author}
                 {content.published_at && (
-                  <> • {new Date(content.published_at).toLocaleDateString()}</>
+                  <> • {new Date(content.published_at).toLocaleDateString('en-GB')}</>
                 )}
                 {(content.karma !== undefined && content.karma !== null) && (
                   <> • {content.karma} upvotes</>
@@ -461,7 +461,7 @@ export function FullscreenPlayer({
               <p className="fullscreen-author">
                 {content.podcast_show_name}
                 {content.published_at && (
-                  <> • {new Date(content.published_at).toLocaleDateString()}</>
+                  <> • {new Date(content.published_at).toLocaleDateString('en-GB')}</>
                 )}
               </p>
             )}

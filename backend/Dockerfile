@@ -1,27 +1,28 @@
+# 1. Use standard Node image
 FROM node:22-slim
 
-# Install ffmpeg
-RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# 2. SPEED BOOST: Copy pre-built FFmpeg binaries
+# This replaces the slow "apt-get install ffmpeg" step.
+# It downloads instantly and caches perfectly.
+COPY --from=mwader/static-ffmpeg:6.0 /ffmpeg /usr/local/bin/
+COPY --from=mwader/static-ffmpeg:6.0 /ffprobe /usr/local/bin/
 
 WORKDIR /app
 
-# Copy package files
+# 3. Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including devDependencies for TypeScript build)
+# 4. Install dependencies (uses cache if package.json hasn't changed)
 RUN npm ci
 
-# Copy application code
+# 5. Copy application code
 COPY . .
 
-# Build TypeScript
+# 6. Build TypeScript
 RUN npm run build
 
-# Expose port
+# 7. Expose port
 EXPOSE 3001
 
-# Start the application
+# 8. Start the application
 CMD ["npm", "start"]

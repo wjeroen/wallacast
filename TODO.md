@@ -8,7 +8,8 @@
 
 ### Features to Implement
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
-- [ ] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs)
+- [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
+- [ ] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong)
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
@@ -134,6 +135,53 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Audio Quality Optimization** (2026-02-01):
+  - Reduced audio frequency from 44.1kHz to 24kHz (optimized for speech)
+  - Reduced bitrate from 192kbps to 96kbps (smaller files, still excellent quality for TTS)
+  - Result: ~70% smaller audio files with no perceptible quality loss for speech
+- [x] **RSS/Atom Feed Improvements** (2026-02-01):
+  - Added full Atom feed support (in addition to RSS 2.0)
+  - Fixed HTML entity decoding in descriptions (&#8217; → ', &#163; → £, &#8212; → —)
+  - Now properly decodes ALL HTML entities including numeric ones using JSDOM
+  - Fixed RSS feed thumbnails appearing in Library tab
+- [x] **Feed Type Icon Colors** (2026-02-01):
+  - Podcast icon: Purple (#a855f7)
+  - Article/Newsletter icon: Blue (#3b82f6) - matches app's border/button blue
+  - Text icon: Green (#10b981)
+  - Icons now visually distinct and color-coded by content type
+- [x] **Fetch Timestamp Display** (2026-02-01):
+  - Added "Fetched by Wallacast/Wallabag on (date)" in fullscreen player
+  - Shows which service fetched the content and when
+  - Updates when you refetch articles from web
+  - Helps track content freshness
+- [x] **Substack UI Cleanup** (2026-02-01):
+  - Removed email subscription widgets from article display
+  - Removed header anchor link buttons (those link icons next to headings)
+  - Cleaner reading experience for Substack articles
+- [x] **Substack Article Fetching Fix** (2026-01-31):
+  - Fixed Cloudflare false positive detection blocking Substack articles
+  - Removed special handling for Substack domains (was using got-scraping unnecessarily)
+  - Simplified to use basic fetch for ALL sites except EA Forum/LessWrong (which need GraphQL)
+  - Changed Cloudflare detection from fatal error to warning (logs but continues parsing)
+  - Result: All Substack domains now work (both *.substack.com and custom domains)
+- [x] **Substack and RSS Feed Subscriptions + Improvements** (2026-01-31):
+  - Smart URL detection in search bar (detects URLs vs search terms automatically, shows Link icon for URLs)
+  - Subscribe to newsletters (Substack, blogs) alongside podcasts
+  - Auto-detect feed type (podcast vs newsletter) based on MIME types (`audio/*` vs `image/*`)
+  - Preview feed content before subscribing (click to browse episodes/articles)
+  - Feed type icons (Podcast icon for podcasts, Newspaper icon for newsletters)
+  - Renamed sections: "Subscribed Podcasts" → "Subscriptions", "Latest Episodes" → "Recent Updates"
+  - Auto-fix Substack URLs (adds /feed if missing, removes trailing slashes)
+  - Database: Added `type` column to podcasts table (podcast/newsletter)
+  - Backend: RSS parser handles both audio enclosures and article links
+  - New endpoint: `/api/podcasts/preview-by-url` for previewing feeds (requires auth via axios)
+  - Fixed navigation bug: "Show All Search Results" now properly clears preview episodes
+  - Improved Substack article extraction: targets `.body.markup` for cleaner content
+  - Removes UI chrome: social buttons (`.post-ufi`), navigation footers, Previous/Next buttons
+  - Dual article fetcher: got-scraping for EA Forum/LessWrong GraphQL, simple fetch for other sites
+  - TTS comment improvements: URLs read as domain names ("link to example.com") instead of full URLs
+  - Comment processing: emojis removed, quotes announced, links replaced with domain references
+  - Thumbnail extraction: handles nested XML tags (`<image><url>...</url></image>`) and image enclosures
 - [x] **Feed Tab & Library Tab UI Improvements** (2026-01-30):
   - Collapsible "Subscribed Podcasts" section (collapsed by default) - chevron icon immediately after text
   - Matched duration format to Library tab (`1h 23m` instead of `1:23:45`)
@@ -161,7 +209,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **Kokoro TTS via DeepInfra**: Implemented intelligent routing for Kokoro (hexgrad/Kokoro-82M) TTS model via DeepInfra, falls back to OpenAI (2026-01-29)
 - [x] **Whisper via DeepInfra**: Implemented automatic preference for DeepInfra Whisper (openai/whisper-large-v3-turbo) with OpenAI fallback (2026-01-29)
 - [x] **GraphQL for EA Forum/LessWrong**: Replaced HTML scraping with GraphQL API fetching using got-scraping with human-like headers (2026-01-27)
-- [x] **Quote Block Announcements**: TTS now says "Quote:" and "End quote." around blockquotes in comments (2026-01-29)
+- [x] **Quote Block Announcements**: TTS now says "Start quote:" and "End quote." around blockquotes in comments and articles (2026-01-31)
 - [x] **LessWrong TTS Score Fix**: Fixed TTS reading internal scores - now only reads user-visible karma + agreement for LessWrong (2026-01-29)
 - [x] **Podcast Description HTML**: Preserved HTML formatting in podcast descriptions while sanitizing dangerous tags - chapters now show on separate lines (2026-01-29)
 - [x] **Read-along Auto-scroll**: Added auto-scroll to center active word when switching to read-along tab (2026-01-27)

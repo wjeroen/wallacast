@@ -6,7 +6,8 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via OpenAI TTS
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via OpenAI Whisper
-- **Unified Library**: Both content types appear in one library with playback position tracking
+- **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
+- **Unified Library**: All content types appear in one library with playback position tracking
 
 ## Tech Stack
 
@@ -20,7 +21,8 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | GPT-4o-mini (prepares content for natural narration - not for extraction) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
-| Audio Processing | FFmpeg (chunking, concatenation, optimization) |
+| Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
+| RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 
 ## Authentication & Multi-User System
@@ -118,6 +120,8 @@ Wallacast supports multiple users with complete data isolation:
   - `008_optimize_playback_updates.sql`: Adds composite index (id, user_id) to speed up playback position updates
   - `009_expand_podcast_language_column.sql`: Expands language column to VARCHAR(100) for longer language codes
   - `010_fix_content_source_default.sql`: Fixes column default to 'wallacast' (wallabag-sync sets 'wallabag' explicitly)
+  - `010_add_podcast_show_name.sql`: Adds podcast_show_name column to content_items for denormalized display
+  - `012_add_feed_type.sql`: Adds type column to podcasts table for RSS feed type detection (podcast/newsletter/blog)
 
 #### Middleware
 
@@ -155,11 +159,12 @@ Wallacast supports multiple users with complete data isolation:
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `DELETE /:id` - Delete content and clean up audio files
 
-- **`routes/podcasts.ts`**: Podcast subscription management (requires JWT auth, all queries filter by `user_id`)
-  - `GET /search?q=` - Search iTunes podcast directory
-  - `POST /subscribe` - Subscribe to podcast feed URL
+- **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
+  - `GET /search?q=` - Smart search: iTunes directory for text queries, RSS feed fetch for URLs (auto-detects)
+  - `POST /subscribe` - Subscribe to podcast or RSS feed URL (auto-detects type: podcast/newsletter/blog)
   - `POST /:id/refresh` - Fetch new episodes from feed
-  - `GET /:id/preview-episodes` - Get episodes without saving to library
+  - `GET /:id/preview-episodes` - Get episodes without saving to library (for subscribed feeds)
+  - `GET /preview-by-url?url=` - Preview episodes/articles from any RSS feed URL without subscribing
 
 - **`routes/queue.ts`**: Queue management (partially implemented)
   - Standard CRUD for queue items with position management
@@ -195,13 +200,14 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
-- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
+- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). Substack-specific optimizations: targets `.body.markup` for cleaner content, removes UI chrome (social buttons, navigation footers, Previous/Next buttons). Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent()`: Orchestrates the full pipeline (prepare content → generate TTS → save to DB with `user_id`)
-  - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement)
+  - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)
+  - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
@@ -210,11 +216,15 @@ Wallacast supports multiple users with complete data isolation:
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
 
-- **`services/podcast-service.ts`**: RSS feed parsing
-  - `parsePodcastFeed()`: Extracts podcast metadata from RSS
+- **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs)
+  - `searchPodcasts()`: Search iTunes podcast directory (returns podcast feeds only)
+  - `searchRSSByUrl()`: Fetch and parse any RSS feed by URL (auto-fixes Substack URLs by adding /feed suffix)
+  - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter) based on MIME types
+  - `detectFeedType()`: Analyzes feed items - checks if enclosures are `audio/*` (podcast) or `image/*` (newsletter)
   - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
-  - `getPreviewEpisodes()`: Gets episodes without saving
-  - Simple regex-based XML parsing (no library)
+  - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio podcast episodes and text newsletter articles)
+  - `extractNestedXMLTag()`: Handles nested XML structures like Substack's `<image><url>...</url></image>`
+  - Simple regex-based XML parsing (no XML library) with support for both attributes and nested tags
 
 - **`services/wallabag-service.ts`**: Wallabag API client (requires per-user credentials)
   - `testConnection()`: Validates Wallabag credentials (URL, client ID/secret, username/password)
@@ -261,12 +271,15 @@ Wallacast supports multiple users with complete data isolation:
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
-- **`components/FeedTab.tsx`**: Podcast discovery and management
-  - **Search**: iTunes podcast search with subscribe button
-  - **Subscribed Podcasts**: Collapsible section (collapsed by default) showing all subscriptions with unsubscribe option
-  - **Latest Episodes**: Shows 20 most recent episodes across all subscribed podcasts
-  - **Podcast Detail View**: Click a podcast to see expanded card with full description + that podcast's episodes. "Show All Episodes" button to return to full feed
-  - **Add to Library**: Plus button on each episode adds it to library (same styling as Library tab)
+- **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management
+  - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
+  - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" button clears preview and returns to search results
+  - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons and unsubscribe option
+  - **Recent Updates**: Shows 20 most recent episodes/articles across all subscribed feeds
+  - **Feed Detail View**: Click a feed to see expanded card with full description + that feed's content. "Show All Subscriptions" button to return to full list
+  - **Feed Type Icons**: Podcast icon (microphone) for podcasts, Newspaper icon for newsletters. Link icon in search bar when URL detected
+  - **Add to Library**: Plus button on each episode/article adds it to library (respects auto-generate audio setting for articles)
+  - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
 - **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
@@ -352,8 +365,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `title`, `author`, `description`
 - `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
+- `type`: `'podcast' | 'newsletter' | 'blog'` - Auto-detected based on feed content (audio enclosures vs text articles)
 - `is_subscribed`, `last_fetched_at`
-- **Unique constraint**: `(feed_url, user_id)` - Multiple users can subscribe to the same podcast
+- **Unique constraint**: `(feed_url, user_id)` - Multiple users can subscribe to the same feed
 
 ### queue_items (not fully implemented in UI)
 - `id`: Primary key
