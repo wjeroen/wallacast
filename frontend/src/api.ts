@@ -108,6 +108,8 @@ export const podcastAPI = {
   getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
 
   getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
+
+  getPreviewByUrl: (feedUrl: string) => api.get<any[]>('/podcasts/preview-by-url', { params: { url: feedUrl } }),
 };
 
 export const queueAPI = {

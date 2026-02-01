@@ -38,7 +38,7 @@ router.get('/', async (req, res) => {
     }
 
     sql += ' ORDER BY created_at DESC';
-
+    
     const result = await query(sql, params);
     res.json(result.rows);
   } catch (error) {
@@ -137,6 +137,8 @@ router.post('/', async (req, res) => {
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    // FIX 1: Initialize finalPreviewPicture with the value passed from frontend
+    let finalPreviewPicture = preview_picture || null;
     let finalPublishedAt = published_at;
     let karma: number | null = null;
     let agreeVotes: number | null = null;
@@ -147,8 +149,8 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
-      htmlContent = articleData.cleaned_html; // Use cleaned HTML (main content with formatting)
-      processedContent = articleData.content; // Store plain text for search/indexing
+      htmlContent = articleData.cleaned_html;
+      processedContent = articleData.content;
 
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
@@ -160,6 +162,11 @@ router.post('/', async (req, res) => {
 
       if (!finalDescription && articleData.excerpt) {
         finalDescription = articleData.excerpt;
+      }
+
+      // FIX 2: If we don't have a picture yet, try to use the one from the scraper
+      if (!finalPreviewPicture && articleData.lead_image_url) {
+        finalPreviewPicture = articleData.lead_image_url;
       }
 
       if (!finalPublishedAt && articleData.published_date) {
@@ -178,7 +185,6 @@ router.post('/', async (req, res) => {
 
       if (articleData.comments && articleData.comments.length > 0) {
         extractedComments = JSON.stringify(articleData.comments);
-        console.log(`Extracted ${articleData.comments.length} comments from Apollo state`);
       }
     }
 
@@ -197,16 +203,17 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // FIX 3: Use finalPreviewPicture instead of raw preview_picture
     const result = await query(
       `INSERT INTO content_items
        (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, preview_picture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
     );
 
     const createdItem = result.rows[0];
-
+    
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
@@ -332,6 +339,7 @@ router.patch('/:id', async (req, res) => {
                 ? JSON.stringify(articleData.comments)
                 : null;
 
+              // FIX 4: Update preview_picture when regenerating content
               await query(
                 `UPDATE content_items SET
                   html_content = $1,
@@ -342,12 +350,13 @@ router.patch('/:id', async (req, res) => {
                   agree_votes = $6,
                   disagree_votes = $7,
                   comments = $8,
+                  preview_picture = COALESCE($9, preview_picture),
                   content_source = 'wallacast',
                   generation_status = 'completed',
                   generation_progress = 100,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $9`,
+                WHERE id = $10`,
                 [
                   articleData.cleaned_html,
                   articleData.content,
@@ -357,6 +366,7 @@ router.patch('/:id', async (req, res) => {
                   articleData.agree_votes,
                   articleData.disagree_votes,
                   commentsJson,
+                  articleData.lead_image_url || null, // Capture image on refetch
                   id
                 ]
               );
@@ -598,6 +608,7 @@ router.post('/:id/refetch', async (req, res) => {
           ? JSON.stringify(articleData.comments)
           : null;
 
+        // FIX 5: Update preview_picture during manual refetch
         await query(
           `UPDATE content_items SET
             html_content = $1,
@@ -608,9 +619,10 @@ router.post('/:id/refetch', async (req, res) => {
             agree_votes = $6,
             disagree_votes = $7,
             comments = $8,
+            preview_picture = COALESCE($9, preview_picture),
             content_source = 'wallacast',
             updated_at = NOW()
-          WHERE id = $9`,
+          WHERE id = $10`,
           [
             articleData.cleaned_html,
             articleData.content,
@@ -620,6 +632,7 @@ router.post('/:id/refetch', async (req, res) => {
             articleData.agree_votes,
             articleData.disagree_votes,
             commentsJson,
+            articleData.lead_image_url || null, // Capture image on refetch
             id
           ]
         );

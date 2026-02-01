@@ -181,6 +181,11 @@ export async function initializeDatabase() {
     const podcastShowNameMigration = await fs.readFile(podcastShowNameMigrationPath, 'utf-8');
     await poolInstance.query(podcastShowNameMigration);
 
+    // Run migration to add feed type column to podcasts table
+    const feedTypeMigrationPath = path.join(__dirname, 'migrations', '012_add_feed_type.sql');
+    const feedTypeMigration = await fs.readFile(feedTypeMigrationPath, 'utf-8');
+    await client.query(feedTypeMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
