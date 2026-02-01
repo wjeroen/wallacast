@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { query } from '../database/db.js';
+import { JSDOM } from 'jsdom';
 
 export interface PodcastSearchResult {
   title: string;
@@ -442,11 +443,20 @@ function cleanDescription(description: string): string {
 }
 
 function cleanHtmlEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
+  if (!text) return '';
+
+  // Use JSDOM to decode ALL HTML entities (including numeric ones like &#8217;, &#163;, etc.)
+  try {
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>${text}</body></html>`);
+    return dom.window.document.body.textContent || text;
+  } catch (e) {
+    // Fallback to basic replacements if JSDOM fails
+    return text
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ');
+  }
 }
