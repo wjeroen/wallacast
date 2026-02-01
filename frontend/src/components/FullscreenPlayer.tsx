@@ -465,6 +465,12 @@ export function FullscreenPlayer({
                 )}
               </p>
             )}
+            {/* Show when content was last fetched */}
+            {content.updated_at && (
+              <p className="fullscreen-metadata">
+                Fetched by {content.content_source === 'wallabag' ? 'Wallabag' : 'Wallacast'} on {new Date(content.updated_at).toLocaleDateString()}
+              </p>
+            )}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
