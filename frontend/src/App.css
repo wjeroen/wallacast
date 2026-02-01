@@ -2322,6 +2322,21 @@
   background: #1e293b;
   border-bottom: 1px solid #334155;
   flex-shrink: 0;
+  max-height: 80px !important;
+  overflow: hidden;
+}
+
+/* NUCLEAR OPTION: Force ALL images in header to be 56px */
+.fullscreen-header img {
+  width: 56px !important;
+  height: 56px !important;
+  max-width: 56px !important;
+  max-height: 56px !important;
+  min-width: 56px !important;
+  min-height: 56px !important;
+  object-fit: cover !important;
+  border-radius: 0.5rem;
+  flex-shrink: 0;
 }
 
 .fullscreen-title-area {
@@ -2330,6 +2345,8 @@
   gap: 1rem;
   flex: 1;
   min-width: 0;
+  max-height: 60px;
+  overflow: hidden;
 }
 
 .fullscreen-thumbnail {
