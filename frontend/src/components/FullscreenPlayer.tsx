@@ -282,7 +282,7 @@ export function FullscreenPlayer({
                 )}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Fetched by {content.content_source}
+                    Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString() : 'unknown date'}
                   </p>
                 )}
               </div>
@@ -463,12 +463,6 @@ export function FullscreenPlayer({
                 {content.published_at && (
                   <> • {new Date(content.published_at).toLocaleDateString()}</>
                 )}
-              </p>
-            )}
-            {/* Show when content was last fetched */}
-            {content.updated_at && (
-              <p className="fullscreen-metadata">
-                Fetched by {content.content_source === 'wallabag' ? 'Wallabag' : 'Wallacast'} on {new Date(content.updated_at).toLocaleDateString()}
               </p>
             )}
           </div>
