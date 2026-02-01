@@ -429,7 +429,7 @@ export function FeedTab() {
                 <div className="content-info">
                   <h3>{episode.title}</h3>
                   <p className="author">
-                    {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
+                    {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
                   {episode.description && (
@@ -514,7 +514,7 @@ export function FeedTab() {
                 <div className="content-info">
                   <h3>{episode.title}</h3>
                   <p className="author">
-                    {episode.published_at && new Date(episode.published_at).toLocaleDateString()}
+                    {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
                   {episode.description && (
@@ -606,7 +606,7 @@ export function FeedTab() {
                   <h3>{episode.title}</h3>
                   <p className="author">
                     {episode.podcast_title}
-                    {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString()}</>}
+                    {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString('en-GB')}</>}
                   </p>
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>

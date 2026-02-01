@@ -377,7 +377,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <p className="author">
                     {item.author}
                     {item.published_at && (
-                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                      <> • {new Date(item.published_at).toLocaleDateString('en-GB')}</>
                     )}
                   </p>
                 )}
@@ -385,7 +385,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <p className="author">
                     {item.podcast_show_name}
                     {item.published_at && (
-                      <> • {new Date(item.published_at).toLocaleDateString()}</>
+                      <> • {new Date(item.published_at).toLocaleDateString('en-GB')}</>
                     )}
                   </p>
                 )}
