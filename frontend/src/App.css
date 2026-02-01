@@ -2333,10 +2333,12 @@
 }
 
 .fullscreen-thumbnail {
-  width: 56px;
-  height: 56px;
+  width: 56px !important;
+  height: 56px !important;
+  max-width: 56px !important;
+  max-height: 56px !important;
   border-radius: 0.5rem;
-  object-fit: cover;
+  object-fit: cover !important;
   flex-shrink: 0;
 }
 
@@ -2542,7 +2544,7 @@
   object-fit: contain;
   display: block;
   border-radius: 0.5rem;
-  margin: 1.5em auto;
+  margin: 1.5em 0;
 }
 
 .article-content a {

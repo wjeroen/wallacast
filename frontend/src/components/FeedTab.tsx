@@ -90,18 +90,18 @@ export function FeedTab() {
       feedCache.podcasts = subs; // Update cache
 
       // 2. Parallel Fetching (The Speed Fix)
-      // We create an array of promises and fire them ALL at once
-      const episodePromises = subs.map((podcast) => 
-        podcastAPI.getPreviewEpisodes(podcast.id)
+      // Use feed_url directly to avoid N+1 database queries
+      const episodePromises = subs.map((podcast) =>
+        podcastAPI.getPreviewByUrl(podcast.feed_url)
           .then(res => ({
-             status: 'fulfilled', 
-             data: res.data, 
-             podcast 
+             status: 'fulfilled',
+             data: res.data,
+             podcast
           }))
-          .catch(err => ({ 
-             status: 'rejected', 
-             err, 
-             podcast 
+          .catch(err => ({
+             status: 'rejected',
+             err,
+             podcast
           }))
       );
 
