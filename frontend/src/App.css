@@ -1365,6 +1365,7 @@
 
 .comment-header {
   display: flex;
+  gap: 0.3rem;
   align-items: center;
   margin-bottom: 0.5rem;
 }
