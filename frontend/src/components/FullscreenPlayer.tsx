@@ -256,7 +256,7 @@ export function FullscreenPlayer({
           <div 
             className="comment-replies" 
             style={{ 
-              paddingLeft: '20px', 
+              paddingLeft: '10px', 
               marginTop: '10px',
             }}
           >
