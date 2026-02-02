@@ -253,17 +253,10 @@ export function FullscreenPlayer({
         />
 
         {comment.replies && comment.replies.length > 0 && (
-          <div 
-            className="comment-replies" 
-            style={{ 
-              paddingLeft: '10px', 
-              marginTop: '10px',
-            }}
-          >
-            {comment.replies.map((reply, idx) => (
-              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-            ))}
-         </div>
+          {comment.replies.map((reply, idx) => (
+            <CommentComponent key={idx} comment={reply} depth={depth + 1} />
+          ))}
+        </div>
         )}
       </div>
     );
