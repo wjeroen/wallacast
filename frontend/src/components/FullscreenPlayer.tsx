@@ -223,7 +223,6 @@ export function FullscreenPlayer({
     const hasMetadata = metadataParts.length > 0;
 
     return (
-      // Only apply margin if it is a reply (depth > 0), and make it a constant amount.
        <div className="comment">
         <div className="comment-header">
           <span className="comment-username">{comment.username}</span>
@@ -259,7 +258,6 @@ export function FullscreenPlayer({
             style={{ 
               paddingLeft: '20px', 
               marginTop: '10px',
-              borderLeft: '2px solid #e5e7eb' // Optional: adds a nice thread line
             }}
           >
             {comment.replies.map((reply, idx) => (
