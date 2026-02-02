@@ -224,7 +224,7 @@ export function FullscreenPlayer({
 
     return (
       // Only apply margin if it is a reply (depth > 0), and make it a constant amount.
-      <div className="comment" style={{ marginLeft: `${depth * 20}px` }}>
+       <div className="comment">
         <div className="comment-header">
           <span className="comment-username">{comment.username}</span>
           {comment.date && (
@@ -240,6 +240,7 @@ export function FullscreenPlayer({
             </span>
           )}
         </div>
+         
         {hasMetadata && metadataParts.length > 0 && (
           <div className="comment-metadata">
             <span className="comment-votes">{metadataParts.join(' • ')}</span>
@@ -253,11 +254,18 @@ export function FullscreenPlayer({
         />
 
         {comment.replies && comment.replies.length > 0 && (
-          <div className="comment-replies">
+          <div 
+            className="comment-replies" 
+            style={{ 
+              paddingLeft: '20px', 
+              marginTop: '10px',
+              borderLeft: '2px solid #e5e7eb' // Optional: adds a nice thread line
+            }}
+          >
             {comment.replies.map((reply, idx) => (
               <CommentComponent key={idx} comment={reply} depth={depth + 1} />
             ))}
-          </div>
+         </div>
         )}
       </div>
     );
