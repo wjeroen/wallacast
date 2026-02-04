@@ -276,9 +276,9 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
 
  Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
 
- CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM. 
- DO NOT summarize. 
- DO NOT rewrite sentences. 
+ CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM.
+ DO NOT summarize.
+ DO NOT rewrite sentences.
  DO NOT simplify the language.
 
  The ONLY changes you are allowed to make:
@@ -288,11 +288,11 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
  * End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
- * Locate the 'alt' text or context for <img> tags. Insert a narrative description such as: "An image displays [alt text]."
+ * Locate the 'alt' text or context for <img> tags. Insert a narrative description formatted as: "An image shows [alt text]. Back to the article."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
- 
+
  Input HTML follows.`
         },
         {
