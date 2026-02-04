@@ -165,6 +165,10 @@ Wallacast supports multiple users with complete data isolation:
   - `POST /:id/refresh` - Fetch new episodes from feed
   - `GET /:id/preview-episodes` - Get episodes without saving to library (for subscribed feeds)
   - `GET /preview-by-url?url=` - Preview episodes/articles from any RSS feed URL without subscribing
+  - **Feed Caching (Performance Optimization)**:
+    - `GET /feed-items?feedId&limit` - Get cached feed items from database (instant, no network requests)
+    - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
+    - `GET /last-refresh` - Get timestamp of last feed refresh
 
 - **`routes/queue.ts`**: Queue management (partially implemented)
   - Standard CRUD for queue items with position management
@@ -216,7 +220,7 @@ Wallacast supports multiple users with complete data isolation:
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
 
-- **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs)
+- **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs) with database caching
   - `searchPodcasts()`: Search iTunes podcast directory (returns podcast feeds only)
   - `searchRSSByUrl()`: Fetch and parse any RSS feed by URL (auto-fixes Substack URLs by adding /feed suffix)
   - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter) based on MIME types
@@ -224,6 +228,11 @@ Wallacast supports multiple users with complete data isolation:
   - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
   - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio podcast episodes and text newsletter articles)
   - `extractNestedXMLTag()`: Handles nested XML structures like Substack's `<image><url>...</url></image>`
+  - **Feed Caching (Performance Optimization)**:
+    - `refreshFeedFromNetwork()`: Fetches RSS feed, parses items, saves to `feed_items` table, cleans up old items (keeps 100 most recent)
+    - `refreshAllFeedsFromNetwork()`: Refreshes all subscribed feeds for a user sequentially
+    - `getCachedFeedItems()`: Loads feed items from database (instant, no network requests)
+    - `getLastRefreshTime()`: Returns timestamp of last feed refresh
   - Simple regex-based XML parsing (no XML library) with support for both attributes and nested tags
 
 - **`services/wallabag-service.ts`**: Wallabag API client (requires per-user credentials)
@@ -271,11 +280,13 @@ Wallacast supports multiple users with complete data isolation:
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
-- **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management
+- **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
   - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" button clears preview and returns to search results
   - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons and unsubscribe option
-  - **Recent Updates**: Shows 20 most recent episodes/articles across all subscribed feeds
+  - **Recent Updates**: Shows 100 most recent episodes/articles across all subscribed feeds (loaded from database cache, instant)
+  - **Refresh Button**: Next to "Recent Updates" heading - refreshes all feeds from network, shows last refresh time ("5 mins ago")
+  - **Performance**: Database caching eliminates 70+ network requests per page load (instant instead of 30+ seconds for 70 subscriptions)
   - **Feed Detail View**: Click a feed to see expanded card with full description + that feed's content. "Show All Subscriptions" button to return to full list
   - **Feed Type Icons**: Podcast icon (microphone) for podcasts, Newspaper icon for newsletters. Link icon in search bar when URL detected
   - **Add to Library**: Plus button on each episode/article adds it to library (respects auto-generate audio setting for articles)
@@ -366,8 +377,23 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
 - `type`: `'podcast' | 'newsletter' | 'blog'` - Auto-detected based on feed content (audio enclosures vs text articles)
-- `is_subscribed`, `last_fetched_at`
+- `is_subscribed`, `last_fetched_at`, `last_refreshed_at`
 - **Unique constraint**: `(feed_url, user_id)` - Multiple users can subscribe to the same feed
+
+### feed_items (RSS feed cache)
+- `id`: Primary key
+- `feed_id`: FK to podcasts table
+- `item_type`: `'podcast_episode' | 'article'`
+- `title`, `description` (max 2000 chars, contains RSS description/summary)
+- `url`: Article URL (for newsletters/blogs)
+- `audio_url`: Episode audio URL (for podcasts)
+- `published_at`, `duration` (seconds, podcasts only)
+- `preview_picture`: Episode/article thumbnail
+- `guid`: Unique identifier from RSS feed (for deduplication)
+- `created_at`, `updated_at`
+- **Purpose**: Caches parsed RSS feed items to avoid fetching from network on every page load. Keeps up to 100 most recent items per feed.
+- **Unique constraint**: `(feed_id, guid)` - Prevents duplicate items in the same feed
+- **Performance**: Loading 70 feeds with 100 items each = instant database query instead of 70 network requests
 
 ### queue_items (not fully implemented in UI)
 - `id`: Primary key

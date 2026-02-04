@@ -186,6 +186,11 @@ export async function initializeDatabase() {
     const feedTypeMigration = await fs.readFile(feedTypeMigrationPath, 'utf-8');
     await client.query(feedTypeMigration);
 
+    // Run migration to add feed_items cache table for RSS feeds
+    const feedItemsCacheMigrationPath = path.join(__dirname, 'migrations', '013_add_feed_items_cache.sql');
+    const feedItemsCacheMigration = await fs.readFile(feedItemsCacheMigrationPath, 'utf-8');
+    await client.query(feedItemsCacheMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
@@ -205,7 +210,7 @@ export async function initializeDatabase() {
     // planner to choose slow sequential scans instead of fast index lookups.
     // ANALYZE is fast (reads a sample, not the whole table) and safe to run.
     // Wrapped in try/catch: missing tables should NOT crash initialization.
-    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'podcast_subscriptions'];
+    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'podcast_subscriptions', 'feed_items'];
     for (const table of tablesToAnalyze) {
       try {
         await client.query(`ANALYZE ${table}`);
