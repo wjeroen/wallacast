@@ -110,6 +110,16 @@ export const podcastAPI = {
   getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
 
   getPreviewByUrl: (feedUrl: string) => api.get<any[]>('/podcasts/preview-by-url', { params: { url: feedUrl } }),
+
+  // Feed caching endpoints
+  getFeedItems: (feedId?: number, limit?: number) =>
+    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit } }),
+
+  refreshFeeds: () =>
+    api.post<{ totalFeeds: number; totalItemsAdded: number }>('/podcasts/refresh-feeds'),
+
+  getLastRefresh: () =>
+    api.get<{ lastRefresh: string | null }>('/podcasts/last-refresh'),
 };
 
 export const queueAPI = {

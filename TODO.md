@@ -135,6 +135,14 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **RSS Feed Loading Optimization** (2026-02-04):
+  - Added database caching for RSS feed items to eliminate 70+ network requests per page load
+  - Created `feed_items` table to store parsed RSS items (up to 100 most recent per feed)
+  - Added refresh button to FeedTab with last refresh timestamp display ("5 mins ago")
+  - Performance improvement: Feed tab now loads instantly instead of 30+ seconds for 70 subscriptions
+  - Auto-cleanup keeps only 100 most recent items per feed to prevent database bloat
+  - New endpoints: `GET /api/podcasts/feed-items`, `POST /api/podcasts/refresh-feeds`, `GET /api/podcasts/last-refresh`
+  - Stores only metadata (title, description, URL, date) - full article text fetched when adding to library
 - [x] **Audio Quality Optimization** (2026-02-01):
   - Reduced audio frequency from 44.1kHz to 24kHz (optimized for speech)
   - Reduced bitrate from 192kbps to 96kbps (smaller files, still excellent quality for TTS)

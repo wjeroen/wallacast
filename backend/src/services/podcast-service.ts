@@ -465,3 +465,212 @@ function cleanHtmlEntities(text: string): string {
       .replace(/&nbsp;/g, ' ');
   }
 }
+
+// --- Feed Caching Functions ---
+
+/**
+ * Fetches RSS feed from network, parses items, and saves to database cache
+ * Also cleans up old items (keeps only 100 most recent per feed)
+ */
+export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): Promise<{ itemsAdded: number; feedId: number }> {
+  console.log(`Refreshing feed ${feedId} from network: ${feedUrl}`);
+
+  try {
+    const response = await fetch(feedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    const xml = await response.text();
+
+    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
+
+    let itemsAdded = 0;
+
+    // Parse and save items (limit to 100 most recent)
+    for (const itemXml of itemMatches.slice(0, 100)) {
+      const title = extractXMLTag(itemXml, 'title');
+      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+      const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+      const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
+      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
+      const duration = extractXMLTag(itemXml, 'itunes:duration');
+      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
+      const guid = extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || enclosureUrl;
+
+      // Extract thumbnail
+      const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
+        extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
+        extractXMLAttribute(itemXml, 'media:content', 'url') ||
+        extractNestedXMLTag(itemXml, 'image', 'url') ||
+        (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
+
+      if (!title) continue;
+
+      const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
+      const item_type = isAudioEnclosure ? 'podcast_episode' : 'article';
+      const url = isAudioEnclosure ? null : link;
+      const audio_url = isAudioEnclosure ? enclosureUrl : null;
+
+      // Truncate description to 2000 chars to prevent abuse
+      const truncatedDescription = description ? description.substring(0, 2000) : null;
+
+      // Insert into feed_items (ON CONFLICT DO NOTHING for deduplication)
+      try {
+        const result = await query(
+          `INSERT INTO feed_items
+           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (feed_id, guid) DO NOTHING
+           RETURNING id`,
+          [
+            feedId,
+            item_type,
+            cleanHtmlEntities(title),
+            cleanDescription(truncatedDescription),
+            url,
+            audio_url,
+            pubDate ? new Date(pubDate) : new Date(),
+            parseDuration(duration),
+            preview_picture,
+            guid,
+          ]
+        );
+
+        if (result.rowCount && result.rowCount > 0) {
+          itemsAdded++;
+        }
+      } catch (err: any) {
+        // Log but continue processing other items
+        console.error(`Error inserting feed item: ${err.message}`);
+      }
+    }
+
+    // Update last_refreshed_at timestamp
+    await query(
+      'UPDATE podcasts SET last_refreshed_at = NOW() WHERE id = $1',
+      [feedId]
+    );
+
+    // Clean up old items (keep only 100 most recent)
+    await cleanupOldFeedItems(feedId, 100);
+
+    console.log(`Feed ${feedId} refreshed: ${itemsAdded} new items added`);
+    return { itemsAdded, feedId };
+  } catch (error) {
+    console.error(`Error refreshing feed ${feedId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Refreshes all subscribed feeds for a specific user
+ */
+export async function refreshAllFeedsFromNetwork(userId: number): Promise<{ totalFeeds: number; totalItemsAdded: number }> {
+  console.log(`Refreshing all feeds for user ${userId}`);
+
+  // Get all subscribed feeds for this user
+  const result = await query(
+    'SELECT id, feed_url FROM podcasts WHERE user_id = $1 AND is_subscribed = TRUE',
+    [userId]
+  );
+
+  const feeds = result.rows;
+  let totalItemsAdded = 0;
+
+  // Refresh each feed sequentially (to avoid overwhelming the server/network)
+  for (const feed of feeds) {
+    try {
+      const { itemsAdded } = await refreshFeedFromNetwork(feed.id, feed.feed_url);
+      totalItemsAdded += itemsAdded;
+    } catch (err: any) {
+      console.error(`Failed to refresh feed ${feed.id}: ${err.message}`);
+      // Continue with other feeds even if one fails
+    }
+  }
+
+  console.log(`All feeds refreshed: ${feeds.length} feeds, ${totalItemsAdded} new items`);
+  return { totalFeeds: feeds.length, totalItemsAdded };
+}
+
+/**
+ * Gets cached feed items from database
+ * @param userId - User ID to filter by their subscribed feeds
+ * @param feedId - Optional: filter by specific feed
+ * @param limit - Maximum number of items to return (default: 100)
+ */
+export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 100): Promise<any[]> {
+  let queryText: string;
+  let queryParams: any[];
+
+  if (feedId) {
+    // Get items for a specific feed
+    queryText = `
+      SELECT
+        fi.*,
+        p.title as podcast_show_name,
+        p.type as feed_type
+      FROM feed_items fi
+      JOIN podcasts p ON fi.feed_id = p.id
+      WHERE p.user_id = $1 AND fi.feed_id = $2
+      ORDER BY fi.published_at DESC
+      LIMIT $3
+    `;
+    queryParams = [userId, feedId, limit];
+  } else {
+    // Get recent items from ALL subscribed feeds
+    queryText = `
+      SELECT
+        fi.*,
+        p.title as podcast_show_name,
+        p.type as feed_type
+      FROM feed_items fi
+      JOIN podcasts p ON fi.feed_id = p.id
+      WHERE p.user_id = $1 AND p.is_subscribed = TRUE
+      ORDER BY fi.published_at DESC
+      LIMIT $2
+    `;
+    queryParams = [userId, limit];
+  }
+
+  const result = await query(queryText, queryParams);
+  return result.rows;
+}
+
+/**
+ * Gets the last refresh time for user's feeds
+ */
+export async function getLastRefreshTime(userId: number): Promise<Date | null> {
+  const result = await query(
+    `SELECT MAX(last_refreshed_at) as last_refresh
+     FROM podcasts
+     WHERE user_id = $1 AND is_subscribed = TRUE`,
+    [userId]
+  );
+
+  return result.rows[0]?.last_refresh || null;
+}
+
+/**
+ * Cleans up old feed items, keeping only the N most recent per feed
+ */
+async function cleanupOldFeedItems(feedId: number, keepCount: number = 100): Promise<number> {
+  // Delete items beyond the keepCount limit (ordered by published_at DESC)
+  const result = await query(
+    `DELETE FROM feed_items
+     WHERE id IN (
+       SELECT id FROM feed_items
+       WHERE feed_id = $1
+       ORDER BY published_at DESC
+       OFFSET $2
+     )`,
+    [feedId, keepCount]
+  );
+
+  const deletedCount = result.rowCount || 0;
+  if (deletedCount > 0) {
+    console.log(`Cleaned up ${deletedCount} old items from feed ${feedId}`);
+  }
+
+  return deletedCount;
+}

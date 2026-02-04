@@ -1,15 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link, RefreshCw } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast as PodcastType } from '../types';
-
-// --- SIMPLE CACHE (Lives outside component to survive tab switching) ---
-const feedCache = {
-  episodes: [] as any[],
-  podcasts: [] as PodcastType[],
-  timestamp: 0
-};
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -40,6 +32,20 @@ function formatDuration(seconds: number): string {
   return `${minutes}m`;
 }
 
+function formatRefreshTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+  return date.toLocaleDateString('en-GB');
+}
+
 const EPISODES_PER_PAGE = 20;
 
 // Helper function to detect if query looks like a URL
@@ -52,8 +58,8 @@ function looksLikeUrl(query: string): boolean {
 }
 
 export function FeedTab() {
-  const [podcasts, setPodcasts] = useState<PodcastType[]>(feedCache.podcasts);
-  const [allEpisodes, setAllEpisodes] = useState<any[]>(feedCache.episodes);
+  const [podcasts, setPodcasts] = useState<PodcastType[]>([]);
+  const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
   const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(EPISODES_PER_PAGE);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PodcastType[]>([]);
@@ -63,80 +69,65 @@ export function FeedTab() {
   const [selectedSearchResult, setSelectedSearchResult] = useState<PodcastType | null>(null);
   const [addingToLibrary, setAddingToLibrary] = useState<string | null>(null);
   const [podcastsExpanded, setPodcastsExpanded] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   useEffect(() => {
-    // Check if cache is valid (exists and is less than 5 mins old)
-    const isCacheValid = feedCache.episodes.length > 0 && (Date.now() - feedCache.timestamp < CACHE_DURATION);
-    
-    if (isCacheValid) {
-      // Use cached data immediately
-      setPodcasts(feedCache.podcasts);
-      setAllEpisodes(feedCache.episodes);
-    } else {
-      // Cache expired or empty, fetch fresh
-      fetchFreshData();
-    }
+    loadCachedData();
+    loadLastRefreshTime();
   }, []);
 
-  const fetchFreshData = async () => {
-    // Only show loading state if we don't have cached data to show
-    if (allEpisodes.length === 0) setLoading(true);
-    
+  const loadCachedData = async () => {
+    setLoading(true);
     try {
-      // 1. Get Subscriptions
-      const response = await podcastAPI.getAll();
-      const subs = response.data;
-      setPodcasts(subs);
-      feedCache.podcasts = subs; // Update cache
+      // 1. Get subscriptions
+      const podcastsResponse = await podcastAPI.getAll();
+      setPodcasts(podcastsResponse.data);
 
-      // 2. Parallel Fetching (The Speed Fix)
-      // Use feed_url directly to avoid N+1 database queries
-      const episodePromises = subs.map((podcast) =>
-        podcastAPI.getPreviewByUrl(podcast.feed_url)
-          .then(res => ({
-             status: 'fulfilled',
-             data: res.data,
-             podcast
-          }))
-          .catch(err => ({
-             status: 'rejected',
-             err,
-             podcast
-          }))
-      );
+      // 2. Get cached feed items from database (instant, no network requests!)
+      const feedItemsResponse = await podcastAPI.getFeedItems(undefined, 100);
+      const items = feedItemsResponse.data;
 
-      // Wait for all requests to finish (or fail)
-      const results = await Promise.all(episodePromises);
+      // Map feed items to episode format with podcast metadata
+      const episodes = items.map((item: any) => ({
+        ...item,
+        podcast_id: item.feed_id,
+        podcast_title: item.podcast_show_name,
+      }));
 
-      // 3. Aggregate Results
-      const aggregatedEpisodes: any[] = [];
-
-      results.forEach((result: any) => {
-        if (result.status === 'fulfilled' && Array.isArray(result.data)) {
-           const taggedEpisodes = result.data.map((ep: any) => ({
-             ...ep,
-             podcast_id: result.podcast.id,
-             podcast_title: result.podcast.title,
-           }));
-           aggregatedEpisodes.push(...taggedEpisodes);
-        } else {
-           console.warn(`Failed to load episodes for ${result.podcast?.title}`);
-        }
-      });
-
-      // 4. Sort and Store
-      aggregatedEpisodes.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
-      
-      setAllEpisodes(aggregatedEpisodes);
-      
-      // Update Cache
-      feedCache.episodes = aggregatedEpisodes;
-      feedCache.timestamp = Date.now();
-
+      setAllEpisodes(episodes);
     } catch (error) {
-      console.error('Failed to load feed:', error);
+      console.error('Failed to load cached feed data:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadLastRefreshTime = async () => {
+    try {
+      const response = await podcastAPI.getLastRefresh();
+      if (response.data.lastRefresh) {
+        setLastRefreshTime(new Date(response.data.lastRefresh));
+      }
+    } catch (error) {
+      console.error('Failed to load last refresh time:', error);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      console.log('Refreshing feeds from network...');
+      const response = await podcastAPI.refreshFeeds();
+      console.log(`Refresh complete: ${response.data.totalFeeds} feeds, ${response.data.totalItemsAdded} new items`);
+
+      // Reload cached data
+      await loadCachedData();
+      await loadLastRefreshTime();
+    } catch (error) {
+      console.error('Failed to refresh feeds:', error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -596,7 +587,33 @@ export function FeedTab() {
 
           {/* Recent Updates */}
           <div className="episodes-section">
-            <h3>Recent Updates</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0 }}>Recent Updates</h3>
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                title={isRefreshing ? 'Refreshing...' : 'Refresh feeds from network'}
+                style={{
+                  padding: '0.5rem',
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: isRefreshing ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.9rem'
+                }}
+              >
+                <RefreshCw size={16} className={isRefreshing ? 'spinning' : ''} />
+                {lastRefreshTime && !isRefreshing && (
+                  <span style={{ fontSize: '0.85rem' }}>
+                    {formatRefreshTime(lastRefreshTime)}
+                  </span>
+                )}
+                {isRefreshing && <span>Refreshing...</span>}
+              </button>
+            </div>
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
                 {episode.preview_picture && (
