@@ -338,18 +338,8 @@ For each image:
 - **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows (e.g., "A flowchart showing three steps in a cycle: Design a harder test, AI scores well, Actually that test was too easy, back to Design").
 - **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Explicitly mention who is replying to whom to make the audio clear.
 
-Output **only** the text to be spoken for each image.
-
-Respond in JSON format:
-[
-  {
-    "index": 1,
-    "description": "...",
-    "is_decorative": false,
-    "confidence": 0.95
-  },
-  ...
-]
+Output format: One description per line, in the same order as the images.
+Output only the text to be spoken, nothing else.
 
 Images to analyze:
 ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
@@ -383,21 +373,27 @@ ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
 
       console.log('[ImageAltText] Gemini response:', text.substring(0, 500));
 
-      // Parse JSON response
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.error('[ImageAltText] Failed to parse Gemini response:', text);
-        throw new Error('Failed to parse Gemini response');
+      // Parse line-by-line text response (not JSON)
+      const lines = text.split('\n').filter(line => line.trim());
+
+      if (lines.length === 0) {
+        console.error('[ImageAltText] No descriptions in Gemini response:', text);
+        throw new Error('No descriptions in Gemini response');
       }
 
-      const results = JSON.parse(jsonMatch[0]);
+      // Map descriptions to URLs
+      const results: ImageAnalysisResult[] = [];
+      imageUrls.forEach((url, index) => {
+        const description = lines[index]?.trim() || '';
+        results.push({
+          url,
+          description,
+          isDecorative: !description, // No description = decorative
+          confidence: description ? 0.95 : 0
+        });
+      });
 
-      return results.map((r: any) => ({
-        url: imageUrls[r.index - 1] || imageUrls[0],
-        description: r.description || '',
-        isDecorative: r.is_decorative || false,
-        confidence: r.confidence || 0.5
-      }));
+      return results;
     } catch (error) {
       console.error('[ImageAltText] Gemini API call failed:', error);
       throw error;
