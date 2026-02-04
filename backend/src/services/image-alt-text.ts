@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { JSDOM } from 'jsdom';
 import { getUserSetting } from './ai-providers.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
@@ -42,12 +42,12 @@ export class ImageAltTextService {
   /**
    * Get Gemini client using user's API key
    */
-  private async getGeminiClient(): Promise<GoogleGenerativeAI> {
+  private async getGeminiClient(): Promise<GoogleGenAI> {
     const apiKey = await getUserSetting(this.userId, 'gemini_api_key');
     if (!apiKey) {
       throw new Error('No Gemini API key configured. Please add your key in Settings.');
     }
-    return new GoogleGenerativeAI(apiKey);
+    return new GoogleGenAI({ apiKey });
   }
 
   /**
@@ -324,8 +324,7 @@ export class ImageAltTextService {
     imageUrls: string[],
     articleContext: { title: string; url: string }
   ): Promise<ImageAnalysisResult[]> {
-    const genAI = await this.getGeminiClient();
-    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+    const ai = await this.getGeminiClient();
 
     // User-tested prompt from implementation plan
     const prompt = `You are an expert accessibility narrator for a text-to-speech article reader. Your task is to describe these images for a listener so they understand the context in a format that offers the best listening experience.
@@ -358,18 +357,29 @@ ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
     try {
       console.log(`[ImageAltText] Sending ${imageUrls.length} image URLs to Gemini with urlContext tool`);
 
-      // Use Gemini's Google Search Retrieval tool to fetch and analyze images from URLs
-      const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
+      // Use Gemini's urlContext tool to fetch images automatically
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          tools: [{ urlContext: {} }], // Enable URL fetching
           temperature: 0.3,
           maxOutputTokens: 2048,
         },
-        tools: [{ googleSearchRetrieval: {} }], // Enable URL fetching for images
       });
 
-      const response = await result.response;
-      const text = response.text();
+      if (!response.candidates || response.candidates.length === 0) {
+        throw new Error('No response candidates from Gemini');
+      }
+
+      const candidate = response.candidates[0];
+      if (!candidate || !candidate.content || !candidate.content.parts) {
+        throw new Error('Invalid response structure from Gemini');
+      }
+
+      const text = candidate.content.parts
+        .map((part: any) => part.text)
+        .join('');
 
       console.log('[ImageAltText] Gemini response:', text.substring(0, 500));
 
