@@ -72,7 +72,7 @@ export class ImageAltTextService {
         total_images: 0,
         decorative_images: 0,
         cost_usd: 0,
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-3-flash-preview',
         processed_at: new Date().toISOString()
       };
     }
@@ -97,22 +97,29 @@ export class ImageAltTextService {
     let costUsd = 0;
 
     if (informativeImages.length > 0) {
-      // Generate descriptions for new images using batch processing
-      const analyses = await this.batchAnalyzeImages(
-        informativeImages.map(img => img.url),
-        { title: context?.articleTitle || '', url: articleUrl }
-      );
+      // Process each image individually (one API call per image)
+      for (let i = 0; i < informativeImages.length; i++) {
+        const img = informativeImages[i];
+        console.log(`[ImageAltText] Processing image ${i + 1}/${informativeImages.length}: ${img.url}`);
 
-      // Build new descriptions map
-      analyses.forEach(analysis => {
-        if (!analysis.isDecorative && analysis.description) {
-          const normalized = this.normalizeUrl(analysis.url);
-          newDescriptions[normalized] = analysis.description;
+        try {
+          const analysis = await this.analyzeImageWithRetry(
+            img.url,
+            { title: context?.articleTitle || '', url: articleUrl }
+          );
+
+          if (!analysis.isDecorative && analysis.description) {
+            const normalized = this.normalizeUrl(analysis.url);
+            newDescriptions[normalized] = analysis.description;
+          }
+
+          // Estimate cost per image
+          costUsd += this.estimateCost(1);
+        } catch (error) {
+          console.error(`[ImageAltText] Failed to process image ${img.url}:`, error);
+          // Continue with next image - don't fail entire article
         }
-      });
-
-      // Estimate cost
-      costUsd = this.estimateCost(informativeImages.length);
+      }
     }
 
     // Merge: keep old descriptions for images still in HTML, add new ones
@@ -243,56 +250,15 @@ export class ImageAltTextService {
   }
 
   /**
-   * Batch process images in groups of 10 to avoid overwhelming the API
+   * Analyze single image with exponential backoff retry logic
    */
-  private async batchAnalyzeImages(
-    imageUrls: string[],
-    articleContext: { title: string; url: string }
-  ): Promise<ImageAnalysisResult[]> {
-    const batchSize = 10;
-    const batches: string[][] = [];
-
-    // Split images into batches
-    for (let i = 0; i < imageUrls.length; i += batchSize) {
-      batches.push(imageUrls.slice(i, i + batchSize));
-    }
-
-    console.log(`[ImageAltText] Processing ${imageUrls.length} images in ${batches.length} batch(es)`);
-
-    const allResults: ImageAnalysisResult[] = [];
-
-    // Process each batch with retry logic
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
-      console.log(`[ImageAltText] Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} images)`);
-
-      try {
-        const batchResults = await this.analyzeImagesWithRetry(batch, articleContext);
-        allResults.push(...batchResults);
-      } catch (error) {
-        console.error(`[ImageAltText] Batch ${batchIndex + 1} failed after retries:`, error);
-        // Continue with other batches even if one fails
-      }
-
-      // Small delay between batches to be nice to the API
-      if (batchIndex < batches.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
-
-    return allResults;
-  }
-
-  /**
-   * Analyze images with exponential backoff retry logic
-   */
-  private async analyzeImagesWithRetry(
-    imageUrls: string[],
+  private async analyzeImageWithRetry(
+    imageUrl: string,
     articleContext: { title: string; url: string },
     attempt: number = 1
-  ): Promise<ImageAnalysisResult[]> {
+  ): Promise<ImageAnalysisResult> {
     try {
-      return await this.analyzeImages(imageUrls, articleContext);
+      return await this.analyzeImage(imageUrl, articleContext);
     } catch (error: any) {
       const isRetryable = error?.status === 503 || error?.message?.includes('503') ||
                           error?.message?.includes('overloaded') ||
@@ -312,49 +278,47 @@ export class ImageAltTextService {
       console.log(`[ImageAltText] Retry attempt ${attempt + 1}/${PROCESSING_CONFIG.retry.maxAttempts} after ${delay}ms (API overloaded)`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      return this.analyzeImagesWithRetry(imageUrls, articleContext, attempt + 1);
+      return this.analyzeImageWithRetry(imageUrl, articleContext, attempt + 1);
     }
   }
 
   /**
-   * Call Gemini to analyze multiple images and generate descriptions
-   * Uses Gemini's native urlContext tool to fetch images automatically
+   * Call Gemini to analyze a single image and generate description
+   * Uses Gemini's native urlContext tool to fetch the image automatically
    */
-  private async analyzeImages(
-    imageUrls: string[],
+  private async analyzeImage(
+    imageUrl: string,
     articleContext: { title: string; url: string }
-  ): Promise<ImageAnalysisResult[]> {
+  ): Promise<ImageAnalysisResult> {
     const ai = await this.getGeminiClient();
 
-    // User-tested prompt from implementation plan
-    const prompt = `You are an expert accessibility narrator for a text-to-speech article reader. Your task is to describe these images for a listener so they understand the context in a format that offers the best listening experience.
+    // Simplified prompt for single image
+    const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
 
 Article context:
 - Title: ${articleContext.title}
 - URL: ${articleContext.url}
 
-For each image:
-- **If it's a photo or visual:** Provide a concise, vivid description of the scene, identifying key subjects, text (if any), and the overall mood.
-- **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows (e.g., "A flowchart showing three steps in a cycle: Design a harder test, AI scores well, Actually that test was too easy, back to Design").
-- **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Explicitly mention who is replying to whom to make the audio clear.
+Image URL: ${imageUrl}
 
-Output format: One description per line, in the same order as the images.
-Output only the text to be spoken, nothing else.
+Guidelines:
+- **If it's a photo or visual:** Describe the scene, identifying key subjects, text (if any), and overall mood.
+- **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows.
+- **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Mention who is replying to whom.
 
-Images to analyze:
-${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
+Just output the description, nothing else.`;
 
     try {
-      console.log(`[ImageAltText] Sending ${imageUrls.length} image URLs to Gemini with urlContext tool`);
+      console.log(`[ImageAltText] Sending image URL to Gemini: ${imageUrl}`);
 
-      // Use Gemini's urlContext tool to fetch images automatically
+      // Use Gemini's urlContext tool to fetch image automatically
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
           tools: [{ urlContext: {} }], // Enable URL fetching
           temperature: 0.3,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 500, // Single image needs less tokens
         },
       });
 
@@ -367,33 +331,20 @@ ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
         throw new Error('Invalid response structure from Gemini');
       }
 
-      const text = candidate.content.parts
+      // Entire response text is the description
+      const description = candidate.content.parts
         .map((part: any) => part.text)
-        .join('');
+        .join('')
+        .trim();
 
-      console.log('[ImageAltText] Gemini response:', text.substring(0, 500));
+      console.log(`[ImageAltText] Generated description (${description.length} chars): ${description.substring(0, 100)}...`);
 
-      // Parse line-by-line text response (not JSON)
-      const lines = text.split('\n').filter(line => line.trim());
-
-      if (lines.length === 0) {
-        console.error('[ImageAltText] No descriptions in Gemini response:', text);
-        throw new Error('No descriptions in Gemini response');
-      }
-
-      // Map descriptions to URLs
-      const results: ImageAnalysisResult[] = [];
-      imageUrls.forEach((url, index) => {
-        const description = lines[index]?.trim() || '';
-        results.push({
-          url,
-          description,
-          isDecorative: !description, // No description = decorative
-          confidence: description ? 0.95 : 0
-        });
-      });
-
-      return results;
+      return {
+        url: imageUrl,
+        description,
+        isDecorative: !description, // No description = decorative
+        confidence: description ? 0.95 : 0
+      };
     } catch (error) {
       console.error('[ImageAltText] Gemini API call failed:', error);
       throw error;
