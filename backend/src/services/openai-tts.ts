@@ -522,7 +522,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         // Save JSONB data (never modify html_content)
         await query(
           'UPDATE content_items SET image_alt_text_data = $1, images_processed = $2, generation_progress = $3 WHERE id = $4',
-          [JSON.stringify(imageAltTextData), true, 10, contentId]
+          [imageAltTextData, true, 10, contentId]
         );
 
         console.log(`[TTS] Processed ${Object.keys(imageAltTextData.descriptions).length} image descriptions`);
