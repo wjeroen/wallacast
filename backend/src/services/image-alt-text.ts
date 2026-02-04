@@ -318,6 +318,7 @@ export class ImageAltTextService {
 
   /**
    * Call Gemini to analyze multiple images and generate descriptions
+   * Uses Gemini's native urlContext tool to fetch images automatically
    */
   private async analyzeImages(
     imageUrls: string[],
@@ -333,7 +334,7 @@ Article context:
 - Title: ${articleContext.title}
 - URL: ${articleContext.url}
 
-For each image (I will provide ${imageUrls.length} image(s)):
+For each image:
 - **If it's a photo or visual:** Provide a concise, vivid description of the scene, identifying key subjects, text (if any), and the overall mood.
 - **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows (e.g., "A flowchart showing three steps in a cycle: Design a harder test, AI scores well, Actually that test was too easy, back to Design").
 - **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Explicitly mention who is replying to whom to make the audio clear.
@@ -349,51 +350,24 @@ Respond in JSON format:
     "confidence": 0.95
   },
   ...
-]`;
+]
+
+Images to analyze:
+${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
 
     try {
-      // Fetch images and convert to base64 for Gemini vision API
-      const imageParts = await Promise.all(
-        imageUrls.map(async (url, index) => {
-          try {
-            console.log(`[ImageAltText] Fetching image ${index + 1}/${imageUrls.length}: ${url}`);
-            const response = await fetch(url);
-            if (!response.ok) {
-              console.warn(`[ImageAltText] Failed to fetch image ${url}: ${response.status}`);
-              return null;
-            }
-            const buffer = await response.arrayBuffer();
-            const mimeType = response.headers.get('content-type') || 'image/jpeg';
+      console.log(`[ImageAltText] Sending ${imageUrls.length} image URLs to Gemini with urlContext tool`);
 
-            return {
-              inlineData: {
-                data: Buffer.from(buffer).toString('base64'),
-                mimeType: mimeType
-              }
-            };
-          } catch (error) {
-            console.error(`[ImageAltText] Error fetching image ${url}:`, error);
-            return null;
-          }
-        })
-      );
+      // Use Gemini's Google Search Retrieval tool to fetch and analyze images from URLs
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 2048,
+        },
+        tools: [{ googleSearchRetrieval: {} }], // Enable URL fetching for images
+      });
 
-      // Filter out failed fetches
-      const validImageParts = imageParts.filter(part => part !== null);
-
-      if (validImageParts.length === 0) {
-        throw new Error('Failed to fetch any images');
-      }
-
-      console.log(`[ImageAltText] Successfully fetched ${validImageParts.length}/${imageUrls.length} images`);
-
-      // Build content array: [text prompt, image1, image2, ...]
-      const content = [
-        { text: prompt },
-        ...validImageParts
-      ];
-
-      const result = await model.generateContent(content);
       const response = await result.response;
       const text = response.text();
 
@@ -408,34 +382,12 @@ Respond in JSON format:
 
       const results = JSON.parse(jsonMatch[0]);
 
-      // Map back to original URLs (accounting for failed fetches)
-      const finalResults: ImageAnalysisResult[] = [];
-      let validIndex = 0;
-
-      for (let i = 0; i < imageUrls.length; i++) {
-        if (imageParts[i] !== null) {
-          const geminiResult = results.find((r: any) => r.index === validIndex + 1);
-          if (geminiResult) {
-            finalResults.push({
-              url: imageUrls[i],
-              description: geminiResult.description || '',
-              isDecorative: geminiResult.is_decorative || false,
-              confidence: geminiResult.confidence || 0.5
-            });
-          }
-          validIndex++;
-        } else {
-          // Image fetch failed, mark as decorative to skip
-          finalResults.push({
-            url: imageUrls[i],
-            description: '',
-            isDecorative: true,
-            confidence: 0
-          });
-        }
-      }
-
-      return finalResults;
+      return results.map((r: any) => ({
+        url: imageUrls[r.index - 1] || imageUrls[0],
+        description: r.description || '',
+        isDecorative: r.is_decorative || false,
+        confidence: r.confidence || 0.5
+      }));
     } catch (error) {
       console.error('[ImageAltText] Gemini API call failed:', error);
       throw error;
