@@ -134,7 +134,7 @@ export class ImageAltTextService {
       total_images: currentImages.length,
       decorative_images: decorativeCount,
       cost_usd: (existingData?.cost_usd || 0) + costUsd,
-      model: 'gemini-2.0-flash-exp',
+      model: 'gemini-3-flash-preview',
       processed_at: new Date().toISOString()
     };
   }
@@ -249,7 +249,7 @@ export class ImageAltTextService {
     articleContext: { title: string; url: string }
   ): Promise<ImageAnalysisResult[]> {
     const genAI = await this.getGeminiClient();
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
     // User-tested prompt from implementation plan
     const prompt = `You are an expert accessibility narrator for a text-to-speech article reader. Your task is to describe these images for a listener so they understand the context in a format that offers the best listening experience.
@@ -321,19 +321,19 @@ ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
    * Estimate cost for image processing
    */
   private estimateCost(imageCount: number): number {
-    // Gemini 2.0 Flash pricing (as of Feb 2026):
-    // Input: $0.075 per 1M tokens (free tier: first 2M tokens/day)
-    // Output: $0.30 per 1M tokens (free tier: first 2M tokens/day)
+    // Gemini 3 Flash pricing:
+    // Input: $0.50 per 1M tokens
+    // Output: $3.00 per 1M tokens
 
-    const tokensPerImage = 258; // Standard resolution
+    const tokensPerImage = 1120; // High resolution
     const tokensPerRequest = 500; // Prompt + article context
     const totalInputTokens = (imageCount * tokensPerImage) + tokensPerRequest;
 
-    const inputCost = (totalInputTokens / 1_000_000) * 0.075;
+    const inputCost = (totalInputTokens / 1_000_000) * 0.50;
 
     // Output tokens (alt-text descriptions): ~100 tokens per image
     const outputTokens = imageCount * 100;
-    const outputCost = (outputTokens / 1_000_000) * 0.30;
+    const outputCost = (outputTokens / 1_000_000) * 3.00;
 
     return inputCost + outputCost;
   }
