@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes } from '../services/podcast-service.js';
+import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, getCachedFeedItems, refreshAllFeedsFromNetwork, getLastRefreshTime } from '../services/podcast-service.js';
 
 const router = express.Router();
 
@@ -176,6 +176,47 @@ router.get('/:id/episodes', async (req, res) => {
   } catch (error) {
     console.error('Error fetching episodes:', error);
     res.status(500).json({ error: 'Failed to fetch episodes' });
+  }
+});
+
+// --- Feed Caching Endpoints ---
+
+// Get cached feed items from database (instant, no network requests)
+router.get('/feed-items', async (req, res) => {
+  try {
+    const { feedId, limit } = req.query;
+    const parsedFeedId = feedId ? parseInt(feedId as string) : undefined;
+    const parsedLimit = limit ? parseInt(limit as string) : 100;
+
+    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit);
+    res.json(items);
+  } catch (error) {
+    console.error('Error fetching cached feed items:', error);
+    res.status(500).json({ error: 'Failed to fetch feed items' });
+  }
+});
+
+// Refresh all subscribed feeds from network (fetches RSS and updates cache)
+router.post('/refresh-feeds', async (req, res) => {
+  try {
+    console.log(`User ${req.user!.userId} refreshing all feeds from network`);
+    const result = await refreshAllFeedsFromNetwork(req.user!.userId);
+    console.log(`Refresh complete: ${result.totalFeeds} feeds, ${result.totalItemsAdded} new items`);
+    res.json(result);
+  } catch (error) {
+    console.error('Error refreshing feeds:', error);
+    res.status(500).json({ error: 'Failed to refresh feeds' });
+  }
+});
+
+// Get last refresh timestamp for user's feeds
+router.get('/last-refresh', async (req, res) => {
+  try {
+    const lastRefresh = await getLastRefreshTime(req.user!.userId);
+    res.json({ lastRefresh });
+  } catch (error) {
+    console.error('Error getting last refresh time:', error);
+    res.status(500).json({ error: 'Failed to get last refresh time' });
   }
 });
 
