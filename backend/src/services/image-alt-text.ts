@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { JSDOM } from 'jsdom';
 import { getUserSetting } from './ai-providers.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
 
 interface ImageDescriptions {
   [url: string]: string;
@@ -96,8 +97,8 @@ export class ImageAltTextService {
     let costUsd = 0;
 
     if (informativeImages.length > 0) {
-      // Generate descriptions for new images only
-      const analyses = await this.analyzeImages(
+      // Generate descriptions for new images using batch processing
+      const analyses = await this.batchAnalyzeImages(
         informativeImages.map(img => img.url),
         { title: context?.articleTitle || '', url: articleUrl }
       );
@@ -239,6 +240,80 @@ export class ImageAltTextService {
     if (img.hasExistingAlt && img.existingAlt.length < 5) return true; // "icon", "logo", etc.
 
     return false; // Likely informative
+  }
+
+  /**
+   * Batch process images in groups of 10 to avoid overwhelming the API
+   */
+  private async batchAnalyzeImages(
+    imageUrls: string[],
+    articleContext: { title: string; url: string }
+  ): Promise<ImageAnalysisResult[]> {
+    const batchSize = 10;
+    const batches: string[][] = [];
+
+    // Split images into batches
+    for (let i = 0; i < imageUrls.length; i += batchSize) {
+      batches.push(imageUrls.slice(i, i + batchSize));
+    }
+
+    console.log(`[ImageAltText] Processing ${imageUrls.length} images in ${batches.length} batch(es)`);
+
+    const allResults: ImageAnalysisResult[] = [];
+
+    // Process each batch with retry logic
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex];
+      console.log(`[ImageAltText] Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} images)`);
+
+      try {
+        const batchResults = await this.analyzeImagesWithRetry(batch, articleContext);
+        allResults.push(...batchResults);
+      } catch (error) {
+        console.error(`[ImageAltText] Batch ${batchIndex + 1} failed after retries:`, error);
+        // Continue with other batches even if one fails
+      }
+
+      // Small delay between batches to be nice to the API
+      if (batchIndex < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    return allResults;
+  }
+
+  /**
+   * Analyze images with exponential backoff retry logic
+   */
+  private async analyzeImagesWithRetry(
+    imageUrls: string[],
+    articleContext: { title: string; url: string },
+    attempt: number = 1
+  ): Promise<ImageAnalysisResult[]> {
+    try {
+      return await this.analyzeImages(imageUrls, articleContext);
+    } catch (error: any) {
+      const isRetryable = error?.status === 503 || error?.message?.includes('503') ||
+                          error?.message?.includes('overloaded') ||
+                          error?.message?.includes('RESOURCE_EXHAUSTED');
+
+      if (!isRetryable || attempt >= PROCESSING_CONFIG.retry.maxAttempts) {
+        console.error(`[ImageAltText] Failed after ${attempt} attempt(s):`, error);
+        throw error;
+      }
+
+      // Exponential backoff
+      const delay = Math.min(
+        PROCESSING_CONFIG.retry.baseDelayMs * Math.pow(2, attempt - 1),
+        PROCESSING_CONFIG.retry.maxDelayMs
+      );
+
+      console.log(`[ImageAltText] Retry attempt ${attempt + 1}/${PROCESSING_CONFIG.retry.maxAttempts} after ${delay}ms (API overloaded)`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      return this.analyzeImagesWithRetry(imageUrls, articleContext, attempt + 1);
+    }
   }
 
   /**
