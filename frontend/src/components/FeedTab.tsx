@@ -152,9 +152,8 @@ export function FeedTab() {
   const handleSubscribe = async (feedUrl: string) => {
     try {
       await podcastAPI.subscribe(feedUrl);
-      // Invalidate cache so we fetch the new podcast next time
-      feedCache.timestamp = 0; 
-      fetchFreshData();
+      // Reload subscriptions and cached data
+      await loadCachedData();
       setSearchQuery('');
       setSearchResults([]);
     } catch (error) {
@@ -170,17 +169,13 @@ export function FeedTab() {
 
     try {
       await podcastAPI.unsubscribe(podcastId);
-      
-      // Manually remove from local state and cache to avoid full reload
+
+      // Manually remove from local state to avoid full reload
       const newPodcasts = podcasts.filter(p => p.id !== podcastId);
       const newEpisodes = allEpisodes.filter(ep => ep.podcast_id !== podcastId);
-      
+
       setPodcasts(newPodcasts);
       setAllEpisodes(newEpisodes);
-      
-      // Update cache
-      feedCache.podcasts = newPodcasts;
-      feedCache.episodes = newEpisodes;
 
       if (selectedPodcast?.id === podcastId) {
         setSelectedPodcast(null);
@@ -210,10 +205,10 @@ export function FeedTab() {
     }
   };
 
-  const handleShowAllPodcasts = () => {
+  const handleShowAllPodcasts = async () => {
     setSelectedPodcast(null);
-    // Restore the full feed from cache
-    setAllEpisodes(feedCache.episodes);
+    // Reload all cached feed items from database
+    await loadCachedData();
     setVisibleEpisodeCount(EPISODES_PER_PAGE);
   };
 

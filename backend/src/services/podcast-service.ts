@@ -513,7 +513,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const audio_url = isAudioEnclosure ? enclosureUrl : null;
 
       // Truncate description to 2000 chars to prevent abuse
-      const truncatedDescription = description ? description.substring(0, 2000) : null;
+      const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
 
       // Insert into feed_items (ON CONFLICT DO NOTHING for deduplication)
       try {
@@ -527,7 +527,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             feedId,
             item_type,
             cleanHtmlEntities(title),
-            cleanDescription(truncatedDescription),
+            truncatedDescription,
             url,
             audio_url,
             pubDate ? new Date(pubDate) : new Date(),
