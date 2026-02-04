@@ -191,6 +191,11 @@ export async function initializeDatabase() {
     const feedItemsCacheMigration = await fs.readFile(feedItemsCacheMigrationPath, 'utf-8');
     await client.query(feedItemsCacheMigration);
 
+    // Run migration to add image alt-text columns for Gemini descriptions
+    const imageAltTextMigrationPath = path.join(__dirname, 'migrations', '014_add_image_alt_text.sql');
+    const imageAltTextMigration = await fs.readFile(imageAltTextMigrationPath, 'utf-8');
+    await client.query(imageAltTextMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
