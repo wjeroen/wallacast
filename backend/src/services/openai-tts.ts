@@ -7,8 +7,9 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser, getUserSetting } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
+import { ImageAltTextService } from './image-alt-text.js';
 
 interface Comment {
   id?: string;
@@ -494,20 +495,67 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     if (contentResult.rows.length === 0) throw new Error('Content not found');
     const content = contentResult.rows[0];
 
-    let articleBodyScript = '';
-    const sourceContent = content.html_content || content.content || '';
-
+    let sourceContent = content.html_content || content.content || '';
     if (!sourceContent) throw new Error('No content to convert to audio');
 
+    let imageAltTextData = content.image_alt_text_data;
+
+    // Step 1: Process images (0-10% progress)
+    const imageAltTextEnabled = await getUserSetting(content.user_id, 'image_alt_text_enabled');
+
+    if (imageAltTextEnabled !== 'false' && sourceContent) {
+      try {
+        console.log('[TTS] Processing image descriptions...');
+        await query(
+          'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+          ['processing_images', 0, contentId]
+        );
+
+        const imageService = new ImageAltTextService(content.user_id);
+        imageAltTextData = await imageService.smartRegenerate(
+          sourceContent,
+          imageAltTextData, // existing data or null
+          content.url || '',
+          { articleTitle: content.title, articleAuthor: content.author }
+        );
+
+        // Save JSONB data (never modify html_content)
+        await query(
+          'UPDATE content_items SET image_alt_text_data = $1, images_processed = $2, generation_progress = $3 WHERE id = $4',
+          [JSON.stringify(imageAltTextData), true, 10, contentId]
+        );
+
+        console.log(`[TTS] Processed ${Object.keys(imageAltTextData.descriptions).length} image descriptions`);
+      } catch (error) {
+        console.error('[TTS] Image alt-text generation failed:', error);
+        // Continue with TTS generation even if image processing fails
+      }
+    }
+
+    // Step 2: Apply descriptions to HTML in memory (if we have any)
+    if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
+      const imageService = new ImageAltTextService(content.user_id);
+      sourceContent = imageService.applyDescriptionsToHtml(sourceContent, imageAltTextData.descriptions);
+      console.log('[TTS] Applied Gemini image descriptions to HTML for narration');
+      // sourceContent now has Gemini alt-text, but we DON'T save it back to DB
+    }
+
+    // Step 3: Script content for listening (10-20% progress)
+    let articleBodyScript = '';
     console.log('[TTS] Running Scriptwriter to format HTML for audio...');
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);
-    
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['scripting_content', 10, contentId]
+    );
+
     const chatClient = await getOpenAIClientForUser(content.user_id);
-    if (chatClient && sourceContent.includes('<')) { 
+    if (chatClient && sourceContent.includes('<')) {
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
+
+    await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [20, contentId]);
 
     let fullScript = '';
 
@@ -534,8 +582,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
        }
     }
 
+    // Step 4: Generate audio chunks (20-90% progress)
     console.log(`[TTS] Sending script (${fullScript.length} chars) to audio engine...`);
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['synthesizing_audio', contentId]);
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['synthesizing_audio', 20, contentId]
+    );
 
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
       contentId: contentId,
@@ -546,6 +598,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       const estimatedMinutes = Math.round(fullScript.length / 900);
       warning = `Generated complete audio in ${chunks} parts (~${estimatedMinutes} minutes).`;
     }
+
+    // Step 5: Final processing (90-95% progress)
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['finalizing_audio', 90, contentId]
+    );
 
     const tempDir = getTempDir();
     const tempFilePath = path.join(tempDir, `final_${contentId}.mp3`);
@@ -569,8 +627,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     console.log(`✓ Audio stored for content ${contentId}`);
 
+    // Step 6: Transcription (95-100% progress)
     console.log('[TTS] Triggering auto-transcription for Read Along...');
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['transcribing', 95, contentId]
+    );
 
     transcribeWithTimestamps(audioUrl, content.user_id)
       .then(async (transcriptResult) => {
