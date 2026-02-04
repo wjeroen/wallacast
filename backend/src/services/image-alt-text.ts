@@ -333,10 +333,10 @@ Article context:
 - Title: ${articleContext.title}
 - URL: ${articleContext.url}
 
-For each image:
+For each image (I will provide ${imageUrls.length} image(s)):
 - **If it's a photo or visual:** Provide a concise, vivid description of the scene, identifying key subjects, text (if any), and the overall mood.
-- **If it's a chart:** Summarize the primary trend or insight (e.g., "A line graph showing Bitcoin price rising from 2020 to 2024"). Provide key data points if legible.
-- **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Explicitly mention who is replying to whom to make the audio clear. (e.g., "User 'Jeroen' asks: [question]. 'TechGuy' replies: [answer].").
+- **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows (e.g., "A flowchart showing three steps in a cycle: Design a harder test, AI scores well, Actually that test was too easy, back to Design").
+- **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Explicitly mention who is replying to whom to make the audio clear.
 
 Output **only** the text to be spoken for each image.
 
@@ -349,15 +349,55 @@ Respond in JSON format:
     "confidence": 0.95
   },
   ...
-]
-
-Images to analyze:
-${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
+]`;
 
     try {
-      const result = await model.generateContent(prompt);
+      // Fetch images and convert to base64 for Gemini vision API
+      const imageParts = await Promise.all(
+        imageUrls.map(async (url, index) => {
+          try {
+            console.log(`[ImageAltText] Fetching image ${index + 1}/${imageUrls.length}: ${url}`);
+            const response = await fetch(url);
+            if (!response.ok) {
+              console.warn(`[ImageAltText] Failed to fetch image ${url}: ${response.status}`);
+              return null;
+            }
+            const buffer = await response.arrayBuffer();
+            const mimeType = response.headers.get('content-type') || 'image/jpeg';
+
+            return {
+              inlineData: {
+                data: Buffer.from(buffer).toString('base64'),
+                mimeType: mimeType
+              }
+            };
+          } catch (error) {
+            console.error(`[ImageAltText] Error fetching image ${url}:`, error);
+            return null;
+          }
+        })
+      );
+
+      // Filter out failed fetches
+      const validImageParts = imageParts.filter(part => part !== null);
+
+      if (validImageParts.length === 0) {
+        throw new Error('Failed to fetch any images');
+      }
+
+      console.log(`[ImageAltText] Successfully fetched ${validImageParts.length}/${imageUrls.length} images`);
+
+      // Build content array: [text prompt, image1, image2, ...]
+      const content = [
+        { text: prompt },
+        ...validImageParts
+      ];
+
+      const result = await model.generateContent(content);
       const response = await result.response;
       const text = response.text();
+
+      console.log('[ImageAltText] Gemini response:', text.substring(0, 500));
 
       // Parse JSON response
       const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -368,12 +408,34 @@ ${imageUrls.map((url, i) => `${i + 1}. ${url}`).join('\n')}`;
 
       const results = JSON.parse(jsonMatch[0]);
 
-      return results.map((r: any) => ({
-        url: imageUrls[r.index - 1] || imageUrls[0],
-        description: r.description || '',
-        isDecorative: r.is_decorative || false,
-        confidence: r.confidence || 0.5
-      }));
+      // Map back to original URLs (accounting for failed fetches)
+      const finalResults: ImageAnalysisResult[] = [];
+      let validIndex = 0;
+
+      for (let i = 0; i < imageUrls.length; i++) {
+        if (imageParts[i] !== null) {
+          const geminiResult = results.find((r: any) => r.index === validIndex + 1);
+          if (geminiResult) {
+            finalResults.push({
+              url: imageUrls[i],
+              description: geminiResult.description || '',
+              isDecorative: geminiResult.is_decorative || false,
+              confidence: geminiResult.confidence || 0.5
+            });
+          }
+          validIndex++;
+        } else {
+          // Image fetch failed, mark as decorative to skip
+          finalResults.push({
+            url: imageUrls[i],
+            description: '',
+            isDecorative: true,
+            confidence: 0
+          });
+        }
+      }
+
+      return finalResults;
     } catch (error) {
       console.error('[ImageAltText] Gemini API call failed:', error);
       throw error;
