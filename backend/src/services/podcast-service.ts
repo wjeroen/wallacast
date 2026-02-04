@@ -420,6 +420,11 @@ function cleanDescription(description: string): string {
   // Remove CDATA wrapper
   let cleaned = description.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
 
+  // FIX: Remove "Published on..." prefix common in EA Forum/LessWrong feeds
+  // Matches pattern: Published on February 1, 2026 11:40 PM GMT<br/><br/>
+  // We do this before entity decoding to ensure we match the <br> tags correctly.
+  cleaned = cleaned.replace(/^Published on [a-zA-Z]+ \d{1,2}, \d{4}.*?GMT\s*(?:<br\s*\/?>\s*)+/i, '');
+
   // Decode common HTML entities FIRST (so &lt;p&gt; becomes <p>)
   cleaned = cleanHtmlEntities(cleaned);
 
