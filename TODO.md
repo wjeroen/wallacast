@@ -116,7 +116,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 #### Read-along Tab (Do First Without Timesync)
 - [x] **[P1]** Create read-along tab that shows Whisper transcript with clickable words (2026-01-24)
-- [ ] **[P4]** TTS should describe images in the article
+- [x] **[P4]** TTS should describe images in the article (2026-02-04)
 - [x] **[P1]** Add "Regenerate audio" button to generate new TTS + Whisper timestamps (2026-01-24)
 - [ ] **[P1]** Wire regenerate audio button to actually regenerate and update display
 - [x] **[P2]** Fix Whisper timestamp seeking - clicking words works correctly now (2026-01-29)
@@ -135,6 +135,20 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Image Alt-Text Generation for TTS** (2026-02-04):
+  - Implemented Gemini 3 Flash powered image description generation for audio narration
+  - Smart regeneration: only processes new images after refetch, merges with existing descriptions
+  - Batch processing: images processed in groups of 10 to avoid overwhelming API
+  - Exponential backoff retry logic: up to 5 attempts for 503/overloaded errors (1s, 2s, 4s, 8s, 16s delays)
+  - Heuristic filtering: automatically skips decorative images (icons, logos, <100px) before API calls
+  - Stores descriptions in JSONB (image_alt_text_data) with metadata - never modifies html_content
+  - Applies descriptions in memory during TTS generation only
+  - Progress tracking: 0-10% image processing, 10-20% scripting, 20-90% audio, 90-95% finalization, 95-100% transcription
+  - User controls: Gemini API key in Settings, image_alt_text_enabled toggle (default: true)
+  - Cost: ~$0.003 per article (4% of TTS cost)
+  - New service: backend/src/services/image-alt-text.ts
+  - Database migration: 014_add_image_alt_text.sql
+  - Frontend updates: Settings UI for Gemini key and toggle, LibraryTab status messages for all stages
 - [x] **RSS Feed Loading Optimization** (2026-02-04):
   - Added database caching for RSS feed items to eliminate 70+ network requests per page load
   - Created `feed_items` table to store parsed RSS items (up to 100 most recent per feed)

@@ -20,6 +20,7 @@ const VALID_SETTING_KEYS = [
   'anthropic_model',
   'google_api_key',
   'google_model',
+  'gemini_api_key',        // NEW: For image alt-text generation
   // Wallabag settings
   'wallabag_url',
   'wallabag_client_id',
@@ -37,6 +38,7 @@ const VALID_SETTING_KEYS = [
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
+  'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
 ];
 
 // Secret keys that should be masked in responses
@@ -45,6 +47,7 @@ const SECRET_KEYS = [
   'deepinfra_api_key',     // NEW: Mask this key
   'anthropic_api_key',
   'google_api_key',
+  'gemini_api_key',        // NEW: Mask Gemini key
   'wallabag_client_secret',
   'wallabag_password',
   'wallabag_access_token',

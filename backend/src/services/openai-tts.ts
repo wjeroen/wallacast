@@ -7,8 +7,9 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser, getUserSetting } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
+import { ImageAltTextService } from './image-alt-text.js';
 
 interface Comment {
   id?: string;
@@ -212,6 +213,81 @@ function htmlToNarrationText(html: string): string {
   }
 }
 
+/**
+ * Replace images with narration text BEFORE scriptwriting
+ * Uses contentUrl to resolve relative paths and fuzzy matching for robustness
+ */
+function injectImageNarrations(html: string, imageDescriptions: { [url: string]: string }, contentUrl?: string): string {
+  try {
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+    const images = Array.from(doc.querySelectorAll('img'));
+    
+    console.log(`[TTS] Injecting narrations for ${images.length} images`);
+    
+    images.forEach((img, index) => {
+      const src = img.getAttribute('src');
+      if (!src) return;
+      
+      let description = null;
+      let absoluteSrc = src;
+
+      // 1. Try to resolve relative URLs using the article's base URL
+      if (contentUrl && !src.match(/^https?:\/\//i) && !src.startsWith('data:')) {
+        try {
+          absoluteSrc = new URL(src, contentUrl).href;
+        } catch (e) { /* ignore invalid urls */ }
+      }
+
+      // 2. Strategy A: Exact Match (Best for preventing duplicates)
+      // Check both the raw source and the resolved absolute source
+      if (imageDescriptions[src]) description = imageDescriptions[src];
+      if (!description && imageDescriptions[absoluteSrc]) description = imageDescriptions[absoluteSrc];
+
+      // 3. Strategy B: Fuzzy Match (Ignore Query Params) 
+      // Only runs if exact match failed. Helps match "img.jpg?w=500" to "img.jpg"
+      if (!description) {
+        const cleanSrc = src.split('?')[0];
+        const cleanAbs = absoluteSrc.split('?')[0];
+        
+        for (const [storedUrl, desc] of Object.entries(imageDescriptions)) {
+           const cleanStored = storedUrl.split('?')[0];
+           // Only match if the clean paths are identical
+           if (cleanStored === cleanSrc || cleanStored === cleanAbs) {
+             description = desc;
+             break;
+           }
+        }
+      }
+
+      // 4. Fallback: Use existing Alt Text if Gemini failed
+      if (!description) {
+         const alt = img.getAttribute('alt');
+         if (alt && alt.trim().length > 3) { 
+            description = alt;
+         }
+      }
+
+      // 5. Construct Narration or Remove
+      let replacementNode;
+      if (description) {
+          replacementNode = doc.createTextNode(` An image shows ${description}. End of description. `);
+      } else {
+          // If no description and no alt text, remove the image entirely 
+          // to prevent "An image is shown here" spam for decorative icons.
+          replacementNode = doc.createTextNode(' '); 
+      }
+      
+      img.replaceWith(replacementNode);
+    });
+    
+    return doc.body.innerHTML;
+  } catch (e) {
+    console.error('[TTS] Failed to inject image narrations:', e);
+    return html;
+  }
+}
+
 function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string, isLessWrong: boolean = false): string {
   let narration = '';
 
@@ -275,9 +351,9 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
 
  Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
 
- CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM. 
- DO NOT summarize. 
- DO NOT rewrite sentences. 
+ CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM.
+ DO NOT summarize.
+ DO NOT rewrite sentences.
  DO NOT simplify the language.
 
  The ONLY changes you are allowed to make:
@@ -287,11 +363,11 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
  * End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
- * Locate the 'alt' text or context for <img> tags. Insert a narrative description such as: "An image displays [alt text]."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
+ * DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
 
  Output ONLY the clean narration text.
- 
+
  Input HTML follows.`
         },
         {
@@ -405,7 +481,7 @@ export async function generateArticleAudio(
         if (options.contentId) {
           await query(
             'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
-            [Math.round(((i + 1) / textChunks.length) * 90), `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
+            [Math.round(30 + (((i + 1) / textChunks.length) * 60)), `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
           );
         }
 
@@ -494,20 +570,69 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     if (contentResult.rows.length === 0) throw new Error('Content not found');
     const content = contentResult.rows[0];
 
-    let articleBodyScript = '';
-    const sourceContent = content.html_content || content.content || '';
-
+    let sourceContent = content.html_content || content.content || '';
     if (!sourceContent) throw new Error('No content to convert to audio');
 
+    let imageAltTextData = content.image_alt_text_data;
+
+    // Step 1: Process images (0-20% progress)
+    const imageAltTextEnabled = await getUserSetting(content.user_id, 'image_alt_text_enabled');
+
+    if (imageAltTextEnabled !== 'false' && sourceContent) {
+      try {
+        console.log('[TTS] Processing image descriptions...');
+        await query(
+          'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+          ['processing_images', 0, contentId]
+        );
+
+        const imageService = new ImageAltTextService(content.user_id);
+        imageAltTextData = await imageService.smartRegenerate(
+          sourceContent,
+          imageAltTextData, // existing data or null
+          content.url || '',
+          { articleTitle: content.title, articleAuthor: content.author }
+        );
+
+        // Save JSONB data (never modify html_content)
+        await query(
+          'UPDATE content_items SET image_alt_text_data = $1, images_processed = $2, generation_progress = $3 WHERE id = $4',
+          [imageAltTextData, true, 20, contentId]
+        );
+
+        console.log(`[TTS] Processed ${Object.keys(imageAltTextData.descriptions).length} image descriptions`);
+      } catch (error) {
+        console.error('[TTS] Image alt-text generation failed:', error);
+        // Continue with TTS generation even if image processing fails
+      }
+    }
+
+    // Step 2: Replace images with narration text (if we have descriptions)
+    if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
+      // PASS content.url as the third argument here:
+      sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions, content.url || undefined);
+      
+      console.log('[TTS] Injected image narrations into HTML for audio script');
+      // sourceContent now has "An image shows..." text instead of <img> tags
+      // Original html_content in database remains unchanged
+    }
+
+    // Step 3: Script content for listening (20-30% progress)
+    let articleBodyScript = '';
     console.log('[TTS] Running Scriptwriter to format HTML for audio...');
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['scripting_content', contentId]);
-    
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['scripting_content', 20, contentId]
+    );
+
     const chatClient = await getOpenAIClientForUser(content.user_id);
-    if (chatClient && sourceContent.includes('<')) { 
+    if (chatClient && sourceContent.includes('<')) {
         articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
+
+    await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [30, contentId]);
 
     let fullScript = '';
 
@@ -534,8 +659,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
        }
     }
 
+    // Step 4: Generate audio chunks (30-90% progress)
     console.log(`[TTS] Sending script (${fullScript.length} chars) to audio engine...`);
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['synthesizing_audio', contentId]);
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['synthesizing_audio', 30, contentId]
+    );
 
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
       contentId: contentId,
@@ -546,6 +675,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       const estimatedMinutes = Math.round(fullScript.length / 900);
       warning = `Generated complete audio in ${chunks} parts (~${estimatedMinutes} minutes).`;
     }
+
+    // Step 5: Final processing (90-95% progress)
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['finalizing_audio', 90, contentId]
+    );
 
     const tempDir = getTempDir();
     const tempFilePath = path.join(tempDir, `final_${contentId}.mp3`);
@@ -569,8 +704,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     console.log(`✓ Audio stored for content ${contentId}`);
 
+    // Step 6: Transcription (95-100% progress)
     console.log('[TTS] Triggering auto-transcription for Read Along...');
-    await query('UPDATE content_items SET current_operation = $1 WHERE id = $2', ['transcribing', contentId]);
+    await query(
+      'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
+      ['transcribing', 95, contentId]
+    );
 
     transcribeWithTimestamps(audioUrl, content.user_id)
       .then(async (transcriptResult) => {
