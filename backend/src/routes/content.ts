@@ -690,7 +690,7 @@ router.post('/:id/generate-audio', async (req, res) => {
       ['generating_audio', 0, 'audio', id]
     );
 
-    generateAudioForContent(parseInt(id))
+    generateAudioForContent(parseInt(id), !!regenerate)
       .then(async (result) => {
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
