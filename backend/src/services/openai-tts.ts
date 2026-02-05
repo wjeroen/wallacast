@@ -271,7 +271,7 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       // 5. Construct Narration or Remove
       let replacementNode;
       if (description) {
-          replacementNode = doc.createTextNode(` An image shows ${description}. Back to the article. `);
+          replacementNode = doc.createTextNode(` An image shows ${description}. End of description. `);
       } else {
           // If no description and no alt text, remove the image entirely 
           // to prevent "An image is shown here" spam for decorative icons.
@@ -364,6 +364,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
+ * DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
 
  Output ONLY the clean narration text.
 
