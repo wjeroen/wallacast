@@ -308,17 +308,84 @@ export class ImageAltTextService {
   }
 
   /**
+   * Download image and convert to base64 for Gemini
+   */
+  private async downloadImage(imageUrl: string): Promise<{ data: string; mimeType: string } | null> {
+    try {
+      console.log(`[ImageAltText] Downloading image: ${imageUrl}`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+      const response = await fetch(imageUrl, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer': new URL(imageUrl).origin,
+        }
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        console.warn(`[ImageAltText] Failed to download ${imageUrl}: ${response.status} ${response.statusText}`);
+        return null;
+      }
+
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Check file size (max 100MB for Gemini as of Jan 2026)
+      const sizeMB = buffer.length / (1024 * 1024);
+      if (sizeMB > 100) {
+        console.warn(`[ImageAltText] Image too large: ${sizeMB.toFixed(2)}MB (max 100MB)`);
+        return null;
+      }
+
+      const base64 = buffer.toString('base64');
+      console.log(`[ImageAltText] ✅ Downloaded ${sizeMB.toFixed(2)}MB, type: ${contentType}`);
+
+      return {
+        data: base64,
+        mimeType: contentType
+      };
+
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.warn(`[ImageAltText] Download timeout for ${imageUrl}`);
+      } else {
+        console.warn(`[ImageAltText] Download failed for ${imageUrl}:`, error.message);
+      }
+      return null;
+    }
+  }
+
+  /**
    * Call Gemini to analyze a single image and generate description
-   * Uses Gemini's native urlContext tool to fetch the image automatically
+   * Downloads the image ourselves and sends inline data (no urlContext)
    */
   private async analyzeImage(
   imageUrl: string
 ): Promise<ImageAnalysisResult> {
   const ai = await this.getGeminiClient();
 
-  const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
+  // Download the image ourselves
+  const imageData = await this.downloadImage(imageUrl);
 
-Image URL: ${imageUrl}
+  if (!imageData) {
+    console.warn(`[ImageAltText] ❌ Could not download image: ${imageUrl}`);
+    return {
+      url: imageUrl,
+      description: "",
+      isDecorative: true,
+      confidence: 0
+    };
+  }
+
+  const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
 
 Guidelines:
 - **If it's a photo or visual:** Describe the scene, identifying key subjects, and overall mood.
@@ -328,17 +395,28 @@ Guidelines:
 
 Important Constraints:
 - Just output the description, nothing else.
-- **DO NOT GUESS** the content based on the URL filename.
-- If you cannot see the image pixels or the download fails, explicitly state "FAILED".`;
+- **DO NOT GUESS** the content based on context or filenames.`;
 
   try {
-    console.log(`[ImageAltText] Sending image URL to Gemini: ${imageUrl}`);
+    console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to Gemini`);
 
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: prompt,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: imageData.mimeType,
+                data: imageData.data
+              }
+            }
+          ]
+        }
+      ],
       config: {
-        tools: [{ urlContext: {} }],
         temperature: 0.3, // Lower temperature reduces creativity/hallucinations
         maxOutputTokens: 16384,
         thinkingConfig: {
@@ -347,44 +425,10 @@ Important Constraints:
       },
     });
 
-    // 1. Validate Candidate Existence
+    // Validate response
     const candidate = response.candidates?.[0];
     if (!candidate?.content?.parts) {
       throw new Error('No response candidates from Gemini');
-    }
-
-    // 2. ANTI-HALLUCINATION CHECK: Verify URL retrieval status via urlContextMetadata
-    // This is THE critical check - verifies Gemini actually fetched the image successfully
-    const urlContextMetadata = (candidate as any).urlContextMetadata;
-
-    console.log(`[ImageAltText] URL Context Metadata:`, JSON.stringify(urlContextMetadata, null, 2));
-
-    if (urlContextMetadata?.urlMetadata) {
-      // Find the metadata entry for this specific URL
-      const urlMetadataEntry = urlContextMetadata.urlMetadata.find(
-        (m: any) => m.retrievedUrl === imageUrl || m.url === imageUrl
-      );
-
-      console.log(`[ImageAltText] Retrieved URL status for ${imageUrl}:`, urlMetadataEntry?.urlRetrievalStatus);
-
-      // Check if URL fetch was successful
-      if (urlMetadataEntry?.urlRetrievalStatus !== 'URL_RETRIEVAL_STATUS_SUCCESS') {
-        const status = urlMetadataEntry?.urlRetrievalStatus || 'NO_STATUS_FOUND';
-        console.warn(`[ImageAltText] ❌ URL fetch FAILED for ${imageUrl} - Status: ${status}`);
-        console.warn(`[ImageAltText] This would have been a hallucination! Rejecting description.`);
-
-        return {
-          url: imageUrl,
-          description: "", // Return empty - this image couldn't be fetched
-          isDecorative: true,
-          confidence: 0
-        };
-      }
-
-      console.log(`[ImageAltText] ✅ URL fetch SUCCESS for ${imageUrl}`);
-    } else {
-      // No urlContextMetadata at all - this is suspicious
-      console.warn(`[ImageAltText] ⚠️  No urlContextMetadata in response - cannot verify image fetch`);
     }
 
     const description = candidate.content.parts
@@ -392,18 +436,18 @@ Important Constraints:
       .join('')
       .trim();
 
-    // 3. Additional Check: Model-Reported Failure (belt-and-suspenders)
-    if (description.includes("FAILED") || description.includes("image alt text generation has failed")) {
-       console.warn(`[ImageAltText] Gemini reported failure to access: ${imageUrl}`);
+    // Check for model-reported failure
+    if (description.includes("FAILED") || !description || description.length < 10) {
+       console.warn(`[ImageAltText] Invalid or empty description for: ${imageUrl}`);
        return {
          url: imageUrl,
-         description: "", // Return empty to treat as decorative/failed rather than hallucinated
+         description: "",
          isDecorative: true,
          confidence: 0
        };
     }
 
-    console.log(`[ImageAltText] Generated description: ${description.substring(0, 100)}...`);
+    console.log(`[ImageAltText] ✅ Generated description: ${description.substring(0, 100)}...`);
 
     return {
       url: imageUrl,
