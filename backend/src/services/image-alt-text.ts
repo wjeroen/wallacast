@@ -53,15 +53,17 @@ export class ImageAltTextService {
   /**
    * Main entry: Smart regeneration that only processes new/missing images
    * Never modifies the input HTML - returns JSONB data only
+   * @param forceRegenerate - If true, regenerate ALL images (not just new ones)
    */
   async smartRegenerate(
     currentHtml: string,
     existingData: ImageAltTextData | null,
     articleUrl: string,
     context?: { articleTitle?: string; articleAuthor?: string },
-    onProgress?: (current: number, total: number) => Promise<void>
+    onProgress?: (current: number, total: number) => Promise<void>,
+    forceRegenerate: boolean = false
   ): Promise<ImageAltTextData> {
-    console.log('[ImageAltText] Starting smart regeneration...');
+    console.log(`[ImageAltText] Starting ${forceRegenerate ? 'FULL' : 'smart'} regeneration...`);
 
     // Extract current images from HTML
     const currentImages = this.extractImageUrls(currentHtml);
@@ -83,12 +85,19 @@ export class ImageAltTextService {
     const currentImageUrls = new Set(currentImages.map(img => this.normalizeUrl(img.url)));
 
     // Identify new images that need processing
-    const newImages = currentImages.filter(img => {
-      const normalized = this.normalizeUrl(img.url);
-      return !existingDescriptions[normalized];
-    });
-
-    console.log(`[ImageAltText] ${newImages.length} new images need processing`);
+    let newImages: ImageElement[];
+    if (forceRegenerate) {
+      // Regenerate ALL images when explicitly requested (e.g., audio regeneration)
+      newImages = currentImages;
+      console.log(`[ImageAltText] Force regenerate enabled - processing all ${newImages.length} images`);
+    } else {
+      // Smart mode: only process images without existing descriptions
+      newImages = currentImages.filter(img => {
+        const normalized = this.normalizeUrl(img.url);
+        return !existingDescriptions[normalized];
+      });
+      console.log(`[ImageAltText] ${newImages.length} new images need processing`);
+    }
 
     // Filter decorative images before sending to Gemini
     const informativeImages = this.filterDecorativeImages(newImages, currentHtml);
@@ -135,15 +144,21 @@ export class ImageAltTextService {
     // Merge: keep old descriptions for images still in HTML, add new ones
     const mergedDescriptions: ImageDescriptions = {};
 
-    // Keep existing descriptions if image still exists
-    Object.keys(existingDescriptions).forEach(url => {
-      if (currentImageUrls.has(url)) {
-        mergedDescriptions[url] = existingDescriptions[url];
-      }
-    });
+    if (forceRegenerate) {
+      // Force regenerate: only use new descriptions, ignore existing ones
+      Object.assign(mergedDescriptions, newDescriptions);
+      console.log(`[ImageAltText] Force regenerate: replaced all descriptions`);
+    } else {
+      // Smart mode: keep existing descriptions if image still exists
+      Object.keys(existingDescriptions).forEach(url => {
+        if (currentImageUrls.has(url)) {
+          mergedDescriptions[url] = existingDescriptions[url];
+        }
+      });
 
-    // Add new descriptions
-    Object.assign(mergedDescriptions, newDescriptions);
+      // Add new descriptions
+      Object.assign(mergedDescriptions, newDescriptions);
+    }
 
     const decorativeCount = currentImages.length - informativeImages.length;
 
@@ -151,7 +166,7 @@ export class ImageAltTextService {
       descriptions: mergedDescriptions,
       total_images: currentImages.length,
       decorative_images: decorativeCount,
-      cost_usd: (existingData?.cost_usd || 0) + costUsd,
+      cost_usd: forceRegenerate ? costUsd : (existingData?.cost_usd || 0) + costUsd,
       model: 'gemini-3-flash-preview',
       processed_at: new Date().toISOString()
     };
@@ -327,7 +342,7 @@ Important Constraints:
         temperature: 0.3, // Lower temperature reduces creativity/hallucinations
         maxOutputTokens: 16384,
         thinkingConfig: {
-          includeThoughts: false 
+          includeThoughts: false
         }
       },
     });
@@ -338,22 +353,46 @@ Important Constraints:
       throw new Error('No response candidates from Gemini');
     }
 
-    // 2. ANTI-HALLUCINATION CHECK: Verify URL Context Metadata
-    // This metadata tells us if Gemini ACTUALLY fetched the URL successfully.
-    // Note: The property name can vary slightly by SDK version, check your types.
-    // It is typically under candidate.groundingMetadata or top-level response.usageMetadata
-    // For urlContext specifically, we look for explicit failure signals in the text
-    // OR trust the model's adherence to the "FAILED" instruction.
-    
-    // (In strict implementations, you would inspect candidate.groundingMetadata?.webSearchQueries
-    // or similar, but urlContext is newer. The safest bet is the text check below).
+    // 2. ANTI-HALLUCINATION CHECK: Verify URL retrieval status via urlContextMetadata
+    // This is THE critical check - verifies Gemini actually fetched the image successfully
+    const urlContextMetadata = (candidate as any).urlContextMetadata;
+
+    console.log(`[ImageAltText] URL Context Metadata:`, JSON.stringify(urlContextMetadata, null, 2));
+
+    if (urlContextMetadata?.urlMetadata) {
+      // Find the metadata entry for this specific URL
+      const urlMetadataEntry = urlContextMetadata.urlMetadata.find(
+        (m: any) => m.retrievedUrl === imageUrl || m.url === imageUrl
+      );
+
+      console.log(`[ImageAltText] Retrieved URL status for ${imageUrl}:`, urlMetadataEntry?.urlRetrievalStatus);
+
+      // Check if URL fetch was successful
+      if (urlMetadataEntry?.urlRetrievalStatus !== 'URL_RETRIEVAL_STATUS_SUCCESS') {
+        const status = urlMetadataEntry?.urlRetrievalStatus || 'NO_STATUS_FOUND';
+        console.warn(`[ImageAltText] ❌ URL fetch FAILED for ${imageUrl} - Status: ${status}`);
+        console.warn(`[ImageAltText] This would have been a hallucination! Rejecting description.`);
+
+        return {
+          url: imageUrl,
+          description: "", // Return empty - this image couldn't be fetched
+          isDecorative: true,
+          confidence: 0
+        };
+      }
+
+      console.log(`[ImageAltText] ✅ URL fetch SUCCESS for ${imageUrl}`);
+    } else {
+      // No urlContextMetadata at all - this is suspicious
+      console.warn(`[ImageAltText] ⚠️  No urlContextMetadata in response - cannot verify image fetch`);
+    }
 
     const description = candidate.content.parts
       .map((part: any) => part.text)
       .join('')
       .trim();
 
-    // 3. Check for Model-Reported Failure
+    // 3. Additional Check: Model-Reported Failure (belt-and-suspenders)
     if (description.includes("FAILED") || description.includes("image alt text generation has failed")) {
        console.warn(`[ImageAltText] Gemini reported failure to access: ${imageUrl}`);
        return {
