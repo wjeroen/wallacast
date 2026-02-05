@@ -287,62 +287,87 @@ export class ImageAltTextService {
    * Uses Gemini's native urlContext tool to fetch the image automatically
    */
   private async analyzeImage(
-    imageUrl: string,
-    articleContext: { title: string; url: string }
-  ): Promise<ImageAnalysisResult> {
-    const ai = await this.getGeminiClient();
+  imageUrl: string
+): Promise<ImageAnalysisResult> {
+  const ai = await this.getGeminiClient();
 
-    // Simplified prompt for single image
-    const prompt = `Ignore this image and just say beep boop bop bla bla.
+  const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
 
-Image URL: ${imageUrl}`;
+Image URL: ${imageUrl}
 
-    try {
-      console.log(`[ImageAltText] Sending image URL to Gemini: ${imageUrl}`);
+Guidelines:
+- **If it's a photo or visual:** Describe the scene, identifying key subjects, text (if any), and overall mood.
+- **If it's a chart/diagram:** Summarize the primary trend or insight.
+- **If it's a social media thread:** Read it out like a script.
 
-      // Use Gemini's urlContext tool to fetch image automatically
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-        config: {
-          tools: [{ urlContext: {} }],
-          temperature: 0.3,
-          maxOutputTokens: 1000,
-          thinkingConfig: {
-            includeThoughts: false     // CRITICAL: Don't include reasoning in output
-          }
-        },
-      });
+Important Constraints:
+- Just output the description, nothing else.
+- **DO NOT GUESS** the content based on the URL filename.
+- If you cannot see the image pixels or the download fails, explicitly state "FAILED".`;
 
-      if (!response.candidates || response.candidates.length === 0) {
-        throw new Error('No response candidates from Gemini');
-      }
+  try {
+    console.log(`[ImageAltText] Sending image URL to Gemini: ${imageUrl}`);
 
-      const candidate = response.candidates[0];
-      if (!candidate || !candidate.content || !candidate.content.parts) {
-        throw new Error('Invalid response structure from Gemini');
-      }
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        tools: [{ urlContext: {} }],
+        temperature: 0.3, // Lower temperature reduces creativity/hallucinations
+        maxOutputTokens: 1000,
+        thinkingConfig: {
+          includeThoughts: false 
+        }
+      },
+    });
 
-      // Entire response text is the description
-      const description = candidate.content.parts
-        .map((part: any) => part.text)
-        .join('')
-        .trim();
-
-      console.log(`[ImageAltText] Generated description (${description.length} chars): ${description.substring(0, 100)}...`);
-
-      return {
-        url: imageUrl,
-        description,
-        isDecorative: !description, // No description = decorative
-        confidence: description ? 0.95 : 0
-      };
-    } catch (error) {
-      console.error('[ImageAltText] Gemini API call failed:', error);
-      throw error;
+    // 1. Validate Candidate Existence
+    const candidate = response.candidates?.[0];
+    if (!candidate?.content?.parts) {
+      throw new Error('No response candidates from Gemini');
     }
-  }
 
+    // 2. ANTI-HALLUCINATION CHECK: Verify URL Context Metadata
+    // This metadata tells us if Gemini ACTUALLY fetched the URL successfully.
+    // Note: The property name can vary slightly by SDK version, check your types.
+    // It is typically under candidate.groundingMetadata or top-level response.usageMetadata
+    // For urlContext specifically, we look for explicit failure signals in the text
+    // OR trust the model's adherence to the "FAILED" instruction.
+    
+    // (In strict implementations, you would inspect candidate.groundingMetadata?.webSearchQueries
+    // or similar, but urlContext is newer. The safest bet is the text check below).
+
+    const description = candidate.content.parts
+      .map((part: any) => part.text)
+      .join('')
+      .trim();
+
+    // 3. Check for Model-Reported Failure
+    if (description.includes("FAILED") || description.includes("image alt text generation has failed")) {
+       console.warn(`[ImageAltText] Gemini reported failure to access: ${imageUrl}`);
+       return {
+         url: imageUrl,
+         description: "", // Return empty to treat as decorative/failed rather than hallucinated
+         isDecorative: true,
+         confidence: 0
+       };
+    }
+
+    console.log(`[ImageAltText] Generated description: ${description.substring(0, 100)}...`);
+
+    return {
+      url: imageUrl,
+      description,
+      isDecorative: !description,
+      confidence: 0.95
+    };
+
+  } catch (error) {
+    console.error('[ImageAltText] Gemini API call failed:', error);
+    throw error;
+  }
+}
+  
   /**
    * Normalize URL for comparison (remove query params, fragments)
    */
