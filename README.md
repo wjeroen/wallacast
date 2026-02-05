@@ -389,7 +389,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
-- `playback_position`, `playback_speed`, `last_played_at`
+- `playback_position`, `playback_speed` (deprecated - speed now stored globally in user settings + localStorage), `last_played_at`
 - `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
 
