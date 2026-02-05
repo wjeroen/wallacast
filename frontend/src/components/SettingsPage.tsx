@@ -472,8 +472,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Create a new client (name: "Wallacast")</li>
               <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
-              
-              Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
+            </ol>
+            <ol style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
+            Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
             </ol>
           </div>
 
