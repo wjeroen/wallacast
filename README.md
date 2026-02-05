@@ -210,10 +210,10 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). Substack-specific optimizations: targets `.body.markup` for cleaner content, removes UI chrome (social buttons, navigation footers, Previous/Next buttons). Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
 - **`services/image-alt-text.ts`**: Gemini-powered image description generation for TTS (requires per-user Gemini API key)
-  - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions
-  - `applyDescriptionsToHtml()`: Applies Gemini descriptions to HTML in memory (never modifies stored html_content)
-  - `batchAnalyzeImages()`: Processes images in groups of 10 to avoid overwhelming API, continues with remaining batches if one fails
-  - `analyzeImagesWithRetry()`: Exponential backoff retry logic (up to 5 attempts) for 503/overloaded errors
+  - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions. Accepts `forceRegenerate` parameter to regenerate ALL images (used when regenerating audio)
+  - `analyzeImage()`: Processes each image individually using Gemini's urlContext tool. **Validates `urlContextMetadata.urlRetrievalStatus` to prevent hallucinations** - rejects descriptions if image fetch failed
+  - `analyzeImageWithRetry()`: Exponential backoff retry logic (up to 5 attempts) for 503/overloaded errors
+  - **Anti-hallucination protection**: Checks Gemini's metadata to verify image was actually fetched before accepting description (detailed logging shows fetch status per image)
   - Heuristic filtering: Automatically skips decorative images (icons, logos, small images <100px) before sending to Gemini
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
@@ -221,10 +221,10 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
-  - `generateAudioForContent()`: Orchestrates the full pipeline with progress tracking:
-    - 0-10%: Process image descriptions (if enabled) using Gemini, save to JSONB
-    - 10-20%: Prepare content for narration (scriptwriter or fallback text extraction)
-    - 20-90%: Generate TTS audio chunks
+  - `generateAudioForContent(contentId, regenerate)`: Orchestrates the full pipeline with progress tracking:
+    - 0-20%: Process image descriptions (if enabled) using Gemini, save to JSONB. When `regenerate=true`, regenerates ALL images instead of just new ones
+    - 20-30%: Prepare content for narration (scriptwriter or fallback text extraction)
+    - 30-90%: Generate TTS audio chunks
     - 90-95%: Finalize audio (save to DB with `user_id`)
     - 95-100%: Auto-transcription for Read Along
   - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)

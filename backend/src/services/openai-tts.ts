@@ -564,7 +564,7 @@ export async function generateArticleAudio(
   }
 }
 
-export async function generateAudioForContent(contentId: number): Promise<{ audioUrl: string; warning?: string }> {
+export async function generateAudioForContent(contentId: number, regenerate: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
   try {
     const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
     if (contentResult.rows.length === 0) throw new Error('Content not found');
@@ -580,7 +580,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     if (imageAltTextEnabled !== 'false' && sourceContent) {
       try {
-        console.log('[TTS] Processing image descriptions...');
+        console.log(`[TTS] Processing image descriptions (regenerate: ${regenerate})...`);
 
         const imageService = new ImageAltTextService(content.user_id);
         imageAltTextData = await imageService.smartRegenerate(
@@ -603,9 +603,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
                 contentId
               ]
             );
-            console.log(`[TTS] DB update complete for image ${current}/${total}`);
-          }
+            console.log(`[TTS] DB update complete for image ${current}/${total}`);  
+          },
+          regenerate // Pass regenerate flag to force full regeneration when true
         );
+
 
         // Save JSONB data (never modify html_content)
         await query(
