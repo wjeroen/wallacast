@@ -525,9 +525,9 @@ export function FullscreenPlayer({
             {isPlaying ? <Pause size={32} /> : <Play size={32} />}
           </button>
 
-          <button onClick={onSkipForward} title="Seek forward 30 seconds" className="seek-btn">
+          <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
             <RotateCw className="seek-icon" />
-            <span className="seek-label">30</span>
+            <span className="seek-label">15</span>
           </button>
         </div>
 
