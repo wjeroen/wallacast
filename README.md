@@ -211,9 +211,10 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/image-alt-text.ts`**: Gemini-powered image description generation for TTS (requires per-user Gemini API key)
   - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions. Accepts `forceRegenerate` parameter to regenerate ALL images (used when regenerating audio)
-  - `analyzeImage()`: Processes each image individually using Gemini's urlContext tool. **Validates `urlContextMetadata.urlRetrievalStatus` to prevent hallucinations** - rejects descriptions if image fetch failed
+  - `downloadImage()`: Downloads images ourselves with proper headers (User-Agent, Referer) to bypass CDN blocking. 30s timeout, 100MB max size
+  - `analyzeImage()`: Sends downloaded image data inline to Gemini (not urlContext). Rejects if download fails or description is invalid
   - `analyzeImageWithRetry()`: Exponential backoff retry logic (up to 5 attempts) for 503/overloaded errors
-  - **Anti-hallucination protection**: Checks Gemini's metadata to verify image was actually fetched before accepting description (detailed logging shows fetch status per image)
+  - **Anti-hallucination protection**: Downloads images ourselves instead of relying on Gemini's urlContext (which CDNs often block). No more hallucinations from failed fetches
   - Heuristic filtering: Automatically skips decorative images (icons, logos, small images <100px) before sending to Gemini
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
