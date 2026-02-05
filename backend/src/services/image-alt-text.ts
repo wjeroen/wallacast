@@ -109,13 +109,17 @@ export class ImageAltTextService {
     if (informativeImages.length > 0) {
       // Process each image individually (one API call per image)
       for (let i = 0; i < informativeImages.length; i++) {
-        // Trigger the progress callback
-        if (onProgress) {
-          await onProgress(i + 1, informativeImages.length);
-        }
-
         const img = informativeImages[i];
         console.log(`[ImageAltText] Processing image ${i + 1}/${informativeImages.length}: ${img.url}`);
+
+        // Trigger the progress callback
+        if (onProgress) {
+          console.log(`[ImageAltText] Calling onProgress callback for image ${i + 1}/${informativeImages.length}`);
+          await onProgress(i + 1, informativeImages.length);
+          console.log(`[ImageAltText] onProgress callback completed`);
+        } else {
+          console.log(`[ImageAltText] WARNING: No onProgress callback provided!`);
+        }
 
         try {
           const analysis = await this.analyzeImageWithRetry(
