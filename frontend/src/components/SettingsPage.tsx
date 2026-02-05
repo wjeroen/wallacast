@@ -289,14 +289,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         {/* AI Provider Settings */}
         <section className="settings-section">
-          <h3><Bot size={20} /> AI Provider</h3>
+          <h3><Bot size={20} /> LLM Provider for TTS preparation</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+             Currently the only model that has been tested is gpt-4o-mini.
+           </p>
+          
           <div className="form-group">
             <label>Provider</label>
             <select
               value={formData.ai_provider}
               onChange={(e) => handleChange('ai_provider', e.target.value)}
             >
-              <option value="openai">OpenAI (Recommended)</option>
+              <option value="openai">OpenAI</option>
             </select>
           </div>
 
@@ -333,6 +337,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
            <h3><Mic size={20} /> Audio Services</h3>
            <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
              Configure Text-to-Speech and Transcription engines.
+             Without a DeepInfra API Key, OpenAI is used for both, which is very costly.
            </p>
 
            <div className="form-group">
@@ -370,7 +375,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   </button>
                 </div>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                  Get your free API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Google AI Studio</a>
+                  Optional. Paid tier required. Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Google AI Studio</a>
                 </small>
             </div>
 
@@ -390,12 +395,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <label>TTS Voice</label>
                 {isDeepInfraTTS ? (
                     <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        <option value="af_heart">Heart (Female) - Recommended</option>
+                        <option value="af_heart">Heart (Female)</option>
                         <option value="af_bella">Bella (Female)</option>
                         <option value="af_nicole">Nicole (Female)</option>
                         <option value="am_adam">Adam (Male)</option>
                         <option value="am_michael">Michael (Male)</option>
-                        <option value="am_puck">Puck (Male) - Playful</option>
+                        <option value="am_puck">Puck (Male) - Recommended</option>
                     </select>
                 ) : (
                     <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
@@ -438,7 +443,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Generate image descriptions for audio
                 </label>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
-                  Adds spoken descriptions of images during TTS generation (~$0.003 per article). Requires Gemini API key.
+                  Adds spoken descriptions of images during TTS generation. Requires Gemini API key and paid tier (costs are minimal).
                 </small>
              </div>
         </section>
@@ -447,7 +452,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag Sync
+            Wallabag Sync (optional)
           </h3>
 
           <div style={{
@@ -467,6 +472,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Create a new client (name: "Wallacast")</li>
               <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
+              
+              Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
             </ol>
           </div>
 
