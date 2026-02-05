@@ -213,6 +213,54 @@ function htmlToNarrationText(html: string): string {
   }
 }
 
+/**
+ * Replace images with narration text BEFORE scriptwriting
+ * This ensures images appear in correct document order (deterministic, not LLM-based)
+ */
+function injectImageNarrations(html: string, imageDescriptions: { [url: string]: string }): string {
+  try {
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+    const images = Array.from(doc.querySelectorAll('img'));
+    
+    console.log(`[TTS] Injecting narrations for ${images.length} images`);
+    
+    images.forEach((img, index) => {
+      const src = img.getAttribute('src');
+      if (!src) return;
+      
+      // Normalize URL for matching (remove query params/fragments)
+      const normalizedSrc = src.split('?')[0].split('#')[0];
+      
+      // Find matching description
+      let description = null;
+      for (const [storedUrl, desc] of Object.entries(imageDescriptions)) {
+        const normalizedStored = storedUrl.split('?')[0].split('#')[0];
+        if (normalizedSrc === normalizedStored) {
+          description = desc;
+          break;
+        }
+      }
+      
+      // Create narration text
+      const narrationText = description 
+        ? `An image shows ${description}. Back to the article.`
+        : 'An image is shown here. Back to the article.';
+      
+      console.log(`[TTS] Image ${index + 1}: ${narrationText.substring(0, 80)}...`);
+      
+      // Replace <img> with text node
+      const textNode = doc.createTextNode(` ${narrationText} `);
+      img.replaceWith(textNode);
+    });
+    
+    return doc.body.innerHTML;
+  } catch (e) {
+    console.error('[TTS] Failed to inject image narrations:', e);
+    return html;
+  }
+}
+
 function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string, isLessWrong: boolean = false): string {
   let narration = '';
 
@@ -288,7 +336,6 @@ async function scriptArticleForListening(htmlContent: string, openai: any): Prom
  * End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
- * Locate the 'alt' text or context for <img> tags. Insert a narrative description formatted as: "An image shows [alt text]. Back to the article."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
@@ -532,12 +579,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       }
     }
 
-    // Step 2: Apply descriptions to HTML in memory (if we have any)
+    // Step 2: Replace images with narration text (if we have descriptions)
     if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
-      const imageService = new ImageAltTextService(content.user_id);
-      sourceContent = imageService.applyDescriptionsToHtml(sourceContent, imageAltTextData.descriptions);
-      console.log('[TTS] Applied Gemini image descriptions to HTML for narration');
-      // sourceContent now has Gemini alt-text, but we DON'T save it back to DB
+      sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions);
+      console.log('[TTS] Injected image narrations into HTML for audio script');
+      // sourceContent now has "An image shows..." text instead of <img> tags
+      // Original html_content in database remains unchanged
     }
 
     // Step 3: Script content for listening (10-20% progress)
