@@ -247,24 +247,51 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     let statusMessage = '';
     const progressPercent = item.generation_progress || 0;
 
-    if (item.generation_status === 'starting') {
+    // Check current_operation first (more specific than generation_status)
+    if (item.current_operation) {
+      switch (item.current_operation) {
+        case 'processing_images':
+          statusMessage = `Processing image descriptions... ${progressPercent}%`;
+          break;
+        case 'scripting_content':
+          statusMessage = `Preparing narration script... ${progressPercent}%`;
+          break;
+        case 'synthesizing_audio':
+          statusMessage = `Generating audio... ${progressPercent}%`;
+          break;
+        case 'concatenating_audio':
+          statusMessage = `Combining audio files... ${progressPercent}%`;
+          break;
+        case 'finalizing_audio':
+          statusMessage = `Finalizing audio... ${progressPercent}%`;
+          break;
+        case 'transcribing':
+          statusMessage = `Creating transcript... ${progressPercent}%`;
+          break;
+        default:
+          // Check for audio chunk pattern (e.g., "audio_chunk_3_of_10")
+          if (item.current_operation.startsWith('audio_chunk_')) {
+            const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
+            if (match) {
+              const [, current, total] = match;
+              statusMessage = `Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
+            } else {
+              statusMessage = `Generating audio... ${progressPercent}%`;
+            }
+          } else if (item.generation_status === 'starting') {
+            statusMessage = 'Starting...';
+          } else if (item.generation_status === 'extracting_content') {
+            statusMessage = 'Extracting content...';
+          } else if (item.generation_status === 'generating_transcript') {
+            statusMessage = `Generating transcript... ${progressPercent}%`;
+          } else {
+            statusMessage = `Processing... ${progressPercent}%`;
+          }
+      }
+    } else if (item.generation_status === 'starting') {
       statusMessage = 'Starting...';
     } else if (item.generation_status === 'extracting_content') {
       statusMessage = 'Extracting content...';
-    } else if (item.generation_status === 'content_ready') {
-      if (item.current_operation?.startsWith('audio_chunk_')) {
-        const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
-        if (match) {
-          const [, current, total] = match;
-          statusMessage = `Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
-        } else {
-          statusMessage = `Generating audio... ${progressPercent}%`;
-        }
-      } else if (item.current_operation === 'concatenating_audio') {
-        statusMessage = `Combining audio files... ${progressPercent}%`;
-      } else {
-        statusMessage = `Generating audio... ${progressPercent}%`;
-      }
     } else if (item.generation_status === 'generating_transcript') {
       statusMessage = `Generating transcript... ${progressPercent}%`;
     } else {

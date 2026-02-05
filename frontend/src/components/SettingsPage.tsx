@@ -48,10 +48,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     openai_model: 'gpt-4o-mini',
     openai_tts_model: 'gpt-4o-mini-tts',
     openai_tts_voice: 'coral',
-    
+
     // DeepInfra Settings
     deepinfra_api_key: '',
-    
+
+    // Gemini Settings (for image alt-text)
+    gemini_api_key: '',
+    image_alt_text_enabled: 'true',
+
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
     // Wallabag Settings
@@ -97,9 +101,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_model: loaded.openai_model || 'gpt-4o-mini',
         openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
-        
+
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
-        
+
+        gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
+        image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
+
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         wallabag_url: loaded.wallabag_url || '',
@@ -131,7 +138,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       for (const [key, value] of Object.entries(formData)) {
         const isBooleanSetting = key === 'auto_transcribe_podcasts' ||
                                  key === 'auto_generate_audio_for_articles' ||
-                                 key === 'wallabag_sync_enabled';
+                                 key === 'wallabag_sync_enabled' ||
+                                 key === 'image_alt_text_enabled';
 
         if (isBooleanSetting) {
           toSave[key] = value;
@@ -281,14 +289,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         {/* AI Provider Settings */}
         <section className="settings-section">
-          <h3><Bot size={20} /> AI Provider</h3>
+          <h3><Bot size={20} /> LLM Provider for TTS preparation</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+             Currently the only model that has been tested is gpt-4o-mini.
+           </p>
+          
           <div className="form-group">
             <label>Provider</label>
             <select
               value={formData.ai_provider}
               onChange={(e) => handleChange('ai_provider', e.target.value)}
             >
-              <option value="openai">OpenAI (Recommended)</option>
+              <option value="openai">OpenAI</option>
             </select>
           </div>
 
@@ -325,6 +337,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
            <h3><Mic size={20} /> Audio Services</h3>
            <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
              Configure Text-to-Speech and Transcription engines.
+             Without a DeepInfra API Key, OpenAI is used for both, which is very costly.
            </p>
 
            <div className="form-group">
@@ -345,6 +358,27 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </div>
             </div>
 
+           <div className="form-group">
+                <label>
+                  <Key size={16} /> Gemini API Key (for image descriptions)
+                  {isSecretSet('gemini_api_key') && <span className="secret-set">(configured)</span>}
+                </label>
+                <div className="input-with-toggle">
+                  <input
+                    type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
+                    value={formData.gemini_api_key}
+                    onChange={(e) => handleChange('gemini_api_key', e.target.value)}
+                    placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
+                  />
+                  <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
+                    {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+                  Optional. Paid tier required. Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Google AI Studio</a>
+                </small>
+            </div>
+
             <div className="form-group">
                 <label>TTS Model</label>
                 <select value={formData.openai_tts_model} onChange={(e) => handleChange('openai_tts_model', e.target.value)}>
@@ -361,12 +395,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <label>TTS Voice</label>
                 {isDeepInfraTTS ? (
                     <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        <option value="af_heart">Heart (Female) - Recommended</option>
+                        <option value="af_heart">Heart (Female)</option>
                         <option value="af_bella">Bella (Female)</option>
                         <option value="af_nicole">Nicole (Female)</option>
                         <option value="am_adam">Adam (Male)</option>
                         <option value="am_michael">Michael (Male)</option>
-                        <option value="am_puck">Puck (Male) - Playful</option>
+                        <option value="am_puck">Puck (Male) - Recommended</option>
                     </select>
                 ) : (
                     <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
@@ -398,13 +432,27 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Auto-transcribe podcasts (Uses DeepInfra if key set)
                 </label>
              </div>
+
+             <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={formData.image_alt_text_enabled === 'true'}
+                    onChange={(e) => handleChange('image_alt_text_enabled', e.target.checked ? 'true' : 'false')}
+                  />
+                  Generate image descriptions for audio
+                </label>
+                <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+                  Adds spoken descriptions of images during TTS generation. Requires Gemini API key and paid tier (costs are minimal).
+                </small>
+             </div>
         </section>
 
         {/* Wallabag Settings (Restored) */}
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag Sync
+            Wallabag Sync (optional)
           </h3>
 
           <div style={{
@@ -424,6 +472,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Create a new client (name: "Wallacast")</li>
               <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
+            </ol>
+            <ol style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
+            Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
             </ol>
           </div>
 
