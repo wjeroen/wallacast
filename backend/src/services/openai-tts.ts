@@ -453,7 +453,7 @@ export async function generateArticleAudio(
         if (options.contentId) {
           await query(
             'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
-            [Math.round(((i + 1) / textChunks.length) * 90), `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
+            [Math.round(30 + (((i + 1) / textChunks.length) * 60)), `audio_chunk_${i + 1}_of_${textChunks.length}`, options.contentId]
           );
         }
 
@@ -547,7 +547,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     let imageAltTextData = content.image_alt_text_data;
 
-    // Step 1: Process images (0-10% progress)
+    // Step 1: Process images (0-20% progress)
     const imageAltTextEnabled = await getUserSetting(content.user_id, 'image_alt_text_enabled');
 
     if (imageAltTextEnabled !== 'false' && sourceContent) {
@@ -569,7 +569,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         // Save JSONB data (never modify html_content)
         await query(
           'UPDATE content_items SET image_alt_text_data = $1, images_processed = $2, generation_progress = $3 WHERE id = $4',
-          [imageAltTextData, true, 10, contentId]
+          [imageAltTextData, true, 20, contentId]
         );
 
         console.log(`[TTS] Processed ${Object.keys(imageAltTextData.descriptions).length} image descriptions`);
@@ -587,12 +587,12 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
       // Original html_content in database remains unchanged
     }
 
-    // Step 3: Script content for listening (10-20% progress)
+    // Step 3: Script content for listening (20-30% progress)
     let articleBodyScript = '';
     console.log('[TTS] Running Scriptwriter to format HTML for audio...');
     await query(
       'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
-      ['scripting_content', 10, contentId]
+      ['scripting_content', 20, contentId]
     );
 
     const chatClient = await getOpenAIClientForUser(content.user_id);
@@ -602,7 +602,7 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
-    await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [20, contentId]);
+    await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [30, contentId]);
 
     let fullScript = '';
 
@@ -629,11 +629,11 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
        }
     }
 
-    // Step 4: Generate audio chunks (20-90% progress)
+    // Step 4: Generate audio chunks (30-90% progress)
     console.log(`[TTS] Sending script (${fullScript.length} chars) to audio engine...`);
     await query(
       'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
-      ['synthesizing_audio', 20, contentId]
+      ['synthesizing_audio', 30, contentId]
     );
 
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
