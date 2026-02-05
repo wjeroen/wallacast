@@ -590,9 +590,11 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           { articleTitle: content.title, articleAuthor: content.author },
           // Progress callback
           async (current, total) => {
+            console.log(`[TTS] Image progress callback triggered: ${current}/${total}`);
             // Scale progress between 0% and 20%
             const progressPercent = Math.round((current / total) * 20);
 
+            console.log(`[TTS] Updating DB: progress=${progressPercent}%, operation=processing_image_${current}_of_${total}`);
             await query(
               'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
               [
@@ -601,9 +603,11 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
                 contentId
               ]
             );
+            console.log(`[TTS] DB update complete for image ${current}/${total}`);  
           },
           regenerate // Pass regenerate flag to force full regeneration when true
         );
+
 
         // Save JSONB data (never modify html_content)
         await query(
