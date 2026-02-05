@@ -325,8 +325,8 @@ Wallacast supports multiple users with complete data isolation:
   - Sync controls (pull, push, full sync) with status indicators
 
 - **`components/AudioPlayer.tsx`**: Full audio player with:
-  - Play/pause, seek, skip ±15/30s
-  - Speed control (0.5x to 3x)
+  - Play/pause, seek, skip ±15s
+  - Speed control (1x, 1.25x, 1.5x, 1.75x, 2x)
   - Sleep timer
   - Volume control
   - Transcript display with word-click-to-seek (for podcasts with timestamps)
