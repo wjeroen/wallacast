@@ -338,10 +338,10 @@ export class ImageAltTextService {
       const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Check file size (max 20MB for Gemini)
+      // Check file size (max 100MB for Gemini as of Jan 2026)
       const sizeMB = buffer.length / (1024 * 1024);
-      if (sizeMB > 20) {
-        console.warn(`[ImageAltText] Image too large: ${sizeMB.toFixed(2)}MB (max 20MB)`);
+      if (sizeMB > 100) {
+        console.warn(`[ImageAltText] Image too large: ${sizeMB.toFixed(2)}MB (max 100MB)`);
         return null;
       }
 
