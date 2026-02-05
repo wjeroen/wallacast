@@ -258,7 +258,7 @@ export class ImageAltTextService {
     attempt: number = 1
   ): Promise<ImageAnalysisResult> {
     try {
-      return await this.analyzeImage(imageUrl, articleContext);
+      return await this.analyzeImage(imageUrl);
     } catch (error: any) {
       const isRetryable = error?.status === 503 || error?.message?.includes('503') ||
                           error?.message?.includes('overloaded') ||
