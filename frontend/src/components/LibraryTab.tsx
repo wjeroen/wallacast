@@ -278,7 +278,18 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             } else {
               statusMessage = `Generating audio... ${progressPercent}%`;
             }
-          } else if (item.generation_status === 'starting') {
+          }
+          // Check for image processing pattern (e.g., "processing_image_3_of_10")
+          else if (item.current_operation.startsWith('processing_image_')) {
+            const match = item.current_operation.match(/processing_image_(\d+)_of_(\d+)/);
+            if (match) {
+              const [, current, total] = match;
+              statusMessage = `Processing image ${current}/${total}... ${progressPercent}%`;
+            } else {
+              statusMessage = `Processing images... ${progressPercent}%`;
+            }
+          }
+          else if (item.generation_status === 'starting') {
             statusMessage = 'Starting...';
           } else if (item.generation_status === 'extracting_content') {
             statusMessage = 'Extracting content...';

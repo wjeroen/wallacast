@@ -581,17 +581,27 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
     if (imageAltTextEnabled !== 'false' && sourceContent) {
       try {
         console.log('[TTS] Processing image descriptions...');
-        await query(
-          'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
-          ['processing_images', 0, contentId]
-        );
 
         const imageService = new ImageAltTextService(content.user_id);
         imageAltTextData = await imageService.smartRegenerate(
           sourceContent,
           imageAltTextData, // existing data or null
           content.url || '',
-          { articleTitle: content.title, articleAuthor: content.author }
+          { articleTitle: content.title, articleAuthor: content.author },
+          // Progress callback
+          async (current, total) => {
+            // Scale progress between 0% and 20%
+            const progressPercent = Math.round((current / total) * 20);
+
+            await query(
+              'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+              [
+                progressPercent,
+                `processing_image_${current}_of_${total}`,
+                contentId
+              ]
+            );
+          }
         );
 
         // Save JSONB data (never modify html_content)
