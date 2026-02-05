@@ -293,22 +293,9 @@ export class ImageAltTextService {
     const ai = await this.getGeminiClient();
 
     // Simplified prompt for single image
-    const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
+    const prompt = `Ignore this image and just say beep boop bop bla bla.
 
-Article context:
-- Title: ${articleContext.title}
-- URL: ${articleContext.url}
-
-Image URL: ${imageUrl}
-
-Guidelines:
-- **If it's a photo or visual:** Describe the scene, identifying key subjects, text (if any), and overall mood.
-- **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows.
-- **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Mention who is replying to whom.
-
-If you don't actually see an image or accessing the url failed, just say "Image alt text generation has failed" or explain what went wrong. Never try to describe images you don't have access to.
-
-Just output the description, nothing else.`;
+Image URL: ${imageUrl}`;
 
     try {
       console.log(`[ImageAltText] Sending image URL to Gemini: ${imageUrl}`);
