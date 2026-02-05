@@ -316,9 +316,13 @@ Just output the description, nothing else.`;
         model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
-          tools: [{ urlContext: {} }], // Enable URL fetching
+          tools: [{ urlContext: {} }],
           temperature: 0.3,
-          maxOutputTokens: 500, // Single image needs less tokens
+          maxOutputTokens: 500,
+          thinkingConfig: {
+            thinkingLevel: 'MINIMAL',  // Uses fewest thinking tokens, saves cost
+            includeThoughts: false     // CRITICAL: Don't include reasoning in output
+          }
         },
       });
 
