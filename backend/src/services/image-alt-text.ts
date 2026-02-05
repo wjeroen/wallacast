@@ -318,7 +318,7 @@ Just output the description, nothing else.`;
         config: {
           tools: [{ urlContext: {} }],
           temperature: 0.3,
-          maxOutputTokens: 500,
+          maxOutputTokens: 1000,
           thinkingConfig: {
             thinkingLevel: 'MINIMAL',  // Uses fewest thinking tokens, saves cost
             includeThoughts: false     // CRITICAL: Don't include reasoning in output
