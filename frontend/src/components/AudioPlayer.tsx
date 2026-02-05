@@ -84,7 +84,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const separator = content.audio_url?.includes('?') ? '&' : '?';
       audio.src = content.audio_url ? `${content.audio_url}${separator}v=${cacheBuster}` : '';
       
-      const validSpeeds = [1, 1.25, 1.5, 2];
+      const validSpeeds = [1, 1.25, 1.5, 1.75, 2];
       const loadedSpeed = content.playback_speed || 1;
       const normalizedSpeed = validSpeeds.includes(loadedSpeed) ? loadedSpeed : 1;
       
@@ -192,7 +192,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   };
 
   const handleSkipBackward = () => handleSeek(Math.max(0, currentTime - 15));
-  const handleSkipForward = () => handleSeek(Math.min(duration, currentTime + 30));
+  const handleSkipForward = () => handleSeek(Math.min(duration, currentTime + 15));
 
   const handleSpeedChange = (speed: number) => {
     if (!audioRef.current) return;
@@ -202,7 +202,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   };
 
   const toggleSpeed = () => {
-    const speeds = [1, 1.25, 1.5, 2];
+    const speeds = [1, 1.25, 1.5, 1.75, 2];
     const currentIndex = speeds.indexOf(playbackSpeed);
     const nextIndex = (currentIndex + 1) % speeds.length;
     handleSpeedChange(speeds[nextIndex]);
