@@ -58,7 +58,8 @@ export class ImageAltTextService {
     currentHtml: string,
     existingData: ImageAltTextData | null,
     articleUrl: string,
-    context?: { articleTitle?: string; articleAuthor?: string }
+    context?: { articleTitle?: string; articleAuthor?: string },
+    onProgress?: (current: number, total: number) => Promise<void>
   ): Promise<ImageAltTextData> {
     console.log('[ImageAltText] Starting smart regeneration...');
 
@@ -99,6 +100,11 @@ export class ImageAltTextService {
     if (informativeImages.length > 0) {
       // Process each image individually (one API call per image)
       for (let i = 0; i < informativeImages.length; i++) {
+        // Trigger the progress callback
+        if (onProgress) {
+          await onProgress(i + 1, informativeImages.length);
+        }
+
         const img = informativeImages[i];
         console.log(`[ImageAltText] Processing image ${i + 1}/${informativeImages.length}: ${img.url}`);
 
