@@ -215,9 +215,9 @@ function htmlToNarrationText(html: string): string {
 
 /**
  * Replace images with narration text BEFORE scriptwriting
- * This ensures images appear in correct document order (deterministic, not LLM-based)
+ * Uses contentUrl to resolve relative paths and fuzzy matching for robustness
  */
-function injectImageNarrations(html: string, imageDescriptions: { [url: string]: string }): string {
+function injectImageNarrations(html: string, imageDescriptions: { [url: string]: string }, contentUrl?: string): string {
   try {
     const dom = new JSDOM(html);
     const doc = dom.window.document;
@@ -229,29 +229,56 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       const src = img.getAttribute('src');
       if (!src) return;
       
-      // Normalize URL for matching (remove query params/fragments)
-      const normalizedSrc = src.split('?')[0].split('#')[0];
-      
-      // Find matching description
       let description = null;
-      for (const [storedUrl, desc] of Object.entries(imageDescriptions)) {
-        const normalizedStored = storedUrl.split('?')[0].split('#')[0];
-        if (normalizedSrc === normalizedStored) {
-          description = desc;
-          break;
+      let absoluteSrc = src;
+
+      // 1. Try to resolve relative URLs using the article's base URL
+      if (contentUrl && !src.match(/^https?:\/\//i) && !src.startsWith('data:')) {
+        try {
+          absoluteSrc = new URL(src, contentUrl).href;
+        } catch (e) { /* ignore invalid urls */ }
+      }
+
+      // 2. Strategy A: Exact Match (Best for preventing duplicates)
+      // Check both the raw source and the resolved absolute source
+      if (imageDescriptions[src]) description = imageDescriptions[src];
+      if (!description && imageDescriptions[absoluteSrc]) description = imageDescriptions[absoluteSrc];
+
+      // 3. Strategy B: Fuzzy Match (Ignore Query Params) 
+      // Only runs if exact match failed. Helps match "img.jpg?w=500" to "img.jpg"
+      if (!description) {
+        const cleanSrc = src.split('?')[0];
+        const cleanAbs = absoluteSrc.split('?')[0];
+        
+        for (const [storedUrl, desc] of Object.entries(imageDescriptions)) {
+           const cleanStored = storedUrl.split('?')[0];
+           // Only match if the clean paths are identical
+           if (cleanStored === cleanSrc || cleanStored === cleanAbs) {
+             description = desc;
+             break;
+           }
         }
       }
+
+      // 4. Fallback: Use existing Alt Text if Gemini failed
+      if (!description) {
+         const alt = img.getAttribute('alt');
+         if (alt && alt.trim().length > 3) { 
+            description = alt;
+         }
+      }
+
+      // 5. Construct Narration or Remove
+      let replacementNode;
+      if (description) {
+          replacementNode = doc.createTextNode(` An image shows ${description}. Back to the article. `);
+      } else {
+          // If no description and no alt text, remove the image entirely 
+          // to prevent "An image is shown here" spam for decorative icons.
+          replacementNode = doc.createTextNode(' '); 
+      }
       
-      // Create narration text
-      const narrationText = description 
-        ? `An image shows ${description}. Back to the article.`
-        : 'An image is shown here. Back to the article.';
-      
-      console.log(`[TTS] Image ${index + 1}: ${narrationText.substring(0, 80)}...`);
-      
-      // Replace <img> with text node
-      const textNode = doc.createTextNode(` ${narrationText} `);
-      img.replaceWith(textNode);
+      img.replaceWith(replacementNode);
     });
     
     return doc.body.innerHTML;
@@ -581,7 +608,9 @@ export async function generateAudioForContent(contentId: number): Promise<{ audi
 
     // Step 2: Replace images with narration text (if we have descriptions)
     if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
-      sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions);
+      // PASS content.url as the third argument here:
+      sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions, content.url || undefined);
+      
       console.log('[TTS] Injected image narrations into HTML for audio script');
       // sourceContent now has "An image shows..." text instead of <img> tags
       // Original html_content in database remains unchanged
