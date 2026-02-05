@@ -315,7 +315,7 @@ Important Constraints:
       config: {
         tools: [{ urlContext: {} }],
         temperature: 0.3, // Lower temperature reduces creativity/hallucinations
-        maxOutputTokens: 1000,
+        maxOutputTokens: 16384,
         thinkingConfig: {
           includeThoughts: false 
         }
