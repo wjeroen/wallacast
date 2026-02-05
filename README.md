@@ -20,6 +20,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | GPT-4o-mini (prepares content for natural narration - not for extraction) |
+| Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -52,6 +53,7 @@ Wallacast supports multiple users with complete data isolation:
 | Adding content | `backend/src/routes/content.ts` |
 | Wallabag sync | `backend/src/routes/wallabag.ts`, `backend/src/services/wallabag-sync.ts`, `backend/src/services/wallabag-service.ts` |
 | TTS generation | `backend/src/services/openai-tts.ts` |
+| Image descriptions | `backend/src/services/image-alt-text.ts` |
 | Transcription | `backend/src/services/transcription.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
@@ -122,6 +124,7 @@ Wallacast supports multiple users with complete data isolation:
   - `010_fix_content_source_default.sql`: Fixes column default to 'wallacast' (wallabag-sync sets 'wallabag' explicitly)
   - `010_add_podcast_show_name.sql`: Adds podcast_show_name column to content_items for denormalized display
   - `012_add_feed_type.sql`: Adds type column to podcasts table for RSS feed type detection (podcast/newsletter/blog)
+  - `014_add_image_alt_text.sql`: Adds image alt-text generation support (images_processed BOOLEAN, image_alt_text_data JSONB) and user setting for toggle
 
 #### Middleware
 
@@ -206,10 +209,24 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). Substack-specific optimizations: targets `.body.markup` for cleaner content, removes UI chrome (social buttons, navigation footers, Previous/Next buttons). Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
+- **`services/image-alt-text.ts`**: Gemini-powered image description generation for TTS (requires per-user Gemini API key)
+  - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions
+  - `applyDescriptionsToHtml()`: Applies Gemini descriptions to HTML in memory (never modifies stored html_content)
+  - `batchAnalyzeImages()`: Processes images in groups of 10 to avoid overwhelming API, continues with remaining batches if one fails
+  - `analyzeImagesWithRetry()`: Exponential backoff retry logic (up to 5 attempts) for 503/overloaded errors
+  - Heuristic filtering: Automatically skips decorative images (icons, logos, small images <100px) before sending to Gemini
+  - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
+  - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
+
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
-  - `generateAudioForContent()`: Orchestrates the full pipeline (prepare content → generate TTS → save to DB with `user_id`)
+  - `generateAudioForContent()`: Orchestrates the full pipeline with progress tracking:
+    - 0-10%: Process image descriptions (if enabled) using Gemini, save to JSONB
+    - 10-20%: Prepare content for narration (scriptwriter or fallback text extraction)
+    - 20-90%: Generate TTS audio chunks
+    - 90-95%: Finalize audio (save to DB with `user_id`)
+    - 95-100%: Auto-transcription for Read Along
   - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)
   - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
@@ -275,7 +292,7 @@ Wallacast supports multiple users with complete data isolation:
   - Login/registration form with toggle between modes
   - Displays auth errors from authStore
   - Uses lucide-react icons for visual polish
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status, handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
@@ -297,7 +314,12 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - OpenAI API key configuration (required for TTS/transcription)
-  - TTS voice selection (alloy, echo, fable, onyx, nova, shimmer)
+  - DeepInfra API key configuration (for cheaper TTS via Kokoro and Whisper)
+  - Gemini API key configuration (for image descriptions in audio)
+  - TTS model and voice selection (Kokoro 82M, gpt-4o-mini-tts, various voices)
+  - Image alt-text generation toggle (default: enabled, ~$0.003 per article)
+  - Auto-transcribe podcasts toggle
+  - Auto-generate audio for articles toggle
   - Wallabag integration settings (URL, client ID/secret, username/password)
   - Test connection buttons for validating credentials
   - Sync controls (pull, push, full sync) with status indicators
