@@ -306,6 +306,8 @@ Guidelines:
 - **If it's a chart/diagram:** Summarize the primary trend or insight. Describe what the visual shows.
 - **If it's a social media thread (Reddit/Twitter):** Read it out like a script. Mention who is replying to whom.
 
+If you don't actually see an image or accessing the url failed, just say "Image alt text generation has failed" or explain what went wrong. Never try to describe images you don't have access to.
+
 Just output the description, nothing else.`;
 
     try {
