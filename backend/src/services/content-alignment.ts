@@ -77,8 +77,8 @@ function extractWordsFromHTML(htmlContent: string): {
   // Remove script, style, and other non-content elements
   $('script, style, nav, footer, aside').remove();
 
-  // Extract text from headings, paragraphs, and list items
-  $('h1, h2, h3, h4, h5, h6, p, li').each((_: number, element: any) => {
+  // Extract text from headings, paragraphs, list items, and images
+  $('h1, h2, h3, h4, h5, h6, p, li, img').each((_: number, element: any) => {
     const $el = $(element);
     const text = $el.text().trim();
     if (!text) return;
