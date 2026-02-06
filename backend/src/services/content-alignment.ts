@@ -78,7 +78,7 @@ function extractWordsFromHTML(htmlContent: string): {
   $('script, style, nav, footer, aside').remove();
 
   // Extract text from headings, paragraphs, and list items
-  $('h1, h2, h3, h4, h5, h6, p, li').each((_, element) => {
+  $('h1, h2, h3, h4, h5, h6, p, li').each((_: number, element: any) => {
     const $el = $(element);
     const text = $el.text().trim();
     if (!text) return;
@@ -92,7 +92,7 @@ function extractWordsFromHTML(htmlContent: string): {
     }
 
     // Split text into words
-    const sectionWords = text.split(/\s+/).filter(w => w.length > 0);
+    const sectionWords = text.split(/\s+/).filter((w: string) => w.length > 0);
 
     // For headings and list items, keep as single chunk
     // For paragraphs, break into chunks if too long

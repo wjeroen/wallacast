@@ -150,6 +150,23 @@ export function FullscreenPlayer({
     return (commentsStartTime / duration) * 100;
   }, [commentsStartTime, duration]);
 
+  // Extract HTML sections for aligned read-along
+  const extractedSections = useMemo(() => {
+    if (!content.html_content) return [];
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content.html_content, 'text/html');
+    const sections: string[] = [];
+
+    // Extract paragraphs, headings, and list items in order
+    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li');
+    elements.forEach((el) => {
+      sections.push(el.outerHTML);
+    });
+
+    return sections;
+  }, [content.html_content]);
+
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
@@ -313,23 +330,6 @@ export function FullscreenPlayer({
     );
   };
 
-  // Extract HTML sections for aligned read-along
-  const extractedSections = useMemo(() => {
-    if (!content.html_content) return [];
-
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(content.html_content, 'text/html');
-    const sections: string[] = [];
-
-    // Extract paragraphs, headings, and list items in order
-    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li');
-    elements.forEach((el) => {
-      sections.push(el.outerHTML);
-    });
-
-    return sections;
-  }, [content.html_content]);
-
   // Render aligned read-along content (formatted HTML with section highlighting)
   const renderAlignedReadAlong = () => {
     if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) {
@@ -349,7 +349,7 @@ export function FullscreenPlayer({
 
     return (
       <div className="aligned-read-along">
-        {alignmentSections.map((alignSection, index) => {
+        {alignmentSections.map((alignSection: any, index: number) => {
           const isActive = index === activeSectionIndex;
           // Use the corresponding HTML section if available
           const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
