@@ -754,7 +754,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               if (content.published_at) {
                 augmentedHtml += `<p>Published on ${formatDateForNarration(content.published_at)}.</p>\n`;
               }
-              if (content.karma !== undefined && content.karma !== null) {
+              // Only add karma for EA Forum/LessWrong posts
+              const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
+              if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
                 augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
               }
 
