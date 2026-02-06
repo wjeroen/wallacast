@@ -7,13 +7,13 @@ BEGIN
   -- Add content_alignment column if it doesn't exist
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'content'
+    WHERE table_name = 'content_items'
     AND column_name = 'content_alignment'
   ) THEN
-    ALTER TABLE content
+    ALTER TABLE content_items
     ADD COLUMN content_alignment JSONB DEFAULT NULL;
 
-    COMMENT ON COLUMN content.content_alignment IS
+    COMMENT ON COLUMN content_items.content_alignment IS
       'Stores mapping between original content words and transcript timestamps. Format: { "words": [...], "sections": [...], "comments_start_time": number }';
   END IF;
 END $$;
