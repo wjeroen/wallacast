@@ -178,43 +178,46 @@ export async function alignContentWithTranscript(
 
   console.log(`[Alignment] Running Needleman-Wunsch alignment...`);
   console.log(`[Alignment] Original: ${normalizedOriginal.length} words, Transcript: ${normalizedTranscript.length} words`);
-  console.log(`[Alignment] DEBUG: Sample original words:`, normalizedOriginal.slice(0, 5));
-  console.log(`[Alignment] DEBUG: Sample transcript words:`, normalizedTranscript.slice(0, 5));
 
-  // Run Needleman-Wunsch alignment (factory function, not constructor)
-  const aligner = seqalign.NWaligner(normalizedOriginal, normalizedTranscript, {
-    similarity: (a: string, b: string) => {
+  // Configure aligner (factory pattern - pass options only)
+  const aligner = seqalign.NWaligner({
+    similarityScoreFunction: (a: string, b: string) => {
       if (!a || !b) return -1;
       if (a === b) return 2; // Exact match
-      // Fuzzy match: check if words share common prefix (handles transcription errors like "park"/"shark")
+      // Fuzzy match: check if words share common prefix (handles transcription errors)
       if (a.length > 3 && b.length > 3 && a.substring(0, 3) === b.substring(0, 3)) {
         return 1; // Partial match
       }
       return -1; // Mismatch
     },
-    gapPenalty: -1, // Penalty for gaps (image descriptions in transcript)
+    gapScoreFunction: () => -1, // Penalty for gaps (image descriptions in transcript)
+    gapSymbol: '', // Use empty string for gaps
   });
 
-  const alignment = aligner.align();
+  // Execute alignment (pass sequences to align method)
+  const result = aligner.align(normalizedOriginal, normalizedTranscript);
   console.log('[Alignment] Alignment complete');
-  console.log('[Alignment] DEBUG: alignment type=', typeof alignment);
-  console.log('[Alignment] DEBUG: alignment keys=', Object.keys(alignment || {}));
-  console.log('[Alignment] DEBUG: alignment=', JSON.stringify(alignment).substring(0, 500));
 
-  // Build word mappings from alignment
+  // Build word mappings from coordinateWalk
   const wordMappings: WordMapping[] = [];
   let matchedWords = 0;
 
-  if (alignment && alignment.length > 0) {
-    // alignment is an array of [originalIndex, transcriptIndex] pairs
-    for (const [origIdx, transIdx] of alignment) {
-      if (origIdx !== -1 && transIdx !== -1 && transIdx < transcriptWords.length) {
+  // coordinateWalk is an array of [originalIndex, transcriptIndex] coordinate pairs
+  if (result && result.coordinateWalk && result.coordinateWalk.length > 0) {
+    for (const [origIdx, transIdx] of result.coordinateWalk) {
+      // Skip the starting point [0,0] and gaps
+      if (origIdx > 0 && transIdx > 0 && transIdx <= transcriptWords.length) {
+        // Adjust for 0-based indexing (coordinateWalk starts at 1)
+        const origIndex = origIdx - 1;
+        const transIndex = transIdx - 1;
+
         wordMappings.push({
-          originalIndex: origIdx,
-          transcriptIndex: transIdx,
-          timestamp: transcriptWords[transIdx].start,
+          originalIndex: origIndex,
+          transcriptIndex: transIndex,
+          timestamp: transcriptWords[transIndex].start,
         });
-        if (normalizedOriginal[origIdx] === normalizedTranscript[transIdx]) {
+
+        if (normalizedOriginal[origIndex] === normalizedTranscript[transIndex]) {
           matchedWords++;
         }
       }
