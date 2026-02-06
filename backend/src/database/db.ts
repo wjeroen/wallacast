@@ -196,6 +196,11 @@ export async function initializeDatabase() {
     const imageAltTextMigration = await fs.readFile(imageAltTextMigrationPath, 'utf-8');
     await client.query(imageAltTextMigration);
 
+    // Run migration to add content_alignment column
+    const contentAlignmentMigrationPath = path.join(__dirname, 'migrations', '015_add_content_alignment.sql');
+    const contentAlignmentMigration = await fs.readFile(contentAlignmentMigrationPath, 'utf-8');
+    await client.query(contentAlignmentMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
