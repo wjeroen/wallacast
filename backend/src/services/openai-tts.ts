@@ -733,8 +733,8 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       .then(async (transcriptResult) => {
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
           await query(
-            'UPDATE content_items SET transcript = $1, transcript_words = $2, current_operation = NULL WHERE id = $3',
-            [transcriptResult.text, JSON.stringify(transcriptResult.words), contentId]
+            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
+            [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
           );
 
           // Run alignment if html_content is available (articles/texts only)
@@ -747,19 +747,34 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               );
 
               await query(
-                'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
-                [JSON.stringify(alignment), contentId]
+                'UPDATE content_items SET content_alignment = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                [JSON.stringify(alignment), 'completed', 100, contentId]
               );
 
               console.log(`[TTS] Alignment complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy, ${alignment.sections.length} sections mapped`);
             } catch (alignError) {
               console.error('[TTS] Alignment failed (non-fatal):', alignError);
-              // Don't fail the whole process if alignment fails
+              // Still mark as completed even if alignment fails
+              await query(
+                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+                ['completed', 100, contentId]
+              );
             }
+          } else {
+            // No html_content (podcasts), mark as completed after transcription
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+              ['completed', 100, contentId]
+            );
           }
       })
-      .catch(err => {
+      .catch(async (err) => {
           console.error('[TTS] Auto-transcription failed:', err);
+          // Still mark as completed (audio is ready even without transcript)
+          await query(
+            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+            ['completed', 100, contentId]
+          );
       });
 
     return { audioUrl, warning };

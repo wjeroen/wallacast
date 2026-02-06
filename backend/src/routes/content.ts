@@ -229,11 +229,9 @@ router.post('/', async (req, res) => {
         );
 
         generateAudioForContent(createdItem.id)
-          .then(async () => {
-            await query(
-              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-              ['completed', 100, createdItem.id]
-            );
+          .then(() => {
+            console.log(`Audio generation pipeline started for ${createdItem.id}`);
+            // Note: Final status will be set by transcription/alignment handler
           })
           .catch(async (error) => {
             console.error('Auto audio generation error:', error);
@@ -495,11 +493,9 @@ router.patch('/:id', async (req, res) => {
           console.log(`Un-archiving article ${id}: triggering audio regeneration`);
 
           generateAudioForContent(parseInt(id))
-            .then(async () => {
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                ['completed', 100, id]
-              );
+            .then(() => {
+              console.log(`Audio generation pipeline started for ${id}`);
+              // Note: Final status will be set by transcription/alignment handler
             })
             .catch(async (error) => {
               console.error('Auto audio generation error on un-archive:', error);
@@ -713,11 +709,9 @@ router.post('/:id/generate-audio', async (req, res) => {
     );
 
     generateAudioForContent(parseInt(id), !!regenerate)
-      .then(async (result) => {
-        await query(
-          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-          ['completed', 100, id]
-        );
+      .then((result) => {
+        console.log(`Audio generation pipeline started for ${id}`);
+        // Note: Final status will be set by transcription/alignment handler
       })
       .catch(async (error) => {
         console.error('Background audio generation error:', error);
@@ -735,6 +729,43 @@ router.post('/:id/generate-audio', async (req, res) => {
   } catch (error) {
     console.error('Error starting TTS generation:', error);
     res.status(500).json({ error: 'Failed to start audio generation' });
+  }
+});
+
+// Cancel ongoing audio generation
+router.post('/:id/cancel-generation', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify content belongs to user
+    const contentResult = await query(
+      'SELECT id, generation_status FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const currentStatus = contentResult.rows[0].generation_status;
+
+    // Only allow cancelling if currently generating
+    if (!currentStatus || currentStatus === 'idle' || currentStatus === 'completed' || currentStatus === 'failed') {
+      return res.status(400).json({ error: 'No generation in progress' });
+    }
+
+    // Mark as cancelled
+    await query(
+      'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+      ['failed', 'Cancelled by user', 0, id]
+    );
+
+    console.log(`Generation cancelled for content ${id}`);
+
+    res.json({ message: 'Generation cancelled successfully' });
+  } catch (error) {
+    console.error('Error cancelling generation:', error);
+    res.status(500).json({ error: 'Failed to cancel generation' });
   }
 });
 

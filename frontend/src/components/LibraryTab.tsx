@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -131,6 +131,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleDelete = async (id: number) => {
     await deleteItem(id);
+  };
+
+  const handleCancelGeneration = async (id: number) => {
+    try {
+      await contentAPI.cancelGeneration(id);
+      // Refresh the item to show cancelled status
+      await refreshItem(id);
+    } catch (error) {
+      console.error('Failed to cancel generation:', error);
+    }
   };
 
   const toggleSelection = (id: number) => {
@@ -311,7 +321,28 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
     return (
       <div className="generation-status generating">
-        <span>{statusMessage}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
+          <span style={{ flex: 1 }}>{statusMessage}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCancelGeneration(item.id);
+            }}
+            className="cancel-generation-btn"
+            title="Stop generation"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '0.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              color: '#ef4444',
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
         {progressPercent > 0 && (
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
