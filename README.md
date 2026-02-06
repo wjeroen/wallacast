@@ -19,7 +19,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
-| TTS Preparation | GPT-4o-mini (prepares content for natural narration - not for extraction) |
+| TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-4o-mini via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
@@ -198,11 +198,12 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
   - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
+  - `getChatClientForUser(userId)`: Intelligent router for narration LLM - prefers DeepSeek-V3.2 via DeepInfra (cheaper), falls back to OpenAI GPT-4o-mini. User can override with `narration_llm` setting ('auto'|'deepseek'|'openai')
   - `getTTSClientForUser(userId, modelId)`: Intelligent router - returns DeepInfra client for Kokoro models, OpenAI client otherwise
   - `getTranscriptionClientForUser(userId)`: Prefers DeepInfra Whisper if configured (cheaper), falls back to OpenAI
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
-  - No global API keys - each user must configure their own (OpenAI and/or DeepInfra)
+  - No global API keys - each user must configure their own (OpenAI and/or DeepInfra, or both)
 
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
@@ -220,7 +221,7 @@ Wallacast supports multiple users with complete data isolation:
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
-  - `extractArticleContent()`: Uses GPT-4o-mini to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
+  - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-4o-mini) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent(contentId, regenerate)`: Orchestrates the full pipeline with progress tracking:
     - 0-20%: Process image descriptions (if enabled) using Gemini, save to JSONB. When `regenerate=true`, regenerates ALL images instead of just new ones
@@ -314,13 +315,10 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
 
 - **`components/SettingsPage.tsx`**: User settings management UI
-  - OpenAI API key configuration (required for TTS/transcription)
-  - DeepInfra API key configuration (for cheaper TTS via Kokoro and Whisper)
-  - Gemini API key configuration (for image descriptions in audio)
-  - TTS model and voice selection (Kokoro 82M, gpt-4o-mini-tts, various voices)
-  - Image alt-text generation toggle (default: enabled, ~$0.003 per article)
-  - Auto-transcribe podcasts toggle
-  - Auto-generate audio for articles toggle
+  - Organized into: API Keys, Audio Generation, Wallabag Sync
+  - API Keys section: DeepInfra (primary/cheapest), OpenAI (optional), Gemini (optional, for image descriptions)
+  - Audio Generation: Narration LLM (Auto/DeepSeek/OpenAI), TTS model/voice, auto-generate/transcribe toggles
+  - With just a DeepInfra key, users get full functionality (narration prep via DeepSeek, TTS via Kokoro, transcription via Whisper)
   - Wallabag integration settings (URL, client ID/secret, username/password)
   - Test connection buttons for validating credentials
   - Sync controls (pull, push, full sync) with status indicators
