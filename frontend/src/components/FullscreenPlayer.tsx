@@ -127,6 +127,20 @@ export function FullscreenPlayer({
     }
   }, [content?.comments]);
 
+  // Parse content alignment data if available
+  const parsedAlignment = useMemo(() => {
+    if (!content?.content_alignment) return null;
+    try {
+      const alignment = typeof content.content_alignment === 'string'
+        ? JSON.parse(content.content_alignment)
+        : content.content_alignment;
+      return alignment || null;
+    } catch (error) {
+      console.error('Failed to parse content alignment:', error);
+      return null;
+    }
+  }, [content?.content_alignment]);
+
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
@@ -162,9 +176,29 @@ export function FullscreenPlayer({
     }
   });
 
-  // Scroll active word to center
+  // Scroll active word/section to center
   const scrollToActive = useCallback(() => {
-    if (activeWordIndex >= 0) {
+    // For aligned view, scroll to active section
+    if (parsedAlignment && extractedSections.length > 0) {
+      const alignmentSections = parsedAlignment.sections;
+      let activeSectionIndex = -1;
+      for (let i = 0; i < alignmentSections.length; i++) {
+        if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
+          activeSectionIndex = i;
+          break;
+        }
+      }
+      if (activeSectionIndex >= 0) {
+        const element = document.getElementById(`section-${activeSectionIndex}`);
+        if (element) {
+          element.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          });
+        }
+      }
+    } else if (activeWordIndex >= 0) {
+      // For word-by-word view, scroll to active word
       const element = document.getElementById(`word-${activeWordIndex}`);
       if (element) {
         element.scrollIntoView({
@@ -173,7 +207,7 @@ export function FullscreenPlayer({
         });
       }
     }
-  }, [activeWordIndex]);
+  }, [activeWordIndex, parsedAlignment, extractedSections, currentTime]);
 
   // Trigger scroll when switching to read-along tab
   useEffect(() => {
@@ -182,6 +216,13 @@ export function FullscreenPlayer({
       setTimeout(scrollToActive, 100);
     }
   }, [activeTab, scrollToActive]);
+
+  // Auto-scroll to active section as audio plays (for aligned view)
+  useEffect(() => {
+    if (activeTab === 'read-along' && parsedAlignment && extractedSections.length > 0) {
+      scrollToActive();
+    }
+  }, [activeTab, currentTime, parsedAlignment, extractedSections, scrollToActive]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
@@ -259,6 +300,78 @@ export function FullscreenPlayer({
             ))}
           </div>
         )}
+      </div>
+    );
+  };
+
+  // Extract HTML sections for aligned read-along
+  const extractedSections = useMemo(() => {
+    if (!content.html_content) return [];
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content.html_content, 'text/html');
+    const sections: string[] = [];
+
+    // Extract paragraphs, headings, and list items in order
+    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li');
+    elements.forEach((el) => {
+      sections.push(el.outerHTML);
+    });
+
+    return sections;
+  }, [content.html_content]);
+
+  // Render aligned read-along content (formatted HTML with section highlighting)
+  const renderAlignedReadAlong = () => {
+    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) {
+      return null; // Fall back to word-by-word transcript
+    }
+
+    const alignmentSections = parsedAlignment.sections;
+
+    // Find the active section index based on currentTime
+    let activeSectionIndex = -1;
+    for (let i = 0; i < alignmentSections.length; i++) {
+      if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
+        activeSectionIndex = i;
+        break;
+      }
+    }
+
+    return (
+      <div className="aligned-read-along">
+        {alignmentSections.map((alignSection, index) => {
+          const isActive = index === activeSectionIndex;
+          // Use the corresponding HTML section if available
+          const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
+
+          return (
+            <div
+              key={index}
+              id={`section-${index}`}
+              className={`read-along-section ${isActive ? 'active' : ''}`}
+              style={{
+                backgroundColor: isActive ? 'rgba(96, 165, 250, 0.1)' : 'transparent',
+                borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
+                paddingLeft: '1rem',
+                marginBottom: '1rem',
+                transition: 'all 0.3s ease',
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                // Seek to this section's start time
+                onSeek(alignSection.startTime);
+              }}
+            >
+              <div
+                dangerouslySetInnerHTML={{ __html: htmlContent }}
+                style={{
+                  color: isActive ? '#60a5fa' : undefined,
+                }}
+              />
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -386,7 +499,11 @@ export function FullscreenPlayer({
             </div>
             {readAlongMessage ? (
               <p className="no-content">{readAlongMessage}</p>
+            ) : parsedAlignment && extractedSections.length > 0 ? (
+              // NEW: Aligned read-along (formatted content with section highlighting)
+              renderAlignedReadAlong()
             ) : displayWords.length > 0 ? (
+              // FALLBACK: Word-by-word transcript (podcasts, or articles without alignment)
               <p className="read-along-text">
                 {displayWords.map((word, index) => {
                   const isRead = index <= activeWordIndex;

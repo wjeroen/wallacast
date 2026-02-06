@@ -10,6 +10,7 @@ import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
+import { alignContentWithTranscript } from './content-alignment.js';
 
 interface Comment {
   id?: string;
@@ -735,6 +736,27 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
             'UPDATE content_items SET transcript = $1, transcript_words = $2, current_operation = NULL WHERE id = $3',
             [transcriptResult.text, JSON.stringify(transcriptResult.words), contentId]
           );
+
+          // Run alignment if html_content is available (articles/texts only)
+          if (content.html_content) {
+            console.log('[TTS] Running content alignment...');
+            try {
+              const alignment = await alignContentWithTranscript(
+                content.html_content,
+                transcriptResult.words
+              );
+
+              await query(
+                'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
+                [JSON.stringify(alignment), contentId]
+              );
+
+              console.log(`[TTS] Alignment complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy, ${alignment.sections.length} sections mapped`);
+            } catch (alignError) {
+              console.error('[TTS] Alignment failed (non-fatal):', alignError);
+              // Don't fail the whole process if alignment fails
+            }
+          }
       })
       .catch(err => {
           console.error('[TTS] Auto-transcription failed:', err);
