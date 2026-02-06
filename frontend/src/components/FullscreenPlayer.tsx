@@ -154,14 +154,27 @@ export function FullscreenPlayer({
   const extractedSections = useMemo(() => {
     if (!content.html_content) return [];
 
-    // Prepend title and author to match alignment (match scriptwriter format exactly)
-    let augmentedHtml = content.html_content;
+    // Build HTML to match scriptwriter output EXACTLY
+    // Order: Title, Author, Date, Karma, Body (with images), Comments
+    let augmentedHtml = '';
+
     if (content.title) {
-      augmentedHtml = `<p>Title: ${content.title}.</p>\n${augmentedHtml}`;
+      augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
     }
     if (content.author) {
-      augmentedHtml = `<p>Written by ${content.author}.</p>\n${augmentedHtml}`;
+      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+      augmentedHtml += `<p>Written by ${cleanAuthor}.</p>\n`;
     }
+    if (content.published_at) {
+      const date = new Date(content.published_at);
+      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
+    }
+    if (content.karma !== undefined && content.karma !== null) {
+      augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
+    }
+
+    augmentedHtml += content.html_content;
 
     // Append comments section marker if comments exist
     if (content.comments) {
@@ -172,14 +185,14 @@ export function FullscreenPlayer({
     const doc = parser.parseFromString(augmentedHtml, 'text/html');
     const sections: string[] = [];
 
-    // Extract paragraphs, headings, and list items in order
-    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li');
+    // Extract paragraphs, headings, list items, AND IMAGES in order
+    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
     elements.forEach((el) => {
       sections.push(el.outerHTML);
     });
 
     return sections;
-  }, [content.html_content, content.title, content.author, content.comments]);
+  }, [content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
 
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
