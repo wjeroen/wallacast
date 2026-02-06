@@ -741,19 +741,37 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (content.html_content) {
             console.log('[TTS] Running content alignment...');
             try {
-              // Prepend title and author to HTML to match scriptwriter output
-              // Scriptwriter adds "Title: X." and "Written by Y."
-              let augmentedHtml = content.html_content;
+              // Build HTML to match scriptwriter output EXACTLY
+              // Order: Title, Author, Date, Karma, Body, Comments
+              let augmentedHtml = '';
+
               if (content.title) {
-                augmentedHtml = `<p>Title: ${content.title}.</p>\n${augmentedHtml}`;
+                augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
               }
               if (content.author) {
-                augmentedHtml = `<p>Written by ${content.author}.</p>\n${augmentedHtml}`;
+                augmentedHtml += `<p>Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}.</p>\n`;
+              }
+              if (content.published_at) {
+                augmentedHtml += `<p>Published on ${formatDateForNarration(content.published_at)}.</p>\n`;
+              }
+              if (content.karma !== undefined && content.karma !== null) {
+                augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
               }
 
-              // Append comments section marker if comments exist
+              augmentedHtml += content.html_content;
+
+              // Append comments section with actual comments HTML
               if (content.comments) {
-                augmentedHtml += `\n<h2>Comments section:</h2>`;
+                try {
+                  const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
+                  if (comments && comments.length > 0) {
+                    augmentedHtml += `\n<h2>Comments section:</h2>`;
+                    // Note: Comments are narrated but we're just adding the heading for alignment
+                    // The actual comments HTML is in content.html_content from EA Forum/LW
+                  }
+                } catch (e) {
+                  // Ignore parse errors
+                }
               }
 
               const alignment = await alignContentWithTranscript(
