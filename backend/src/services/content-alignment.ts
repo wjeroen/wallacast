@@ -179,15 +179,23 @@ export async function alignContentWithTranscript(
   // Configure aligner (factory pattern - pass options only)
   const aligner = seqalign.NWaligner({
     similarityScoreFunction: (a: string, b: string) => {
-      if (!a || !b) return -1;
-      if (a === b) return 2; // Exact match
-      // Fuzzy match: check if words share common prefix (handles transcription errors)
-      if (a.length > 3 && b.length > 3 && a.substring(0, 3) === b.substring(0, 3)) {
-        return 1; // Partial match
+      if (!a || !b) return -3;
+
+      // 1. Exact Match: High reward
+      if (a.toLowerCase() === b.toLowerCase()) return 3;
+
+      // 2. Fuzzy Match: Small reward
+      // Check if words share common prefix (handles transcription errors)
+      if (a.length > 3 && b.length > 3 && a.substring(0, 3).toLowerCase() === b.substring(0, 3).toLowerCase()) {
+        return 1;
       }
-      return -1; // Mismatch
+
+      // 3. MISMATCH: HIGH PENALTY
+      // This must be lower than (Gap * 2) to prevent false alignments.
+      // If Gap is -1, Mismatch should be at least -3.
+      return -3;
     },
-    gapScoreFunction: () => -1, // Penalty for gaps (image descriptions in transcript)
+    gapScoreFunction: () => -1, // Penalty for gaps (keeps small so algorithm can skip intro/outro)
     gapSymbol: '', // Use empty string for gaps
   });
 
