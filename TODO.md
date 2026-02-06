@@ -32,6 +32,7 @@
   - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
   - NOTE: Quote announcements (2026-01-29) and LessWrong score filtering (2026-01-29) already implemented
+  - [x] Fix TTS reading emoji names in comment author usernames (e.g. "small orange diamond" for 🔸) - stripped emojis from usernames and article author in narration (2026-02-06)
 - [x] **[P2]** CRITICAL: Fixed 80GB mobile data usage and slow queries (2026-01-27):
   - App was returning entire audio files with every click and update (caused 80GB mobile data usage)
   - Root cause: `RETURNING *` in PATCH, list queries included audio_data for all items

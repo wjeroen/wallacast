@@ -297,7 +297,8 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
 
     let commentIntro = '';
     // Fix: Handle potential missing username (though Fetcher usually handles this)
-    const username = comment.username || 'Anonymous';
+    // Strip emojis from username for narration (e.g. EA Forum authors with 🔸)
+    const username = (comment.username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
 
     if (isReply && replyTo) {
       commentIntro = `A reply to ${replyTo} by ${username}`;
@@ -654,7 +655,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     if (content.title) {
       fullScript += `Title: ${content.title}. `;
-      if (content.author) fullScript += `Written by ${content.author}. `;
+      if (content.author) fullScript += `Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
       if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
       if (content.karma !== undefined && content.karma !== null) fullScript += `It has ${content.karma} karma. `;
       fullScript += '\n\n';
