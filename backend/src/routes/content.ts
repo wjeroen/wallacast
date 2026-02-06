@@ -6,6 +6,7 @@ import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
+import { alignContentWithTranscript } from '../services/content-alignment.js';
 
 const router = express.Router();
 
@@ -51,7 +52,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
     );
 
@@ -414,6 +415,27 @@ router.patch('/:id', async (req, res) => {
                 'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
+
+              // Run alignment if html_content is available (articles/texts only, not podcasts)
+              if (type === 'article' || type === 'text') {
+                const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
+                if (contentResult.rows.length > 0 && contentResult.rows[0].html_content) {
+                  console.log(`[Alignment] Running alignment for ${type} ${id}...`);
+                  try {
+                    const alignment = await alignContentWithTranscript(
+                      contentResult.rows[0].html_content,
+                      result.words
+                    );
+                    await query(
+                      'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
+                      [JSON.stringify(alignment), id]
+                    );
+                    console.log(`[Alignment] Complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy`);
+                  } catch (alignError) {
+                    console.error('[Alignment] Failed (non-fatal):', alignError);
+                  }
+                }
+              }
 
               console.log(`Transcript regenerated successfully for podcast ${id}`);
             } catch (error) {
