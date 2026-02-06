@@ -154,8 +154,17 @@ export function FullscreenPlayer({
   const extractedSections = useMemo(() => {
     if (!content.html_content) return [];
 
+    // Prepend title and author to match alignment
+    let augmentedHtml = content.html_content;
+    if (content.title) {
+      augmentedHtml = `<p><strong>Title:</strong> ${content.title}</p>\n${augmentedHtml}`;
+    }
+    if (content.author) {
+      augmentedHtml = `<p><strong>Author:</strong> ${content.author}</p>\n${augmentedHtml}`;
+    }
+
     const parser = new DOMParser();
-    const doc = parser.parseFromString(content.html_content, 'text/html');
+    const doc = parser.parseFromString(augmentedHtml, 'text/html');
     const sections: string[] = [];
 
     // Extract paragraphs, headings, and list items in order
@@ -165,7 +174,7 @@ export function FullscreenPlayer({
     });
 
     return sections;
-  }, [content.html_content]);
+  }, [content.html_content, content.title, content.author]);
 
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
