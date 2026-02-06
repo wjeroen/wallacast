@@ -14,7 +14,7 @@
  * 6. Return alignment data to be stored in database
  */
 
-import { NWaligner } from 'seqalign';
+import * as seqalign from 'seqalign';
 import * as cheerio from 'cheerio';
 
 interface TranscriptWord {
@@ -180,7 +180,7 @@ export async function alignContentWithTranscript(
   console.log(`[Alignment] Original: ${normalizedOriginal.length} words, Transcript: ${normalizedTranscript.length} words`);
 
   // Run Needleman-Wunsch alignment
-  const aligner = new NWaligner(normalizedOriginal, normalizedTranscript, {
+  const aligner = new seqalign.NWaligner(normalizedOriginal, normalizedTranscript, {
     similarity: (a: string, b: string) => {
       if (!a || !b) return -1;
       if (a === b) return 2; // Exact match

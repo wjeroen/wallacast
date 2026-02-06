@@ -85,36 +85,34 @@ export function MiniPlayer({
           {isPlaying ? <Pause size={24} /> : <Play size={24} />}
         </button>
 
-        <div className="mini-progress-container">
+        <div className="mini-progress-container" style={{ position: 'relative' }}>
           <span className="mini-time">{formatTime(currentTime)}</span>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <input
-              type="range"
-              min="0"
-              max={duration || 0}
-              value={currentTime}
-              onChange={(e) => onSeek(parseFloat(e.target.value))}
-              className="mini-progress-slider"
-            />
-            {commentsMarkerPosition !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${commentsMarkerPosition}%`,
-                  top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: '3px',
-                  height: '12px',
-                  backgroundColor: '#f97316', // Orange color
-                  borderRadius: '1px',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-                title="Comments section starts here"
-              />
-            )}
-          </div>
+          <input
+            type="range"
+            min="0"
+            max={duration || 0}
+            value={currentTime}
+            onChange={(e) => onSeek(parseFloat(e.target.value))}
+            className="mini-progress-slider"
+          />
           <span className="mini-time">{formatTime(duration)}</span>
+          {commentsMarkerPosition !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: `${commentsMarkerPosition}%`,
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '3px',
+                height: '14px',
+                backgroundColor: '#f97316',
+                borderRadius: '1px',
+                pointerEvents: 'none',
+                zIndex: 10,
+              }}
+              title="Comments section starts here"
+            />
+          )}
         </div>
       </div>
     </div>

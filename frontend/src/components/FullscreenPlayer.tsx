@@ -628,36 +628,34 @@ export function FullscreenPlayer({
 
       {/* Player Controls */}
       <div className="fullscreen-player-controls">
-        <div className="fullscreen-progress-bar">
+        <div className="fullscreen-progress-bar" style={{ position: 'relative' }}>
           <span className="time">{formatTime(currentTime)}</span>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <input
-              type="range"
-              min="0"
-              max={duration || 0}
-              value={currentTime}
-              onChange={(e) => onSeek(parseFloat(e.target.value))}
-              className="progress-slider"
-            />
-            {commentsMarkerPosition !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${commentsMarkerPosition}%`,
-                  top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: '3px',
-                  height: '14px',
-                  backgroundColor: '#f97316', // Orange color
-                  borderRadius: '1px',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-                title="Comments section starts here"
-              />
-            )}
-          </div>
+          <input
+            type="range"
+            min="0"
+            max={duration || 0}
+            value={currentTime}
+            onChange={(e) => onSeek(parseFloat(e.target.value))}
+            className="progress-slider"
+          />
           <span className="time">{formatTime(duration)}</span>
+          {commentsMarkerPosition !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: `${commentsMarkerPosition}%`,
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '3px',
+                height: '14px',
+                backgroundColor: '#f97316',
+                borderRadius: '1px',
+                pointerEvents: 'none',
+                zIndex: 10,
+              }}
+              title="Comments section starts here"
+            />
+          )}
         </div>
 
         <div className="fullscreen-playback-controls">
