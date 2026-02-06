@@ -105,7 +105,7 @@ function extractWordsFromHTML(htmlContent: string): {
         type,
         startIndex,
         endIndex,
-        text: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
+        text: text,
       });
     } else {
       // Break long paragraph into chunks
@@ -120,7 +120,7 @@ function extractWordsFromHTML(htmlContent: string): {
           type: 'paragraph',
           startIndex,
           endIndex,
-          text: chunkText.substring(0, 100) + (chunkText.length > 100 ? '...' : ''),
+          text: chunkText,
         });
       }
     }
