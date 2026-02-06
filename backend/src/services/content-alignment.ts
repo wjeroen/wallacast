@@ -199,32 +199,36 @@ export async function alignContentWithTranscript(
   console.log('[Alignment] Alignment complete');
 
   // Build word mappings from coordinateWalk
-  // coordinateWalk is a PATH through the alignment matrix, not direct pairs
-  // We need to interpret moves between consecutive coordinates:
-  // - Diagonal move [i,j] → [i+1,j+1]: alignment (original[i] ↔ transcript[j])
-  // - Down move [i,j] → [i+1,j]: gap in transcript
-  // - Right move [i,j] → [i,j+1]: gap in original
+  // coordinateWalk is a PATH through the alignment matrix
+  // IMPORTANT: seqalign returns the path BACKWARDS (end→start) due to backtracking
+  // We must reverse it to go from start→end before processing
   const wordMappings: WordMapping[] = [];
   let matchedWords = 0;
 
   if (result && result.coordinateWalk && result.coordinateWalk.length > 1) {
-    // Iterate through consecutive pairs in the path
-    for (let i = 0; i < result.coordinateWalk.length - 1; i++) {
-      const [origIdx, transIdx] = result.coordinateWalk[i];
-      const [nextOrigIdx, nextTransIdx] = result.coordinateWalk[i + 1];
+    // Reverse the walk if it starts from the end (standard Needleman-Wunsch backtracking)
+    let walk = result.coordinateWalk;
+    if (walk[0][0] !== 0 || walk[0][1] !== 0) {
+      walk = [...walk].reverse(); // Create a copy and reverse it
+    }
+
+    // Iterate through consecutive pairs in the path (now start→end)
+    for (let i = 0; i < walk.length - 1; i++) {
+      const [currOrig, currTrans] = walk[i];
+      const [nextOrig, nextTrans] = walk[i + 1];
 
       // Check if this is a diagonal move (both indices increase = alignment)
-      if (nextOrigIdx === origIdx + 1 && nextTransIdx === transIdx + 1) {
-        // This is an alignment: original[origIdx] aligns with transcript[transIdx]
-        if (origIdx < normalizedOriginal.length && transIdx < normalizedTranscript.length &&
-            transIdx < transcriptWords.length) {
+      if (nextOrig === currOrig + 1 && nextTrans === currTrans + 1) {
+        // This is an alignment: original[currOrig] aligns with transcript[currTrans]
+        if (currOrig < normalizedOriginal.length && currTrans < normalizedTranscript.length &&
+            currTrans < transcriptWords.length) {
           wordMappings.push({
-            originalIndex: origIdx,
-            transcriptIndex: transIdx,
-            timestamp: transcriptWords[transIdx].start,
+            originalIndex: currOrig,
+            transcriptIndex: currTrans,
+            timestamp: transcriptWords[currTrans].start,
           });
 
-          if (normalizedOriginal[origIdx] === normalizedTranscript[transIdx]) {
+          if (normalizedOriginal[currOrig] === normalizedTranscript[currTrans]) {
             matchedWords++;
           }
         }
