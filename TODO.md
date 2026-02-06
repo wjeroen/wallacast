@@ -40,7 +40,7 @@
 - [ ] **[P2]** Remove clickable domain URL links for podcasts (and texts if shown) in library cards and fullscreen player - they're pointless since podcasts don't have source URLs to visit
 - [ ] **[P2]** Verify Wallabag sync works end-to-end with real Wallabag instance
 - [ ] **[P2]** Play audio immediately upon clicking an item, don't forget last position
-- [ ] **[P2]** Remember last-set speed toggle (like Spotify - one global setting that remembers last used speed across all items) - NOTE: Gemini implemented the OPPOSITE (per-item speed in database) on 2026-01-28, need to revert and implement correctly as global setting
+- [x] **[P2]** Remember last-set speed toggle (like Spotify - one global setting that remembers last used speed across all items) - Fixed: now uses localStorage + backend user setting instead of per-item database column (2026-02-05)
 - [x] **[P2]** Fix library card button positioning: move buttons currently in the middle right to the top right (currently some information like audio status and generation status overlaps with the buttons) (2026-01-30)
 - [x] **[P2]** Fix podcast tab "+ Add to library" button to match other button styles - use a simple + button instead (podcast cards should look similar to library tab podcast cards) (2026-01-30)
 - [ ] **[P2]** Don't show audio player timeline when there's no audio (buttons are fine), show "generate audio" button instead
@@ -135,6 +135,14 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **DeepSeek Narration LLM + Settings Reorganization** (2026-02-06):
+  - Added DeepSeek-V3.2 via DeepInfra as narration prep LLM (much cheaper than GPT-4o-mini)
+  - Smart auto-routing: prefers DeepSeek if DeepInfra key is set, falls back to OpenAI
+  - User can override with explicit choice (Auto/DeepSeek/OpenAI) in settings
+  - With just a DeepInfra key, users get full functionality (no OpenAI key needed)
+  - Reorganized Settings page: API Keys section + Audio Generation section (clearer layout)
+  - New setting: `narration_llm` ('auto'|'deepseek'|'openai')
+  - New function: `getChatClientForUser()` in ai-providers.ts
 - [x] **Image Alt-Text Generation for TTS** (2026-02-04):
   - Implemented Gemini 3 Flash powered image description generation for audio narration
   - Smart regeneration: only processes new images after refetch, merges with existing descriptions
