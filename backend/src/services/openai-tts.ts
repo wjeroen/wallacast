@@ -741,8 +741,18 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (content.html_content) {
             console.log('[TTS] Running content alignment...');
             try {
+              // Prepend title and author to HTML to match scriptwriter output
+              // Scriptwriter adds "Title: X" and "Author: Y" which need to align
+              let augmentedHtml = content.html_content;
+              if (content.title) {
+                augmentedHtml = `<p>Title: ${content.title}</p>\n${augmentedHtml}`;
+              }
+              if (content.author) {
+                augmentedHtml = `<p>Author: ${content.author}</p>\n${augmentedHtml}`;
+              }
+
               const alignment = await alignContentWithTranscript(
-                content.html_content,
+                augmentedHtml,
                 transcriptResult.words
               );
 
