@@ -131,26 +131,25 @@ function extractWordsFromHTML(htmlContent: string): {
 
 /**
  * Detect where comments section starts in the transcript
- * Looks for phrases like "comment section", "comments:", "discussion section", etc.
+ * Looks for "comment section" or "comments section" phrases ONLY in last 30% of transcript
+ * (to avoid matching "comments" word in the article body)
  */
 function detectCommentsStart(transcriptWords: TranscriptWord[]): number | null {
+  // Only search in the last 30% of transcript (comments are always at the end)
+  const startSearchIndex = Math.floor(transcriptWords.length * 0.7);
+
   const commentsPatterns = [
     ['comment', 'section'],
-    ['comments'],
+    ['comments', 'section'],
     ['discussion', 'section'],
-    ['reader', 'comments'],
-    ['user', 'comments'],
   ];
 
-  for (let i = 0; i < transcriptWords.length - 1; i++) {
+  for (let i = startSearchIndex; i < transcriptWords.length - 1; i++) {
     const currentWord = normalizeWord(transcriptWords[i].word);
     const nextWord = i + 1 < transcriptWords.length ? normalizeWord(transcriptWords[i + 1].word) : '';
 
     for (const pattern of commentsPatterns) {
-      if (pattern.length === 1 && currentWord === pattern[0]) {
-        return transcriptWords[i].start;
-      }
-      if (pattern.length === 2 && currentWord === pattern[0] && nextWord === pattern[1]) {
+      if (currentWord === pattern[0] && nextWord === pattern[1]) {
         return transcriptWords[i].start;
       }
     }
