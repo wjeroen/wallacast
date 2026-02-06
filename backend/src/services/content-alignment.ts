@@ -179,8 +179,8 @@ export async function alignContentWithTranscript(
   console.log(`[Alignment] Running Needleman-Wunsch alignment...`);
   console.log(`[Alignment] Original: ${normalizedOriginal.length} words, Transcript: ${normalizedTranscript.length} words`);
 
-  // Run Needleman-Wunsch alignment
-  const aligner = new seqalign.NWaligner(normalizedOriginal, normalizedTranscript, {
+  // Run Needleman-Wunsch alignment (factory function, not constructor)
+  const aligner = seqalign.NWaligner(normalizedOriginal, normalizedTranscript, {
     similarity: (a: string, b: string) => {
       if (!a || !b) return -1;
       if (a === b) return 2; // Exact match
