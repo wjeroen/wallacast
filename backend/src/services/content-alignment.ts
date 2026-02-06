@@ -195,7 +195,9 @@ export async function alignContentWithTranscript(
 
   const alignment = aligner.align();
   console.log('[Alignment] Alignment complete');
-  console.log(`[Alignment] DEBUG: alignment type=${typeof alignment}, length=${alignment?.length}, sample=`, alignment?.slice(0, 5));
+  console.log('[Alignment] DEBUG: alignment type=', typeof alignment);
+  console.log('[Alignment] DEBUG: alignment keys=', Object.keys(alignment || {}));
+  console.log('[Alignment] DEBUG: alignment=', JSON.stringify(alignment).substring(0, 500));
 
   // Build word mappings from alignment
   const wordMappings: WordMapping[] = [];
