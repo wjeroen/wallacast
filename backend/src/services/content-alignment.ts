@@ -178,6 +178,8 @@ export async function alignContentWithTranscript(
 
   console.log(`[Alignment] Running Needleman-Wunsch alignment...`);
   console.log(`[Alignment] Original: ${normalizedOriginal.length} words, Transcript: ${normalizedTranscript.length} words`);
+  console.log(`[Alignment] DEBUG: Sample original words:`, normalizedOriginal.slice(0, 5));
+  console.log(`[Alignment] DEBUG: Sample transcript words:`, normalizedTranscript.slice(0, 5));
 
   // Run Needleman-Wunsch alignment (factory function, not constructor)
   const aligner = seqalign.NWaligner(normalizedOriginal, normalizedTranscript, {
