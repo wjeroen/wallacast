@@ -14,7 +14,6 @@ BEGIN
     ADD COLUMN content_alignment JSONB DEFAULT NULL;
 
     COMMENT ON COLUMN content.content_alignment IS
-      'Stores mapping between original content words and transcript timestamps. ' ||
-      'Format: { "words": [...], "sections": [...], "comments_start_time": number }';
+      'Stores mapping between original content words and transcript timestamps. Format: { "words": [...], "sections": [...], "comments_start_time": number }';
   END IF;
 END $$;
