@@ -7,7 +7,7 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getOpenAIClientForUser, getUserSetting } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 
@@ -329,21 +329,22 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
-async function scriptArticleForListening(htmlContent: string, openai: any): Promise<string> {
+async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-4o-mini'): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
     const dom = new JSDOM(htmlContent);
     const doc = dom.window.document;
-    
+
     const junkSelectors = 'script, style, noscript, iframe, svg, path, input[type="hidden"], meta, link';
     doc.querySelectorAll(junkSelectors).forEach(el => el.remove());
-    
+
     // Use the cleaner HTML which retains structure but drops junk
     const cleanHtml = doc.body.innerHTML || htmlContent;
 
+    console.log(`[TTS] Scriptwriting with model: ${modelId}`);
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: modelId,
       messages: [
         {
           role: 'system',
@@ -640,9 +641,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       ['scripting_content', 20, contentId]
     );
 
-    const chatClient = await getOpenAIClientForUser(content.user_id);
-    if (chatClient && sourceContent.includes('<')) {
-        articleBodyScript = await scriptArticleForListening(sourceContent, chatClient);
+    const chatConfig = await getChatClientForUser(content.user_id);
+    if (chatConfig && sourceContent.includes('<')) {
+        articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
     }

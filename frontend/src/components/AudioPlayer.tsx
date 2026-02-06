@@ -1,8 +1,19 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ContentItem } from '../types';
-import { contentAPI } from '../api';
+import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
+
+const VALID_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
+
+function getStoredSpeed(): number {
+  const stored = localStorage.getItem('playbackSpeed');
+  if (stored) {
+    const parsed = parseFloat(stored);
+    if (VALID_SPEEDS.includes(parsed)) return parsed;
+  }
+  return 1;
+}
 
 interface AudioPlayerProps {
   content: ContentItem | null;
@@ -14,7 +25,7 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [playbackSpeed, setPlaybackSpeed] = useState(getStoredSpeed);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -26,6 +37,20 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  // Sync speed from backend on mount (for cross-device persistence)
+  useEffect(() => {
+    userSettingsAPI.get('playback_speed').then(res => {
+      const val = res.data.value ? parseFloat(res.data.value) : null;
+      if (val && VALID_SPEEDS.includes(val)) {
+        localStorage.setItem('playbackSpeed', String(val));
+        setPlaybackSpeed(val);
+        if (audioRef.current) {
+          audioRef.current.playbackRate = val;
+        }
+      }
+    }).catch(() => {});
+  }, []);
 
   // ---------------------------------------------------------------------------
   // 1. ROBUST DATA PARSING (Fixes the "Fallback to Linear" issue)
@@ -84,12 +109,10 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const separator = content.audio_url?.includes('?') ? '&' : '?';
       audio.src = content.audio_url ? `${content.audio_url}${separator}v=${cacheBuster}` : '';
       
-      const validSpeeds = [1, 1.25, 1.5, 1.75, 2];
-      const loadedSpeed = content.playback_speed || 1;
-      const normalizedSpeed = validSpeeds.includes(loadedSpeed) ? loadedSpeed : 1;
-      
-      audio.playbackRate = normalizedSpeed;
-      setPlaybackSpeed(normalizedSpeed);
+      // Use global speed from localStorage (instant, no API call needed)
+      const storedSpeed = getStoredSpeed();
+      audio.playbackRate = storedSpeed;
+      setPlaybackSpeed(storedSpeed);
 
       const handleLoadedMetadata = () => {
         if (startPosition > 0) {
@@ -198,14 +221,15 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     if (!audioRef.current) return;
     audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
-    if (content) contentAPI.update(content.id, { playback_speed: speed });
+    // Save globally: localStorage for instant recall, backend for cross-device sync
+    localStorage.setItem('playbackSpeed', String(speed));
+    userSettingsAPI.set('playback_speed', String(speed)).catch(() => {});
   };
 
   const toggleSpeed = () => {
-    const speeds = [1, 1.25, 1.5, 1.75, 2];
-    const currentIndex = speeds.indexOf(playbackSpeed);
-    const nextIndex = (currentIndex + 1) % speeds.length;
-    handleSpeedChange(speeds[nextIndex]);
+    const currentIndex = VALID_SPEEDS.indexOf(playbackSpeed);
+    const nextIndex = (currentIndex + 1) % VALID_SPEEDS.length;
+    handleSpeedChange(VALID_SPEEDS[nextIndex]);
   };
 
   const toggleSleepTimer = () => {
