@@ -141,6 +141,15 @@ export function FullscreenPlayer({
     }
   }, [content?.content_alignment]);
 
+  // Extract comments start time for timeline marker
+  const commentsStartTime = parsedAlignment?.commentsStartTime || null;
+
+  // Calculate marker position as percentage
+  const commentsMarkerPosition = useMemo(() => {
+    if (!commentsStartTime || !duration || duration === 0) return null;
+    return (commentsStartTime / duration) * 100;
+  }, [commentsStartTime, duration]);
+
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
@@ -621,14 +630,33 @@ export function FullscreenPlayer({
       <div className="fullscreen-player-controls">
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min="0"
-            max={duration || 0}
-            value={currentTime}
-            onChange={(e) => onSeek(parseFloat(e.target.value))}
-            className="progress-slider"
-          />
+          <div style={{ position: 'relative', flex: 1 }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 0}
+              value={currentTime}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="progress-slider"
+            />
+            {commentsMarkerPosition !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${commentsMarkerPosition}%`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '3px',
+                  height: '14px',
+                  backgroundColor: '#f97316', // Orange color
+                  borderRadius: '1px',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title="Comments section starts here"
+              />
+            )}
+          </div>
           <span className="time">{formatTime(duration)}</span>
         </div>
 
