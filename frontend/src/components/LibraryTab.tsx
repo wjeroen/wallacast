@@ -56,6 +56,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Track recently completed items (show "Completed" for 5 seconds)
+  const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
+
   // Fetch content on mount
   useEffect(() => {
     fetchContent();
@@ -96,9 +99,18 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           // Update just this item in the store
           updateItem(item.id, updated);
 
-          // If item completed, refresh to get full data
+          // If item completed, refresh to get full data and track completion time
           if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
+            setRecentlyCompleted(prev => new Map(prev).set(item.id, Date.now()));
             setTimeout(() => refreshItem(item.id), 500);
+            // Clear from recently completed after 5 seconds
+            setTimeout(() => {
+              setRecentlyCompleted(prev => {
+                const newMap = new Map(prev);
+                newMap.delete(item.id);
+                return newMap;
+              });
+            }, 5000);
           }
         } catch (error) {
           console.error('Failed to fetch item status:', error);
@@ -242,6 +254,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
 
     if (item.generation_status === 'completed') {
+      // Show "Completed ✓" for 5 seconds after completion
+      if (recentlyCompleted.has(item.id)) {
+        return (
+          <div className="generation-status completed" style={{ color: '#10b981' }}>
+            <span>✓ Completed</span>
+          </div>
+        );
+      }
       return null;
     }
 
