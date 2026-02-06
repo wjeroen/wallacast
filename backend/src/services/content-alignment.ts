@@ -199,28 +199,37 @@ export async function alignContentWithTranscript(
   console.log('[Alignment] Alignment complete');
 
   // Build word mappings from coordinateWalk
+  // coordinateWalk is a PATH through the alignment matrix, not direct pairs
+  // We need to interpret moves between consecutive coordinates:
+  // - Diagonal move [i,j] → [i+1,j+1]: alignment (original[i] ↔ transcript[j])
+  // - Down move [i,j] → [i+1,j]: gap in transcript
+  // - Right move [i,j] → [i,j+1]: gap in original
   const wordMappings: WordMapping[] = [];
   let matchedWords = 0;
 
-  // coordinateWalk is an array of [originalIndex, transcriptIndex] coordinate pairs
-  if (result && result.coordinateWalk && result.coordinateWalk.length > 0) {
-    for (const [origIdx, transIdx] of result.coordinateWalk) {
-      // Skip the starting point [0,0] and gaps
-      if (origIdx > 0 && transIdx > 0 && transIdx <= transcriptWords.length) {
-        // Adjust for 0-based indexing (coordinateWalk starts at 1)
-        const origIndex = origIdx - 1;
-        const transIndex = transIdx - 1;
+  if (result && result.coordinateWalk && result.coordinateWalk.length > 1) {
+    // Iterate through consecutive pairs in the path
+    for (let i = 0; i < result.coordinateWalk.length - 1; i++) {
+      const [origIdx, transIdx] = result.coordinateWalk[i];
+      const [nextOrigIdx, nextTransIdx] = result.coordinateWalk[i + 1];
 
-        wordMappings.push({
-          originalIndex: origIndex,
-          transcriptIndex: transIndex,
-          timestamp: transcriptWords[transIndex].start,
-        });
+      // Check if this is a diagonal move (both indices increase = alignment)
+      if (nextOrigIdx === origIdx + 1 && nextTransIdx === transIdx + 1) {
+        // This is an alignment: original[origIdx] aligns with transcript[transIdx]
+        if (origIdx < normalizedOriginal.length && transIdx < normalizedTranscript.length &&
+            transIdx < transcriptWords.length) {
+          wordMappings.push({
+            originalIndex: origIdx,
+            transcriptIndex: transIdx,
+            timestamp: transcriptWords[transIdx].start,
+          });
 
-        if (normalizedOriginal[origIndex] === normalizedTranscript[transIndex]) {
-          matchedWords++;
+          if (normalizedOriginal[origIdx] === normalizedTranscript[transIdx]) {
+            matchedWords++;
+          }
         }
       }
+      // Note: We ignore gaps (non-diagonal moves) as they don't represent alignments
     }
   }
 
