@@ -131,12 +131,12 @@ function extractWordsFromHTML(htmlContent: string): {
 
 /**
  * Detect where comments section starts in the transcript
- * Looks for "comment section" or "comments section" phrases ONLY in last 30% of transcript
- * (to avoid matching "comments" word in the article body)
+ * Looks for "comment section" or "comments section" phrases in last 15% of transcript
+ * (EA Forum/LW can have 90% comments, so we search very late to avoid false matches)
  */
 function detectCommentsStart(transcriptWords: TranscriptWord[]): number | null {
-  // Only search in the last 30% of transcript (comments are always at the end)
-  const startSearchIndex = Math.floor(transcriptWords.length * 0.7);
+  // Search in the last 15% of transcript to avoid matching "comments" in article
+  const startSearchIndex = Math.floor(transcriptWords.length * 0.85);
 
   const commentsPatterns = [
     ['comment', 'section'],

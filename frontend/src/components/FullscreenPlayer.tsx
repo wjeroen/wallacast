@@ -170,7 +170,9 @@ export function FullscreenPlayer({
       const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
     }
-    if (content.karma !== undefined && content.karma !== null) {
+    // Only add karma for EA Forum/LessWrong posts
+    const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
+    if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
       augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
     }
 
