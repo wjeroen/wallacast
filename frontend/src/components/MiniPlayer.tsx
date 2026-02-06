@@ -1,5 +1,6 @@
 import { Play, Pause, X } from 'lucide-react';
 import type { ContentItem } from '../types';
+import { useMemo } from 'react';
 
 interface MiniPlayerProps {
   content: ContentItem | null;
@@ -37,6 +38,25 @@ export function MiniPlayer({
 }: MiniPlayerProps) {
   if (!content) return null;
 
+  // Parse content alignment to get comments start time
+  const commentsStartTime = useMemo(() => {
+    if (!content.content_alignment) return null;
+    try {
+      const alignment = typeof content.content_alignment === 'string'
+        ? JSON.parse(content.content_alignment)
+        : content.content_alignment;
+      return alignment?.commentsStartTime || null;
+    } catch {
+      return null;
+    }
+  }, [content.content_alignment]);
+
+  // Calculate marker position as percentage
+  const commentsMarkerPosition = useMemo(() => {
+    if (!commentsStartTime || !duration || duration === 0) return null;
+    return (commentsStartTime / duration) * 100;
+  }, [commentsStartTime, duration]);
+
   return (
     <div className="mini-player">
       <div className="mini-player-header">
@@ -67,14 +87,33 @@ export function MiniPlayer({
 
         <div className="mini-progress-container">
           <span className="mini-time">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min="0"
-            max={duration || 0}
-            value={currentTime}
-            onChange={(e) => onSeek(parseFloat(e.target.value))}
-            className="mini-progress-slider"
-          />
+          <div style={{ position: 'relative', flex: 1 }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 0}
+              value={currentTime}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="mini-progress-slider"
+            />
+            {commentsMarkerPosition !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${commentsMarkerPosition}%`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '3px',
+                  height: '12px',
+                  backgroundColor: '#f97316', // Orange color
+                  borderRadius: '1px',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title="Comments section starts here"
+              />
+            )}
+          </div>
           <span className="mini-time">{formatTime(duration)}</span>
         </div>
       </div>

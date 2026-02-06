@@ -23,7 +23,7 @@
 - [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
 
 ### Bug Fixes
-- [ ] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress - need endpoint to cancel generation and UI button during audio generation
+- [x] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress (2026-02-06)
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
@@ -136,6 +136,31 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Content-Transcript Alignment for Read-Along Tab** (2026-02-06):
+  - Implemented Needleman-Wunsch global sequence alignment to sync original HTML content with Whisper transcript
+  - Read-along tab now displays formatted content (images, headers, paragraphs) instead of plain transcript
+  - Smart chunking: long paragraphs auto-split into ~50-word sections (15-20 sec audio each)
+  - Section-based highlighting with smooth transitions (blue background + border)
+  - Auto-scroll keeps active section centered during playback
+  - Handles image descriptions gracefully (treated as gaps in alignment)
+  - Tolerates transcription errors with fuzzy matching
+  - Clickable sections to seek audio
+  - Comment section detection for timeline markers
+  - New service: backend/src/services/content-alignment.ts using seqalign library
+  - Database migration: 015_add_content_alignment.sql (JSONB column)
+  - Alignment runs automatically after Whisper transcription (95% → 97% → 100% progress)
+  - Accuracy stats logged to console
+  - Falls back to word-by-word transcript for podcasts or if alignment unavailable
+- [x] **Timeline Markers & Progress Bar Improvements** (2026-02-06):
+  - Added orange timeline marker showing where comments section begins (EA Forum/LessWrong)
+  - Fixed transcription progress display (was showing 100% too early, now shows full pipeline)
+  - Added "aligning_content" operation status (97% progress)
+  - Progress bar now accurately shows: audio generation → transcription → alignment → completed
+- [x] **Stop/Cancel Button for Audio Generation** (2026-02-06):
+  - Added cancel endpoint: POST /api/content/:id/cancel-generation
+  - Red X button appears on LibraryTab progress bars during generation
+  - Immediately marks generation as cancelled when clicked
+  - Prevents wasted API calls when user changes their mind
 - [x] **DeepSeek Narration LLM + Settings Reorganization** (2026-02-06):
   - Added DeepSeek-V3.2 via DeepInfra as narration prep LLM (much cheaper than GPT-4o-mini)
   - Smart auto-routing: prefers DeepSeek if DeepInfra key is set, falls back to OpenAI
