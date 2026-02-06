@@ -154,13 +154,18 @@ export function FullscreenPlayer({
   const extractedSections = useMemo(() => {
     if (!content.html_content) return [];
 
-    // Prepend title and author to match alignment
+    // Prepend title and author to match alignment (match scriptwriter format exactly)
     let augmentedHtml = content.html_content;
     if (content.title) {
-      augmentedHtml = `<p><strong>Title:</strong> ${content.title}</p>\n${augmentedHtml}`;
+      augmentedHtml = `<p>Title: ${content.title}.</p>\n${augmentedHtml}`;
     }
     if (content.author) {
-      augmentedHtml = `<p><strong>Author:</strong> ${content.author}</p>\n${augmentedHtml}`;
+      augmentedHtml = `<p>Written by ${content.author}.</p>\n${augmentedHtml}`;
+    }
+
+    // Append comments section marker if comments exist
+    if (content.comments) {
+      augmentedHtml += `\n<h2>Comments section:</h2>`;
     }
 
     const parser = new DOMParser();
@@ -174,7 +179,7 @@ export function FullscreenPlayer({
     });
 
     return sections;
-  }, [content.html_content, content.title, content.author]);
+  }, [content.html_content, content.title, content.author, content.comments]);
 
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
