@@ -84,7 +84,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Poll for progress updates on items that are generating
   useEffect(() => {
     const generatingItems = content.filter(
-      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript'].includes(item.generation_status)
+      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)
     );
 
     if (generatingItems.length === 0) return;
@@ -297,6 +297,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           break;
         case 'transcribing':
           statusMessage = `Creating transcript... ${progressPercent}%`;
+          break;
+        case 'aligning_content':
+          statusMessage = `Aligning content... ${progressPercent}%`;
           break;
         default:
           // Check for audio chunk pattern (e.g., "audio_chunk_3_of_10")
