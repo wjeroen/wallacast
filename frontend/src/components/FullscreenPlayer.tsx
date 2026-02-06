@@ -178,9 +178,31 @@ export function FullscreenPlayer({
 
     augmentedHtml += content.html_content;
 
-    // Append comments section marker if comments exist
+    // Append comments section with ACTUAL COMMENT TEXT as HTML
     if (content.comments) {
-      augmentedHtml += `\n<h2>Comments section:</h2>`;
+      try {
+        const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
+        if (comments && Array.isArray(comments) && comments.length > 0) {
+          augmentedHtml += `\n<h2>Comments section:</h2>\n`;
+
+          // Convert comments to HTML paragraphs for alignment
+          function commentsToHTML(commentsList: any[], depth: number = 0): string {
+            let html = '';
+            for (const comment of commentsList) {
+              const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
+              html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
+              if (comment.replies && comment.replies.length > 0) {
+                html += commentsToHTML(comment.replies, depth + 1);
+              }
+            }
+            return html;
+          }
+
+          augmentedHtml += commentsToHTML(comments);
+        }
+      } catch (e) {
+        console.error('Failed to parse comments:', e);
+      }
     }
 
     const parser = new DOMParser();
@@ -190,6 +212,10 @@ export function FullscreenPlayer({
     // Extract paragraphs, headings, list items, AND IMAGES in order
     const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
     elements.forEach((el) => {
+      // Add max-width to images to prevent overflow
+      if (el.tagName === 'IMG') {
+        el.setAttribute('style', 'max-width: 100%; height: auto;');
+      }
       sections.push(el.outerHTML);
     });
 

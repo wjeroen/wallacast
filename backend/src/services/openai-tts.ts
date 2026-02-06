@@ -762,17 +762,30 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
               augmentedHtml += content.html_content;
 
-              // Append comments section with actual comments HTML
+              // Append comments section with ACTUAL COMMENT TEXT as HTML
               if (content.comments) {
                 try {
                   const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
                   if (comments && comments.length > 0) {
-                    augmentedHtml += `\n<h2>Comments section:</h2>`;
-                    // Note: Comments are narrated but we're just adding the heading for alignment
-                    // The actual comments HTML is in content.html_content from EA Forum/LW
+                    augmentedHtml += `\n<h2>Comments section:</h2>\n`;
+
+                    // Convert comments to HTML paragraphs for alignment
+                    function commentsToHTML(commentsList: any[], depth: number = 0): string {
+                      let html = '';
+                      for (const comment of commentsList) {
+                        const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
+                        html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
+                        if (comment.replies && comment.replies.length > 0) {
+                          html += commentsToHTML(comment.replies, depth + 1);
+                        }
+                      }
+                      return html;
+                    }
+
+                    augmentedHtml += commentsToHTML(comments);
                   }
                 } catch (e) {
-                  // Ignore parse errors
+                  console.error('[Alignment] Failed to parse comments:', e);
                 }
               }
 
