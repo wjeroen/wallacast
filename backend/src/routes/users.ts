@@ -35,6 +35,7 @@ const VALID_SETTING_KEYS = [
   // App preferences
   'theme',
   'playback_speed',
+  'narration_llm',           // 'auto', 'deepseek', 'openai' - which LLM prepares text for TTS
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',

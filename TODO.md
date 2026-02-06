@@ -135,6 +135,14 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **DeepSeek Narration LLM + Settings Reorganization** (2026-02-06):
+  - Added DeepSeek-V3.2 via DeepInfra as narration prep LLM (much cheaper than GPT-4o-mini)
+  - Smart auto-routing: prefers DeepSeek if DeepInfra key is set, falls back to OpenAI
+  - User can override with explicit choice (Auto/DeepSeek/OpenAI) in settings
+  - With just a DeepInfra key, users get full functionality (no OpenAI key needed)
+  - Reorganized Settings page: API Keys section + Audio Generation section (clearer layout)
+  - New setting: `narration_llm` ('auto'|'deepseek'|'openai')
+  - New function: `getChatClientForUser()` in ai-providers.ts
 - [x] **Image Alt-Text Generation for TTS** (2026-02-04):
   - Implemented Gemini 3 Flash powered image description generation for audio narration
   - Smart regeneration: only processes new images after refetch, merges with existing descriptions
