@@ -161,6 +161,51 @@ export async function getOpenAIClientForUser(userId: number): Promise<OpenAI | n
   return new OpenAI({ apiKey });
 }
 
+/**
+ * INTELLIGENT ROUTER FOR NARRATION PREP LLM
+ * Returns the client + model for scriptwriting (preparing text for TTS).
+ * Supports: OpenAI gpt-4o-mini, DeepSeek-V3.2 via DeepInfra.
+ *
+ * Routing logic:
+ *   1. If user explicitly chose 'deepseek' or 'openai', use that
+ *   2. If 'auto' (default): prefer DeepInfra/DeepSeek (cheaper), fallback to OpenAI
+ */
+export async function getChatClientForUser(userId: number): Promise<{ client: OpenAI; model: string } | null> {
+  const narrationLlm = await getUserSetting(userId, 'narration_llm') || 'auto';
+
+  if (narrationLlm === 'deepseek') {
+    const client = await getDeepInfraClientForUser(userId);
+    if (client) return { client, model: 'deepseek-ai/DeepSeek-V3.2' };
+    console.warn('[AI] User chose DeepSeek but no DeepInfra key, falling back to OpenAI');
+  }
+
+  if (narrationLlm === 'openai') {
+    const client = await getOpenAIClientForUser(userId);
+    if (client) {
+      const model = await getUserSetting(userId, 'openai_model') || 'gpt-4o-mini';
+      return { client, model };
+    }
+    console.warn('[AI] User chose OpenAI but no OpenAI key, falling back to DeepInfra');
+  }
+
+  // Auto-routing: prefer DeepInfra (cheaper)
+  const deepInfraClient = await getDeepInfraClientForUser(userId);
+  if (deepInfraClient) {
+    console.log('[AI] Auto-routing narration LLM to DeepSeek-V3.2 via DeepInfra');
+    return { client: deepInfraClient, model: 'deepseek-ai/DeepSeek-V3.2' };
+  }
+
+  // Fallback to OpenAI
+  const openaiClient = await getOpenAIClientForUser(userId);
+  if (openaiClient) {
+    const model = await getUserSetting(userId, 'openai_model') || 'gpt-4o-mini';
+    console.log(`[AI] Auto-routing narration LLM to OpenAI ${model}`);
+    return { client: openaiClient, model };
+  }
+
+  return null;
+}
+
 export async function getTTSOptionsForUser(userId: number): Promise<{ voice: string; model: string }> {
   const voice = await getUserSetting(userId, 'openai_tts_voice') || 'coral';
   const model = await getUserSetting(userId, 'openai_tts_model') || 'gpt-4o-mini-tts';

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Bot, Globe, Check, AlertCircle, Mic } from 'lucide-react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
 
@@ -52,6 +52,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // DeepInfra Settings
     deepinfra_api_key: '',
 
+    // Narration LLM
+    narration_llm: 'auto',
+
     // Gemini Settings (for image alt-text)
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
@@ -103,6 +106,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
 
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
+
+        narration_llm: loaded.narration_llm || 'auto',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
@@ -287,21 +292,32 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         </section>
 
-        {/* AI Provider Settings */}
+        {/* API Keys Section */}
         <section className="settings-section">
-          <h3><Bot size={20} /> LLM Provider for TTS preparation</h3>
+          <h3><Key size={20} /> API Keys</h3>
           <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
-             Currently the only model that has been tested is gpt-4o-mini.
-           </p>
-          
+            You only need keys for the services you want. With just a DeepInfra key you can do everything (narration prep, TTS, and transcription).
+          </p>
+
           <div className="form-group">
-            <label>Provider</label>
-            <select
-              value={formData.ai_provider}
-              onChange={(e) => handleChange('ai_provider', e.target.value)}
-            >
-              <option value="openai">OpenAI</option>
-            </select>
+            <label>
+              <Key size={16} /> DeepInfra API Key
+              {isSecretSet('deepinfra_api_key') && <span className="secret-set">(configured)</span>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
+                value={formData.deepinfra_api_key}
+                onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
+                placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
+                {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+              Powers TTS (Kokoro), transcription (Whisper), and narration prep (DeepSeek). Cheapest option.
+            </small>
           </div>
 
           <div className="form-group">
@@ -320,62 +336,49 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+              Optional. For OpenAI TTS voices and GPT narration prep. Not needed if using DeepInfra for everything.
+            </small>
           </div>
-           
-           <div className="form-group">
-                <label>Chat Model</label>
-                <select value={formData.openai_model} onChange={(e) => handleChange('openai_model', e.target.value)}>
-                   {currentProvider?.models?.chat?.map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> Gemini API Key
+              {isSecretSet('gemini_api_key') && <span className="secret-set">(configured)</span>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
+                value={formData.gemini_api_key}
+                onChange={(e) => handleChange('gemini_api_key', e.target.value)}
+                placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
+                {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+              Optional. Describes images in articles for audio narration. Paid tier required. Get key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Google AI Studio</a>
+            </small>
+          </div>
         </section>
 
-        {/* AUDIO SERVICES (New Section) */}
+        {/* Audio Generation Section */}
         <section className="settings-section">
-           <h3><Mic size={20} /> Audio Services</h3>
+           <h3><Mic size={20} /> Audio Generation</h3>
            <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
-             Configure Text-to-Speech and Transcription engines.
-             Without a DeepInfra API Key, OpenAI is used for both, which is very costly.
+             How articles get converted to audio: Narration LLM scripts the text, then TTS speaks it.
            </p>
 
            <div className="form-group">
-                <label>
-                  <Key size={16} /> DeepInfra API Key (Cheaper TTS & Whisper)
-                  {isSecretSet('deepinfra_api_key') && <span className="secret-set">(configured)</span>}
-                </label>
-                <div className="input-with-toggle">
-                  <input
-                    type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
-                    value={formData.deepinfra_api_key}
-                    onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
-                    placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
-                  />
-                  <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
-                    {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-            </div>
-
-           <div className="form-group">
-                <label>
-                  <Key size={16} /> Gemini API Key (for image descriptions)
-                  {isSecretSet('gemini_api_key') && <span className="secret-set">(configured)</span>}
-                </label>
-                <div className="input-with-toggle">
-                  <input
-                    type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
-                    value={formData.gemini_api_key}
-                    onChange={(e) => handleChange('gemini_api_key', e.target.value)}
-                    placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
-                  />
-                  <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
-                    {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
+                <label>Narration LLM</label>
+                <select value={formData.narration_llm} onChange={(e) => handleChange('narration_llm', e.target.value)}>
+                  <option value="auto">Auto (prefers DeepSeek if DeepInfra key is set)</option>
+                  <option value="deepseek">DeepSeek V3.2 (via DeepInfra)</option>
+                  <option value="openai">OpenAI GPT-4o-mini</option>
+                </select>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                  Optional. Paid tier required. Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Google AI Studio</a>
+                  Prepares article text for speech. DeepSeek is much cheaper than GPT-4o-mini.
                 </small>
             </div>
 
@@ -410,7 +413,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     </select>
                 )}
             </div>
-             
+
              <div className="form-group checkbox-group">
                 <label>
                   <input
@@ -421,7 +424,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Auto-generate audio for articles
                 </label>
              </div>
-             
+
              <div className="form-group checkbox-group">
                 <label>
                   <input
@@ -429,7 +432,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     checked={formData.auto_transcribe_podcasts === 'true'}
                     onChange={(e) => handleChange('auto_transcribe_podcasts', e.target.checked ? 'true' : 'false')}
                   />
-                  Auto-transcribe podcasts (Uses DeepInfra if key set)
+                  Auto-transcribe podcasts
                 </label>
              </div>
 
@@ -443,7 +446,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Generate image descriptions for audio
                 </label>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
-                  Adds spoken descriptions of images during TTS generation. Requires Gemini API key and paid tier (costs are minimal).
+                  Requires Gemini API key.
                 </small>
              </div>
         </section>
