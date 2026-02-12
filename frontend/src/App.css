@@ -22,6 +22,18 @@
   border-bottom: 1px solid #334155;
 }
 
+.app-logo-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.app-logo {
+  height: 2.5rem;
+  width: auto;
+  object-fit: contain;
+}
+
 .app-header h1 {
   font-size: 1.5rem;
   font-weight: 700;
@@ -1564,6 +1576,13 @@
   text-align: center;
 }
 
+.loading-logo {
+  height: 5rem;
+  width: auto;
+  margin: 0 auto 1rem;
+  object-fit: contain;
+}
+
 .loading-content h1 {
   font-size: 2rem;
   color: #60a5fa;
@@ -1607,6 +1626,14 @@
 .login-header {
   text-align: center;
   margin-bottom: 2rem;
+}
+
+.login-logo {
+  height: 5rem;
+  width: auto;
+  margin: 0 auto 1rem;
+  display: block;
+  object-fit: contain;
 }
 
 .login-header h1 {
