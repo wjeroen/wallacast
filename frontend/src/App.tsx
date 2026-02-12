@@ -131,7 +131,7 @@ function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-content">
-          <img src="/logo.png" alt="wallacast logo" className="loading-logo" />
+          <img src="/logo-dark.png" alt="wallacast logo" className="loading-logo" />
           <h1>wallacast</h1>
           <div className="loading-spinner"></div>
         </div>
@@ -153,7 +153,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-header.png" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
 
