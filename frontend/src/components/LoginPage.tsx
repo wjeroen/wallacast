@@ -30,7 +30,7 @@ export function LoginPage() {
     <div className="login-page">
       <div className="login-container">
         <div className="login-header">
-          <img src="/logo.png" alt="wallacast logo" className="login-logo" />
+          <img src="/logo-dark.png" alt="wallacast logo" className="login-logo" />
           <h1>wallacast</h1>
           <p>{isRegister ? 'Create your account' : 'Sign in to your account'}</p>
         </div>
