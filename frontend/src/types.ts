@@ -21,6 +21,7 @@ export interface ContentItem {
   transcript?: string;
   transcript_words?: string; // JSON string of word timestamps
   tts_chunks?: string; // JSON string of TTS chunk metadata
+  content_alignment?: string; // JSON string of content-to-transcript alignment data
   duration?: number;
   file_size?: number;
   podcast_id?: number;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -56,6 +56,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Track recently completed items (show "Completed" for 5 seconds)
+  const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
+
   // Fetch content on mount
   useEffect(() => {
     fetchContent();
@@ -81,7 +84,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Poll for progress updates on items that are generating
   useEffect(() => {
     const generatingItems = content.filter(
-      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript'].includes(item.generation_status)
+      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)
     );
 
     if (generatingItems.length === 0) return;
@@ -96,9 +99,18 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           // Update just this item in the store
           updateItem(item.id, updated);
 
-          // If item completed, refresh to get full data
+          // If item completed, refresh to get full data and track completion time
           if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
+            setRecentlyCompleted(prev => new Map(prev).set(item.id, Date.now()));
             setTimeout(() => refreshItem(item.id), 500);
+            // Clear from recently completed after 5 seconds
+            setTimeout(() => {
+              setRecentlyCompleted(prev => {
+                const newMap = new Map(prev);
+                newMap.delete(item.id);
+                return newMap;
+              });
+            }, 5000);
           }
         } catch (error) {
           console.error('Failed to fetch item status:', error);
@@ -131,6 +143,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleDelete = async (id: number) => {
     await deleteItem(id);
+  };
+
+  const handleCancelGeneration = async (id: number) => {
+    try {
+      await contentAPI.cancelGeneration(id);
+      // Refresh the item to show cancelled status
+      await refreshItem(id);
+    } catch (error) {
+      console.error('Failed to cancel generation:', error);
+    }
   };
 
   const toggleSelection = (id: number) => {
@@ -232,6 +254,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
 
     if (item.generation_status === 'completed') {
+      // Show "Completed ✓" for 5 seconds after completion
+      if (recentlyCompleted.has(item.id)) {
+        return (
+          <div className="generation-status completed" style={{ color: '#10b981' }}>
+            <span>✓ Completed</span>
+          </div>
+        );
+      }
       return null;
     }
 
@@ -267,6 +297,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           break;
         case 'transcribing':
           statusMessage = `Creating transcript... ${progressPercent}%`;
+          break;
+        case 'aligning_content':
+          statusMessage = `Aligning content... ${progressPercent}%`;
           break;
         default:
           // Check for audio chunk pattern (e.g., "audio_chunk_3_of_10")
@@ -311,7 +344,28 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
     return (
       <div className="generation-status generating">
-        <span>{statusMessage}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
+          <span style={{ flex: 1 }}>{statusMessage}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCancelGeneration(item.id);
+            }}
+            className="cancel-generation-btn"
+            title="Stop generation"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '0.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              color: '#ef4444',
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
         {progressPercent > 0 && (
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
