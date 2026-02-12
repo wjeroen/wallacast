@@ -131,7 +131,8 @@ function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-content">
-          <h1>Wallacast</h1>
+          <img src="/logo-0f172a.png" alt="wallacast logo" className="loading-logo" />
+          <h1>wallacast</h1>
           <div className="loading-spinner"></div>
         </div>
       </div>
@@ -151,7 +152,10 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Wallacast</h1>
+        <div className="app-logo-container">
+          <img src="/logo-1e293b.png" alt="wallacast logo" className="app-logo" />
+          <h1>wallacast</h1>
+        </div>
 
         <div className="header-right">
           {wallabagEnabled && (
