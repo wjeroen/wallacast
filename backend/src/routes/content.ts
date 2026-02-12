@@ -6,6 +6,7 @@ import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
+import { alignContentWithTranscript } from '../services/content-alignment.js';
 
 const router = express.Router();
 
@@ -51,7 +52,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
     );
 
@@ -228,11 +229,9 @@ router.post('/', async (req, res) => {
         );
 
         generateAudioForContent(createdItem.id)
-          .then(async () => {
-            await query(
-              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-              ['completed', 100, createdItem.id]
-            );
+          .then(() => {
+            console.log(`Audio generation pipeline started for ${createdItem.id}`);
+            // Note: Final status will be set by transcription/alignment handler
           })
           .catch(async (error) => {
             console.error('Auto audio generation error:', error);
@@ -415,6 +414,27 @@ router.patch('/:id', async (req, res) => {
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
 
+              // Run alignment if html_content is available (articles/texts only, not podcasts)
+              if (type === 'article' || type === 'text') {
+                const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
+                if (contentResult.rows.length > 0 && contentResult.rows[0].html_content) {
+                  console.log(`[Alignment] Running alignment for ${type} ${id}...`);
+                  try {
+                    const alignment = await alignContentWithTranscript(
+                      contentResult.rows[0].html_content,
+                      result.words
+                    );
+                    await query(
+                      'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
+                      [JSON.stringify(alignment), id]
+                    );
+                    console.log(`[Alignment] Complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy`);
+                  } catch (alignError) {
+                    console.error('[Alignment] Failed (non-fatal):', alignError);
+                  }
+                }
+              }
+
               console.log(`Transcript regenerated successfully for podcast ${id}`);
             } catch (error) {
               console.error('Transcript regeneration error:', error);
@@ -473,11 +493,9 @@ router.patch('/:id', async (req, res) => {
           console.log(`Un-archiving article ${id}: triggering audio regeneration`);
 
           generateAudioForContent(parseInt(id))
-            .then(async () => {
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                ['completed', 100, id]
-              );
+            .then(() => {
+              console.log(`Audio generation pipeline started for ${id}`);
+              // Note: Final status will be set by transcription/alignment handler
             })
             .catch(async (error) => {
               console.error('Auto audio generation error on un-archive:', error);
@@ -691,11 +709,9 @@ router.post('/:id/generate-audio', async (req, res) => {
     );
 
     generateAudioForContent(parseInt(id), !!regenerate)
-      .then(async (result) => {
-        await query(
-          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-          ['completed', 100, id]
-        );
+      .then((result) => {
+        console.log(`Audio generation pipeline started for ${id}`);
+        // Note: Final status will be set by transcription/alignment handler
       })
       .catch(async (error) => {
         console.error('Background audio generation error:', error);
@@ -713,6 +729,43 @@ router.post('/:id/generate-audio', async (req, res) => {
   } catch (error) {
     console.error('Error starting TTS generation:', error);
     res.status(500).json({ error: 'Failed to start audio generation' });
+  }
+});
+
+// Cancel ongoing audio generation
+router.post('/:id/cancel-generation', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify content belongs to user
+    const contentResult = await query(
+      'SELECT id, generation_status FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const currentStatus = contentResult.rows[0].generation_status;
+
+    // Only allow cancelling if currently generating
+    if (!currentStatus || currentStatus === 'idle' || currentStatus === 'completed' || currentStatus === 'failed') {
+      return res.status(400).json({ error: 'No generation in progress' });
+    }
+
+    // Mark as cancelled
+    await query(
+      'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+      ['failed', 'Cancelled by user', 0, id]
+    );
+
+    console.log(`Generation cancelled for content ${id}`);
+
+    res.json({ message: 'Generation cancelled successfully' });
+  } catch (error) {
+    console.error('Error cancelling generation:', error);
+    res.status(500).json({ error: 'Failed to cancel generation' });
   }
 });
 

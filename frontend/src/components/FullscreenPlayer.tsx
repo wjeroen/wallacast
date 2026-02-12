@@ -127,6 +127,101 @@ export function FullscreenPlayer({
     }
   }, [content?.comments]);
 
+  // Parse content alignment data if available
+  const parsedAlignment = useMemo(() => {
+    if (!content?.content_alignment) return null;
+    try {
+      const alignment = typeof content.content_alignment === 'string'
+        ? JSON.parse(content.content_alignment)
+        : content.content_alignment;
+      return alignment || null;
+    } catch (error) {
+      console.error('Failed to parse content alignment:', error);
+      return null;
+    }
+  }, [content?.content_alignment]);
+
+  // Extract comments start time for timeline marker
+  const commentsStartTime = parsedAlignment?.commentsStartTime || null;
+
+  // Calculate marker position as percentage
+  const commentsMarkerPosition = useMemo(() => {
+    if (!commentsStartTime || !duration || duration === 0) return null;
+    return (commentsStartTime / duration) * 100;
+  }, [commentsStartTime, duration]);
+
+  // Extract HTML sections for aligned read-along
+  const extractedSections = useMemo(() => {
+    if (!content.html_content) return [];
+
+    // Build HTML to match scriptwriter output EXACTLY
+    // Order: Title, Author, Date, Karma, Body (with images), Comments
+    let augmentedHtml = '';
+
+    if (content.title) {
+      augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
+    }
+    if (content.author) {
+      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+      augmentedHtml += `<p>Written by ${cleanAuthor}.</p>\n`;
+    }
+    if (content.published_at) {
+      const date = new Date(content.published_at);
+      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
+    }
+    // Only add karma for EA Forum/LessWrong posts
+    const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
+    if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
+      augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
+    }
+
+    augmentedHtml += content.html_content;
+
+    // Append comments section with ACTUAL COMMENT TEXT as HTML
+    if (content.comments) {
+      try {
+        const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
+        if (comments && Array.isArray(comments) && comments.length > 0) {
+          augmentedHtml += `\n<h2>Comments section:</h2>\n`;
+
+          // Convert comments to HTML paragraphs for alignment
+          function commentsToHTML(commentsList: any[], depth: number = 0): string {
+            let html = '';
+            for (const comment of commentsList) {
+              const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
+              html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
+              if (comment.replies && comment.replies.length > 0) {
+                html += commentsToHTML(comment.replies, depth + 1);
+              }
+            }
+            return html;
+          }
+
+          augmentedHtml += commentsToHTML(comments);
+        }
+      } catch (e) {
+        console.error('Failed to parse comments:', e);
+      }
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(augmentedHtml, 'text/html');
+    const sections: string[] = [];
+
+    // Extract paragraphs, headings, list items, AND IMAGES in order
+    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
+    elements.forEach((el) => {
+      // Add max-width to images to prevent overflow
+      if (el.tagName === 'IMG') {
+        el.setAttribute('style', 'max-width: 100%; height: auto;');
+      }
+      sections.push(el.outerHTML);
+    });
+
+    return sections;
+  }, [content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
+
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
@@ -162,9 +257,29 @@ export function FullscreenPlayer({
     }
   });
 
-  // Scroll active word to center
+  // Scroll active word/section to center
   const scrollToActive = useCallback(() => {
-    if (activeWordIndex >= 0) {
+    // For aligned view, scroll to active section
+    if (parsedAlignment && extractedSections.length > 0) {
+      const alignmentSections = parsedAlignment.sections;
+      let activeSectionIndex = -1;
+      for (let i = 0; i < alignmentSections.length; i++) {
+        if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
+          activeSectionIndex = i;
+          break;
+        }
+      }
+      if (activeSectionIndex >= 0) {
+        const element = document.getElementById(`section-${activeSectionIndex}`);
+        if (element) {
+          element.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          });
+        }
+      }
+    } else if (activeWordIndex >= 0) {
+      // For word-by-word view, scroll to active word
       const element = document.getElementById(`word-${activeWordIndex}`);
       if (element) {
         element.scrollIntoView({
@@ -173,7 +288,7 @@ export function FullscreenPlayer({
         });
       }
     }
-  }, [activeWordIndex]);
+  }, [activeWordIndex, parsedAlignment, extractedSections, currentTime]);
 
   // Trigger scroll when switching to read-along tab
   useEffect(() => {
@@ -182,6 +297,13 @@ export function FullscreenPlayer({
       setTimeout(scrollToActive, 100);
     }
   }, [activeTab, scrollToActive]);
+
+  // Auto-scroll to active section as audio plays (for aligned view)
+  useEffect(() => {
+    if (activeTab === 'read-along' && parsedAlignment && extractedSections.length > 0) {
+      scrollToActive();
+    }
+  }, [activeTab, currentTime, parsedAlignment, extractedSections, scrollToActive]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
@@ -259,6 +381,61 @@ export function FullscreenPlayer({
             ))}
           </div>
         )}
+      </div>
+    );
+  };
+
+  // Render aligned read-along content (formatted HTML with section highlighting)
+  const renderAlignedReadAlong = () => {
+    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) {
+      return null; // Fall back to word-by-word transcript
+    }
+
+    const alignmentSections = parsedAlignment.sections;
+
+    // Find the active section index based on currentTime
+    let activeSectionIndex = -1;
+    for (let i = 0; i < alignmentSections.length; i++) {
+      if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
+        activeSectionIndex = i;
+        break;
+      }
+    }
+
+    return (
+      <div className="aligned-read-along">
+        {alignmentSections.map((alignSection: any, index: number) => {
+          const isActive = index === activeSectionIndex;
+          // Use the corresponding HTML section if available
+          const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
+
+          return (
+            <div
+              key={index}
+              id={`section-${index}`}
+              className={`read-along-section ${isActive ? 'active' : ''}`}
+              style={{
+                backgroundColor: isActive ? 'rgba(96, 165, 250, 0.1)' : 'transparent',
+                borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
+                paddingLeft: '1rem',
+                marginBottom: '1rem',
+                transition: 'all 0.3s ease',
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                // Seek to this section's start time
+                onSeek(alignSection.startTime);
+              }}
+            >
+              <div
+                dangerouslySetInnerHTML={{ __html: htmlContent }}
+                style={{
+                  color: isActive ? '#60a5fa' : undefined,
+                }}
+              />
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -386,7 +563,11 @@ export function FullscreenPlayer({
             </div>
             {readAlongMessage ? (
               <p className="no-content">{readAlongMessage}</p>
+            ) : parsedAlignment && extractedSections.length > 0 ? (
+              // NEW: Aligned read-along (formatted content with section highlighting)
+              renderAlignedReadAlong()
             ) : displayWords.length > 0 ? (
+              // FALLBACK: Word-by-word transcript (podcasts, or articles without alignment)
               <p className="read-along-text">
                 {displayWords.map((word, index) => {
                   const isRead = index <= activeWordIndex;
@@ -504,14 +685,33 @@ export function FullscreenPlayer({
       <div className="fullscreen-player-controls">
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min="0"
-            max={duration || 0}
-            value={currentTime}
-            onChange={(e) => onSeek(parseFloat(e.target.value))}
-            className="progress-slider"
-          />
+          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 0}
+              value={currentTime}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="progress-slider"
+            />
+            {commentsMarkerPosition !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${commentsMarkerPosition}%`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '3px',
+                  height: '14px',
+                  backgroundColor: '#f97316',
+                  borderRadius: '1px',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title="Comments section starts here"
+              />
+            )}
+          </div>
           <span className="time">{formatTime(duration)}</span>
         </div>
 

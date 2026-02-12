@@ -55,6 +55,7 @@ Wallacast supports multiple users with complete data isolation:
 | TTS generation | `backend/src/services/openai-tts.ts` |
 | Image descriptions | `backend/src/services/image-alt-text.ts` |
 | Transcription | `backend/src/services/transcription.ts` |
+| Content-transcript alignment | `backend/src/services/content-alignment.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player | `frontend/src/components/AudioPlayer.tsx` |
