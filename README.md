@@ -14,7 +14,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Component | Technology |
 |-----------|------------|
 | Backend | Node.js, Express, TypeScript |
-| Frontend | React, Vite, TypeScript |
+| Frontend | React, Vite, TypeScript (PWA enabled) |
 | Database | PostgreSQL |
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
@@ -339,6 +339,35 @@ Wallacast supports multiple users with complete data isolation:
 - **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings (field names aligned with Wallabag API)
 - **`App.css`**: All styles (single CSS file, no modules)
 - **`index.css`**: Base styles from Vite template
+
+### Progressive Web App (PWA)
+
+Wallacast is a fully-functional Progressive Web App that can be installed on mobile and desktop devices:
+
+**Installation:**
+- **Mobile (iOS/Android)**: Visit the site in your browser, tap the Share button (iOS) or browser menu (Android), and select "Add to Home Screen" or "Install app"
+- **Desktop**: When you visit the site, modern browsers (Chrome, Edge, Safari) will show an install prompt in the address bar
+
+**PWA Features:**
+- **Standalone App Window**: Launches in its own window without browser UI (no address bar, tabs)
+- **App Icons**: Custom wallacast icons at all required sizes (48px to 512px) for home screen, taskbar, and app launcher
+- **Offline Support**: Service worker caches static assets (HTML, CSS, JS) for offline access to the app shell
+- **Background Caching**: Network-first strategy for API calls with cache fallback ensures functionality even with poor connectivity
+- **Theme Colors**: Custom theme color (`#2563eb`) for browser/OS UI integration
+
+**Implementation Files:**
+- **`public/manifest.json`**: Web app manifest defining app name, icons, display mode, theme colors
+- **`public/service-worker.js`**: Service worker implementing caching strategies (cache-first for static assets, network-first for API calls)
+- **`main.tsx`**: Service worker registration on app load
+- **`index.html`**: PWA meta tags, manifest link, favicons, iOS-specific meta tags
+- **`public/AppIcons/`**: Icon assets organized by platform (android, ios, windows11)
+
+**Caching Strategy:**
+- Static assets (HTML, CSS, JS, icons): Cache-first with background refresh for responsiveness
+- API calls (`/api/*`): Network-first with cache fallback for reliability
+- Cache version: `wallacast-v1` (increment to force cache refresh on updates)
+
+**Note**: The PWA works best when deployed over HTTPS (required for service workers). Railway automatically provides HTTPS.
 
 ## Database Schema
 
