@@ -10,7 +10,7 @@ import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
-import { alignContentWithTranscript } from './content-alignment.js';
+import { generateLLMAlignment } from './llm-alignment.js';
 
 interface Comment {
   id?: string;
@@ -737,60 +737,13 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
             [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
           );
 
-          // Run alignment if html_content is available (articles/texts only)
+          // Run LLM alignment if html_content is available (articles/texts only)
           if (content.html_content) {
-            console.log('[TTS] Running content alignment...');
+            console.log('[TTS] Running LLM-based content alignment...');
             try {
-              // Build HTML to match scriptwriter output EXACTLY
-              // Order: Title, Author, Date, Karma, Body, Comments
-              let augmentedHtml = '';
-
-              if (content.title) {
-                augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
-              }
-              if (content.author) {
-                augmentedHtml += `<p>Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}.</p>\n`;
-              }
-              if (content.published_at) {
-                augmentedHtml += `<p>Published on ${formatDateForNarration(content.published_at)}.</p>\n`;
-              }
-              // Only add karma for EA Forum/LessWrong posts
-              const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
-              if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
-                augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
-              }
-
-              augmentedHtml += content.html_content;
-
-              // Append comments section with ACTUAL COMMENT TEXT as HTML
-              if (content.comments) {
-                try {
-                  const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-                  if (comments && comments.length > 0) {
-                    augmentedHtml += `\n<h2>Comments section:</h2>\n`;
-
-                    // Convert comments to HTML paragraphs for alignment
-                    function commentsToHTML(commentsList: any[], depth: number = 0): string {
-                      let html = '';
-                      for (const comment of commentsList) {
-                        const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
-                        html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
-                        if (comment.replies && comment.replies.length > 0) {
-                          html += commentsToHTML(comment.replies, depth + 1);
-                        }
-                      }
-                      return html;
-                    }
-
-                    augmentedHtml += commentsToHTML(comments);
-                  }
-                } catch (e) {
-                  console.error('[Alignment] Failed to parse comments:', e);
-                }
-              }
-
-              const alignment = await alignContentWithTranscript(
-                augmentedHtml,
+              const alignment = await generateLLMAlignment(
+                contentId,
+                content.user_id,
                 transcriptResult.words
               );
 
@@ -799,9 +752,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
                 [JSON.stringify(alignment), 'completed', 100, contentId]
               );
 
-              console.log(`[TTS] Alignment complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy, ${alignment.sections.length} sections mapped`);
+              console.log(`[TTS] LLM alignment complete: ${alignment.elements.length} elements timestamped`);
             } catch (alignError) {
-              console.error('[TTS] Alignment failed (non-fatal):', alignError);
+              console.error('[TTS] LLM alignment failed (non-fatal):', alignError);
               // Still mark as completed even if alignment fails
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
