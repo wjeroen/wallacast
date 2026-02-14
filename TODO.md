@@ -123,6 +123,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Fix Whisper timestamp seeking - clicking words works correctly now (2026-01-29)
 - [x] **[P1]** LLM-based content alignment (replaces Needleman-Wunsch) - read-along tab now looks exactly like content+comments tabs with per-element timestamps (2026-02-14)
 - [x] **[P2]** Auto-scroll toggle in tab header (persisted to localStorage) (2026-02-14)
+- [x] **[P1]** Fix LLM alignment timestamp precision - changed from 5-second time buckets (which forced LLM to snap to multiples of 5) to inline per-word timestamps giving sub-second precision; also fixed M:SS→M.SS format confusion (2026-02-14)
 - [ ] **[P2]** Test LLM alignment quality across different content types (articles, EA Forum, LessWrong, podcasts)
 - [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 

@@ -7,7 +7,7 @@
  * How it works:
  * 1. Extract block-level elements from HTML (paragraphs, headings, images, etc.)
  * 2. Extract comments as individual elements with metadata
- * 3. Build a time-bucketed transcript from Whisper word timestamps
+ * 3. Build a transcript with inline per-word timestamps from Whisper
  * 4. Send elements + transcript to the user's selected LLM
  * 5. LLM returns a start time for each element
  * 6. Store as content_alignment JSONB with version: 'llm-v1'
@@ -283,33 +283,25 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
 }
 
 /**
- * Build time-bucketed transcript from word-level timestamps.
- * Groups words into segments (default 5 seconds) with timestamps.
- * Smaller buckets give the LLM finer-grained anchors for matching.
+ * Build transcript with inline per-word timestamp markers.
+ * Instead of grouping into time buckets (which limits LLM to bucket-boundary precision),
+ * this embeds actual Whisper timestamps every N words, giving sub-second precision.
+ *
+ * Output: "[0.0] Title, Do Your Job [1.5] Unreasonably Well, written [2.8] by Max Dalton..."
  */
-function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number = 5): string {
+function buildTimedTranscript(words: TranscriptWord[], wordsPerMarker: number = 5): string {
   if (words.length === 0) return '';
 
-  const segments: string[] = [];
-  let currentSegmentStart = 0;
-  let currentWords: string[] = [];
+  const parts: string[] = [];
 
-  for (const word of words) {
-    if (word.start >= currentSegmentStart + segmentDuration && currentWords.length > 0) {
-      // Use total seconds (e.g., [90s]) instead of M:SS to avoid LLM echoing M.SS format
-      segments.push(`[${Math.round(currentSegmentStart)}s] ${currentWords.join(' ')}`);
-      currentSegmentStart = Math.floor(word.start / segmentDuration) * segmentDuration;
-      currentWords = [];
+  for (let i = 0; i < words.length; i++) {
+    if (i % wordsPerMarker === 0) {
+      parts.push(`[${words[i].start.toFixed(1)}]`);
     }
-    currentWords.push((word.word || '').trim());
+    parts.push((words[i].word || '').trim());
   }
 
-  // Last segment
-  if (currentWords.length > 0) {
-    segments.push(`[${Math.round(currentSegmentStart)}s] ${currentWords.join(' ')}`);
-  }
-
-  return segments.join('\n');
+  return parts.join(' ');
 }
 
 /**
@@ -402,26 +394,30 @@ export async function generateLLMAlignment(
 
 The article was converted to speech via TTS. The audio reads: title, author/date, article body, then optionally a comments section.
 
+TRANSCRIPT FORMAT:
+The transcript has inline timestamp markers like [14.2] every few words, showing the exact time in seconds at that point. Use these markers to pinpoint precise timestamps.
+
 YOUR METHOD:
-1. For each content element below, read its text
-2. Find where those words (or close paraphrase) appear in the timestamped transcript
-3. Return the timestamp where that element STARTS being spoken
+1. For each content element, find its first distinctive words in the transcript
+2. Note the nearest [timestamp] marker at or before that location
+3. Return that timestamp value
 
-CRITICAL: You MUST actually match text between elements and transcript. Do NOT distribute timestamps evenly — different paragraphs have very different lengths in the audio. Short paragraphs might be 3 seconds apart, long ones might be 30+ seconds apart.
+Example: If element text is "I've just started a blog" and you find in the transcript "[14.2] I've just started a [16.8] blog about", return 14.2.
 
-BAD output (evenly spaced): [0, 15, 30, 45, 60, 75, 90]
-GOOD output (actually matched): [0, 3.5, 7, 14, 52, 58, 103]
+CRITICAL: You MUST actually search for text matches. Do NOT distribute timestamps evenly — different paragraphs have very different lengths in the audio. Short paragraphs might be 2 seconds apart, long ones might be 60+ seconds apart.
 
-The total audio is ${totalAudioDuration} seconds long. Your timestamps must span from 0 to approximately ${totalAudioDuration}.
+BAD output (evenly spaced, round numbers): [0, 15, 30, 45, 60, 75, 90]
+GOOD output (from actual [timestamp] markers): [0.0, 3.2, 7.1, 14.2, 52.8, 58.1, 103.4]
+
+The total audio is ${totalAudioDuration} seconds. The last element should have a timestamp near ${totalAudioDuration}.
 
 RULES:
-- Timestamps are in TOTAL SECONDS (e.g., 90 for 1 minute 30 seconds, NOT 1.30)
+- Timestamps are in TOTAL SECONDS (e.g., 90.5 for ~1min 30sec, NOT 1.30)
 - Times must be non-decreasing
-- Use decimal precision (e.g., 14.5, not just 15)
+- Use the decimal values from the [timestamp] markers — do NOT round to whole numbers
 - If an element isn't spoken (e.g., decorative image), use the same time as the previous element
-- Images correspond to "An image shows..." in the audio
-- The array must have exactly ${allElements.length} numbers
-- Not all articles have comments. If there are no comment elements, that's fine.`;
+- Images correspond to "An image shows..." or "An image depicts..." in the audio
+- The array must have exactly ${allElements.length} numbers`;
 
   const userPrompt = `CONTENT ELEMENTS (${allElements.length} total):
 ${elementsList}
@@ -429,7 +425,7 @@ ${elementsList}
 TIMESTAMPED TRANSCRIPT (total duration: ${totalAudioDuration}s):
 ${timedTranscript}
 
-Find where each element is spoken in the transcript. Return ONLY a JSON array of ${allElements.length} timestamps in TOTAL SECONDS (e.g., 90 not 1.30 for 1 min 30 sec).`;
+For each element, find where its text appears in the transcript using the [timestamp] markers. Return ONLY a JSON array of ${allElements.length} timestamps in seconds, using the decimal values from the markers.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -513,6 +509,24 @@ Find where each element is spoken in the transcript. Return ONLY a JSON array of
     for (let i = 1; i < timestamps.length; i++) {
       if (timestamps[i] < timestamps[i - 1]) {
         timestamps[i] = timestamps[i - 1];
+      }
+    }
+
+    // Validate: check if timestamps actually cover the full audio
+    const finalTs = timestamps[timestamps.length - 1];
+    if (totalAudioDuration > 60 && finalTs < totalAudioDuration * 0.7) {
+      console.warn(`[LLM-Align] WARNING: Timestamps only cover ${finalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(finalTs / totalAudioDuration * 100).toFixed(0)}%). LLM may not have matched the full transcript.`);
+    }
+
+    // Validate: detect lazy even distribution (all same interval)
+    if (timestamps.length >= 5) {
+      const diffs = timestamps.slice(1).map((t, i) => Math.round((t - timestamps[i]) * 10) / 10);
+      const nonZeroDiffs = diffs.filter(d => d > 0);
+      if (nonZeroDiffs.length > 0) {
+        const uniqueDiffs = new Set(nonZeroDiffs);
+        if (uniqueDiffs.size <= 2) {
+          console.warn(`[LLM-Align] WARNING: Timestamps appear evenly distributed (intervals: ${[...uniqueDiffs].join(', ')}s). LLM may not have done real text matching.`);
+        }
       }
     }
 
