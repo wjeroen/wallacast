@@ -2752,11 +2752,10 @@
 /* Orange divider between content and comments in read-along tab.
    Visually connects to the orange timeline marker on the progress bar. */
 .read-along-comments-divider {
-  height: 2px;
+  height: 3px;
   background: #f97316;
   margin: 1.5rem 0 0.5rem 0;
   border-radius: 1px;
-  opacity: 0.7;
 }
 
 /* Queue Tab */
