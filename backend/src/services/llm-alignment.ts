@@ -296,9 +296,8 @@ function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number =
 
   for (const word of words) {
     if (word.start >= currentSegmentStart + segmentDuration && currentWords.length > 0) {
-      const mins = Math.floor(currentSegmentStart / 60);
-      const secs = Math.floor(currentSegmentStart % 60);
-      segments.push(`[${mins}:${secs.toString().padStart(2, '0')}] ${currentWords.join(' ')}`);
+      // Use total seconds (e.g., [90s]) instead of M:SS to avoid LLM echoing M.SS format
+      segments.push(`[${Math.round(currentSegmentStart)}s] ${currentWords.join(' ')}`);
       currentSegmentStart = Math.floor(word.start / segmentDuration) * segmentDuration;
       currentWords = [];
     }
@@ -307,9 +306,7 @@ function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number =
 
   // Last segment
   if (currentWords.length > 0) {
-    const mins = Math.floor(currentSegmentStart / 60);
-    const secs = Math.floor(currentSegmentStart % 60);
-    segments.push(`[${mins}:${secs.toString().padStart(2, '0')}] ${currentWords.join(' ')}`);
+    segments.push(`[${Math.round(currentSegmentStart)}s] ${currentWords.join(' ')}`);
   }
 
   return segments.join('\n');
@@ -418,6 +415,7 @@ GOOD output (actually matched): [0, 3.5, 7, 14, 52, 58, 103]
 The total audio is ${totalAudioDuration} seconds long. Your timestamps must span from 0 to approximately ${totalAudioDuration}.
 
 RULES:
+- Timestamps are in TOTAL SECONDS (e.g., 90 for 1 minute 30 seconds, NOT 1.30)
 - Times must be non-decreasing
 - Use decimal precision (e.g., 14.5, not just 15)
 - If an element isn't spoken (e.g., decorative image), use the same time as the previous element
@@ -431,7 +429,7 @@ ${elementsList}
 TIMESTAMPED TRANSCRIPT (total duration: ${totalAudioDuration}s):
 ${timedTranscript}
 
-Find where each element is spoken in the transcript. Return ONLY a JSON array of ${allElements.length} timestamps in seconds.`;
+Find where each element is spoken in the transcript. Return ONLY a JSON array of ${allElements.length} timestamps in TOTAL SECONDS (e.g., 90 not 1.30 for 1 min 30 sec).`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -476,6 +474,31 @@ Find where each element is spoken in the transcript. Return ONLY a JSON array of
       const n = typeof t === 'number' ? t : parseFloat(String(t));
       return isNaN(n) ? 0 : n;
     });
+
+    // Detect M.SS format: if max timestamp is much smaller than audio duration,
+    // the LLM likely returned minutes.seconds (e.g., 1.30 = 1min 30sec = 90s)
+    const maxTs = Math.max(...timestamps);
+    if (totalAudioDuration > 60 && maxTs > 0 && maxTs < totalAudioDuration * 0.25) {
+      // Re-parse from raw JSON, treating values as M.SS
+      console.warn(`[LLM-Align] Detected M.SS format (max ${maxTs}s vs ${totalAudioDuration}s duration). Converting...`);
+      const rawValues = JSON.parse(jsonMatch[0]) as (number | string)[];
+      timestamps = rawValues.map(t => {
+        const str = String(t);
+        // Values like "1.30" mean 1 min 30 sec, but JSON parsed it to 1.3
+        // We need the original string to recover the "30" part
+        const dotIndex = str.indexOf('.');
+        if (dotIndex === -1) return Number(str) * 60; // whole number = minutes
+        const minPart = parseInt(str.slice(0, dotIndex), 10) || 0;
+        const secStr = str.slice(dotIndex + 1);
+        // Pad to 2 digits: "5" → "50"? No — "0.5" meant "0:05" (5 sec), not 50.
+        // The LLM writes "0.5" for 5s, "0.05" for 5s, "0.50" for 50s, "1.30" for 1:30
+        // Key insight: if secStr has 1 digit, it could be ambiguous (0.5 = 5s or 50s?)
+        // But in M:SS, single digit after dot = that many seconds (0.5 = 0:05 = 5s)
+        const secPart = parseInt(secStr, 10) || 0;
+        return minPart * 60 + secPart;
+      }).map(n => isNaN(n) ? 0 : n);
+      console.log(`[LLM-Align] Converted timestamps range: ${timestamps[0]}s to ${timestamps[timestamps.length - 1]}s`);
+    }
 
     // Pad or trim to match element count
     if (timestamps.length !== allElements.length) {
