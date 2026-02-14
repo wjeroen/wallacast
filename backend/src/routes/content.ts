@@ -421,7 +421,7 @@ router.patch('/:id', async (req, res) => {
                   console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
                   try {
                     const alignment = await generateLLMAlignment(
-                      id,
+                      parseInt(id),
                       req.user!.userId,
                       result.words
                     );
