@@ -401,7 +401,7 @@ The audio typically reads in this order:
 3. Image descriptions replace images (spoken as "An image shows...")
 4. Comments are read after the article body (introduced by "Comments section")
 
-TASK: For each numbered content element, determine the approximate start time (in seconds) when it begins being spoken in the audio. Return ONLY a JSON array of numbers.
+TASK: For each numbered content element, determine the approximate start time (in seconds) when it begins being spoken in the audio. Return ONLY a JSON array of numbers. Note that not all articles will have comment sections.
 
 RULES:
 - Times MUST be non-decreasing (each element's time >= previous element's time)
