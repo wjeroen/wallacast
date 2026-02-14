@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -314,12 +314,19 @@ export function FullscreenPlayer({
     }
   }, [activeWordIndex, activeElementIndex, isLLMAlignment, parsedAlignment, extractedSections, currentTime]);
 
-  // Trigger scroll when switching to read-along tab
+  // Keep a ref to scrollToActive so the tab-switch effect can use the latest
+  // version without re-firing on every currentTime tick
+  const scrollToActiveRef = useRef(scrollToActive);
+  useEffect(() => {
+    scrollToActiveRef.current = scrollToActive;
+  }, [scrollToActive]);
+
+  // Trigger scroll once when switching to read-along tab
   useEffect(() => {
     if (activeTab === 'read-along') {
-      setTimeout(scrollToActive, 100);
+      setTimeout(() => scrollToActiveRef.current(), 100);
     }
-  }, [activeTab, scrollToActive]);
+  }, [activeTab]);
 
   // Auto-scroll as audio plays (only when autoScroll is on)
   useEffect(() => {
@@ -463,58 +470,84 @@ export function FullscreenPlayer({
           })}
         </div>
 
-        {/* Comments section (same styling as comments tab) */}
-        {commentElements.length > 0 && (
-          <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
-            {/* Orange divider line — matches the orange timeline marker */}
-            <div className="read-along-comments-divider" />
-            {commentDivider && (
-              <div
-                id={`ra-el-${elements.indexOf(commentDivider)}`}
-                className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
-                onClick={() => onSeek(commentDivider.startTime)}
-              >
-                <h3>Comments ({commentElements.length})</h3>
-              </div>
-            )}
-            <div className="comments-list">
-              {commentElements.map((el, i) => {
-                const globalIndex = elements.indexOf(el);
-                const isActive = globalIndex === activeElementIndex;
-                const meta = el.commentMeta;
-                const metaStr = buildCommentMetadata(meta, isLW);
+        {/* Comments section (same nesting as comments tab) */}
+        {commentElements.length > 0 && (() => {
+          // Build tree from flat depth-tracked comments to match comments tab nesting
+          interface CommentNode {
+            element: LLMAlignmentElement;
+            globalIndex: number;
+            children: CommentNode[];
+          }
+          const roots: CommentNode[] = [];
+          const stack: CommentNode[] = [];
+          for (const el of commentElements) {
+            const depth = el.commentMeta?.depth ?? 0;
+            const node: CommentNode = { element: el, globalIndex: elements.indexOf(el), children: [] };
+            while (stack.length > depth) stack.pop();
+            if (stack.length === 0) {
+              roots.push(node);
+            } else {
+              stack[stack.length - 1].children.push(node);
+            }
+            stack.push(node);
+          }
 
-                return (
-                  <div
-                    key={`comment-${i}`}
-                    id={`ra-el-${globalIndex}`}
-                    className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                    onClick={() => onSeek(el.startTime)}
-                    style={{ paddingLeft: meta?.depth ? `${meta.depth * 10}px` : undefined }}
-                  >
-                    <div className="comment">
-                      <div className="comment-header">
-                        <span className="comment-username">{meta?.username || 'Anonymous'}</span>
-                        {meta?.date && (
-                          <span className="comment-date">
-                            {' \u00B7 '}
-                            {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
-                          </span>
-                        )}
-                      </div>
-                      {metaStr && (
-                        <div className="comment-metadata">
-                          <span className="comment-votes">{metaStr}</span>
-                        </div>
-                      )}
-                      <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
-                    </div>
+          const renderCommentNode = (node: CommentNode): React.ReactNode => {
+            const { element: el, globalIndex, children } = node;
+            const isActive = globalIndex === activeElementIndex;
+            const meta = el.commentMeta;
+            const metaStr = buildCommentMetadata(meta, isLW);
+            return (
+              <div className="comment" key={`comment-${globalIndex}`}>
+                <div
+                  id={`ra-el-${globalIndex}`}
+                  className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onSeek(el.startTime); }}
+                >
+                  <div className="comment-header">
+                    <span className="comment-username">{meta?.username || 'Anonymous'}</span>
+                    {meta?.date && (
+                      <span className="comment-date">
+                        {' \u00B7 '}
+                        {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
+                      </span>
+                    )}
                   </div>
-                );
-              })}
+                  {metaStr && (
+                    <div className="comment-metadata">
+                      <span className="comment-votes">{metaStr}</span>
+                    </div>
+                  )}
+                  <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
+                </div>
+                {children.length > 0 && (
+                  <div className="comment-replies">
+                    {children.map(child => renderCommentNode(child))}
+                  </div>
+                )}
+              </div>
+            );
+          };
+
+          return (
+            <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+              {/* Orange divider line — matches the orange timeline marker */}
+              <div className="read-along-comments-divider" />
+              {commentDivider && (
+                <div
+                  id={`ra-el-${elements.indexOf(commentDivider)}`}
+                  className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(commentDivider.startTime)}
+                >
+                  <h3>Comments ({commentElements.length})</h3>
+                </div>
+              )}
+              <div className="comments-list">
+                {roots.map(node => renderCommentNode(node))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     );
   };
