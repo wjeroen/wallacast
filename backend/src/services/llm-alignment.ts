@@ -305,6 +305,110 @@ function buildTimedTranscript(words: TranscriptWord[], wordsPerMarker: number = 
 }
 
 /**
+ * Post-process LLM timestamps using algorithmic text matching to catch gross errors.
+ * For each element, searches the transcript for the element's distinctive words.
+ * If the best match is significantly different from the LLM's timestamp, uses the
+ * algorithmic match instead. This catches cases where the LLM skipped elements,
+ * matched to the wrong section, or got off-by-one on comments.
+ *
+ * NOT the same as global Needleman-Wunsch alignment — this only finds ~N anchor
+ * points with a simple sliding window, and only overrides when the LLM is clearly wrong.
+ */
+function verifyAndFixTimestamps(
+  timestamps: number[],
+  elements: ContentElement[],
+  transcriptWords: TranscriptWord[]
+): number[] {
+  const fixed = [...timestamps];
+  const STOP_WORDS = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'of', 'in', 'to',
+    'and', 'for', 'on', 'at', 'by', 'it', 'i', 'that', 'this', 'with',
+    'be', 'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would',
+    'can', 'could', 'should', 'may', 'might', 'not', 'no', 'but', 'or',
+    'if', 'so', 'as', 'its', 'my', 'your', 'their', 'our', 'his', 'her',
+  ]);
+
+  // Pre-normalize transcript words
+  const normalizedTranscript = transcriptWords.map(w =>
+    w.word.toLowerCase().replace(/[^\w]/g, '').trim()
+  );
+
+  let corrections = 0;
+
+  for (let elIdx = 0; elIdx < elements.length; elIdx++) {
+    const el = elements[elIdx];
+
+    // Skip non-text elements
+    if (el.type === 'comment-divider' || el.type === 'image') continue;
+
+    // Extract distinctive words from element text
+    const elementWords = el.text.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+      .slice(0, 8);
+
+    if (elementWords.length < 2) continue;
+
+    // Search forward from a bit before the previous element's position
+    // (the -5s buffer handles cases where an earlier correction shifted things)
+    const searchStartTime = elIdx > 0 ? Math.max(0, fixed[elIdx - 1] - 5) : 0;
+    const searchStartIdx = transcriptWords.findIndex(w => w.start >= searchStartTime);
+    const startIdx = Math.max(0, searchStartIdx);
+
+    let bestScore = 0;
+    let bestIdx = -1;
+    const windowSize = 25;
+
+    for (let i = startIdx; i < normalizedTranscript.length - 1; i++) {
+      const endJ = Math.min(i + windowSize, normalizedTranscript.length);
+      const window = normalizedTranscript.slice(i, endJ);
+      let score = 0;
+      for (const ew of elementWords) {
+        if (window.some(tw => tw === ew || (tw.length > 4 && ew.length > 4 && tw.startsWith(ew.slice(0, 4))))) {
+          score++;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx < 0) continue;
+
+    const matchRatio = bestScore / elementWords.length;
+    const algorithmicTs = transcriptWords[bestIdx].start;
+    const diff = Math.abs(algorithmicTs - fixed[elIdx]);
+
+    // High confidence match (>60% words): correct if >5s off
+    // Medium confidence match (>40% words): correct if >15s off
+    const shouldCorrect = (matchRatio >= 0.6 && diff > 5) || (matchRatio >= 0.4 && diff > 15);
+
+    if (shouldCorrect) {
+      console.log(`[LLM-Align] CORRECTED [${elIdx}] (${el.type}): ${fixed[elIdx].toFixed(1)}s → ${algorithmicTs.toFixed(1)}s (${bestScore}/${elementWords.length} words, diff=${diff.toFixed(1)}s)`);
+      fixed[elIdx] = algorithmicTs;
+      corrections++;
+    }
+  }
+
+  if (corrections > 0) {
+    console.log(`[LLM-Align] Applied ${corrections} algorithmic corrections to LLM timestamps`);
+  } else {
+    console.log(`[LLM-Align] All LLM timestamps verified — no corrections needed`);
+  }
+
+  // Re-enforce non-decreasing after corrections
+  for (let i = 1; i < fixed.length; i++) {
+    if (fixed[i] < fixed[i - 1]) {
+      fixed[i] = fixed[i - 1];
+    }
+  }
+
+  return fixed;
+}
+
+/**
  * Main entry point: generate LLM-based content alignment.
  * Extracts content elements, builds timed transcript, calls LLM,
  * and returns structured alignment data for the read-along tab.
@@ -511,6 +615,11 @@ For each element, find where its text appears in the transcript using the [times
         timestamps[i] = timestamps[i - 1];
       }
     }
+
+    // Algorithmic post-processing: verify timestamps by searching for element text
+    // in the transcript. Corrects gross LLM errors (>5-15s off) while keeping
+    // good LLM matches intact.
+    timestamps = verifyAndFixTimestamps(timestamps, allElements, transcriptWords);
 
     // Validate: check if timestamps actually cover the full audio
     const finalTs = timestamps[timestamps.length - 1];
