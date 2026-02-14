@@ -504,6 +504,13 @@ Find where each element is spoken in the transcript. Return ONLY a JSON array of
     timestamps = allElements.map((_, i) => Math.round((i / Math.max(allElements.length, 1)) * totalDuration * 10) / 10);
   }
 
+  // Helper: find transcript text near a timestamp for logging
+  function findTranscriptNearTime(time: number, words: TranscriptWord[], windowSeconds: number = 10): string {
+    const matches = words.filter(w => Math.abs(w.start - time) < windowSeconds);
+    if (matches.length === 0) return '[no match found]';
+    return matches.slice(0, 15).map(w => w.word).join(' ').trim() + '...';
+  }
+
   // Log sample timestamps for debugging
   const sampleTimestamps = timestamps.length <= 10
     ? timestamps
@@ -519,6 +526,19 @@ Find where each element is spoken in the transcript. Return ONLY a JSON array of
   }
   if (allElements.length > 8) {
     console.log(`[LLM-Align]   ... (${allElements.length - 8} more elements)`);
+  }
+
+  // Log example matches to verify LLM is actually matching text
+  console.log(`[LLM-Align] Example matches (element text → transcript at timestamp):`);
+  const exampleIndices = [0, 1, allElements.length - 1].filter(i => i < allElements.length && i >= 0);
+  for (const i of exampleIndices) {
+    const el = allElements[i];
+    const typeLabel = el.type === 'comment' ? `comment by ${el.commentMeta?.username}` : el.type;
+    const elementText = el.text.slice(0, 80).replace(/\n/g, ' ');
+    const transcriptText = findTranscriptNearTime(timestamps[i], transcriptWords);
+    console.log(`[LLM-Align]   [${i}] ${typeLabel} @ ${timestamps[i]}s:`);
+    console.log(`[LLM-Align]     Element: "${elementText}"`);
+    console.log(`[LLM-Align]     Transcript: "${transcriptText}"`);
   }
 
   // Build result elements (strip the `text` field - only needed for LLM prompt)
