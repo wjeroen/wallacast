@@ -466,6 +466,8 @@ export function FullscreenPlayer({
         {/* Comments section (same styling as comments tab) */}
         {commentElements.length > 0 && (
           <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+            {/* Orange divider line — matches the orange timeline marker */}
+            <div className="read-along-comments-divider" />
             {commentDivider && (
               <div
                 id={`ra-el-${elements.indexOf(commentDivider)}`}
