@@ -2703,6 +2703,52 @@
   padding: 2rem;
 }
 
+/* LLM Read-Along Elements */
+
+.read-along-element {
+  cursor: pointer;
+  transition: background-color 0.3s ease, border-left-color 0.3s ease;
+  border-left: 3px solid transparent;
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
+  border-radius: 2px;
+}
+
+.read-along-element:hover {
+  background-color: rgba(96, 165, 250, 0.06);
+}
+
+.read-along-element.ra-active {
+  background-color: rgba(96, 165, 250, 0.1);
+  border-left-color: #60a5fa;
+}
+
+/* Autoscroll toggle in tabs bar */
+
+.autoscroll-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+
+.autoscroll-toggle:hover {
+  color: #94a3b8;
+}
+
+.autoscroll-toggle.active {
+  color: #60a5fa;
+}
+
 /* Queue Tab */
 
 .tab-queue-display {
@@ -2848,5 +2894,14 @@
 
   .read-along-text {
     font-size: 1rem;
+  }
+
+  .autoscroll-label {
+    display: none;
+  }
+
+  .read-along-element {
+    padding-left: 0.35rem;
+    margin-left: -0.35rem;
   }
 }

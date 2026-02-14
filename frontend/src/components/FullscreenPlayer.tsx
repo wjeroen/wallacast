@@ -10,6 +10,7 @@ import {
   Minimize2,
   SquareArrowOutUpRight,
   RefreshCw,
+  ArrowDownToLine,
 } from 'lucide-react';
 import type { ContentItem, Comment } from '../types';
 
@@ -17,6 +18,19 @@ interface TranscriptWord {
   word: string;
   start: number;
   end: number;
+}
+
+interface LLMAlignmentElement {
+  type: string;
+  html: string;
+  startTime: number;
+  commentMeta?: {
+    username: string;
+    date?: string;
+    karma?: number;
+    extendedScore?: Record<string, number>;
+    depth: number;
+  };
 }
 
 interface FullscreenPlayerProps {
@@ -45,11 +59,8 @@ type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
 
 function cleanHtml(text: string): string {
   if (!text) return '';
-  // Remove CDATA wrapper
   let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Remove HTML tags
   cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  // Decode HTML entities
   cleaned = cleaned
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -57,7 +68,6 @@ function cleanHtml(text: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ');
-  // Clean up whitespace
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   return cleaned;
 }
@@ -74,7 +84,6 @@ function getDomainFromUrl(url: string): string {
 function isEAForumOrLessWrong(url: string): boolean {
   if (!url) return false;
   const domain = getDomainFromUrl(url);
-  
   return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
 }
 
@@ -89,6 +98,37 @@ function formatTime(seconds: number): string {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Build metadata string for a comment (e.g., "5 upvotes · 3 agreement")
+ */
+function buildCommentMetadata(
+  meta: LLMAlignmentElement['commentMeta'],
+  isLessWrong: boolean
+): string {
+  if (!meta) return '';
+  const parts: string[] = [];
+
+  if (meta.karma !== undefined && meta.karma !== null) {
+    parts.push(`${meta.karma} upvote${meta.karma !== 1 ? 's' : ''}`);
+  }
+
+  if (meta.extendedScore) {
+    if (isLessWrong) {
+      if (typeof meta.extendedScore.agreement === 'number') {
+        parts.push(`${meta.extendedScore.agreement} agreement`);
+      }
+    } else {
+      Object.entries(meta.extendedScore).forEach(([reaction, count]) => {
+        if (count > 0 && reaction !== 'baseScore') {
+          parts.push(`${count} ${reaction.toLowerCase()}`);
+        }
+      });
+    }
+  }
+
+  return parts.join(' \u00B7 ');
 }
 
 export function FullscreenPlayer({
@@ -112,6 +152,14 @@ export function FullscreenPlayer({
   onRefetch,
 }: FullscreenPlayerProps) {
   const [activeTab, setActiveTab] = useState<TabType>('content');
+  const [autoScroll, setAutoScroll] = useState(() => {
+    return localStorage.getItem('readAlongAutoScroll') !== 'false';
+  });
+
+  // Persist autoscroll preference
+  useEffect(() => {
+    localStorage.setItem('readAlongAutoScroll', String(autoScroll));
+  }, [autoScroll]);
 
   // Parse comments from JSON string if available
   const parsedComments: Comment[] = useMemo(() => {
@@ -141,6 +189,9 @@ export function FullscreenPlayer({
     }
   }, [content?.content_alignment]);
 
+  // Check if this is the new LLM-based alignment
+  const isLLMAlignment = parsedAlignment?.version === 'llm-v1';
+
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
 
@@ -150,17 +201,29 @@ export function FullscreenPlayer({
     return (commentsStartTime / duration) * 100;
   }, [commentsStartTime, duration]);
 
-  // Extract HTML sections for aligned read-along
-  const extractedSections = useMemo(() => {
-    if (!content.html_content) return [];
+  // Find active element index for LLM alignment
+  const activeElementIndex = useMemo(() => {
+    if (!isLLMAlignment || !parsedAlignment?.elements) return -1;
+    const elements = parsedAlignment.elements as LLMAlignmentElement[];
 
-    // Build HTML to match scriptwriter output EXACTLY
-    // Order: Title, Author, Date, Karma, Body (with images), Comments
-    let augmentedHtml = '';
-
-    if (content.title) {
-      augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
+    let activeIdx = -1;
+    for (let i = 0; i < elements.length; i++) {
+      if (elements[i].startTime <= currentTime) {
+        activeIdx = i;
+      } else {
+        break;
+      }
     }
+    return activeIdx;
+  }, [isLLMAlignment, parsedAlignment, currentTime]);
+
+  // Legacy: Extract HTML sections for old aligned read-along (non-LLM)
+  const extractedSections = useMemo(() => {
+    // Only compute for old-style alignment
+    if (isLLMAlignment || !parsedAlignment || !content.html_content) return [];
+
+    let augmentedHtml = '';
+    if (content.title) augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
     if (content.author) {
       const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
       augmentedHtml += `<p>Written by ${cleanAuthor}.</p>\n`;
@@ -170,83 +233,50 @@ export function FullscreenPlayer({
       const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
     }
-    // Only add karma for EA Forum/LessWrong posts
     const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
     if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
       augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
     }
-
     augmentedHtml += content.html_content;
 
-    // Append comments section with ACTUAL COMMENT TEXT as HTML
     if (content.comments) {
       try {
         const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
         if (comments && Array.isArray(comments) && comments.length > 0) {
           augmentedHtml += `\n<h2>Comments section:</h2>\n`;
-
-          // Convert comments to HTML paragraphs for alignment
           function commentsToHTML(commentsList: any[], depth: number = 0): string {
             let html = '';
             for (const comment of commentsList) {
               const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
               html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
-              if (comment.replies && comment.replies.length > 0) {
-                html += commentsToHTML(comment.replies, depth + 1);
-              }
+              if (comment.replies && comment.replies.length > 0) html += commentsToHTML(comment.replies, depth + 1);
             }
             return html;
           }
-
           augmentedHtml += commentsToHTML(comments);
         }
-      } catch (e) {
-        console.error('Failed to parse comments:', e);
-      }
+      } catch (e) { /* ignore */ }
     }
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(augmentedHtml, 'text/html');
     const sections: string[] = [];
-
-    // Extract paragraphs, headings, list items, AND IMAGES in order
     const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
     elements.forEach((el) => {
-      // Add max-width to images to prevent overflow
-      if (el.tagName === 'IMG') {
-        el.setAttribute('style', 'max-width: 100%; height: auto;');
-      }
+      if (el.tagName === 'IMG') el.setAttribute('style', 'max-width: 100%; height: auto;');
       sections.push(el.outerHTML);
     });
-
     return sections;
-  }, [content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
+  }, [isLLMAlignment, parsedAlignment, content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
 
   // Determine which tabs are available
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
-
-    // Content tab for articles and texts only
-    if (content.type === 'article' || content.type === 'text') {
-      tabs.push('content');
-    }
-
-    // Description tab for podcasts only
-    if (content.type === 'podcast_episode') {
-      tabs.push('description');
-    }
-
-    // Comments tab for EA Forum/LessWrong articles (even if no comments yet)
-    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) {
-      tabs.push('comments');
-    }
-
-    // Read-along tab for all content types
+    if (content.type === 'article' || content.type === 'text') tabs.push('content');
+    if (content.type === 'podcast_episode') tabs.push('description');
+    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');
     tabs.push('read-along');
-
-    // Queue tab (always available but work in progress)
     tabs.push('queue');
-
     return tabs;
   }, [content.type, content.url, parsedComments.length]);
 
@@ -257,10 +287,15 @@ export function FullscreenPlayer({
     }
   });
 
-  // Scroll active word/section to center
+  // Scroll active element to center
   const scrollToActive = useCallback(() => {
-    // For aligned view, scroll to active section
-    if (parsedAlignment && extractedSections.length > 0) {
+    if (isLLMAlignment && activeElementIndex >= 0) {
+      const element = document.getElementById(`ra-el-${activeElementIndex}`);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } else if (parsedAlignment && !isLLMAlignment && extractedSections.length > 0) {
+      // Legacy alignment
       const alignmentSections = parsedAlignment.sections;
       let activeSectionIndex = -1;
       for (let i = 0; i < alignmentSections.length; i++) {
@@ -271,109 +306,72 @@ export function FullscreenPlayer({
       }
       if (activeSectionIndex >= 0) {
         const element = document.getElementById(`section-${activeSectionIndex}`);
-        if (element) {
-          element.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center',
-          });
-        }
+        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     } else if (activeWordIndex >= 0) {
-      // For word-by-word view, scroll to active word
       const element = document.getElementById(`word-${activeWordIndex}`);
-      if (element) {
-        element.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-        });
-      }
+      if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [activeWordIndex, parsedAlignment, extractedSections, currentTime]);
+  }, [activeWordIndex, activeElementIndex, isLLMAlignment, parsedAlignment, extractedSections, currentTime]);
 
   // Trigger scroll when switching to read-along tab
   useEffect(() => {
     if (activeTab === 'read-along') {
-      // Small timeout to ensure DOM is rendered before scrolling
       setTimeout(scrollToActive, 100);
     }
   }, [activeTab, scrollToActive]);
 
-  // Auto-scroll to active section as audio plays (for aligned view)
+  // Auto-scroll as audio plays (only when autoScroll is on)
   useEffect(() => {
-    if (activeTab === 'read-along' && parsedAlignment && extractedSections.length > 0) {
+    if (activeTab === 'read-along' && autoScroll) {
       scrollToActive();
     }
-  }, [activeTab, currentTime, parsedAlignment, extractedSections, scrollToActive]);
+  }, [activeTab, currentTime, autoScroll, scrollToActive]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
-      // If already on read-along, clicking again centers the view
       scrollToActive();
     } else {
       setActiveTab(tab);
     }
   };
 
-  // Recursive component to render comments with replies
+  // Recursive component to render comments with replies (for Comments tab)
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    // Build metadata string like "94 upvotes • 16 agreement"
     const metadataParts: string[] = [];
-    
-    // Always show karma as "upvotes"
     if (comment.karma !== undefined && comment.karma !== null) {
       metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
     }
-
-    // Handle extended scores (reactions)
     if (comment.extendedScore) {
-      const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-
-      if (isLessWrong) {
-        // LessWrong: Only show 'agreement' score (simplify - ignore other reactions)
+      const isLW = content.url ? content.url.includes('lesswrong.com') : false;
+      if (isLW) {
         if (typeof comment.extendedScore.agreement === 'number') {
           metadataParts.push(`${comment.extendedScore.agreement} agreement`);
         }
       } else {
-        // EA Forum (and others): Show ALL reactions
         Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
-          const label = reactionType.toLowerCase();
-          metadataParts.push(`${count} ${label}`);
+          metadataParts.push(`${count} ${reactionType.toLowerCase()}`);
         });
       }
     }
 
-    const hasMetadata = metadataParts.length > 0;
-
     return (
-       <div className="comment">
+      <div className="comment">
         <div className="comment-header">
           <span className="comment-username">{comment.username}</span>
           {comment.date && (
             <span className="comment-date">
-              {' • '}
-              {(() => {
-                try {
-                  return new Date(comment.date).toLocaleDateString('en-GB');
-                } catch {
-                  return comment.date;
-                }
-              })()}
+              {' \u00B7 '}
+              {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
             </span>
           )}
         </div>
-         
-        {hasMetadata && metadataParts.length > 0 && (
+        {metadataParts.length > 0 && (
           <div className="comment-metadata">
-            <span className="comment-votes">{metadataParts.join(' • ')}</span>
+            <span className="comment-votes">{metadataParts.join(' \u00B7 ')}</span>
           </div>
         )}
-
-        {/* Render HTML content (blockquotes, links, etc.) */}
-        <div
-          className="comment-content"
-          dangerouslySetInnerHTML={{ __html: comment.content }}
-        />
-
+        <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
         {comment.replies && comment.replies.length > 0 && (
           <div className="comment-replies">
             {comment.replies.map((reply, idx) => (
@@ -385,15 +383,145 @@ export function FullscreenPlayer({
     );
   };
 
-  // Render aligned read-along content (formatted HTML with section highlighting)
-  const renderAlignedReadAlong = () => {
-    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) {
-      return null; // Fall back to word-by-word transcript
-    }
+  // --------------------------------------------------------------------------
+  // LLM Read-Along Renderer
+  // Renders content EXACTLY like content tab + comments tab, with timestamps
+  // --------------------------------------------------------------------------
+  const renderLLMReadAlong = () => {
+    if (!parsedAlignment || !isLLMAlignment) return null;
 
+    const elements = parsedAlignment.elements as LLMAlignmentElement[];
+    const isLW = content.url ? content.url.includes('lesswrong.com') : false;
+
+    // Split elements into categories
+    const titleEl = elements.find(e => e.type === 'title');
+    const metaElements = elements.filter(e => e.type === 'meta');
+    const bodyElements = elements.filter(e =>
+      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block'].includes(e.type)
+    );
+    const commentDivider = elements.find(e => e.type === 'comment-divider');
+    const commentElements = elements.filter(e => e.type === 'comment');
+
+    return (
+      <div className="tab-content-display">
+        {/* Header section (mirrors content tab header) */}
+        <div className="content-header" style={{ marginBottom: '1rem' }}>
+          {/* Title - timestamped */}
+          {titleEl && (
+            <div
+              id={`ra-el-${elements.indexOf(titleEl)}`}
+              className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
+              onClick={() => onSeek(titleEl.startTime)}
+            >
+              <h2 style={{ margin: '0 0 0.5rem 0', color: '#f1f5f9', fontSize: '1.5rem' }}>{content.title}</h2>
+            </div>
+          )}
+
+          {/* Author/date meta - timestamped */}
+          {metaElements.map((el, i) => (
+            <div
+              key={`meta-${i}`}
+              id={`ra-el-${elements.indexOf(el)}`}
+              className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+              onClick={() => onSeek(el.startTime)}
+            >
+              <div dangerouslySetInnerHTML={{ __html: el.html }} />
+            </div>
+          ))}
+
+          {/* Static source URL (not spoken, not timestamped) */}
+          {content.url && content.type === 'article' && (
+            <p className="content-source">
+              <a href={content.url} target="_blank" rel="noopener noreferrer">
+                {getDomainFromUrl(content.url)}
+                <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
+              </a>
+            </p>
+          )}
+          {content.type === 'article' && content.content_source && (
+            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+              Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+            </p>
+          )}
+        </div>
+
+        {/* Article body (same .article-content CSS as content tab) */}
+        <div className="article-content">
+          {bodyElements.map((el, i) => {
+            const globalIndex = elements.indexOf(el);
+            const isActive = globalIndex === activeElementIndex;
+            return (
+              <div
+                key={`body-${i}`}
+                id={`ra-el-${globalIndex}`}
+                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                onClick={() => onSeek(el.startTime)}
+              >
+                <div dangerouslySetInnerHTML={{ __html: el.html }} />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Comments section (same styling as comments tab) */}
+        {commentElements.length > 0 && (
+          <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+            {commentDivider && (
+              <div
+                id={`ra-el-${elements.indexOf(commentDivider)}`}
+                className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
+                onClick={() => onSeek(commentDivider.startTime)}
+              >
+                <h3>Comments ({commentElements.length})</h3>
+              </div>
+            )}
+            <div className="comments-list">
+              {commentElements.map((el, i) => {
+                const globalIndex = elements.indexOf(el);
+                const isActive = globalIndex === activeElementIndex;
+                const meta = el.commentMeta;
+                const metaStr = buildCommentMetadata(meta, isLW);
+
+                return (
+                  <div
+                    key={`comment-${i}`}
+                    id={`ra-el-${globalIndex}`}
+                    className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                    onClick={() => onSeek(el.startTime)}
+                    style={{ paddingLeft: meta?.depth ? `${meta.depth * 10}px` : undefined }}
+                  >
+                    <div className="comment">
+                      <div className="comment-header">
+                        <span className="comment-username">{meta?.username || 'Anonymous'}</span>
+                        {meta?.date && (
+                          <span className="comment-date">
+                            {' \u00B7 '}
+                            {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
+                          </span>
+                        )}
+                      </div>
+                      {metaStr && (
+                        <div className="comment-metadata">
+                          <span className="comment-votes">{metaStr}</span>
+                        </div>
+                      )}
+                      <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Legacy aligned read-along (Needleman-Wunsch, for old data)
+  const renderLegacyAlignedReadAlong = () => {
+    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) return null;
     const alignmentSections = parsedAlignment.sections;
 
-    // Find the active section index based on currentTime
     let activeSectionIndex = -1;
     for (let i = 0; i < alignmentSections.length; i++) {
       if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
@@ -406,9 +534,7 @@ export function FullscreenPlayer({
       <div className="aligned-read-along">
         {alignmentSections.map((alignSection: any, index: number) => {
           const isActive = index === activeSectionIndex;
-          // Use the corresponding HTML section if available
           const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
-
           return (
             <div
               key={index}
@@ -422,17 +548,9 @@ export function FullscreenPlayer({
                 transition: 'all 0.3s ease',
                 cursor: 'pointer',
               }}
-              onClick={() => {
-                // Seek to this section's start time
-                onSeek(alignSection.startTime);
-              }}
+              onClick={() => onSeek(alignSection.startTime)}
             >
-              <div
-                dangerouslySetInnerHTML={{ __html: htmlContent }}
-                style={{
-                  color: isActive ? '#60a5fa' : undefined,
-                }}
-              />
+              <div dangerouslySetInnerHTML={{ __html: htmlContent }} style={{ color: isActive ? '#60a5fa' : undefined }} />
             </div>
           );
         })}
@@ -449,7 +567,6 @@ export function FullscreenPlayer({
               <div className="content-header">
                 <h2>{content.title}</h2>
                 {content.author && <p className="content-author">By {content.author}</p>}
-                {/* Only show domain URL for articles (not podcasts/texts) */}
                 {content.url && content.type === 'article' && (
                   <p className="content-source">
                     <a href={content.url} target="_blank" rel="noopener noreferrer">
@@ -483,10 +600,9 @@ export function FullscreenPlayer({
           <div className="tab-content-display">
             <h3>Podcast Description</h3>
             {content.description ? (
-              <div 
-                className="article-content" 
-                // whiteSpace: 'pre-wrap' preserves newlines (\n) from the database
-                style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }} 
+              <div
+                className="article-content"
+                style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}
                 dangerouslySetInnerHTML={{ __html: content.description }}
               />
             ) : (
@@ -518,18 +634,13 @@ export function FullscreenPlayer({
             )}
           </div>
         );
-      case 'read-along':
-        // Show appropriate messages when audio/transcript aren't ready
+      case 'read-along': {
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
         const isTranscribing = content.current_operation === 'transcribing';
+        const isAligning = content.current_operation === 'aligning_content';
         const hasAudio = !!content.audio_url;
         const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
 
-        // FIX: Use Whisper words directly for display when available.
-        // Previously, we split content.transcript by whitespace, which produced
-        // a different word count than the Whisper words array. activeWordIndex
-        // is an index into the Whisper array, so using it on differently-split
-        // display words caused gradual drift (transcript highlighting ran ahead).
         const hasWhisperWords = transcriptWords.length > 0;
         const fallbackTranscript = content.transcript || content.content || '';
         const fallbackText = cleanHtml(fallbackTranscript);
@@ -537,37 +648,28 @@ export function FullscreenPlayer({
           ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
           : fallbackText.split(/\s+/).filter(w => w.length > 0);
 
-        // Determine what message to show instead of the transcript
         let readAlongMessage: string | null = null;
         if (!hasAudio && isGenerating) {
-          readAlongMessage = 'Audio is being generated... The read-along transcript will appear once audio generation and transcription are complete.';
+          readAlongMessage = 'Audio is being generated... The read-along will appear once audio generation and transcription are complete.';
         } else if (!hasAudio) {
           readAlongMessage = 'No audio has been generated yet. Generate audio first to use the read-along feature.';
         } else if (isTranscribing) {
           readAlongMessage = 'Transcript is being generated... This may take a minute.';
+        } else if (isAligning) {
+          readAlongMessage = 'Aligning content with audio... Almost done.';
         } else if (!hasTranscript) {
           readAlongMessage = 'No transcript available yet. The transcript is generated automatically after audio creation.';
         }
 
         return (
           <div className="tab-read-along-display">
-            <div className="read-along-header">
-              <h3>Read-along</h3>
-              {(content.type === 'article' || content.type === 'text') && (
-                <button className="refetch-button regenerate-audio-btn" title="Regenerate audio">
-                  <RefreshCw size={16} />
-                  <span className="refetch-text-full">Regenerate audio</span>
-                  <span className="refetch-text-short">Audio</span>
-                </button>
-              )}
-            </div>
             {readAlongMessage ? (
               <p className="no-content">{readAlongMessage}</p>
+            ) : isLLMAlignment ? (
+              renderLLMReadAlong()
             ) : parsedAlignment && extractedSections.length > 0 ? (
-              // NEW: Aligned read-along (formatted content with section highlighting)
-              renderAlignedReadAlong()
+              renderLegacyAlignedReadAlong()
             ) : displayWords.length > 0 ? (
-              // FALLBACK: Word-by-word transcript (podcasts, or articles without alignment)
               <p className="read-along-text">
                 {displayWords.map((word, index) => {
                   const isRead = index <= activeWordIndex;
@@ -576,10 +678,7 @@ export function FullscreenPlayer({
                       key={index}
                       id={`word-${index}`}
                       className={`transcript-word ${isRead ? 'read' : ''}`}
-                      style={{
-                        color: isRead ? '#60a5fa' : undefined, // Light blue (#60a5fa) for read words
-                        cursor: 'pointer'
-                      }}
+                      style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
                       onClick={() => onTranscriptWordClick(index)}
                     >
                       {word}{' '}
@@ -592,11 +691,12 @@ export function FullscreenPlayer({
             )}
           </div>
         );
+      }
       case 'queue':
         return (
           <div className="tab-queue-display">
             <h3>Queue</h3>
-            <p className="work-in-progress">🚧 Work in progress</p>
+            <p className="work-in-progress">Work in progress</p>
             <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
               Queue functionality will be implemented soon. Stay tuned!
             </p>
@@ -632,10 +732,10 @@ export function FullscreenPlayer({
               <p className="fullscreen-author">
                 {content.author}
                 {content.published_at && (
-                  <> • {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
                 )}
                 {(content.karma !== undefined && content.karma !== null) && (
-                  <> • {content.karma} upvotes</>
+                  <> &bull; {content.karma} upvotes</>
                 )}
               </p>
             )}
@@ -643,7 +743,7 @@ export function FullscreenPlayer({
               <p className="fullscreen-author">
                 {content.podcast_show_name}
                 {content.published_at && (
-                  <> • {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
                 )}
               </p>
             )}
@@ -659,7 +759,7 @@ export function FullscreenPlayer({
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs with autoscroll toggle */}
       <div className="fullscreen-tabs">
         {availableTabs.map((tab) => (
           <button
@@ -674,6 +774,16 @@ export function FullscreenPlayer({
             {tab === 'queue' && 'Queue'}
           </button>
         ))}
+        {activeTab === 'read-along' && (
+          <button
+            className={`autoscroll-toggle ${autoScroll ? 'active' : ''}`}
+            onClick={() => setAutoScroll(!autoScroll)}
+            title={autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
+          >
+            <ArrowDownToLine size={14} />
+            <span className="autoscroll-label">Auto-scroll</span>
+          </button>
+        )}
       </div>
 
       {/* Tab Content Area */}
