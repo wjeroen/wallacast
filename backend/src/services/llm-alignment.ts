@@ -438,9 +438,11 @@ Return ONLY a JSON array of ${allElements.length} start times in seconds. Exampl
 
   const responseText = response.choices[0]?.message?.content || '';
   console.log(`[LLM-Align] LLM response length: ${responseText.length} chars`);
+  console.log(`[LLM-Align] Raw LLM response (first 500 chars): ${responseText.slice(0, 500)}`);
 
   // Parse response - extract JSON array
   let timestamps: number[];
+  let usedFallback = false;
   try {
     const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
     if (!jsonMatch) {
@@ -451,6 +453,8 @@ Return ONLY a JSON array of ${allElements.length} start times in seconds. Exampl
     if (!Array.isArray(timestamps)) {
       throw new Error('Parsed result is not an array');
     }
+
+    console.log(`[LLM-Align] Parsed ${timestamps.length} timestamps from LLM`);
 
     // Ensure all values are numbers
     timestamps = timestamps.map(t => {
@@ -475,12 +479,31 @@ Return ONLY a JSON array of ${allElements.length} start times in seconds. Exampl
     }
 
   } catch (parseError) {
-    console.error('[LLM-Align] Failed to parse LLM response, using fallback distribution:', parseError);
+    usedFallback = true;
+    console.error('[LLM-Align] Failed to parse LLM response, using FALLBACK even distribution:', parseError);
+    console.error('[LLM-Align] Full LLM response was:', responseText);
     // Fallback: distribute timestamps evenly across the audio duration
     const totalDuration = transcriptWords.length > 0
       ? transcriptWords[transcriptWords.length - 1].end
       : 0;
     timestamps = allElements.map((_, i) => Math.round((i / Math.max(allElements.length, 1)) * totalDuration * 10) / 10);
+  }
+
+  // Log sample timestamps for debugging
+  const sampleTimestamps = timestamps.length <= 10
+    ? timestamps
+    : [...timestamps.slice(0, 5), '...', ...timestamps.slice(-3)];
+  console.log(`[LLM-Align] ${usedFallback ? 'FALLBACK' : 'LLM'} timestamps (sample): [${sampleTimestamps.join(', ')}]`);
+  console.log(`[LLM-Align] Timestamp range: ${timestamps[0]}s to ${timestamps[timestamps.length - 1]}s`);
+
+  // Log element-to-timestamp mapping for first few elements
+  for (let i = 0; i < Math.min(allElements.length, 8); i++) {
+    const el = allElements[i];
+    const typeLabel = el.type === 'comment' ? `comment by ${el.commentMeta?.username}` : el.type;
+    console.log(`[LLM-Align]   [${i}] ${typeLabel} → ${timestamps[i]}s: "${el.text.slice(0, 60)}..."`);
+  }
+  if (allElements.length > 8) {
+    console.log(`[LLM-Align]   ... (${allElements.length - 8} more elements)`);
   }
 
   // Build result elements (strip the `text` field - only needed for LLM prompt)
