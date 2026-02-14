@@ -7,7 +7,7 @@
  * How it works:
  * 1. Extract block-level elements from HTML (paragraphs, headings, images, etc.)
  * 2. Extract comments as individual elements with metadata
- * 3. Build a transcript with inline per-word timestamps from Whisper
+ * 3. Build a sentence-chunked transcript with timestamps from Whisper
  * 4. Send elements + transcript to the user's selected LLM
  * 5. LLM returns a start time for each element
  * 6. Store as content_alignment JSONB with version: 'llm-v1'
@@ -283,129 +283,49 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
 }
 
 /**
- * Build transcript with inline per-word timestamp markers.
- * Instead of grouping into time buckets (which limits LLM to bucket-boundary precision),
- * this embeds actual Whisper timestamps every N words, giving sub-second precision.
+ * Build sentence-chunked transcript from word-level timestamps.
+ * Groups words into sentences (splitting at . ? !) with one timestamp per line.
+ * Long sentences (>40 words) are split at commas/semicolons.
  *
- * Output: "[0.0] Title, Do Your Job [1.5] Unreasonably Well, written [2.8] by Max Dalton..."
+ * Output:
+ * [0.0] Title, Do Your Job Unreasonably Well, written by Max Dalton.
+ * [4.6] Published on 27th of January, 2026, it has 102 karma.
+ * [10.5] I've just started a blog about effective altruism organization-style management.
  */
-function buildTimedTranscript(words: TranscriptWord[], wordsPerMarker: number = 5): string {
+function buildTimedTranscript(words: TranscriptWord[]): string {
   if (words.length === 0) return '';
 
-  const parts: string[] = [];
+  const sentences: string[] = [];
+  let currentWords: string[] = [];
+  let sentenceStart: number = words[0].start;
 
-  for (let i = 0; i < words.length; i++) {
-    if (i % wordsPerMarker === 0) {
-      parts.push(`[${words[i].start.toFixed(1)}]`);
+  for (const word of words) {
+    const trimmed = (word.word || '').trim();
+    if (!trimmed) continue;
+
+    if (currentWords.length === 0) {
+      sentenceStart = word.start;
     }
-    parts.push((words[i].word || '').trim());
-  }
+    currentWords.push(trimmed);
 
-  return parts.join(' ');
-}
+    // Sentence boundary: word ends with . ? ! (optionally followed by " ' ) ])
+    const isSentenceEnd = /[.!?]["')\]]?$/.test(trimmed);
 
-/**
- * Post-process LLM timestamps using algorithmic text matching to catch gross errors.
- * For each element, searches the transcript for the element's distinctive words.
- * If the best match is significantly different from the LLM's timestamp, uses the
- * algorithmic match instead. This catches cases where the LLM skipped elements,
- * matched to the wrong section, or got off-by-one on comments.
- *
- * NOT the same as global Needleman-Wunsch alignment — this only finds ~N anchor
- * points with a simple sliding window, and only overrides when the LLM is clearly wrong.
- */
-function verifyAndFixTimestamps(
-  timestamps: number[],
-  elements: ContentElement[],
-  transcriptWords: TranscriptWord[]
-): number[] {
-  const fixed = [...timestamps];
-  const STOP_WORDS = new Set([
-    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'of', 'in', 'to',
-    'and', 'for', 'on', 'at', 'by', 'it', 'i', 'that', 'this', 'with',
-    'be', 'has', 'have', 'had', 'do', 'does', 'did', 'will', 'would',
-    'can', 'could', 'should', 'may', 'might', 'not', 'no', 'but', 'or',
-    'if', 'so', 'as', 'its', 'my', 'your', 'their', 'our', 'his', 'her',
-  ]);
+    // Break very long runs (>40 words) at commas or semicolons
+    const isLongBreak = currentWords.length > 40 && /[,;:]$/.test(trimmed);
 
-  // Pre-normalize transcript words
-  const normalizedTranscript = transcriptWords.map(w =>
-    w.word.toLowerCase().replace(/[^\w]/g, '').trim()
-  );
-
-  let corrections = 0;
-
-  for (let elIdx = 0; elIdx < elements.length; elIdx++) {
-    const el = elements[elIdx];
-
-    // Skip non-text elements
-    if (el.type === 'comment-divider' || el.type === 'image') continue;
-
-    // Extract distinctive words from element text
-    const elementWords = el.text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
-      .slice(0, 8);
-
-    if (elementWords.length < 2) continue;
-
-    // Search forward from a bit before the previous element's position
-    // (the -5s buffer handles cases where an earlier correction shifted things)
-    const searchStartTime = elIdx > 0 ? Math.max(0, fixed[elIdx - 1] - 5) : 0;
-    const searchStartIdx = transcriptWords.findIndex(w => w.start >= searchStartTime);
-    const startIdx = Math.max(0, searchStartIdx);
-
-    let bestScore = 0;
-    let bestIdx = -1;
-    const windowSize = 25;
-
-    for (let i = startIdx; i < normalizedTranscript.length - 1; i++) {
-      const endJ = Math.min(i + windowSize, normalizedTranscript.length);
-      const window = normalizedTranscript.slice(i, endJ);
-      let score = 0;
-      for (const ew of elementWords) {
-        if (window.some(tw => tw === ew || (tw.length > 4 && ew.length > 4 && tw.startsWith(ew.slice(0, 4))))) {
-          score++;
-        }
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        bestIdx = i;
-      }
-    }
-
-    if (bestIdx < 0) continue;
-
-    const matchRatio = bestScore / elementWords.length;
-    const algorithmicTs = transcriptWords[bestIdx].start;
-    const diff = Math.abs(algorithmicTs - fixed[elIdx]);
-
-    // High confidence match (>60% words): correct if >5s off
-    // Medium confidence match (>40% words): correct if >15s off
-    const shouldCorrect = (matchRatio >= 0.6 && diff > 5) || (matchRatio >= 0.4 && diff > 15);
-
-    if (shouldCorrect) {
-      console.log(`[LLM-Align] CORRECTED [${elIdx}] (${el.type}): ${fixed[elIdx].toFixed(1)}s → ${algorithmicTs.toFixed(1)}s (${bestScore}/${elementWords.length} words, diff=${diff.toFixed(1)}s)`);
-      fixed[elIdx] = algorithmicTs;
-      corrections++;
+    if (isSentenceEnd || isLongBreak) {
+      sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
+      currentWords = [];
     }
   }
 
-  if (corrections > 0) {
-    console.log(`[LLM-Align] Applied ${corrections} algorithmic corrections to LLM timestamps`);
-  } else {
-    console.log(`[LLM-Align] All LLM timestamps verified — no corrections needed`);
+  // Remaining words
+  if (currentWords.length > 0) {
+    sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
   }
 
-  // Re-enforce non-decreasing after corrections
-  for (let i = 1; i < fixed.length; i++) {
-    if (fixed[i] < fixed[i - 1]) {
-      fixed[i] = fixed[i - 1];
-    }
-  }
-
-  return fixed;
+  return sentences.join('\n');
 }
 
 /**
@@ -496,40 +416,45 @@ export async function generateLLMAlignment(
 
   const systemPrompt = `You match article content to its audio narration by finding where each piece of text is spoken.
 
-The article was converted to speech via TTS. The audio reads: title, author/date, article body, then optionally a comments section.
+The article was converted to speech via TTS. A scriptwriter reformatted the original text before speaking it:
+- The audio reads: title, author/date, karma (if present), article body, then optionally a comments section.
+- Lists get numbering added ("First, ...", "Second, ...").
+- Comments get headers like "A comment by Username on Date with N upvotes".
+- Some words may be slightly rephrased or reordered.
 
 TRANSCRIPT FORMAT:
-The transcript has inline timestamp markers like [14.2] every few words, showing the exact time in seconds at that point. Use these markers to pinpoint precise timestamps.
+Each line is one sentence from the audio, prefixed with its start time in seconds:
+[0.0] Title, Do Your Job Unreasonably Well, written by Max Dalton.
+[4.6] Published on 27th of January, 2026, it has 102 karma.
+[10.5] I've just started a blog about effective altruism organization-style management.
 
 YOUR METHOD:
-1. For each content element, find its first distinctive words in the transcript
-2. Note the nearest [timestamp] marker at or before that location
-3. Return that timestamp value
+1. For each content element, find the sentence line where its text BEGINS being spoken
+2. Use the [timestamp] from that line as the element's start time
+3. Match by meaning/keywords, not exact wording (the scriptwriter may have rephrased slightly)
 
-Example: If element text is "I've just started a blog" and you find in the transcript "[14.2] I've just started a [16.8] blog about", return 14.2.
-
-CRITICAL: You MUST actually search for text matches. Do NOT distribute timestamps evenly — different paragraphs have very different lengths in the audio. Short paragraphs might be 2 seconds apart, long ones might be 60+ seconds apart.
-
-BAD output (evenly spaced, round numbers): [0, 15, 30, 45, 60, 75, 90]
-GOOD output (from actual [timestamp] markers): [0.0, 3.2, 7.1, 14.2, 52.8, 58.1, 103.4]
-
-The total audio is ${totalAudioDuration} seconds. The last element should have a timestamp near ${totalAudioDuration}.
-
-RULES:
-- Timestamps are in TOTAL SECONDS (e.g., 90.5 for ~1min 30sec, NOT 1.30)
-- Times must be non-decreasing
-- Use the decimal values from the [timestamp] markers — do NOT round to whole numbers
-- If an element isn't spoken (e.g., decorative image), use the same time as the previous element
+CRITICAL RULES:
+- You MUST search for actual text matches. Do NOT distribute timestamps evenly.
+- Different elements have very different lengths. Short ones may be 2s apart, long ones 60+s apart.
+- Timestamps are in TOTAL SECONDS (e.g., 90.5 for 1min 30sec, NOT 1.30)
+- Times must be non-decreasing (each >= the previous)
+- Use the exact decimal values from the [timestamp] markers — do NOT round
+- If an element isn't spoken (e.g., decorative image), reuse the previous element's time
 - Images correspond to "An image shows..." or "An image depicts..." in the audio
-- The array must have exactly ${allElements.length} numbers`;
+- Return exactly ${allElements.length} numbers
+
+BAD (evenly spaced): [0, 15, 30, 45, 60, 75, 90]
+GOOD (from text matching): [0.0, 3.2, 7.1, 14.2, 52.8, 58.1, 103.4]
+
+Total audio duration: ${totalAudioDuration} seconds.`;
 
   const userPrompt = `CONTENT ELEMENTS (${allElements.length} total):
 ${elementsList}
 
-TIMESTAMPED TRANSCRIPT (total duration: ${totalAudioDuration}s):
+TIMESTAMPED TRANSCRIPT (${totalAudioDuration}s total):
 ${timedTranscript}
 
-For each element, find where its text appears in the transcript using the [timestamp] markers. Return ONLY a JSON array of ${allElements.length} timestamps in seconds, using the decimal values from the markers.`;
+For each content element above, find the transcript sentence where it starts being spoken. Return ONLY a JSON array of ${allElements.length} timestamps (in seconds), taken from the [timestamp] at the start of each matching sentence line. Example output format: [0.0, 4.6, 10.5, ...]`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -545,7 +470,7 @@ For each element, find where its text appears in the transcript using the [times
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
-    temperature: 0.1,
+    temperature: 0.2,
     max_completion_tokens: 4000,
   });
 
@@ -615,11 +540,6 @@ For each element, find where its text appears in the transcript using the [times
         timestamps[i] = timestamps[i - 1];
       }
     }
-
-    // Algorithmic post-processing: verify timestamps by searching for element text
-    // in the transcript. Corrects gross LLM errors (>5-15s off) while keeping
-    // good LLM matches intact.
-    timestamps = verifyAndFixTimestamps(timestamps, allElements, transcriptWords);
 
     // Validate: check if timestamps actually cover the full audio
     const finalTs = timestamps[timestamps.length - 1];
