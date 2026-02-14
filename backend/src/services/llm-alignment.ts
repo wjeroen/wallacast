@@ -414,47 +414,43 @@ export async function generateLLMAlignment(
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  const systemPrompt = `You match article content to its audio narration by finding where each piece of text is spoken.
+  const systemPrompt = `You are given ${allElements.length} CONTENT ELEMENTS and a TIMESTAMPED TRANSCRIPT of their audio narration. Your job: for each content element, find where it starts in the transcript and return its timestamp.
 
-The article was converted to speech via TTS. A scriptwriter reformatted the original text before speaking it:
-- The audio reads: title, author/date, karma (if present), article body, then optionally a comments section.
-- Lists get numbering added ("First, ...", "Second, ...").
-- Comments get headers like "A comment by Username on Date with N upvotes".
-- Some words may be slightly rephrased or reordered.
+BACKGROUND:
+- The article was converted to speech via TTS. A scriptwriter reformatted the text before speaking.
+- Lists get numbering ("First, ...", "Second, ..."). Comments get headers like "A comment by Username on Date with N upvotes".
+- Some words may be slightly rephrased. Match by meaning/keywords, not exact wording.
 
 TRANSCRIPT FORMAT:
-Each line is one sentence from the audio, prefixed with its start time in seconds:
+Each line is one sentence from the audio with its start time in seconds:
 [0.0] Title, Do Your Job Unreasonably Well, written by Max Dalton.
 [4.6] Published on 27th of January, 2026, it has 102 karma.
-[10.5] I've just started a blog about effective altruism organization-style management.
+[10.5] I've just started a blog about effective altruism.
 
-YOUR METHOD:
-1. For each content element, find the sentence line where its text BEGINS being spoken
-2. Use the [timestamp] from that line as the element's start time
-3. Match by meaning/keywords, not exact wording (the scriptwriter may have rephrased slightly)
+YOUR TASK:
+- There are exactly ${allElements.length} content elements numbered [0] through [${allElements.length - 1}].
+- For each element, find the transcript line where that element's text BEGINS being spoken.
+- Return EXACTLY ${allElements.length} timestamps — one per content element, NOT one per transcript line.
+- The transcript has many more lines than there are elements. Multiple transcript lines may correspond to a single long element.
 
-CRITICAL RULES:
-- You MUST search for actual text matches. Do NOT distribute timestamps evenly.
-- Different elements have very different lengths. Short ones may be 2s apart, long ones 60+s apart.
-- Timestamps are in TOTAL SECONDS (e.g., 90.5 for 1min 30sec, NOT 1.30)
-- Times must be non-decreasing (each >= the previous)
-- Use the exact decimal values from the [timestamp] markers — do NOT round
+RULES:
+- Timestamps in TOTAL SECONDS (90.5 for 1min 30sec, NOT 1.30)
+- Non-decreasing (each timestamp >= the previous)
+- Use exact decimal values from [timestamp] markers, do NOT round
 - If an element isn't spoken (e.g., decorative image), reuse the previous element's time
-- Images correspond to "An image shows..." or "An image depicts..." in the audio
-- Return exactly ${allElements.length} numbers
+- Images match "An image shows..." or "An image depicts..." in the transcript
+- Do NOT distribute timestamps evenly — match actual text positions
+- The last element should have a timestamp near the end of the ${totalAudioDuration}s audio
 
-BAD (evenly spaced): [0, 15, 30, 45, 60, 75, 90]
-GOOD (from text matching): [0.0, 3.2, 7.1, 14.2, 52.8, 58.1, 103.4]
+OUTPUT: A JSON array of exactly ${allElements.length} numbers. Nothing else.`;
 
-Total audio duration: ${totalAudioDuration} seconds.`;
-
-  const userPrompt = `CONTENT ELEMENTS (${allElements.length} total):
+  const userPrompt = `CONTENT ELEMENTS (${allElements.length} elements — return exactly ${allElements.length} timestamps):
 ${elementsList}
 
-TIMESTAMPED TRANSCRIPT (${totalAudioDuration}s total):
+TIMESTAMPED TRANSCRIPT (reference only — do NOT return one timestamp per line):
 ${timedTranscript}
 
-For each content element above, find the transcript sentence where it starts being spoken. Return ONLY a JSON array of ${allElements.length} timestamps (in seconds), taken from the [timestamp] at the start of each matching sentence line. Example output format: [0.0, 4.6, 10.5, ...]`;
+Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each content element [0] through [${allElements.length - 1}]. Find where each element's text begins in the transcript and use that line's [timestamp].`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
