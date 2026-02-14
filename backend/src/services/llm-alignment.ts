@@ -284,9 +284,10 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
 
 /**
  * Build time-bucketed transcript from word-level timestamps.
- * Groups words into segments (default 15 seconds) with timestamps.
+ * Groups words into segments (default 5 seconds) with timestamps.
+ * Smaller buckets give the LLM finer-grained anchors for matching.
  */
-function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number = 15): string {
+function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number = 5): string {
   if (words.length === 0) return '';
 
   const segments: string[] = [];
@@ -383,6 +384,11 @@ export async function generateLLMAlignment(
   // Build timed transcript
   const timedTranscript = buildTimedTranscript(transcriptWords);
 
+  // Calculate total audio duration
+  const totalAudioDuration = transcriptWords.length > 0
+    ? Math.ceil(transcriptWords[transcriptWords.length - 1].end)
+    : 0;
+
   // Build the elements list for the prompt (truncate long texts)
   const elementsList = allElements.map((el, i) => {
     const typeLabel = el.type === 'comment'
@@ -393,30 +399,39 @@ export async function generateLLMAlignment(
     return `[${i}] (${typeLabel}) ${displayText}`;
   }).join('\n');
 
-  const systemPrompt = `You align article content with its audio narration transcript. The article was converted to speech via TTS.
+  console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-The audio typically reads in this order:
-1. Title, author, date at the start
-2. Article body (may be slightly rephrased for natural speech)
-3. Image descriptions replace images (spoken as "An image shows...")
-4. Comments are read after the article body (introduced by "Comments section")
+  const systemPrompt = `You match article content to its audio narration by finding where each piece of text is spoken.
 
-TASK: For each numbered content element, determine the approximate start time (in seconds) when it begins being spoken in the audio. Return ONLY a JSON array of numbers. Note that not all articles will have comment sections.
+The article was converted to speech via TTS. The audio reads: title, author/date, article body, then optionally a comments section.
+
+YOUR METHOD:
+1. For each content element below, read its text
+2. Find where those words (or close paraphrase) appear in the timestamped transcript
+3. Return the timestamp where that element STARTS being spoken
+
+CRITICAL: You MUST actually match text between elements and transcript. Do NOT distribute timestamps evenly — different paragraphs have very different lengths in the audio. Short paragraphs might be 3 seconds apart, long ones might be 30+ seconds apart.
+
+BAD output (evenly spaced): [0, 15, 30, 45, 60, 75, 90]
+GOOD output (actually matched): [0, 3.5, 7, 14, 52, 58, 103]
+
+The total audio is ${totalAudioDuration} seconds long. Your timestamps must span from 0 to approximately ${totalAudioDuration}.
 
 RULES:
-- Times MUST be non-decreasing (each element's time >= previous element's time)
-- If an element isn't spoken (e.g., decorative image without description), assign it the same time as the nearest spoken element
-- Images in the article correspond to "An image shows..." descriptions in the audio
-- Be precise to within a few seconds
-- The array must have exactly ${allElements.length} numbers`;
+- Times must be non-decreasing
+- Use decimal precision (e.g., 14.5, not just 15)
+- If an element isn't spoken (e.g., decorative image), use the same time as the previous element
+- Images correspond to "An image shows..." in the audio
+- The array must have exactly ${allElements.length} numbers
+- Not all articles have comments. If there are no comment elements, that's fine.`;
 
-  const userPrompt = `CONTENT ELEMENTS:
+  const userPrompt = `CONTENT ELEMENTS (${allElements.length} total):
 ${elementsList}
 
-AUDIO TRANSCRIPT:
+TIMESTAMPED TRANSCRIPT (total duration: ${totalAudioDuration}s):
 ${timedTranscript}
 
-Return ONLY a JSON array of ${allElements.length} start times in seconds. Example format: [0, 2.5, 8, 15.3, ...]`;
+Find where each element is spoken in the transcript. Return ONLY a JSON array of ${allElements.length} timestamps in seconds.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
