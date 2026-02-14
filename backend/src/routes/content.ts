@@ -6,7 +6,7 @@ import { fetchArticleContent } from '../services/article-fetcher.js';
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
-import { alignContentWithTranscript } from '../services/content-alignment.js';
+import { generateLLMAlignment } from '../services/llm-alignment.js';
 
 const router = express.Router();
 
@@ -414,23 +414,24 @@ router.patch('/:id', async (req, res) => {
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
 
-              // Run alignment if html_content is available (articles/texts only, not podcasts)
+              // Run LLM alignment if html_content is available (articles/texts only, not podcasts)
               if (type === 'article' || type === 'text') {
                 const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
                 if (contentResult.rows.length > 0 && contentResult.rows[0].html_content) {
-                  console.log(`[Alignment] Running alignment for ${type} ${id}...`);
+                  console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
                   try {
-                    const alignment = await alignContentWithTranscript(
-                      contentResult.rows[0].html_content,
+                    const alignment = await generateLLMAlignment(
+                      id,
+                      req.user!.userId,
                       result.words
                     );
                     await query(
                       'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
                       [JSON.stringify(alignment), id]
                     );
-                    console.log(`[Alignment] Complete: ${alignment.stats.accuracy.toFixed(1)}% accuracy`);
+                    console.log(`[LLM-Align] Complete: ${alignment.elements.length} elements timestamped`);
                   } catch (alignError) {
-                    console.error('[Alignment] Failed (non-fatal):', alignError);
+                    console.error('[LLM-Align] Failed (non-fatal):', alignError);
                   }
                 }
               }
