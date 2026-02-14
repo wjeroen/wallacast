@@ -246,7 +246,7 @@ Wallacast supports multiple users with complete data isolation:
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
   - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
-  - `buildTimedTranscript()`: Groups Whisper word timestamps into 15-second time-bucketed segments formatted as `[M:SS] words...`
+  - `buildTimedTranscript()`: Builds transcript with inline per-word timestamp markers every 5 words (e.g., `[14.2] word word word [16.8] word...`), giving the LLM sub-second precision for text matching
   - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI fallback)
   - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
   - Enforces non-decreasing timestamps in output
