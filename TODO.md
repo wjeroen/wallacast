@@ -115,14 +115,16 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P1]** Add refetch comments button that looks like a refresh button (2026-01-24)
 - [ ] **[P1]** Wire refetch button to actually update the display after refetching
 
-#### Read-along Tab (Do First Without Timesync)
+#### Read-along Tab
 - [x] **[P1]** Create read-along tab that shows Whisper transcript with clickable words (2026-01-24)
 - [x] **[P4]** TTS should describe images in the article (2026-02-04)
 - [x] **[P1]** Add "Regenerate audio" button to generate new TTS + Whisper timestamps (2026-01-24)
 - [ ] **[P1]** Wire regenerate audio button to actually regenerate and update display
 - [x] **[P2]** Fix Whisper timestamp seeking - clicking words works correctly now (2026-01-29)
-- [ ] **[P6]** Don't make tab automatically follow the audio (expect too many annoyances and bugs) - instead add a button that jumps to where the audio currently is (TIMESYNC - DO LATER)
-- [ ] **[P6]** Ensure jump-to-current-position button works properly on various screen display sizes (TIMESYNC - DO LATER)
+- [x] **[P1]** LLM-based content alignment (replaces Needleman-Wunsch) - read-along tab now looks exactly like content+comments tabs with per-element timestamps (2026-02-14)
+- [x] **[P2]** Auto-scroll toggle in tab header (persisted to localStorage) (2026-02-14)
+- [ ] **[P2]** Test LLM alignment quality across different content types (articles, EA Forum, LessWrong, podcasts)
+- [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 
 #### Queue Tab Implementation (Do Later)
 - [ ] **[P6]** Connect existing queue table/routes to UI - add queue state to App.tsx or Zustand store
@@ -136,6 +138,18 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **LLM-Based Read-Along Alignment (v3)** (2026-02-14):
+  - Replaced Needleman-Wunsch algorithm with LLM-based alignment that semantically maps HTML content elements to Whisper timestamps
+  - Read-along tab now renders content EXACTLY like the content tab + comments tab (same CSS classes, same layout)
+  - Each block element (paragraph, heading, image, blockquote, list, comment) gets its own timestamp
+  - Uses user's configured narration LLM (DeepSeek-V3.2 via DeepInfra preferred, OpenAI fallback) via `getChatClientForUser()`
+  - Added auto-scroll toggle in tab header bar (persisted to localStorage, icon-only on mobile)
+  - Clickable elements to seek audio to that section
+  - Active element highlighted with blue left border and subtle background
+  - Comments rendered with full metadata (username, date, karma, reactions) matching comments tab
+  - New service: `backend/src/services/llm-alignment.ts`
+  - Frontend: Rewrote FullscreenPlayer.tsx read-along renderer with three-tier fallback: LLM alignment → legacy Needleman-Wunsch → word-by-word transcript
+  - Backward compatible: old alignment data still works via legacy renderer
 - [x] **Content-Transcript Alignment for Read-Along Tab** (2026-02-06):
   - Implemented Needleman-Wunsch global sequence alignment to sync original HTML content with Whisper transcript
   - Read-along tab now displays formatted content (images, headers, paragraphs) instead of plain transcript

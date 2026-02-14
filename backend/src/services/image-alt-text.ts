@@ -390,8 +390,7 @@ export class ImageAltTextService {
 Guidelines:
 - **If it's a photo or visual:** Describe the scene, identifying key subjects, and overall mood.
 - **If it's a chart/diagram:** Summarize the primary trend or insight.
-- **If it's a social media thread:** Read it out like a script.
-- Never summarize text that is displayed on an image, always read words exactly as they are written, VERBATIM.
+- **If it's a social media thread:** Read it out like a script. Never summarize blocks of text that are displayed on an image, always read sentences exactly as they are written, VERBATIM.
 
 Important Constraints:
 - Just output the description, nothing else.
