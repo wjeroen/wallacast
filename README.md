@@ -55,7 +55,8 @@ Wallacast supports multiple users with complete data isolation:
 | TTS generation | `backend/src/services/openai-tts.ts` |
 | Image descriptions | `backend/src/services/image-alt-text.ts` |
 | Transcription | `backend/src/services/transcription.ts` |
-| Content-transcript alignment | `backend/src/services/content-alignment.ts` |
+| Content-transcript alignment (LLM) | `backend/src/services/llm-alignment.ts` |
+| Content-transcript alignment (legacy) | `backend/src/services/content-alignment.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player | `frontend/src/components/AudioPlayer.tsx` |
@@ -229,7 +230,8 @@ Wallacast supports multiple users with complete data isolation:
     - 20-30%: Prepare content for narration (scriptwriter or fallback text extraction)
     - 30-90%: Generate TTS audio chunks
     - 90-95%: Finalize audio (save to DB with `user_id`)
-    - 95-100%: Auto-transcription for Read Along
+    - 95-97%: Auto-transcription for Read Along
+    - 97-100%: LLM-based content alignment (maps HTML elements to transcript timestamps)
   - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)
   - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
@@ -239,6 +241,18 @@ Wallacast supports multiple users with complete data isolation:
   - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
+
+- **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
+  - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
+  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
+  - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
+  - `buildTimedTranscript()`: Groups Whisper word timestamps into 15-second time-bucketed segments formatted as `[M:SS] words...`
+  - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI fallback)
+  - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
+  - Enforces non-decreasing timestamps in output
+  - Stored in `content_alignment` JSONB column (same column as old Needleman-Wunsch data)
+
+- **`services/content-alignment.ts`**: Legacy Needleman-Wunsch content alignment (no longer used for new alignments, kept for backward compatibility with existing data)
 
 - **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs) with database caching
   - `searchPodcasts()`: Search iTunes podcast directory (returns podcast feeds only)
