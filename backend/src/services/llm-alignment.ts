@@ -521,13 +521,29 @@ Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each co
       console.log(`[LLM-Align] Converted timestamps range: ${timestamps[0]}s to ${timestamps[timestamps.length - 1]}s`);
     }
 
-    // Pad or trim to match element count
+    // Handle count mismatch between LLM output and expected elements
     if (timestamps.length !== allElements.length) {
-      console.warn(`[LLM-Align] Expected ${allElements.length} timestamps, got ${timestamps.length}. Adjusting...`);
-      while (timestamps.length < allElements.length) {
-        timestamps.push(timestamps[timestamps.length - 1] || 0);
+      console.warn(`[LLM-Align] Expected ${allElements.length} timestamps, got ${timestamps.length}.`);
+
+      if (timestamps.length > allElements.length) {
+        // Too many: RESAMPLE instead of truncating (truncation loses end of audio!)
+        // Linearly maps N_src positions → N_dst positions, preserving first AND last
+        const srcLen = timestamps.length;
+        const dstLen = allElements.length;
+        const resampled: number[] = [];
+        for (let i = 0; i < dstLen; i++) {
+          const srcIdx = Math.min(Math.round(i * (srcLen - 1) / (dstLen - 1)), srcLen - 1);
+          resampled.push(timestamps[srcIdx]);
+        }
+        console.log(`[LLM-Align] Resampled ${srcLen} → ${dstLen} timestamps (range preserved: ${timestamps[0]}→${timestamps[srcLen - 1]})`);
+        timestamps = resampled;
+      } else {
+        // Too few: pad with the last value
+        console.log(`[LLM-Align] Padding ${timestamps.length} → ${allElements.length} with last value ${timestamps[timestamps.length - 1]}`);
+        while (timestamps.length < allElements.length) {
+          timestamps.push(timestamps[timestamps.length - 1] || 0);
+        }
       }
-      timestamps = timestamps.slice(0, allElements.length);
     }
 
     // Ensure non-decreasing
@@ -537,13 +553,43 @@ Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each co
       }
     }
 
-    // Validate: check if timestamps actually cover the full audio
+    // Check audio coverage — if LLM didn't match the end, stretch the tail
     const finalTs = timestamps[timestamps.length - 1];
-    if (totalAudioDuration > 60 && finalTs < totalAudioDuration * 0.7) {
-      console.warn(`[LLM-Align] WARNING: Timestamps only cover ${finalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(finalTs / totalAudioDuration * 100).toFixed(0)}%). LLM may not have matched the full transcript.`);
+    if (totalAudioDuration > 60 && finalTs > 0 && finalTs < totalAudioDuration * 0.85) {
+      console.warn(`[LLM-Align] Timestamps only cover ${finalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(finalTs / totalAudioDuration * 100).toFixed(0)}%). Stretching tail...`);
+
+      // Stretch the last ~30% of timestamps proportionally to reach ~95% of audio
+      const stretchIdx = Math.floor(timestamps.length * 0.7);
+      const anchorTime = timestamps[stretchIdx];
+      const targetEnd = totalAudioDuration * 0.95;
+      const currentRange = finalTs - anchorTime;
+
+      if (currentRange > 0) {
+        const targetRange = targetEnd - anchorTime;
+        const scale = targetRange / currentRange;
+
+        for (let i = stretchIdx + 1; i < timestamps.length; i++) {
+          timestamps[i] = Math.round((anchorTime + (timestamps[i] - anchorTime) * scale) * 10) / 10;
+        }
+
+        // Re-enforce non-decreasing after stretching
+        for (let i = 1; i < timestamps.length; i++) {
+          if (timestamps[i] < timestamps[i - 1]) {
+            timestamps[i] = timestamps[i - 1];
+          }
+        }
+
+        console.log(`[LLM-Align] Stretched tail: ${finalTs.toFixed(0)}s → ${timestamps[timestamps.length - 1].toFixed(0)}s (${scale.toFixed(2)}x from anchor ${anchorTime.toFixed(0)}s)`);
+      }
     }
 
-    // Validate: detect lazy even distribution (all same interval)
+    // Final coverage warning
+    const postFinalTs = timestamps[timestamps.length - 1];
+    if (totalAudioDuration > 60 && postFinalTs < totalAudioDuration * 0.7) {
+      console.warn(`[LLM-Align] WARNING: Even after adjustments, timestamps only cover ${postFinalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(postFinalTs / totalAudioDuration * 100).toFixed(0)}%).`);
+    }
+
+    // Detect lazy even distribution
     if (timestamps.length >= 5) {
       const diffs = timestamps.slice(1).map((t, i) => Math.round((t - timestamps[i]) * 10) / 10);
       const nonZeroDiffs = diffs.filter(d => d > 0);
