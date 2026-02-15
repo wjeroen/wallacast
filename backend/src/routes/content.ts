@@ -470,13 +470,14 @@ router.patch('/:id', async (req, res) => {
                 ['generating_transcript', 0, 'transcript', id]
               );
 
-              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt.slice(0, 1000));
+              // CHANGED: Removed .slice(0, 1000) here; the service handles the slicing logic centrally.
+              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt);
 
               await query(
                 'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
-
+              
               // Run LLM alignment if html_content is available (articles/texts only, not podcasts)
               if (type === 'article' || type === 'text') {
                 const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
