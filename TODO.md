@@ -125,6 +125,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Auto-scroll toggle in tab header (persisted to localStorage) (2026-02-14)
 - [x] **[P1]** Fix LLM alignment timestamp precision - changed from 5-second time buckets to sentence-chunked transcript (one timestamp per sentence line) giving sub-second precision; also fixed M:SS→M.SS format confusion; removed broken algorithmic post-processing; improved LLM prompt clarity (2026-02-14)
 - [x] **[P1]** Fix LLM alignment count mismatch causing last 30-40% of audio to be unmatched - replaced destructive array truncation with linear resampling to preserve full timestamp range; added tail-stretching when LLM doesn't cover enough of the audio duration (2026-02-14)
+- [x] **[P2]** Fix LLM alignment comment timestamps pointing to body instead of header - comment element text now matches TTS scriptwriter format ("Username on Date with N upvotes: ...") so LLM finds the spoken header, not just the body text; also simplified chain-of-thought prompt (2026-02-15)
 - [ ] **[P2]** Test LLM alignment quality across different content types (articles, EA Forum, LessWrong, podcasts)
 - [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 
