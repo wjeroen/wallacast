@@ -83,8 +83,10 @@ export async function transcribeWithTimestamps(
     let transcriptText = '';
     let allWords: any[] = [];
     
-    // Hint for Whisper to improve accuracy (limited to 224 chars by API)
-    let previousTranscript = initialPrompt ? initialPrompt.slice(0, 224) : '';
+    // Hint for Whisper to improve accuracy.
+    // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
+    // The API might truncate it, but we shouldn't truncate useful context prematurely.
+    let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
 
     if (fileSizeMB > 25) {
       console.log(`File exceeds 25 MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
