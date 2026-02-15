@@ -85,7 +85,6 @@ export async function transcribeWithTimestamps(
     
     // Hint for Whisper to improve accuracy.
     // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
-    // The API might truncate it, but we shouldn't truncate useful context prematurely.
     let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
 
     if (fileSizeMB > 25) {
@@ -101,12 +100,25 @@ export async function transcribeWithTimestamps(
         const chunkDuration = await getAudioDuration(chunkFiles[i]);
         console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length} (${chunkDuration.toFixed(1)}s) using model ${model}...`);
 
+        // HYBRID PROMPT STRATEGY:
+        // 1. Chunk 1: Use the full initialPrompt to establish names/context.
+        // 2. Chunk 2+: Combine the Metadata (first 600 chars) with Continuity (last 200 chars).
+        let currentPrompt = previousTranscript;
+        
+        if (i > 0 && initialPrompt) {
+            // Take the Metadata (Title, Author, Comments) from the start
+            const metadataPart = initialPrompt.slice(0, 600);
+            // Take the Continuity (last few sentences) from the actual previous text
+            const continuityPart = previousTranscript.slice(-200);
+            currentPrompt = `${metadataPart} ... ${continuityPart}`;
+        }
+
         const transcription = await client.audio.transcriptions.create({
           file: createReadStream(chunkFiles[i]),
           model: model,
           response_format: 'verbose_json',
           timestamp_granularities: ['word'],
-          prompt: previousTranscript.slice(-224),
+          prompt: currentPrompt,
         });
 
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
