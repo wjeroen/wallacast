@@ -107,44 +107,53 @@ function extractContentElements(
 ): ContentElement[] {
   const elements: ContentElement[] = [];
 
-  // Add title + author + date + karma as ONE element (the TTS reads these
-  // as one continuous sentence, so splitting them confuses the LLM)
+  // Add metadata elements (these ARE spoken in the audio, kept as separate
+  // elements so they display individually in the read-along tab)
   if (title) {
-    let metaText = `Title: ${title}.`;
-    let metaHtml = `<h2>${escapeHtml(title)}</h2>`;
+    elements.push({
+      type: 'title',
+      html: `<h2>${escapeHtml(title)}</h2>`,
+      text: `Title: ${title}.`,
+    });
+  }
 
-    if (author) {
-      const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-      metaText += ` Written by ${cleanAuthor}.`;
-      metaHtml += `\n<p class="content-author">By ${escapeHtml(cleanAuthor)}`;
-      if (publishedAt) {
-        try {
-          const date = new Date(publishedAt);
-          const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-          metaText += ` Published on ${formatted}.`;
-          metaHtml += ` · ${escapeHtml(formatted)}`;
-        } catch { /* ignore */ }
-      }
-      metaHtml += `</p>`;
-    } else if (publishedAt) {
+  // Author + date on one line
+  if (author) {
+    const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+    let metaText = `Written by ${cleanAuthor}.`;
+    let metaHtml = `By ${escapeHtml(cleanAuthor)}`;
+    if (publishedAt) {
       try {
         const date = new Date(publishedAt);
         const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         metaText += ` Published on ${formatted}.`;
-        metaHtml += `\n<p class="content-author">${escapeHtml(formatted)}</p>`;
+        metaHtml += ` · ${escapeHtml(formatted)}`;
       } catch { /* ignore */ }
     }
-
-    const isEAForumOrLW = url && (url.includes('forum.effectivealtruism.org') || url.includes('lesswrong.com'));
-    if (isEAForumOrLW && karma !== undefined && karma !== null) {
-      metaText += ` It has ${karma} karma.`;
-      metaHtml += `\n<p class="content-author">${karma} karma</p>`;
-    }
-
     elements.push({
-      type: 'title',
-      html: metaHtml,
+      type: 'meta',
+      html: `<p class="content-author">${metaHtml}</p>`,
       text: metaText,
+    });
+  } else if (publishedAt) {
+    try {
+      const date = new Date(publishedAt);
+      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      elements.push({
+        type: 'meta',
+        html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
+        text: `Published on ${formatted}.`,
+      });
+    } catch { /* ignore */ }
+  }
+
+  // Karma for EA Forum/LW
+  const isEAForumOrLW = url && (url.includes('forum.effectivealtruism.org') || url.includes('lesswrong.com'));
+  if (isEAForumOrLW && karma !== undefined && karma !== null) {
+    elements.push({
+      type: 'meta',
+      html: `<p class="content-author">${karma} karma</p>`,
+      text: `It has ${karma} karma.`,
     });
   }
 
@@ -467,15 +476,30 @@ export async function generateLLMAlignment(
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  // Single prompt — LLM marks each answer with >>>, reasoning is optional
+  // Diagnostic: search transcript for "comment" to verify it's present
+  const transcriptLines = timedTranscript.split('\n');
+  const commentLines = transcriptLines.filter(line => /comment/i.test(line));
+  if (commentLines.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Transcript lines containing "comment":`);
+    commentLines.forEach(line => console.log(`[LLM-Align]   ${line}`));
+  } else {
+    console.log(`[LLM-Align] DIAGNOSTIC: No transcript lines contain the word "comment"!`);
+  }
+  // Also log the last 5 transcript lines (where comments section should transition)
+  console.log(`[LLM-Align] DIAGNOSTIC: Last 5 transcript lines:`);
+  transcriptLines.slice(-5).forEach(line => console.log(`[LLM-Align]   ${line}`));
+  // Log the elements list being sent to the LLM
+  console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
+
+  // Single prompt — LLM reasons through matches, marks answers with >>>
   const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements.
 
-For each element, find the transcript line where it starts being spoken and write the answer on a line starting with >>> like this:
+For each element, find the transcript line where it starts being spoken. Briefly explain your reasoning, then write the answer on a line starting with >>> like this:
 
+Element 0 is the title — I see "Title, Do Your Job" at [0.0].
 >>> 0: 0.0
->>> 1: 4.6
 
-You can add reasoning before any >>> line if it helps, but it's not required. Only >>> lines are parsed.
+Only >>> lines are parsed. Everything else is for your reasoning.
 
 The scriptwriter may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 
