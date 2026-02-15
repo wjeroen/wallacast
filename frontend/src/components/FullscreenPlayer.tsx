@@ -438,7 +438,7 @@ export function FullscreenPlayer({
 
           {/* URL removed — already shown in fullscreen player header */}
           {content.type === 'article' && content.content_source && (
-            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px' }}>
               Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
             </p>
           )}
@@ -531,7 +531,7 @@ export function FullscreenPlayer({
                   className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
                   onClick={() => onSeek(commentDivider.startTime)}
                 >
-                  <h3>Comment section</h3>
+                  <h3>Comments ({commentElements.length})</h3>
                 </div>
               )}
               <div className="comments-list">
@@ -593,7 +593,17 @@ export function FullscreenPlayer({
             <div className="content-header-with-button">
               <div className="content-header">
                 <h2>{content.title}</h2>
-                {content.author && <p className="content-author">By {content.author}</p>}
+                {content.author && (
+                  <p className="content-author">
+                    By {content.author}
+                    {content.published_at && (
+                      <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
+                    )}
+                    {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
+                      <> {content.karma} karma</>
+                    )}
+                  </p>
+                )}
                 {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
