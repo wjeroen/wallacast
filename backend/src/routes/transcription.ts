@@ -1,6 +1,7 @@
 import express from 'express';
 import { query } from '../database/db.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
+import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 
 const router = express.Router();
 
@@ -51,70 +52,15 @@ router.post('/content/:id', async (req, res) => {
 
     console.log('Starting transcription for content:', id, 'audio_url:', content.audio_url);
 
-    // Build Whisper prompt hint for better transcription of key phrases
-    let whisperPrompt = '';
-
-    // 1. Article Metadata
-    if (content.title) whisperPrompt += `Title: ${content.title}. `;
-    if (content.author) whisperPrompt += `Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
-    
-    // Use real date if available, otherwise generic fallback
-    const dateStr = content.published_at ? new Date(content.published_at).toLocaleDateString('en-US') : 'recent date';
-    whisperPrompt += `Published on ${dateStr}. `;
-
-    // 2. Comments Section
-    if (content.comments) {
-      try {
-        const commentsData = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-        
-        if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
-          whisperPrompt += 'Comments section: ';
-          
-          // First Commenter
-          const firstComm = commentsData[0];
-          const user1 = (firstComm.username || 'User').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-          const date1 = firstComm.date ? new Date(firstComm.date).toLocaleDateString('en-US') : 'recently';
-          const upvotes1 = firstComm.karma || 0; // matching fetcher.ts property
-          
-          whisperPrompt += `${user1} on ${date1} with ${upvotes1} upvotes. `;
-
-          // Reply / Second Commenter
-          let secondComm = null;
-          let isReply = false;
-
-          // Check if first comment has replies (as per Comment interface)
-          if (firstComm.replies && firstComm.replies.length > 0) {
-              secondComm = firstComm.replies[0];
-              isReply = true;
-          } else if (commentsData.length > 1) {
-              secondComm = commentsData[1];
-          }
-
-          if (secondComm) {
-              const user2 = (secondComm.username || 'User').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-              const date2 = secondComm.date ? new Date(secondComm.date).toLocaleDateString('en-US') : 'recently';
-              const upvotes2 = secondComm.karma || 0;
-              
-              // Handle agree votes from extendedScore
-              let agree2 = 0;
-              if (secondComm.extendedScore) {
-                 // extendedScore might be parsed object or JSON string
-                 const es = typeof secondComm.extendedScore === 'string' ? JSON.parse(secondComm.extendedScore) : secondComm.extendedScore;
-                 agree2 = es.agreement || es.agree || 0;
-              }
-
-              if (isReply) {
-                   whisperPrompt += `A reply to ${user1} by ${user2} on ${date2} with ${upvotes2} upvotes, ${agree2} agree.`;
-              } else {
-                   whisperPrompt += `${user2} on ${date2} with ${upvotes2} upvotes.`;
-              }
-          }
-        }
-      } catch { /* ignore parsing errors */ }
-    }
+    // Build Whisper prompt so it recognizes title, author, comment headers
+    const whisperPrompt = buildWhisperPrompt({
+      title: content.title,
+      author: content.author,
+      published_at: content.published_at,
+      comments: content.comments,
+    });
 
     // Start transcription in background (don't await)
-    // CHANGED: Passed full whisperPrompt (no slice) so the service can decide how to use it.
     transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
