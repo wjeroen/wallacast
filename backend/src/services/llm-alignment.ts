@@ -550,12 +550,17 @@ Element 1 is "Written by Max Dalton" — I see "written by Max Dalton." at [2.8]
 Element 5 is a comment-divider "Comments section:" — I need to find where the comments section starts in the transcript. I see "Comments section:" at [TIME]. If it's not in the transcript, I'll use the timestamp just before the first comment starts.
 >>> 5: TIME
 
-Element 6 is a comment by JP Addison — the transcript has "JP Addison on 28th of January" at [TIME]. This is the START of the comment (the header), not the body text.
+Element 6 is a comment by JP Addison — I'm looking for "JP Addison on 28th of January" in the transcript. I found it at [TIME]. This is the START of the comment (the header).
 >>> 6: TIME
 
+Element 7 is a comment by UserB — I can't find "UserB on Date" in the transcript (Whisper may have dropped the header). But I can see the comment body text starting with "I think this is great" at [TIME2]. I'll use that as the start of this comment.
+>>> 7: TIME2
+
 IMPORTANT RULES:
-- For comments, match the HEADER (the "Username on Date with N upvotes:" line), NOT the body text that follows.
-- For the comment-divider, look for "Comments section:" in the transcript. If the exact phrase isn't there, use the timestamp of the last content line before the first comment header starts.
+- For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
+- If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
+- BEWARE: A username like "JP Addison" might appear in ANOTHER comment's header (e.g. "A reply to JP Addison by MaxDalton"). That is NOT JP Addison's own comment! Only match the username at the START of its own header line, not inside another comment's "reply to" prefix.
+- For the comment-divider, look for "Comments section:" in the transcript. If the exact phrase isn't there, use the timestamp of the last content line before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 - Use exact [timestamp] values from the transcript. Do NOT copy timestamps from the examples above — find the real ones.
 - Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
@@ -695,6 +700,65 @@ Now go through each element 0 to ${allElements.length - 1}. For each one, explai
           if (timestamps[i] < timestamps[i - 1]) timestamps[i] = timestamps[i - 1];
         }
         console.log(`[LLM-Align] Stretched: ${finalTs.toFixed(0)}s → ${timestamps[timestamps.length - 1].toFixed(0)}s`);
+      }
+    }
+
+    // Post-processing: fix comment-divider and first comment when Whisper drops headers
+    // Whisper sometimes drops "Comments section:" and the first comment's header entirely,
+    // causing the LLM to assign the same timestamp to both (usually too late).
+    const commentDividerIdx = allElements.findIndex(el => el.type === 'comment-divider');
+    if (commentDividerIdx >= 0) {
+      const firstCommentIdx = allElements.findIndex((el, i) => i > commentDividerIdx && el.type === 'comment');
+      if (firstCommentIdx >= 0) {
+        const lastContentIdx = commentDividerIdx - 1;
+        const lastContentTime = lastContentIdx >= 0 ? timestamps[lastContentIdx] : 0;
+        const firstCommentTime = timestamps[firstCommentIdx];
+
+        // If comment-divider and first comment have the same timestamp, or if the first comment
+        // is much later than the last content (>10s gap suggesting Whisper dropped the header),
+        // try to find the comment body text in the raw transcript
+        if (timestamps[commentDividerIdx] >= firstCommentTime) {
+          // Comment-divider should always be before first comment
+          // Set it to just after the last content element
+          const betterDividerTime = Math.round((lastContentTime + 1) * 10) / 10;
+          console.log(`[LLM-Align] Post-fix: comment-divider ${timestamps[commentDividerIdx]}s → ${betterDividerTime}s (placed after last content at ${lastContentTime}s)`);
+          timestamps[commentDividerIdx] = betterDividerTime;
+        }
+
+        // If first comment's timestamp is much later than last content (>15s gap),
+        // search for the first comment's body text in the raw transcript
+        if (firstCommentTime - lastContentTime > 15) {
+          const firstComment = allElements[firstCommentIdx];
+          // Get first few words of the comment body (after the header "Username on Date with N upvotes:")
+          const colonIdx = firstComment.text.indexOf(':');
+          const bodyStart = colonIdx >= 0 ? firstComment.text.slice(colonIdx + 1).trim() : firstComment.text;
+          const firstWords = bodyStart.split(/\s+/).slice(0, 5).join(' ').toLowerCase().replace(/[^\w\s]/g, '');
+
+          if (firstWords.length > 8) {
+            // Search raw transcript words for a match
+            for (let wi = 0; wi < transcriptWords.length - 4; wi++) {
+              const windowText = transcriptWords.slice(wi, wi + 5)
+                .map(w => (w.word || '').trim().toLowerCase().replace(/[^\w\s]/g, ''))
+                .join(' ');
+              if (windowText.includes(firstWords.slice(0, 15))) {
+                const betterTime = transcriptWords[wi].start;
+                // Only use if it's between last content and current assignment
+                if (betterTime > lastContentTime && betterTime < firstCommentTime) {
+                  console.log(`[LLM-Align] Post-fix: first comment "${allElements[firstCommentIdx].commentMeta?.username}" ${firstCommentTime}s → ${betterTime}s (matched body text "${firstWords.slice(0, 30)}")`);
+                  timestamps[firstCommentIdx] = betterTime;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Re-enforce non-decreasing after fixes
+        for (let i = 1; i < timestamps.length; i++) {
+          if (timestamps[i] < timestamps[i - 1]) {
+            timestamps[i] = timestamps[i - 1];
+          }
+        }
       }
     }
 
