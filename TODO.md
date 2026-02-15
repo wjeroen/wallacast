@@ -123,6 +123,14 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Fix Whisper timestamp seeking - clicking words works correctly now (2026-01-29)
 - [x] **[P1]** LLM-based content alignment (replaces Needleman-Wunsch) - read-along tab now looks exactly like content+comments tabs with per-element timestamps (2026-02-14)
 - [x] **[P2]** Auto-scroll toggle in tab header (persisted to localStorage) (2026-02-14)
+- [x] **[P1]** Fix LLM alignment timestamp precision - changed from 5-second time buckets to sentence-chunked transcript (one timestamp per sentence line) giving sub-second precision; also fixed M:SS→M.SS format confusion; removed broken algorithmic post-processing; improved LLM prompt clarity (2026-02-14)
+- [x] **[P1]** Fix LLM alignment count mismatch causing last 30-40% of audio to be unmatched - replaced destructive array truncation with linear resampling to preserve full timestamp range; added tail-stretching when LLM doesn't cover enough of the audio duration (2026-02-14)
+- [x] **[P2]** Fix LLM alignment comment timestamps pointing to body instead of header - comment element text now matches TTS scriptwriter format ("Username on Date with N upvotes: ...") so LLM finds the spoken header, not just the body text; also simplified chain-of-thought prompt (2026-02-15)
+- [x] **[P2]** Fix LLM alignment title/author/karma - kept as 3 separate elements (title, author+date, karma); removed redundant URL from content/read-along tabs (already in header) (2026-02-15)
+- [x] **[P2]** Add "Regenerate transcript" option to articles/texts in library card dropdown - re-runs Whisper + LLM alignment on existing audio without regenerating TTS (2026-02-15)
+- [x] **[P2]** Fix LLM comment-divider hallucination - removed hardcoded timestamp from prompt example; added fallback rule to use last content timestamp when "Comments section" not in Whisper transcript (2026-02-15)
+- [x] **[P2]** Add date and karma to content tab header - content tab now shows "By Author Date Karma" matching what read-along tab shows (2026-02-15)
+- [x] **[P2]** Improve Whisper transcription accuracy — pass prompt hint with title, author, "Comments section:", and first comment header so Whisper recognizes these key phrases; extend post-processing to fix ALL comments with dropped headers (not just first); increase LLM token limit for long articles (2026-02-15)
 - [ ] **[P2]** Test LLM alignment quality across different content types (articles, EA Forum, LessWrong, podcasts)
 - [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 

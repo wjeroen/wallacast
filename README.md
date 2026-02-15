@@ -238,7 +238,7 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
   - `transcribeAudio()`: Basic transcription
-  - `transcribeWithTimestamps()`: Returns word-level timestamps for sync
+  - `transcribeWithTimestamps(audioUrl, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint (max 224 chars) to improve recognition of key phrases like "Comments section:" and comment headers
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
 
@@ -246,10 +246,11 @@ Wallacast supports multiple users with complete data isolation:
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
   - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
-  - `buildTimedTranscript()`: Groups Whisper word timestamps into 15-second time-bucketed segments formatted as `[M:SS] words...`
+  - `buildTimedTranscript()`: Groups Whisper words into sentences (splitting at `.?!` boundaries) with one timestamp per line (e.g., `[14.2] I've just started a blog about effective altruism.`), giving the LLM natural sentence context for text matching
   - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI fallback)
   - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
   - Enforces non-decreasing timestamps in output
+  - Post-processing: fixes comment-divider placement and searches for body text in raw Whisper words when headers are dropped (applies to ALL comments, not just the first)
   - Stored in `content_alignment` JSONB column (same column as old Needleman-Wunsch data)
 
 - **`services/content-alignment.ts`**: Legacy Needleman-Wunsch content alignment (no longer used for new alignments, kept for backward compatibility with existing data)

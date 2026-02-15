@@ -436,17 +436,9 @@ export function FullscreenPlayer({
             </div>
           ))}
 
-          {/* Static source URL (not spoken, not timestamped) */}
-          {content.url && content.type === 'article' && (
-            <p className="content-source">
-              <a href={content.url} target="_blank" rel="noopener noreferrer">
-                {getDomainFromUrl(content.url)}
-                <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
-              </a>
-            </p>
-          )}
+          {/* URL removed — already shown in fullscreen player header */}
           {content.type === 'article' && content.content_source && (
-            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px' }}>
               Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
             </p>
           )}
@@ -601,15 +593,18 @@ export function FullscreenPlayer({
             <div className="content-header-with-button">
               <div className="content-header">
                 <h2>{content.title}</h2>
-                {content.author && <p className="content-author">By {content.author}</p>}
-                {content.url && content.type === 'article' && (
-                  <p className="content-source">
-                    <a href={content.url} target="_blank" rel="noopener noreferrer">
-                      {getDomainFromUrl(content.url)}
-                      <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
-                    </a>
+                {content.author && (
+                  <p className="content-author">
+                    By {content.author}
+                    {content.published_at && (
+                      <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
+                    )}
+                    {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
+                      <> {content.karma} karma</>
+                    )}
                   </p>
                 )}
+                {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}

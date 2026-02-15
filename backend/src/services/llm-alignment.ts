@@ -7,7 +7,7 @@
  * How it works:
  * 1. Extract block-level elements from HTML (paragraphs, headings, images, etc.)
  * 2. Extract comments as individual elements with metadata
- * 3. Build a time-bucketed transcript from Whisper word timestamps
+ * 3. Build a sentence-chunked transcript with timestamps from Whisper
  * 4. Send elements + transcript to the user's selected LLM
  * 5. LLM returns a start time for each element
  * 6. Store as content_alignment JSONB with version: 'llm-v1'
@@ -107,7 +107,8 @@ function extractContentElements(
 ): ContentElement[] {
   const elements: ContentElement[] = [];
 
-  // Add metadata elements (these ARE spoken in the audio)
+  // Add metadata elements (these ARE spoken in the audio, kept as separate
+  // elements so they display individually in the read-along tab)
   if (title) {
     elements.push({
       type: 'title',
@@ -116,7 +117,7 @@ function extractContentElements(
     });
   }
 
-  // Author + date on one line (matches content tab's "By Author" display)
+  // Author + date on one line
   if (author) {
     const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
     let metaText = `Written by ${cleanAuthor}.`;
@@ -246,20 +247,80 @@ function extractContentElements(
 }
 
 /**
- * Flatten nested comments into a linear list with depth tracking
+ * Format a date string into ordinal narration form: "23rd of January 2026"
+ * Must match openai-tts.ts formatDateForNarration() exactly.
  */
-function extractCommentElements(comments: any[], depth: number = 0): ContentElement[] {
+function formatDateForLLM(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    const day = date.getDate();
+    const month = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    const suffix = ['th', 'st', 'nd', 'rd'];
+    const v = day % 100;
+    const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+    return `${ordinalDay} of ${month} ${year}`;
+  } catch {
+    return dateString;
+  }
+}
+
+/**
+ * Format karma/reactions into narration text: "8 upvotes, 3 agreement"
+ * Must match openai-tts.ts formatReactionsForNarration() exactly.
+ */
+function formatReactionsForLLM(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false): string {
+  const parts: string[] = [];
+  if (karma !== undefined && karma !== null) {
+    parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
+  }
+  if (extendedScore) {
+    if (isLessWrong) {
+      if (typeof extendedScore.agreement === 'number') {
+        parts.push(`${extendedScore.agreement} agreement`);
+      }
+    } else {
+      for (const [reaction, count] of Object.entries(extendedScore)) {
+        if (count > 0 && reaction !== 'baseScore') {
+          parts.push(`${count} ${reaction}`);
+        }
+      }
+    }
+  }
+  return parts.join(', ');
+}
+
+/**
+ * Flatten nested comments into a linear list with depth tracking.
+ * The `text` field matches the TTS scriptwriter's spoken format so the LLM
+ * can find the comment HEADER ("Username on Date with N upvotes:") in the transcript,
+ * not just the comment body text.
+ */
+function extractCommentElements(comments: any[], depth: number = 0, parentUsername?: string, isLessWrong: boolean = false): ContentElement[] {
   const elements: ContentElement[] = [];
 
   for (const comment of comments) {
-    const username = ((comment.username || 'Anonymous') as string).trim();
+    // Strip emojis from username (same as TTS scriptwriter)
+    const username = ((comment.username || 'Anonymous') as string)
+      .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
     const commentHtml = comment.content || '';
     const plainText = commentHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // Build text for LLM matching
-    let llmText = `${username}`;
-    if (comment.karma !== undefined && comment.karma !== null) llmText += ` (${comment.karma} karma)`;
-    llmText += `: ${plainText}`;
+    // Build intro matching TTS scriptwriter format exactly:
+    // Top-level: "Username on 23rd of January 2026 with 8 upvotes"
+    // Reply:     "A reply to ParentUser by Username on 23rd of January 2026 with 3 upvotes"
+    let intro = '';
+    if (depth > 0 && parentUsername) {
+      intro = `A reply to ${parentUsername} by ${username}`;
+    } else {
+      intro = `${username}`;
+    }
+    const date = comment.date ? formatDateForLLM(comment.date) : '';
+    if (date) intro += ` on ${date}`;
+    const reactions = formatReactionsForLLM(comment.karma, comment.extendedScore, isLessWrong);
+    if (reactions) intro += ` with ${reactions}`;
+
+    const llmText = `${intro}: ${plainText}`;
 
     elements.push({
       type: 'comment',
@@ -275,7 +336,7 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
     });
 
     if (comment.replies && comment.replies.length > 0) {
-      elements.push(...extractCommentElements(comment.replies, depth + 1));
+      elements.push(...extractCommentElements(comment.replies, depth + 1, username, isLessWrong));
     }
   }
 
@@ -283,36 +344,53 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
 }
 
 /**
- * Build time-bucketed transcript from word-level timestamps.
- * Groups words into segments (default 5 seconds) with timestamps.
- * Smaller buckets give the LLM finer-grained anchors for matching.
+ * Build sentence-chunked transcript from word-level timestamps.
+ * Groups words into clauses, splitting at sentence-ending punctuation
+ * (. ? ! : ,) so each line gets its own timestamp.
+ *
+ * Treating : and , as boundaries is critical because:
+ * - "Comments section:" needs its own line to be matchable
+ * - "Username on Date with N upvotes:" needs its own line (comment headers)
+ * - "Title, Do Your Job," separates from "written by Max Dalton."
+ *
+ * Output:
+ * [0.0] Title,
+ * [0.2] Do Your Job Unreasonably Well,
+ * [1.1] written by Max Dalton.
+ * [2.8] Published on 27th of January, 2026,
+ * [4.6] it has 102 karma.
  */
-function buildTimedTranscript(words: TranscriptWord[], segmentDuration: number = 5): string {
+function buildTimedTranscript(words: TranscriptWord[]): string {
   if (words.length === 0) return '';
 
-  const segments: string[] = [];
-  let currentSegmentStart = 0;
+  const sentences: string[] = [];
   let currentWords: string[] = [];
+  let sentenceStart: number = words[0].start;
 
   for (const word of words) {
-    if (word.start >= currentSegmentStart + segmentDuration && currentWords.length > 0) {
-      const mins = Math.floor(currentSegmentStart / 60);
-      const secs = Math.floor(currentSegmentStart % 60);
-      segments.push(`[${mins}:${secs.toString().padStart(2, '0')}] ${currentWords.join(' ')}`);
-      currentSegmentStart = Math.floor(word.start / segmentDuration) * segmentDuration;
+    const trimmed = (word.word || '').trim();
+    if (!trimmed) continue;
+
+    if (currentWords.length === 0) {
+      sentenceStart = word.start;
+    }
+    currentWords.push(trimmed);
+
+    // Break at all punctuation: . ? ! : , ; (optionally followed by " ' ) ])
+    const isClauseEnd = /[.!?:,;]["')\]]?$/.test(trimmed);
+
+    if (isClauseEnd) {
+      sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
       currentWords = [];
     }
-    currentWords.push((word.word || '').trim());
   }
 
-  // Last segment
+  // Remaining words
   if (currentWords.length > 0) {
-    const mins = Math.floor(currentSegmentStart / 60);
-    const secs = Math.floor(currentSegmentStart % 60);
-    segments.push(`[${mins}:${secs.toString().padStart(2, '0')}] ${currentWords.join(' ')}`);
+    sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
   }
 
-  return segments.join('\n');
+  return sentences.join('\n');
 }
 
 /**
@@ -352,6 +430,7 @@ export async function generateLLMAlignment(
 
   // Extract comment elements
   let commentElements: ContentElement[] = [];
+  const isLessWrong = content.url && content.url.includes('lesswrong.com');
 
   if (content.comments) {
     try {
@@ -360,7 +439,7 @@ export async function generateLLMAlignment(
         : content.comments;
 
       if (comments && Array.isArray(comments) && comments.length > 0) {
-        commentElements = extractCommentElements(comments);
+        commentElements = extractCommentElements(comments, 0, undefined, isLessWrong);
       }
     } catch (e) {
       console.error('[LLM-Align] Failed to parse comments:', e);
@@ -374,7 +453,7 @@ export async function generateLLMAlignment(
     allElements.push({
       type: 'comment-divider',
       html: '',
-      text: 'Comments section',
+      text: 'Comments section:',
     });
     allElements.push(...commentElements);
   }
@@ -389,49 +468,114 @@ export async function generateLLMAlignment(
     ? Math.ceil(transcriptWords[transcriptWords.length - 1].end)
     : 0;
 
-  // Build the elements list for the prompt (truncate long texts)
+  // Build element list for the prompt
   const elementsList = allElements.map((el, i) => {
     const typeLabel = el.type === 'comment'
       ? `comment by ${el.commentMeta?.username || 'Unknown'}`
       : el.type;
-    // Truncate text to keep prompt manageable
-    const displayText = el.text.length > 200 ? el.text.slice(0, 200) + '...' : el.text;
-    return `[${i}] (${typeLabel}) ${displayText}`;
+    const maxLen = el.type === 'comment' ? 300 : 200;
+    const displayText = el.text.length > maxLen ? el.text.slice(0, maxLen) + '...' : el.text;
+    return `${i}. (${typeLabel}) ${displayText}`;
   }).join('\n');
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  const systemPrompt = `You match article content to its audio narration by finding where each piece of text is spoken.
+  // Diagnostic: search CHUNKED transcript lines for "comment"
+  const transcriptLines = timedTranscript.split('\n');
+  const commentLines = transcriptLines.filter(line => /comment/i.test(line));
+  if (commentLines.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Transcript lines containing "comment":`);
+    commentLines.forEach(line => console.log(`[LLM-Align]   ${line}`));
+  } else {
+    console.log(`[LLM-Align] DIAGNOSTIC: No transcript lines contain the word "comment"!`);
+  }
 
-The article was converted to speech via TTS. The audio reads: title, author/date, article body, then optionally a comments section.
+  // Diagnostic: search RAW Whisper words for comment/section variations
+  // This catches cases where sentence-chunking might split "Comments" and "section" across lines
+  const commentWordMatches = transcriptWords.filter(w =>
+    /comm|sect|comment|section/i.test((w.word || '').trim())
+  );
+  if (commentWordMatches.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Raw Whisper words matching comm/sect:`);
+    commentWordMatches.forEach(w => console.log(`[LLM-Align]   "${w.word.trim()}" at ${w.start.toFixed(1)}s`));
+  } else {
+    console.log(`[LLM-Align] DIAGNOSTIC: No raw Whisper words match comm/sect! Whisper may have dropped "Comments section" entirely.`);
+  }
 
-YOUR METHOD:
-1. For each content element below, read its text
-2. Find where those words (or close paraphrase) appear in the timestamped transcript
-3. Return the timestamp where that element STARTS being spoken
+  // Log last 15 transcript lines (comment section transition area)
+  console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
+  transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
 
-CRITICAL: You MUST actually match text between elements and transcript. Do NOT distribute timestamps evenly — different paragraphs have very different lengths in the audio. Short paragraphs might be 3 seconds apart, long ones might be 30+ seconds apart.
+  // Diagnostic: dump raw Whisper words in the transition zone (last content → first comment)
+  // This shows EXACTLY what Whisper captured, word by word, including the "Comments section" gap
+  const lastTranscriptLine = transcriptLines[transcriptLines.length - 1];
+  const lastTimestampMatch = lastTranscriptLine?.match(/^\[([\d.]+)\]/);
+  const lastContentTime = lastTimestampMatch ? parseFloat(lastTimestampMatch[1]) : 0;
+  // Show words from 10s before last content to 45s after (covers the transition to first comment)
+  const transitionStart = Math.max(0, lastContentTime - 180); // ~3 min before end
+  const transitionEnd = lastContentTime + 10;
+  const transitionWords = transcriptWords.filter(w => w.start >= transitionStart && w.start <= transitionEnd);
+  if (transitionWords.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Raw Whisper words from ${transitionStart.toFixed(0)}s to ${transitionEnd.toFixed(0)}s (article→comments transition):`);
+    // Group by ~2 second windows for readability
+    let currentWindowStart = transitionWords[0].start;
+    let windowWords: string[] = [];
+    for (const w of transitionWords) {
+      if (w.start - currentWindowStart > 2 && windowWords.length > 0) {
+        console.log(`[LLM-Align]   [${currentWindowStart.toFixed(1)}] ${windowWords.join(' ')}`);
+        windowWords = [];
+        currentWindowStart = w.start;
+      }
+      windowWords.push((w.word || '').trim());
+    }
+    if (windowWords.length > 0) {
+      console.log(`[LLM-Align]   [${currentWindowStart.toFixed(1)}] ${windowWords.join(' ')}`);
+    }
+  }
 
-BAD output (evenly spaced): [0, 15, 30, 45, 60, 75, 90]
-GOOD output (actually matched): [0, 3.5, 7, 14, 52, 58, 103]
+  // Log the elements list being sent to the LLM
+  console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
 
-The total audio is ${totalAudioDuration} seconds long. Your timestamps must span from 0 to approximately ${totalAudioDuration}.
+  // Single prompt — LLM reasons through each match, marks answers with >>>
+  const prompt = `I have an article that was read aloud as audio. Below is the timestamped transcript from the audio, followed by the article's content elements. Your job is to find where each element starts being spoken in the transcript, so that we can sync the original text with the audio.
+Keep in mind that the transcription is generated by AI, so some words and names won't always be transcribed accurately. You need to find the best matches, not exact matches.
 
-RULES:
-- Times must be non-decreasing
-- Use decimal precision (e.g., 14.5, not just 15)
-- If an element isn't spoken (e.g., decorative image), use the same time as the previous element
-- Images correspond to "An image shows..." in the audio
-- The array must have exactly ${allElements.length} numbers
-- Not all articles have comments. If there are no comment elements, that's fine.`;
+For each element, explain which transcript line matches it and why, then write the answer on a new line starting with >>>. 
 
-  const userPrompt = `CONTENT ELEMENTS (${allElements.length} total):
-${elementsList}
+IMPORTANT RULES:
+- Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
+- For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
+- If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
+- Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
+- For the comment-divider, look for "Comments section:" in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
+- The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
+- Use exact [timestamp] values from the transcript. Do NOT copy timestamps from the examples below — find the real ones.
 
-TIMESTAMPED TRANSCRIPT (total duration: ${totalAudioDuration}s):
+Here is an example of the expected format:
+"Element 0 is the title "How To Flex Your Car" — the transcript has "How To Flex Your Car," at [0.0] which matches.
+>>> 0: 0.0
+
+Element 1 is "Written by Car McVroom" — I see "written by Car McVroom." at [2.8].
+>>> 1: 2.8
+
+Element 7 is a comment-divider "Comments section:" — I need to find where the comments section starts in the transcript. I can't find it in the transcript, so I'll use the timestamp just before the first comment starts.
+>>> 7: 40.3
+
+Element 8 is a comment by SmartyPants — I'm looking for "SmartyPants on 28th of January" in the transcript. I found it at [40.3]. This is the START of the comment header.
+>>> 8: 40.3
+
+Element 9 is a comment by UserB — I can't find "UserB on Date" in the transcript. But I can see the comment body text starting with "I think this is great" at [61.4]. I'll use that as the start of this comment.
+>>> 9: 61.4"
+
+Of course, unlike in this example, make sure not to skip any spoken elements!
+
+TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-Find where each element is spoken in the transcript. Return ONLY a JSON array of ${allElements.length} timestamps in seconds.`;
+ELEMENTS TO MATCH (${allElements.length} total):
+${elementsList}
+
+Now go through each element 0 to ${allElements.length - 1}. For each one, explain your reasoning, then write >>> followed by the element number and timestamp.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -444,52 +588,220 @@ Find where each element is spoken in the transcript. Return ONLY a JSON array of
   const response = await chatConfig.client.chat.completions.create({
     model: chatConfig.model,
     messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: 'user', content: prompt },
     ],
     temperature: 0.1,
-    max_completion_tokens: 4000,
+    max_completion_tokens: 16000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
   console.log(`[LLM-Align] LLM response length: ${responseText.length} chars`);
-  console.log(`[LLM-Align] Raw LLM response (first 500 chars): ${responseText.slice(0, 500)}`);
+  // Log full response so reasoning is visible in Railway logs
+  console.log(`[LLM-Align] Full LLM response:\n${responseText}`);
 
-  // Parse response - extract JSON array
+  // Parse response — only extract lines starting with >>>
   let timestamps: number[];
   let usedFallback = false;
   try {
-    const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
-    if (!jsonMatch) {
-      throw new Error('No JSON array found in LLM response');
-    }
-    timestamps = JSON.parse(jsonMatch[0]);
-
-    if (!Array.isArray(timestamps)) {
-      throw new Error('Parsed result is not an array');
-    }
-
-    console.log(`[LLM-Align] Parsed ${timestamps.length} timestamps from LLM`);
-
-    // Ensure all values are numbers
-    timestamps = timestamps.map(t => {
-      const n = typeof t === 'number' ? t : parseFloat(String(t));
-      return isNaN(n) ? 0 : n;
-    });
-
-    // Pad or trim to match element count
-    if (timestamps.length !== allElements.length) {
-      console.warn(`[LLM-Align] Expected ${allElements.length} timestamps, got ${timestamps.length}. Adjusting...`);
-      while (timestamps.length < allElements.length) {
-        timestamps.push(timestamps[timestamps.length - 1] || 0);
+    const timestampMap = new Map<number, number>();
+    const lines = responseText.split('\n');
+    for (const line of lines) {
+      // Primary: match ">>> 0: 0.0" lines (the marked answers)
+      const markedMatch = line.match(/^>>>\s*(\d+)\s*:\s*([\d.]+)/);
+      if (markedMatch) {
+        const index = parseInt(markedMatch[1], 10);
+        const timestamp = parseFloat(markedMatch[2]);
+        if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
+          timestampMap.set(index, timestamp);
+        }
       }
-      timestamps = timestamps.slice(0, allElements.length);
+    }
+
+    console.log(`[LLM-Align] Parsed ${timestampMap.size}/${allElements.length} >>> markers`);
+
+    // Fallback 1: if no >>> markers, try plain "0: 0.0" lines
+    if (timestampMap.size === 0) {
+      console.warn('[LLM-Align] No >>> markers found, trying plain index:timestamp lines...');
+      for (const line of lines) {
+        const match = line.match(/^\s*\[?(\d+)\]?\s*[:=]\s*([\d.]+)/);
+        if (match) {
+          const index = parseInt(match[1], 10);
+          const timestamp = parseFloat(match[2]);
+          if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
+            timestampMap.set(index, timestamp);
+          }
+        }
+      }
+      if (timestampMap.size > 0) {
+        console.log(`[LLM-Align] Plain format fallback: parsed ${timestampMap.size} pairs`);
+      }
+    }
+
+    // Fallback 2: try JSON array
+    if (timestampMap.size === 0) {
+      console.warn('[LLM-Align] No index:timestamp pairs found, trying JSON array fallback...');
+      const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
+      if (!jsonMatch) {
+        throw new Error('No timestamps found in LLM response');
+      }
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed)) throw new Error('Parsed result is not an array');
+      parsed.forEach((val: any, i: number) => {
+        const n = typeof val === 'number' ? val : parseFloat(String(val));
+        if (!isNaN(n) && i < allElements.length) timestampMap.set(i, n);
+      });
+      console.log(`[LLM-Align] JSON fallback: parsed ${timestampMap.size} timestamps`);
+    }
+
+    // Build timestamps array from map — missing elements get previous value
+    timestamps = [];
+    let missingCount = 0;
+    for (let i = 0; i < allElements.length; i++) {
+      if (timestampMap.has(i)) {
+        timestamps.push(timestampMap.get(i)!);
+      } else {
+        const prev = timestamps.length > 0 ? timestamps[timestamps.length - 1] : 0;
+        timestamps.push(prev);
+        missingCount++;
+      }
+    }
+    if (missingCount > 0) {
+      console.warn(`[LLM-Align] ${missingCount} elements missing from LLM response, filled with previous timestamps`);
+    }
+
+    // M.SS safety net: if all timestamps are way too small, LLM used minutes.seconds
+    const maxTs = Math.max(...timestamps);
+    if (totalAudioDuration > 60 && maxTs > 0 && maxTs < totalAudioDuration * 0.25) {
+      console.warn(`[LLM-Align] Detected M.SS format (max ${maxTs}s vs ${totalAudioDuration}s). Converting...`);
+      timestamps = timestamps.map(t => {
+        const minutes = Math.floor(t);
+        const seconds = Math.round((t - minutes) * 100);
+        return minutes * 60 + seconds;
+      });
     }
 
     // Ensure non-decreasing
     for (let i = 1; i < timestamps.length; i++) {
       if (timestamps[i] < timestamps[i - 1]) {
         timestamps[i] = timestamps[i - 1];
+      }
+    }
+
+    // Coverage check — if LLM didn't match the end, stretch the tail
+    const finalTs = timestamps[timestamps.length - 1];
+    if (totalAudioDuration > 60 && finalTs > 0 && finalTs < totalAudioDuration * 0.85) {
+      console.warn(`[LLM-Align] Timestamps only cover ${finalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(finalTs / totalAudioDuration * 100).toFixed(0)}%). Stretching tail...`);
+      const stretchIdx = Math.floor(timestamps.length * 0.7);
+      const anchorTime = timestamps[stretchIdx];
+      const targetEnd = totalAudioDuration * 0.95;
+      const currentRange = finalTs - anchorTime;
+      if (currentRange > 0) {
+        const scale = (targetEnd - anchorTime) / currentRange;
+        for (let i = stretchIdx + 1; i < timestamps.length; i++) {
+          timestamps[i] = Math.round((anchorTime + (timestamps[i] - anchorTime) * scale) * 10) / 10;
+        }
+        for (let i = 1; i < timestamps.length; i++) {
+          if (timestamps[i] < timestamps[i - 1]) timestamps[i] = timestamps[i - 1];
+        }
+        console.log(`[LLM-Align] Stretched: ${finalTs.toFixed(0)}s → ${timestamps[timestamps.length - 1].toFixed(0)}s`);
+      }
+    }
+
+    // Post-processing: fix comment-divider and first comment when Whisper drops headers
+    // Whisper sometimes drops "Comments section:" and the first comment's header entirely,
+    // causing the LLM to assign the same timestamp to both (usually too late).
+    const commentDividerIdx = allElements.findIndex(el => el.type === 'comment-divider');
+    if (commentDividerIdx >= 0) {
+      const firstCommentIdx = allElements.findIndex((el, i) => i > commentDividerIdx && el.type === 'comment');
+      if (firstCommentIdx >= 0) {
+        const lastContentIdx = commentDividerIdx - 1;
+        const lastContentTime = lastContentIdx >= 0 ? timestamps[lastContentIdx] : 0;
+        const firstCommentTime = timestamps[firstCommentIdx];
+
+        // If comment-divider and first comment have the same timestamp, or if the first comment
+        // is much later than the last content (>10s gap suggesting Whisper dropped the header),
+        // try to find the comment body text in the raw transcript
+        if (timestamps[commentDividerIdx] >= firstCommentTime) {
+          // Comment-divider should always be before first comment
+          // Set it to just after the last content element
+          const betterDividerTime = Math.round((lastContentTime + 1) * 10) / 10;
+          console.log(`[LLM-Align] Post-fix: comment-divider ${timestamps[commentDividerIdx]}s → ${betterDividerTime}s (placed after last content at ${lastContentTime}s)`);
+          timestamps[commentDividerIdx] = betterDividerTime;
+        }
+
+        // If first comment's timestamp is much later than last content (>15s gap),
+        // search for the first comment's body text in the raw transcript
+        if (firstCommentTime - lastContentTime > 15) {
+          const firstComment = allElements[firstCommentIdx];
+          // Get first few words of the comment body (after the header "Username on Date with N upvotes:")
+          const colonIdx = firstComment.text.indexOf(':');
+          const bodyStart = colonIdx >= 0 ? firstComment.text.slice(colonIdx + 1).trim() : firstComment.text;
+          const firstWords = bodyStart.split(/\s+/).slice(0, 5).join(' ').toLowerCase().replace(/[^\w\s]/g, '');
+
+          if (firstWords.length > 8) {
+            // Search raw transcript words for a match
+            for (let wi = 0; wi < transcriptWords.length - 4; wi++) {
+              const windowText = transcriptWords.slice(wi, wi + 5)
+                .map(w => (w.word || '').trim().toLowerCase().replace(/[^\w\s]/g, ''))
+                .join(' ');
+              if (windowText.includes(firstWords.slice(0, 15))) {
+                const betterTime = transcriptWords[wi].start;
+                // Only use if it's between last content and current assignment
+                if (betterTime > lastContentTime && betterTime < firstCommentTime) {
+                  console.log(`[LLM-Align] Post-fix: first comment "${allElements[firstCommentIdx].commentMeta?.username}" ${firstCommentTime}s → ${betterTime}s (matched body text "${firstWords.slice(0, 30)}")`);
+                  timestamps[firstCommentIdx] = betterTime;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // Extended post-processing: fix ALL comments where headers were dropped.
+        // When Whisper drops a comment header, the LLM assigns the same timestamp as
+        // the previous element (it couldn't find the header in the transcript). We search
+        // for the comment's body text in the raw Whisper words as a fallback.
+        let bodyFixCount = 0;
+        for (let ci = commentDividerIdx + 1; ci < allElements.length; ci++) {
+          if (allElements[ci].type !== 'comment') continue;
+          if (ci === firstCommentIdx) continue; // Already handled above
+
+          // If this comment has the same timestamp as the previous element,
+          // the LLM likely couldn't find its header — search for body text
+          const prevTime = ci > 0 ? timestamps[ci - 1] : 0;
+          if (timestamps[ci] <= prevTime) {
+            const comment = allElements[ci];
+            const colonIdx = comment.text.indexOf(':');
+            const bodyStart = colonIdx >= 0 ? comment.text.slice(colonIdx + 1).trim() : comment.text;
+            const firstWords = bodyStart.split(/\s+/).slice(0, 6).join(' ').toLowerCase().replace(/[^\w\s]/g, '');
+
+            if (firstWords.length > 8) {
+              // Search raw transcript words starting AFTER the previous timestamp
+              for (let wi = 0; wi < transcriptWords.length - 5; wi++) {
+                if (transcriptWords[wi].start <= prevTime) continue;
+                const windowText = transcriptWords.slice(wi, wi + 6)
+                  .map(w => (w.word || '').trim().toLowerCase().replace(/[^\w\s]/g, ''))
+                  .join(' ');
+                if (windowText.includes(firstWords.slice(0, 20))) {
+                  const betterTime = transcriptWords[wi].start;
+                  timestamps[ci] = betterTime;
+                  bodyFixCount++;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (bodyFixCount > 0) {
+          console.log(`[LLM-Align] Post-fix: fixed ${bodyFixCount} additional comments via body text search`);
+        }
+
+        // Re-enforce non-decreasing after all fixes
+        for (let i = 1; i < timestamps.length; i++) {
+          if (timestamps[i] < timestamps[i - 1]) {
+            timestamps[i] = timestamps[i - 1];
+          }
+        }
       }
     }
 
