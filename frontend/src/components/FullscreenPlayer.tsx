@@ -436,15 +436,7 @@ export function FullscreenPlayer({
             </div>
           ))}
 
-          {/* Static source URL (not spoken, not timestamped) */}
-          {content.url && content.type === 'article' && (
-            <p className="content-source">
-              <a href={content.url} target="_blank" rel="noopener noreferrer">
-                {getDomainFromUrl(content.url)}
-                <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
-              </a>
-            </p>
-          )}
+          {/* URL removed — already shown in fullscreen player header */}
           {content.type === 'article' && content.content_source && (
             <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
               Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
@@ -602,14 +594,7 @@ export function FullscreenPlayer({
               <div className="content-header">
                 <h2>{content.title}</h2>
                 {content.author && <p className="content-author">By {content.author}</p>}
-                {content.url && content.type === 'article' && (
-                  <p className="content-source">
-                    <a href={content.url} target="_blank" rel="noopener noreferrer">
-                      {getDomainFromUrl(content.url)}
-                      <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
-                    </a>
-                  </p>
-                )}
+                {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
