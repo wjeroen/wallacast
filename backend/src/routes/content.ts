@@ -400,20 +400,68 @@ router.patch('/:id', async (req, res) => {
         if (audio_url) {
           console.log(`Regenerating transcript for ${type} ${id}`);
 
-          // Build Whisper prompt hint for better transcription of key phrases
+         // Build Whisper prompt hint for better transcription of key phrases
           let whisperPrompt = '';
+          
+          // 1. Article Metadata
           if (title) whisperPrompt += `Title: ${title}. `;
           if (author) whisperPrompt += `Written by ${author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
+          
+          // Use real date if available, otherwise generic fallback
+          const dateStr = published_at ? new Date(published_at).toLocaleDateString('en-US') : 'recent date';
+          whisperPrompt += `Published on ${dateStr}. `;
+
+          // 2. Comments Section
           if (comments) {
             try {
               const commentsData = typeof comments === 'string' ? JSON.parse(comments) : comments;
+              
               if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
                 whisperPrompt += 'Comments section: ';
-                const username = (commentsData[0].username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-                whisperPrompt += username;
+                
+                // First Commenter
+                const firstComm = commentsData[0];
+                const user1 = (firstComm.username || 'User').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+                const date1 = firstComm.date ? new Date(firstComm.date).toLocaleDateString('en-US') : 'recently';
+                const upvotes1 = firstComm.karma || 0; // Use 'karma' per Fetcher interface
+                
+                whisperPrompt += `${user1} on ${date1} with ${upvotes1} upvotes. `;
+
+                // Reply / Second Commenter
+                let secondComm = null;
+                let isReply = false;
+
+                if (firstComm.replies && firstComm.replies.length > 0) {
+                    secondComm = firstComm.replies[0];
+                    isReply = true;
+                } else if (commentsData.length > 1) {
+                    secondComm = commentsData[1];
+                }
+
+                if (secondComm) {
+                    const user2 = (secondComm.username || 'User').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+                    const date2 = secondComm.date ? new Date(secondComm.date).toLocaleDateString('en-US') : 'recently';
+                    const upvotes2 = secondComm.karma || 0;
+                    
+                    // Handle agree votes from extendedScore
+                    let agree2 = 0;
+                    if (secondComm.extendedScore) {
+                       const es = typeof secondComm.extendedScore === 'string' ? JSON.parse(secondComm.extendedScore) : secondComm.extendedScore;
+                       agree2 = es.agreement || es.agree || 0;
+                    }
+
+                    if (isReply) {
+                         whisperPrompt += `A reply to ${user1} by ${user2} on ${date2} with ${upvotes2} upvotes, ${agree2} agree.`;
+                    } else {
+                         whisperPrompt += `${user2} on ${date2} with ${upvotes2} upvotes.`;
+                    }
+                }
               }
-            } catch { /* ignore */ }
+            } catch { /* ignore parsing errors */ }
           }
+          
+          // Log the prompt to debug
+          console.log('Generated Whisper Prompt:', whisperPrompt);
 
           (async () => {
             try {
@@ -422,7 +470,7 @@ router.patch('/:id', async (req, res) => {
                 ['generating_transcript', 0, 'transcript', id]
               );
 
-              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt.slice(0, 224));
+              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt.slice(0, 1000));
 
               await query(
                 'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
