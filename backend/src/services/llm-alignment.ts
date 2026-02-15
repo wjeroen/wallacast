@@ -345,13 +345,20 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
 
 /**
  * Build sentence-chunked transcript from word-level timestamps.
- * Groups words into sentences (splitting at . ? !) with one timestamp per line.
- * Long sentences (>40 words) are split at commas/semicolons.
+ * Groups words into clauses, splitting at sentence-ending punctuation
+ * (. ? ! : ,) so each line gets its own timestamp.
+ *
+ * Treating : and , as boundaries is critical because:
+ * - "Comments section:" needs its own line to be matchable
+ * - "Username on Date with N upvotes:" needs its own line (comment headers)
+ * - "Title, Do Your Job," separates from "written by Max Dalton."
  *
  * Output:
- * [0.0] Title, Do Your Job Unreasonably Well, written by Max Dalton.
- * [4.6] Published on 27th of January, 2026, it has 102 karma.
- * [10.5] I've just started a blog about effective altruism organization-style management.
+ * [0.0] Title,
+ * [0.2] Do Your Job Unreasonably Well,
+ * [1.1] written by Max Dalton.
+ * [2.8] Published on 27th of January, 2026,
+ * [4.6] it has 102 karma.
  */
 function buildTimedTranscript(words: TranscriptWord[]): string {
   if (words.length === 0) return '';
@@ -369,13 +376,10 @@ function buildTimedTranscript(words: TranscriptWord[]): string {
     }
     currentWords.push(trimmed);
 
-    // Sentence boundary: word ends with . ? ! (optionally followed by " ' ) ])
-    const isSentenceEnd = /[.!?]["')\]]?$/.test(trimmed);
+    // Break at all punctuation: . ? ! : , ; (optionally followed by " ' ) ])
+    const isClauseEnd = /[.!?:,;]["')\]]?$/.test(trimmed);
 
-    // Break very long runs (>40 words) at commas or semicolons
-    const isLongBreak = currentWords.length > 40 && /[,;:]$/.test(trimmed);
-
-    if (isSentenceEnd || isLongBreak) {
+    if (isClauseEnd) {
       sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
       currentWords = [];
     }
@@ -485,23 +489,34 @@ export async function generateLLMAlignment(
   } else {
     console.log(`[LLM-Align] DIAGNOSTIC: No transcript lines contain the word "comment"!`);
   }
-  // Also log the last 5 transcript lines (where comments section should transition)
-  console.log(`[LLM-Align] DIAGNOSTIC: Last 5 transcript lines:`);
-  transcriptLines.slice(-5).forEach(line => console.log(`[LLM-Align]   ${line}`));
+  // Log last 15 transcript lines (comment section transition area)
+  console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
+  transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
   // Log the elements list being sent to the LLM
   console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
 
-  // Single prompt — LLM reasons through matches, marks answers with >>>
-  const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements.
+  // Single prompt — LLM reasons through each match, marks answers with >>>
+  const prompt = `I have an article that was read aloud as audio. Below is the timestamped transcript from the audio, followed by the article's content elements. Your job is to find where each element starts being spoken in the transcript.
 
-For each element, find the transcript line where it starts being spoken. Briefly explain your reasoning, then write the answer on a line starting with >>> like this:
+For each element, explain which transcript line matches it and why, then write the answer on a line starting with >>>. Here is an example of the expected format:
 
-Element 0 is the title — I see "Title, Do Your Job" at [0.0].
+Element 0 is the title "Do your job" — the transcript has "Title," at [0.0] which matches.
 >>> 0: 0.0
 
-Only >>> lines are parsed. Everything else is for your reasoning.
+Element 1 is "Written by Max Dalton" — I see "written by Max Dalton." at [2.8].
+>>> 1: 2.8
 
-The scriptwriter may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
+Element 5 is a comment-divider "Comments section:" — the transcript has "Comments section:" at [285.3].
+>>> 5: 285.3
+
+Element 6 is a comment by JP Addison — the transcript has "JP Addison on 28th of January" at [287.8]. This is the START of the comment (the header), not the body text.
+>>> 6: 287.8
+
+IMPORTANT RULES:
+- For comments, match the HEADER (the "Username on Date with N upvotes:" line), NOT the body text that follows.
+- The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
+- Use exact [timestamp] values from the transcript.
+- Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
@@ -509,7 +524,7 @@ ${timedTranscript}
 ELEMENTS TO MATCH (${allElements.length} total):
 ${elementsList}
 
-Go through each element 0 to ${allElements.length - 1}. Use exact [timestamp] values from the transcript. Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.`;
+Now go through each element 0 to ${allElements.length - 1}. For each one, explain your reasoning, then write >>> followed by the element number and timestamp.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -525,7 +540,7 @@ Go through each element 0 to ${allElements.length - 1}. Use exact [timestamp] va
       { role: 'user', content: prompt },
     ],
     temperature: 0.1,
-    max_completion_tokens: 8000,
+    max_completion_tokens: 16000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
