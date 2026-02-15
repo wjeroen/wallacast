@@ -531,7 +531,7 @@ export function FullscreenPlayer({
                   className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
                   onClick={() => onSeek(commentDivider.startTime)}
                 >
-                  <h3>Comments ({commentElements.length})</h3>
+                  <h3>Comment section</h3>
                 </div>
               )}
               <div className="comments-list">
