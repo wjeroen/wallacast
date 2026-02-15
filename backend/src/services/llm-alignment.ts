@@ -505,6 +505,34 @@ export async function generateLLMAlignment(
   // Log last 15 transcript lines (comment section transition area)
   console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
   transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
+
+  // Diagnostic: dump raw Whisper words in the transition zone (last content → first comment)
+  // This shows EXACTLY what Whisper captured, word by word, including the "Comments section" gap
+  const lastTranscriptLine = transcriptLines[transcriptLines.length - 1];
+  const lastTimestampMatch = lastTranscriptLine?.match(/^\[([\d.]+)\]/);
+  const lastContentTime = lastTimestampMatch ? parseFloat(lastTimestampMatch[1]) : 0;
+  // Show words from 10s before last content to 45s after (covers the transition to first comment)
+  const transitionStart = Math.max(0, lastContentTime - 180); // ~3 min before end
+  const transitionEnd = lastContentTime + 10;
+  const transitionWords = transcriptWords.filter(w => w.start >= transitionStart && w.start <= transitionEnd);
+  if (transitionWords.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Raw Whisper words from ${transitionStart.toFixed(0)}s to ${transitionEnd.toFixed(0)}s (article→comments transition):`);
+    // Group by ~2 second windows for readability
+    let currentWindowStart = transitionWords[0].start;
+    let windowWords: string[] = [];
+    for (const w of transitionWords) {
+      if (w.start - currentWindowStart > 2 && windowWords.length > 0) {
+        console.log(`[LLM-Align]   [${currentWindowStart.toFixed(1)}] ${windowWords.join(' ')}`);
+        windowWords = [];
+        currentWindowStart = w.start;
+      }
+      windowWords.push((w.word || '').trim());
+    }
+    if (windowWords.length > 0) {
+      console.log(`[LLM-Align]   [${currentWindowStart.toFixed(1)}] ${windowWords.join(' ')}`);
+    }
+  }
+
   // Log the elements list being sent to the LLM
   console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
 
