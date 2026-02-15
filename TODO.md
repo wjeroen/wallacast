@@ -130,6 +130,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Add "Regenerate transcript" option to articles/texts in library card dropdown - re-runs Whisper + LLM alignment on existing audio without regenerating TTS (2026-02-15)
 - [x] **[P2]** Fix LLM comment-divider hallucination - removed hardcoded timestamp from prompt example; added fallback rule to use last content timestamp when "Comments section" not in Whisper transcript (2026-02-15)
 - [x] **[P2]** Add date and karma to content tab header - content tab now shows "By Author Date Karma" matching what read-along tab shows (2026-02-15)
+- [x] **[P2]** Improve Whisper transcription accuracy — pass prompt hint with title, author, "Comments section:", and first comment header so Whisper recognizes these key phrases; extend post-processing to fix ALL comments with dropped headers (not just first); increase LLM token limit for long articles (2026-02-15)
 - [ ] **[P2]** Test LLM alignment quality across different content types (articles, EA Forum, LessWrong, podcasts)
 - [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 

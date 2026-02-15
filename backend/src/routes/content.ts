@@ -390,15 +390,30 @@ router.patch('/:id', async (req, res) => {
 
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
-        'SELECT type, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT type, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
-        const { type, audio_url } = contentResult.rows[0];
+        const { type, audio_url, title, author, comments } = contentResult.rows[0];
 
         if (audio_url) {
           console.log(`Regenerating transcript for ${type} ${id}`);
+
+          // Build Whisper prompt hint for better transcription of key phrases
+          let whisperPrompt = '';
+          if (title) whisperPrompt += `Title: ${title}. `;
+          if (author) whisperPrompt += `Written by ${author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
+          if (comments) {
+            try {
+              const commentsData = typeof comments === 'string' ? JSON.parse(comments) : comments;
+              if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
+                whisperPrompt += 'Comments section: ';
+                const username = (commentsData[0].username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+                whisperPrompt += username;
+              }
+            } catch { /* ignore */ }
+          }
 
           (async () => {
             try {
@@ -407,7 +422,7 @@ router.patch('/:id', async (req, res) => {
                 ['generating_transcript', 0, 'transcript', id]
               );
 
-              const result = await transcribeWithTimestamps(audio_url, req.user!.userId);
+              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt.slice(0, 224));
 
               await query(
                 'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
