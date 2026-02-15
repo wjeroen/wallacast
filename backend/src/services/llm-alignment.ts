@@ -480,7 +480,7 @@ export async function generateLLMAlignment(
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  // Diagnostic: search transcript for "comment" to verify it's present
+  // Diagnostic: search CHUNKED transcript lines for "comment"
   const transcriptLines = timedTranscript.split('\n');
   const commentLines = transcriptLines.filter(line => /comment/i.test(line));
   if (commentLines.length > 0) {
@@ -489,6 +489,19 @@ export async function generateLLMAlignment(
   } else {
     console.log(`[LLM-Align] DIAGNOSTIC: No transcript lines contain the word "comment"!`);
   }
+
+  // Diagnostic: search RAW Whisper words for comment/section variations
+  // This catches cases where sentence-chunking might split "Comments" and "section" across lines
+  const commentWordMatches = transcriptWords.filter(w =>
+    /comm|sect|comment|section/i.test((w.word || '').trim())
+  );
+  if (commentWordMatches.length > 0) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Raw Whisper words matching comm/sect:`);
+    commentWordMatches.forEach(w => console.log(`[LLM-Align]   "${w.word.trim()}" at ${w.start.toFixed(1)}s`));
+  } else {
+    console.log(`[LLM-Align] DIAGNOSTIC: No raw Whisper words match comm/sect! Whisper may have dropped "Comments section" entirely.`);
+  }
+
   // Log last 15 transcript lines (comment section transition area)
   console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
   transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
@@ -506,16 +519,17 @@ Element 0 is the title "Do your job" — the transcript has "Title," at [0.0] wh
 Element 1 is "Written by Max Dalton" — I see "written by Max Dalton." at [2.8].
 >>> 1: 2.8
 
-Element 5 is a comment-divider "Comments section:" — the transcript has "Comments section:" at [285.3].
->>> 5: 285.3
+Element 5 is a comment-divider "Comments section:" — I need to find where the comments section starts in the transcript. I see "Comments section:" at [TIME]. If it's not in the transcript, I'll use the timestamp just before the first comment starts.
+>>> 5: TIME
 
-Element 6 is a comment by JP Addison — the transcript has "JP Addison on 28th of January" at [287.8]. This is the START of the comment (the header), not the body text.
->>> 6: 287.8
+Element 6 is a comment by JP Addison — the transcript has "JP Addison on 28th of January" at [TIME]. This is the START of the comment (the header), not the body text.
+>>> 6: TIME
 
 IMPORTANT RULES:
 - For comments, match the HEADER (the "Username on Date with N upvotes:" line), NOT the body text that follows.
+- For the comment-divider, look for "Comments section:" in the transcript. If the exact phrase isn't there, use the timestamp of the last content line before the first comment header starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
-- Use exact [timestamp] values from the transcript.
+- Use exact [timestamp] values from the transcript. Do NOT copy timestamps from the examples above — find the real ones.
 - Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
 
 TRANSCRIPT (${totalAudioDuration}s audio):
