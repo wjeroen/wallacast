@@ -587,7 +587,7 @@ Now go through each element 0 to ${allElements.length - 1}. For each one, explai
       { role: 'user', content: prompt },
     ],
     temperature: 0.1,
-    max_completion_tokens: 16000,
+    max_completion_tokens: 24000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
@@ -753,7 +753,46 @@ Now go through each element 0 to ${allElements.length - 1}. For each one, explai
           }
         }
 
-        // Re-enforce non-decreasing after fixes
+        // Extended post-processing: fix ALL comments where headers were dropped.
+        // When Whisper drops a comment header, the LLM assigns the same timestamp as
+        // the previous element (it couldn't find the header in the transcript). We search
+        // for the comment's body text in the raw Whisper words as a fallback.
+        let bodyFixCount = 0;
+        for (let ci = commentDividerIdx + 1; ci < allElements.length; ci++) {
+          if (allElements[ci].type !== 'comment') continue;
+          if (ci === firstCommentIdx) continue; // Already handled above
+
+          // If this comment has the same timestamp as the previous element,
+          // the LLM likely couldn't find its header — search for body text
+          const prevTime = ci > 0 ? timestamps[ci - 1] : 0;
+          if (timestamps[ci] <= prevTime) {
+            const comment = allElements[ci];
+            const colonIdx = comment.text.indexOf(':');
+            const bodyStart = colonIdx >= 0 ? comment.text.slice(colonIdx + 1).trim() : comment.text;
+            const firstWords = bodyStart.split(/\s+/).slice(0, 6).join(' ').toLowerCase().replace(/[^\w\s]/g, '');
+
+            if (firstWords.length > 8) {
+              // Search raw transcript words starting AFTER the previous timestamp
+              for (let wi = 0; wi < transcriptWords.length - 5; wi++) {
+                if (transcriptWords[wi].start <= prevTime) continue;
+                const windowText = transcriptWords.slice(wi, wi + 6)
+                  .map(w => (w.word || '').trim().toLowerCase().replace(/[^\w\s]/g, ''))
+                  .join(' ');
+                if (windowText.includes(firstWords.slice(0, 20))) {
+                  const betterTime = transcriptWords[wi].start;
+                  timestamps[ci] = betterTime;
+                  bodyFixCount++;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (bodyFixCount > 0) {
+          console.log(`[LLM-Align] Post-fix: fixed ${bodyFixCount} additional comments via body text search`);
+        }
+
+        // Re-enforce non-decreasing after all fixes
         for (let i = 1; i < timestamps.length; i++) {
           if (timestamps[i] < timestamps[i - 1]) {
             timestamps[i] = timestamps[i - 1];
