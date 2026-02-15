@@ -114,7 +114,7 @@ router.post('/content/:id', async (req, res) => {
     }
 
     // Start transcription in background (don't await)
-    // Pass the generated prompt (sliced to 800 chars to be safe, logic handled in service)
+    // CHANGED: Passed full whisperPrompt (no slice) so the service can decide how to use it.
     transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
