@@ -571,6 +571,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                             )}
                           </>
                         )}
+                        {(item.type === 'article' || item.type === 'text') && item.audio_url && (
+                          <button
+                            onClick={() => handleRegenerateTranscript(item.id)}
+                            disabled={item.generation_status === 'generating_transcript'}
+                          >
+                            Regenerate transcript
+                          </button>
+                        )}
                         {item.type === 'article' && item.url && (
                           <button onClick={() => handleRefetchContent(item.id)}>
                             Refetch from web

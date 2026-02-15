@@ -729,7 +729,38 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       ['transcribing', 95, contentId]
     );
 
-    transcribeWithTimestamps(audioUrl, content.user_id)
+    // Build Whisper prompt hint (max 224 chars) to improve transcription accuracy.
+    // Whisper often drops short transitional phrases like "Comments section:" and
+    // misrecognizes proper nouns in comment headers. Providing a prompt with these
+    // key phrases helps Whisper recognize them correctly.
+    let whisperPrompt = '';
+    if (content.title) {
+      whisperPrompt += `Title: ${content.title}. `;
+    }
+    if (content.author) {
+      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+      whisperPrompt += `Written by ${cleanAuthor}. `;
+    }
+    if (content.comments) {
+      try {
+        const commentsData = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
+        if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
+          whisperPrompt += 'Comments section: ';
+          const firstComment = commentsData[0];
+          const username = (firstComment.username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+          whisperPrompt += username;
+          if (firstComment.date) {
+            whisperPrompt += ` on ${formatDateForNarration(firstComment.date)}`;
+          }
+          if (firstComment.karma !== undefined) {
+            whisperPrompt += ` with ${firstComment.karma} upvotes`;
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    console.log(`[TTS] Whisper prompt hint (${whisperPrompt.length} chars): "${whisperPrompt.slice(0, 100)}..."`);
+
+    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt.slice(0, 224))
       .then(async (transcriptResult) => {
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
           await query(
