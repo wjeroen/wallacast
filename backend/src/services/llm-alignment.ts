@@ -246,20 +246,80 @@ function extractContentElements(
 }
 
 /**
- * Flatten nested comments into a linear list with depth tracking
+ * Format a date string into ordinal narration form: "23rd of January 2026"
+ * Must match openai-tts.ts formatDateForNarration() exactly.
  */
-function extractCommentElements(comments: any[], depth: number = 0): ContentElement[] {
+function formatDateForLLM(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    const day = date.getDate();
+    const month = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    const suffix = ['th', 'st', 'nd', 'rd'];
+    const v = day % 100;
+    const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+    return `${ordinalDay} of ${month} ${year}`;
+  } catch {
+    return dateString;
+  }
+}
+
+/**
+ * Format karma/reactions into narration text: "8 upvotes, 3 agreement"
+ * Must match openai-tts.ts formatReactionsForNarration() exactly.
+ */
+function formatReactionsForLLM(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false): string {
+  const parts: string[] = [];
+  if (karma !== undefined && karma !== null) {
+    parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
+  }
+  if (extendedScore) {
+    if (isLessWrong) {
+      if (typeof extendedScore.agreement === 'number') {
+        parts.push(`${extendedScore.agreement} agreement`);
+      }
+    } else {
+      for (const [reaction, count] of Object.entries(extendedScore)) {
+        if (count > 0 && reaction !== 'baseScore') {
+          parts.push(`${count} ${reaction}`);
+        }
+      }
+    }
+  }
+  return parts.join(', ');
+}
+
+/**
+ * Flatten nested comments into a linear list with depth tracking.
+ * The `text` field matches the TTS scriptwriter's spoken format so the LLM
+ * can find the comment HEADER ("Username on Date with N upvotes:") in the transcript,
+ * not just the comment body text.
+ */
+function extractCommentElements(comments: any[], depth: number = 0, parentUsername?: string, isLessWrong: boolean = false): ContentElement[] {
   const elements: ContentElement[] = [];
 
   for (const comment of comments) {
-    const username = ((comment.username || 'Anonymous') as string).trim();
+    // Strip emojis from username (same as TTS scriptwriter)
+    const username = ((comment.username || 'Anonymous') as string)
+      .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
     const commentHtml = comment.content || '';
     const plainText = commentHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // Build text for LLM matching
-    let llmText = `${username}`;
-    if (comment.karma !== undefined && comment.karma !== null) llmText += ` (${comment.karma} karma)`;
-    llmText += `: ${plainText}`;
+    // Build intro matching TTS scriptwriter format exactly:
+    // Top-level: "Username on 23rd of January 2026 with 8 upvotes"
+    // Reply:     "A reply to ParentUser by Username on 23rd of January 2026 with 3 upvotes"
+    let intro = '';
+    if (depth > 0 && parentUsername) {
+      intro = `A reply to ${parentUsername} by ${username}`;
+    } else {
+      intro = `${username}`;
+    }
+    const date = comment.date ? formatDateForLLM(comment.date) : '';
+    if (date) intro += ` on ${date}`;
+    const reactions = formatReactionsForLLM(comment.karma, comment.extendedScore, isLessWrong);
+    if (reactions) intro += ` with ${reactions}`;
+
+    const llmText = `${intro}: ${plainText}`;
 
     elements.push({
       type: 'comment',
@@ -275,7 +335,7 @@ function extractCommentElements(comments: any[], depth: number = 0): ContentElem
     });
 
     if (comment.replies && comment.replies.length > 0) {
-      elements.push(...extractCommentElements(comment.replies, depth + 1));
+      elements.push(...extractCommentElements(comment.replies, depth + 1, username, isLessWrong));
     }
   }
 
@@ -365,6 +425,7 @@ export async function generateLLMAlignment(
 
   // Extract comment elements
   let commentElements: ContentElement[] = [];
+  const isLessWrong = content.url && content.url.includes('lesswrong.com');
 
   if (content.comments) {
     try {
@@ -373,7 +434,7 @@ export async function generateLLMAlignment(
         : content.comments;
 
       if (comments && Array.isArray(comments) && comments.length > 0) {
-        commentElements = extractCommentElements(comments);
+        commentElements = extractCommentElements(comments, 0, undefined, isLessWrong);
       }
     } catch (e) {
       console.error('[LLM-Align] Failed to parse comments:', e);
@@ -387,7 +448,7 @@ export async function generateLLMAlignment(
     allElements.push({
       type: 'comment-divider',
       html: '',
-      text: 'Comments section',
+      text: 'Comments section:',
     });
     allElements.push(...commentElements);
   }
@@ -407,32 +468,32 @@ export async function generateLLMAlignment(
     const typeLabel = el.type === 'comment'
       ? `comment by ${el.commentMeta?.username || 'Unknown'}`
       : el.type;
-    const displayText = el.text.length > 200 ? el.text.slice(0, 200) + '...' : el.text;
+    const maxLen = el.type === 'comment' ? 300 : 200;
+    const displayText = el.text.length > maxLen ? el.text.slice(0, maxLen) + '...' : el.text;
     return `${i}. (${typeLabel}) ${displayText}`;
   }).join('\n');
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  // Single prompt — LLM reasons through each element, marks answers with >>>
+  // Single prompt — LLM marks each answer with >>>, reasoning is optional
   const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements.
 
-For each element, find the transcript line where it starts being spoken. Think through each match briefly, then write the answer on a line starting with >>> like this:
+For each element, find the transcript line where it starts being spoken and write the answer on a line starting with >>> like this:
 
-Element 0 is the title "Do your job" — I see "Title, Do Your Job" at [0.0].
 >>> 0: 0.0
-
-Element 1 is the author info — "written by Max Dalton" appears at [4.6].
 >>> 1: 4.6
 
-The scriptwriter may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), and added comment headers ("A comment by Username on Date with N upvotes"). Match by meaning, not exact wording.
+You can add reasoning before any >>> line if it helps, but it's not required. Only >>> lines are parsed.
+
+The scriptwriter may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-ELEMENTS TO MATCH:
+ELEMENTS TO MATCH (${allElements.length} total):
 ${elementsList}
 
-Now go through each element. For each one, explain which transcript line matches, then write >>> followed by the element number and timestamp. Use exact [timestamp] values from the transcript in total seconds. Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.`;
+Go through each element 0 to ${allElements.length - 1}. Use exact [timestamp] values from the transcript. Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
