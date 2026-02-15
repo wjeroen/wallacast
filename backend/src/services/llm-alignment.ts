@@ -402,38 +402,37 @@ export async function generateLLMAlignment(
     ? Math.ceil(transcriptWords[transcriptWords.length - 1].end)
     : 0;
 
-  // Build fill-in-the-blank element list (LLM replaces ___ with timestamp)
-  const elementsWithBlanks = allElements.map((el, i) => {
+  // Build element list for the prompt
+  const elementsList = allElements.map((el, i) => {
     const typeLabel = el.type === 'comment'
       ? `comment by ${el.commentMeta?.username || 'Unknown'}`
       : el.type;
     const displayText = el.text.length > 200 ? el.text.slice(0, 200) + '...' : el.text;
-    return `${i}: ___ ${typeLabel} | ${displayText}`;
+    return `${i}. (${typeLabel}) ${displayText}`;
   }).join('\n');
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  // Single prompt — transcript first so LLM has timestamps in memory, then elements to fill in
-  const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements. For each element, find the transcript line where it starts being spoken and write its timestamp.
+  // Single prompt — LLM reasons through each element, marks answers with >>>
+  const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements.
 
-The audio was prepared by a scriptwriter who may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), and added comment headers ("A comment by Username on Date with N upvotes"). Match by meaning, not exact wording.
+For each element, find the transcript line where it starts being spoken. Think through each match briefly, then write the answer on a line starting with >>> like this:
+
+Element 0 is the title "Do your job" — I see "Title, Do Your Job" at [0.0].
+>>> 0: 0.0
+
+Element 1 is the author info — "written by Max Dalton" appears at [4.6].
+>>> 1: 4.6
+
+The scriptwriter may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), and added comment headers ("A comment by Username on Date with N upvotes"). Match by meaning, not exact wording.
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-ELEMENTS — replace each ___ with the timestamp (in seconds) where that element starts being spoken:
-${elementsWithBlanks}
+ELEMENTS TO MATCH:
+${elementsList}
 
-Output ONLY the element number and timestamp, one per line, like this:
-0: 0.0
-1: 4.6
-2: 10.5
-
-Rules:
-- Use exact [timestamp] values from the transcript (in total seconds like 90.5, not 1:30)
-- Each timestamp must be >= the previous one
-- If an element isn't in the audio, reuse the previous timestamp
-- Images match "An image shows..." or "An image depicts..." in the transcript`;
+Now go through each element. For each one, explain which transcript line matches, then write >>> followed by the element number and timestamp. Use exact [timestamp] values from the transcript in total seconds. Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -449,34 +448,53 @@ Rules:
       { role: 'user', content: prompt },
     ],
     temperature: 0.1,
-    max_completion_tokens: 4000,
+    max_completion_tokens: 8000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
   console.log(`[LLM-Align] LLM response length: ${responseText.length} chars`);
-  console.log(`[LLM-Align] Raw LLM response (first 800 chars): ${responseText.slice(0, 800)}`);
+  // Log full response so reasoning is visible in Railway logs
+  console.log(`[LLM-Align] Full LLM response:\n${responseText}`);
 
-  // Parse response — extract index: timestamp pairs
+  // Parse response — only extract lines starting with >>>
   let timestamps: number[];
   let usedFallback = false;
   try {
     const timestampMap = new Map<number, number>();
     const lines = responseText.split('\n');
     for (const line of lines) {
-      // Match "0: 0.0", "1: 4.6", "[12]: 10.5", "0 = 0.0", etc.
-      const match = line.match(/^\s*\[?(\d+)\]?\s*[:=]\s*([\d.]+)/);
-      if (match) {
-        const index = parseInt(match[1], 10);
-        const timestamp = parseFloat(match[2]);
+      // Primary: match ">>> 0: 0.0" lines (the marked answers)
+      const markedMatch = line.match(/^>>>\s*(\d+)\s*:\s*([\d.]+)/);
+      if (markedMatch) {
+        const index = parseInt(markedMatch[1], 10);
+        const timestamp = parseFloat(markedMatch[2]);
         if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
           timestampMap.set(index, timestamp);
         }
       }
     }
 
-    console.log(`[LLM-Align] Parsed ${timestampMap.size}/${allElements.length} index:timestamp pairs`);
+    console.log(`[LLM-Align] Parsed ${timestampMap.size}/${allElements.length} >>> markers`);
 
-    // Fallback: if line-based parsing found nothing, try JSON array
+    // Fallback 1: if no >>> markers, try plain "0: 0.0" lines
+    if (timestampMap.size === 0) {
+      console.warn('[LLM-Align] No >>> markers found, trying plain index:timestamp lines...');
+      for (const line of lines) {
+        const match = line.match(/^\s*\[?(\d+)\]?\s*[:=]\s*([\d.]+)/);
+        if (match) {
+          const index = parseInt(match[1], 10);
+          const timestamp = parseFloat(match[2]);
+          if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
+            timestampMap.set(index, timestamp);
+          }
+        }
+      }
+      if (timestampMap.size > 0) {
+        console.log(`[LLM-Align] Plain format fallback: parsed ${timestampMap.size} pairs`);
+      }
+    }
+
+    // Fallback 2: try JSON array
     if (timestampMap.size === 0) {
       console.warn('[LLM-Align] No index:timestamp pairs found, trying JSON array fallback...');
       const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
