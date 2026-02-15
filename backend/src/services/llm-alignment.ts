@@ -402,55 +402,38 @@ export async function generateLLMAlignment(
     ? Math.ceil(transcriptWords[transcriptWords.length - 1].end)
     : 0;
 
-  // Build the elements list for the prompt (truncate long texts)
-  const elementsList = allElements.map((el, i) => {
+  // Build fill-in-the-blank element list (LLM replaces ___ with timestamp)
+  const elementsWithBlanks = allElements.map((el, i) => {
     const typeLabel = el.type === 'comment'
       ? `comment by ${el.commentMeta?.username || 'Unknown'}`
       : el.type;
-    // Truncate text to keep prompt manageable
     const displayText = el.text.length > 200 ? el.text.slice(0, 200) + '...' : el.text;
-    return `[${i}] (${typeLabel}) ${displayText}`;
+    return `${i}: ___ ${typeLabel} | ${displayText}`;
   }).join('\n');
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
-  const systemPrompt = `You are given ${allElements.length} CONTENT ELEMENTS and a TIMESTAMPED TRANSCRIPT of their audio narration. Your job: for each content element, find where it starts in the transcript and return its timestamp.
+  // Single prompt — transcript first so LLM has timestamps in memory, then elements to fill in
+  const prompt = `I have an article that was read aloud. Below is the timestamped transcript of the audio, followed by the article's content elements. For each element, find the transcript line where it starts being spoken and write its timestamp.
 
-BACKGROUND:
-- The article was converted to speech via TTS. A scriptwriter reformatted the text before speaking.
-- Lists get numbering ("First, ...", "Second, ..."). Comments get headers like "A comment by Username on Date with N upvotes".
-- Some words may be slightly rephrased. Match by meaning/keywords, not exact wording.
+The audio was prepared by a scriptwriter who may have slightly rephrased text, added numbering to lists ("First, ...", "Second, ..."), and added comment headers ("A comment by Username on Date with N upvotes"). Match by meaning, not exact wording.
 
-TRANSCRIPT FORMAT:
-Each line is one sentence from the audio with its start time in seconds:
-[0.0] Title, Do Your Job Unreasonably Well, written by Max Dalton.
-[4.6] Published on 27th of January, 2026, it has 102 karma.
-[10.5] I've just started a blog about effective altruism.
-
-YOUR TASK:
-- There are exactly ${allElements.length} content elements numbered [0] through [${allElements.length - 1}].
-- For each element, find the transcript line where that element's text BEGINS being spoken.
-- Return EXACTLY ${allElements.length} timestamps — one per content element, NOT one per transcript line.
-- The transcript has many more lines than there are elements. Multiple transcript lines may correspond to a single long element.
-
-RULES:
-- Timestamps in TOTAL SECONDS (90.5 for 1min 30sec, NOT 1.30)
-- Non-decreasing (each timestamp >= the previous)
-- Use exact decimal values from [timestamp] markers, do NOT round
-- If an element isn't spoken (e.g., decorative image), reuse the previous element's time
-- Images match "An image shows..." or "An image depicts..." in the transcript
-- Do NOT distribute timestamps evenly — match actual text positions
-- The last element should have a timestamp near the end of the ${totalAudioDuration}s audio
-
-OUTPUT: A JSON array of exactly ${allElements.length} numbers. Nothing else.`;
-
-  const userPrompt = `CONTENT ELEMENTS (${allElements.length} elements — return exactly ${allElements.length} timestamps):
-${elementsList}
-
-TIMESTAMPED TRANSCRIPT (reference only — do NOT return one timestamp per line):
+TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each content element [0] through [${allElements.length - 1}]. Find where each element's text begins in the transcript and use that line's [timestamp].`;
+ELEMENTS — replace each ___ with the timestamp (in seconds) where that element starts being spoken:
+${elementsWithBlanks}
+
+Output ONLY the element number and timestamp, one per line, like this:
+0: 0.0
+1: 4.6
+2: 10.5
+
+Rules:
+- Use exact [timestamp] values from the transcript (in total seconds like 90.5, not 1:30)
+- Each timestamp must be >= the previous one
+- If an element isn't in the audio, reuse the previous timestamp
+- Images match "An image shows..." or "An image depicts..." in the transcript`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -463,87 +446,77 @@ Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each co
   const response = await chatConfig.client.chat.completions.create({
     model: chatConfig.model,
     messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: 'user', content: prompt },
     ],
-    temperature: 0.2,
+    temperature: 0.1,
     max_completion_tokens: 4000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
   console.log(`[LLM-Align] LLM response length: ${responseText.length} chars`);
-  console.log(`[LLM-Align] Raw LLM response (first 500 chars): ${responseText.slice(0, 500)}`);
+  console.log(`[LLM-Align] Raw LLM response (first 800 chars): ${responseText.slice(0, 800)}`);
 
-  // Parse response - extract JSON array
+  // Parse response — extract index: timestamp pairs
   let timestamps: number[];
   let usedFallback = false;
   try {
-    const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
-    if (!jsonMatch) {
-      throw new Error('No JSON array found in LLM response');
-    }
-    timestamps = JSON.parse(jsonMatch[0]);
-
-    if (!Array.isArray(timestamps)) {
-      throw new Error('Parsed result is not an array');
-    }
-
-    console.log(`[LLM-Align] Parsed ${timestamps.length} timestamps from LLM`);
-
-    // Ensure all values are numbers
-    timestamps = timestamps.map(t => {
-      const n = typeof t === 'number' ? t : parseFloat(String(t));
-      return isNaN(n) ? 0 : n;
-    });
-
-    // Detect M.SS format: if max timestamp is much smaller than audio duration,
-    // the LLM likely returned minutes.seconds (e.g., 1.30 = 1min 30sec = 90s)
-    const maxTs = Math.max(...timestamps);
-    if (totalAudioDuration > 60 && maxTs > 0 && maxTs < totalAudioDuration * 0.25) {
-      // Re-parse from raw JSON, treating values as M.SS
-      console.warn(`[LLM-Align] Detected M.SS format (max ${maxTs}s vs ${totalAudioDuration}s duration). Converting...`);
-      const rawValues = JSON.parse(jsonMatch[0]) as (number | string)[];
-      timestamps = rawValues.map(t => {
-        const str = String(t);
-        // Values like "1.30" mean 1 min 30 sec, but JSON parsed it to 1.3
-        // We need the original string to recover the "30" part
-        const dotIndex = str.indexOf('.');
-        if (dotIndex === -1) return Number(str) * 60; // whole number = minutes
-        const minPart = parseInt(str.slice(0, dotIndex), 10) || 0;
-        const secStr = str.slice(dotIndex + 1);
-        // Pad to 2 digits: "5" → "50"? No — "0.5" meant "0:05" (5 sec), not 50.
-        // The LLM writes "0.5" for 5s, "0.05" for 5s, "0.50" for 50s, "1.30" for 1:30
-        // Key insight: if secStr has 1 digit, it could be ambiguous (0.5 = 5s or 50s?)
-        // But in M:SS, single digit after dot = that many seconds (0.5 = 0:05 = 5s)
-        const secPart = parseInt(secStr, 10) || 0;
-        return minPart * 60 + secPart;
-      }).map(n => isNaN(n) ? 0 : n);
-      console.log(`[LLM-Align] Converted timestamps range: ${timestamps[0]}s to ${timestamps[timestamps.length - 1]}s`);
-    }
-
-    // Handle count mismatch between LLM output and expected elements
-    if (timestamps.length !== allElements.length) {
-      console.warn(`[LLM-Align] Expected ${allElements.length} timestamps, got ${timestamps.length}.`);
-
-      if (timestamps.length > allElements.length) {
-        // Too many: RESAMPLE instead of truncating (truncation loses end of audio!)
-        // Linearly maps N_src positions → N_dst positions, preserving first AND last
-        const srcLen = timestamps.length;
-        const dstLen = allElements.length;
-        const resampled: number[] = [];
-        for (let i = 0; i < dstLen; i++) {
-          const srcIdx = Math.min(Math.round(i * (srcLen - 1) / (dstLen - 1)), srcLen - 1);
-          resampled.push(timestamps[srcIdx]);
-        }
-        console.log(`[LLM-Align] Resampled ${srcLen} → ${dstLen} timestamps (range preserved: ${timestamps[0]}→${timestamps[srcLen - 1]})`);
-        timestamps = resampled;
-      } else {
-        // Too few: pad with the last value
-        console.log(`[LLM-Align] Padding ${timestamps.length} → ${allElements.length} with last value ${timestamps[timestamps.length - 1]}`);
-        while (timestamps.length < allElements.length) {
-          timestamps.push(timestamps[timestamps.length - 1] || 0);
+    const timestampMap = new Map<number, number>();
+    const lines = responseText.split('\n');
+    for (const line of lines) {
+      // Match "0: 0.0", "1: 4.6", "[12]: 10.5", "0 = 0.0", etc.
+      const match = line.match(/^\s*\[?(\d+)\]?\s*[:=]\s*([\d.]+)/);
+      if (match) {
+        const index = parseInt(match[1], 10);
+        const timestamp = parseFloat(match[2]);
+        if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
+          timestampMap.set(index, timestamp);
         }
       }
+    }
+
+    console.log(`[LLM-Align] Parsed ${timestampMap.size}/${allElements.length} index:timestamp pairs`);
+
+    // Fallback: if line-based parsing found nothing, try JSON array
+    if (timestampMap.size === 0) {
+      console.warn('[LLM-Align] No index:timestamp pairs found, trying JSON array fallback...');
+      const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
+      if (!jsonMatch) {
+        throw new Error('No timestamps found in LLM response');
+      }
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed)) throw new Error('Parsed result is not an array');
+      parsed.forEach((val: any, i: number) => {
+        const n = typeof val === 'number' ? val : parseFloat(String(val));
+        if (!isNaN(n) && i < allElements.length) timestampMap.set(i, n);
+      });
+      console.log(`[LLM-Align] JSON fallback: parsed ${timestampMap.size} timestamps`);
+    }
+
+    // Build timestamps array from map — missing elements get previous value
+    timestamps = [];
+    let missingCount = 0;
+    for (let i = 0; i < allElements.length; i++) {
+      if (timestampMap.has(i)) {
+        timestamps.push(timestampMap.get(i)!);
+      } else {
+        const prev = timestamps.length > 0 ? timestamps[timestamps.length - 1] : 0;
+        timestamps.push(prev);
+        missingCount++;
+      }
+    }
+    if (missingCount > 0) {
+      console.warn(`[LLM-Align] ${missingCount} elements missing from LLM response, filled with previous timestamps`);
+    }
+
+    // M.SS safety net: if all timestamps are way too small, LLM used minutes.seconds
+    const maxTs = Math.max(...timestamps);
+    if (totalAudioDuration > 60 && maxTs > 0 && maxTs < totalAudioDuration * 0.25) {
+      console.warn(`[LLM-Align] Detected M.SS format (max ${maxTs}s vs ${totalAudioDuration}s). Converting...`);
+      timestamps = timestamps.map(t => {
+        const minutes = Math.floor(t);
+        const seconds = Math.round((t - minutes) * 100);
+        return minutes * 60 + seconds;
+      });
     }
 
     // Ensure non-decreasing
@@ -553,51 +526,23 @@ Return a JSON array of EXACTLY ${allElements.length} timestamps, one for each co
       }
     }
 
-    // Check audio coverage — if LLM didn't match the end, stretch the tail
+    // Coverage check — if LLM didn't match the end, stretch the tail
     const finalTs = timestamps[timestamps.length - 1];
     if (totalAudioDuration > 60 && finalTs > 0 && finalTs < totalAudioDuration * 0.85) {
       console.warn(`[LLM-Align] Timestamps only cover ${finalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(finalTs / totalAudioDuration * 100).toFixed(0)}%). Stretching tail...`);
-
-      // Stretch the last ~30% of timestamps proportionally to reach ~95% of audio
       const stretchIdx = Math.floor(timestamps.length * 0.7);
       const anchorTime = timestamps[stretchIdx];
       const targetEnd = totalAudioDuration * 0.95;
       const currentRange = finalTs - anchorTime;
-
       if (currentRange > 0) {
-        const targetRange = targetEnd - anchorTime;
-        const scale = targetRange / currentRange;
-
+        const scale = (targetEnd - anchorTime) / currentRange;
         for (let i = stretchIdx + 1; i < timestamps.length; i++) {
           timestamps[i] = Math.round((anchorTime + (timestamps[i] - anchorTime) * scale) * 10) / 10;
         }
-
-        // Re-enforce non-decreasing after stretching
         for (let i = 1; i < timestamps.length; i++) {
-          if (timestamps[i] < timestamps[i - 1]) {
-            timestamps[i] = timestamps[i - 1];
-          }
+          if (timestamps[i] < timestamps[i - 1]) timestamps[i] = timestamps[i - 1];
         }
-
-        console.log(`[LLM-Align] Stretched tail: ${finalTs.toFixed(0)}s → ${timestamps[timestamps.length - 1].toFixed(0)}s (${scale.toFixed(2)}x from anchor ${anchorTime.toFixed(0)}s)`);
-      }
-    }
-
-    // Final coverage warning
-    const postFinalTs = timestamps[timestamps.length - 1];
-    if (totalAudioDuration > 60 && postFinalTs < totalAudioDuration * 0.7) {
-      console.warn(`[LLM-Align] WARNING: Even after adjustments, timestamps only cover ${postFinalTs.toFixed(0)}s of ${totalAudioDuration}s audio (${(postFinalTs / totalAudioDuration * 100).toFixed(0)}%).`);
-    }
-
-    // Detect lazy even distribution
-    if (timestamps.length >= 5) {
-      const diffs = timestamps.slice(1).map((t, i) => Math.round((t - timestamps[i]) * 10) / 10);
-      const nonZeroDiffs = diffs.filter(d => d > 0);
-      if (nonZeroDiffs.length > 0) {
-        const uniqueDiffs = new Set(nonZeroDiffs);
-        if (uniqueDiffs.size <= 2) {
-          console.warn(`[LLM-Align] WARNING: Timestamps appear evenly distributed (intervals: ${[...uniqueDiffs].join(', ')}s). LLM may not have done real text matching.`);
-        }
+        console.log(`[LLM-Align] Stretched: ${finalTs.toFixed(0)}s → ${timestamps[timestamps.length - 1].toFixed(0)}s`);
       }
     }
 
