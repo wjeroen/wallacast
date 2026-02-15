@@ -397,8 +397,8 @@ router.patch('/:id', async (req, res) => {
       if (contentResult.rows.length > 0) {
         const { type, audio_url } = contentResult.rows[0];
 
-        if (type === 'podcast_episode' && audio_url) {
-          console.log(`Regenerating transcript for podcast ${id}`);
+        if (audio_url) {
+          console.log(`Regenerating transcript for ${type} ${id}`);
 
           (async () => {
             try {
@@ -419,6 +419,10 @@ router.patch('/:id', async (req, res) => {
                 const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
                 if (contentResult.rows.length > 0 && contentResult.rows[0].html_content) {
                   console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
+                  await query(
+                    'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
+                    [97, 'aligning_content', id]
+                  );
                   try {
                     const alignment = await generateLLMAlignment(
                       parseInt(id),
@@ -426,17 +430,21 @@ router.patch('/:id', async (req, res) => {
                       result.words
                     );
                     await query(
-                      'UPDATE content_items SET content_alignment = $1 WHERE id = $2',
-                      [JSON.stringify(alignment), id]
+                      'UPDATE content_items SET content_alignment = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                      [JSON.stringify(alignment), 'completed', 100, id]
                     );
                     console.log(`[LLM-Align] Complete: ${alignment.elements.length} elements timestamped`);
                   } catch (alignError) {
                     console.error('[LLM-Align] Failed (non-fatal):', alignError);
+                    await query(
+                      'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+                      ['completed', 100, id]
+                    );
                   }
                 }
               }
 
-              console.log(`Transcript regenerated successfully for podcast ${id}`);
+              console.log(`Transcript regenerated successfully for ${type} ${id}`);
             } catch (error) {
               console.error('Transcript regeneration error:', error);
               await query(

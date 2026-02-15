@@ -107,52 +107,44 @@ function extractContentElements(
 ): ContentElement[] {
   const elements: ContentElement[] = [];
 
-  // Add metadata elements (these ARE spoken in the audio)
+  // Add title + author + date + karma as ONE element (the TTS reads these
+  // as one continuous sentence, so splitting them confuses the LLM)
   if (title) {
-    elements.push({
-      type: 'title',
-      html: `<h2>${escapeHtml(title)}</h2>`,
-      text: `Title: ${title}.`,
-    });
-  }
+    let metaText = `Title: ${title}.`;
+    let metaHtml = `<h2>${escapeHtml(title)}</h2>`;
 
-  // Author + date on one line (matches content tab's "By Author" display)
-  if (author) {
-    const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-    let metaText = `Written by ${cleanAuthor}.`;
-    let metaHtml = `By ${escapeHtml(cleanAuthor)}`;
-    if (publishedAt) {
+    if (author) {
+      const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+      metaText += ` Written by ${cleanAuthor}.`;
+      metaHtml += `\n<p class="content-author">By ${escapeHtml(cleanAuthor)}`;
+      if (publishedAt) {
+        try {
+          const date = new Date(publishedAt);
+          const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+          metaText += ` Published on ${formatted}.`;
+          metaHtml += ` · ${escapeHtml(formatted)}`;
+        } catch { /* ignore */ }
+      }
+      metaHtml += `</p>`;
+    } else if (publishedAt) {
       try {
         const date = new Date(publishedAt);
         const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         metaText += ` Published on ${formatted}.`;
-        metaHtml += ` · ${escapeHtml(formatted)}`;
+        metaHtml += `\n<p class="content-author">${escapeHtml(formatted)}</p>`;
       } catch { /* ignore */ }
     }
-    elements.push({
-      type: 'meta',
-      html: `<p class="content-author">${metaHtml}</p>`,
-      text: metaText,
-    });
-  } else if (publishedAt) {
-    try {
-      const date = new Date(publishedAt);
-      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      elements.push({
-        type: 'meta',
-        html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
-        text: `Published on ${formatted}.`,
-      });
-    } catch { /* ignore */ }
-  }
 
-  // Karma for EA Forum/LW
-  const isEAForumOrLW = url && (url.includes('forum.effectivealtruism.org') || url.includes('lesswrong.com'));
-  if (isEAForumOrLW && karma !== undefined && karma !== null) {
+    const isEAForumOrLW = url && (url.includes('forum.effectivealtruism.org') || url.includes('lesswrong.com'));
+    if (isEAForumOrLW && karma !== undefined && karma !== null) {
+      metaText += ` It has ${karma} karma.`;
+      metaHtml += `\n<p class="content-author">${karma} karma</p>`;
+    }
+
     elements.push({
-      type: 'meta',
-      html: `<p class="content-author">${karma} karma</p>`,
-      text: `It has ${karma} karma.`,
+      type: 'title',
+      html: metaHtml,
+      text: metaText,
     });
   }
 
