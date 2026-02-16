@@ -549,25 +549,42 @@ IMPORTANT RULES:
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
 - For the comment-divider, look for "Comments section:" in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
-- Use exact [timestamp] values from the transcript. Do NOT copy timestamps from the examples below — find the real ones.
+- Images are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript.
+- Footnotes, endnotes, acknowledgments, and reference sections at the end of an article are typically NOT spoken in the audio. Reuse the previous element's timestamp for these.
+- CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section above. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
-Here is an example of the expected format:
+Below are two examples from other articles showing the expected output format. Note how the timestamps are completely different between the two — YOUR timestamps will also be different because they come from a different transcript entirely.
+
+EXAMPLE 1 (from an article about cars):
 "Element 0 is the title "How To Flex Your Car" — the transcript has "How To Flex Your Car," at [0.0] which matches.
 >>> 0: 0.0
 
 Element 1 is "Written by Car McVroom" — I see "written by Car McVroom." at [2.8].
 >>> 1: 2.8
 
-Element 7 is a comment-divider "Comments section:" — I need to find where the comments section starts in the transcript. I can't find it in the transcript, so I'll use the timestamp just before the first comment starts.
->>> 7: 40.3
+Element 4 is an image — looking for "an image shows" in the transcript... found at [18.5].
+>>> 4: 18.5
 
-Element 8 is a comment by SmartyPants — I'm looking for "SmartyPants on 28th of January" in the transcript. I found it at [40.3]. This is the START of the comment header.
->>> 8: 40.3
+Element 7 is a comment-divider — I see "comments section" at [35.1].
+>>> 7: 35.1
 
-Element 9 is a comment by UserB — I can't find "UserB on Date" in the transcript. But I can see the comment body text starting with "I think this is great" at [61.4]. I'll use that as the start of this comment.
->>> 9: 61.4"
+Element 8 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [35.1].
+>>> 8: 35.1"
 
-Of course, unlike in this example, make sure not to skip any spoken elements!
+EXAMPLE 2 (from a longer article about cooking):
+"Element 0 is the title "The Science of Baking Bread" — transcript line at [3.2] says "The Science of Baking Bread."
+>>> 0: 3.2
+
+Element 3 is a heading "Ingredients" — transcript has "Ingredients." at [47.9].
+>>> 3: 47.9
+
+Element 5 is a footnote — not spoken in audio, reusing previous timestamp.
+>>> 5: 47.9
+
+Element 10 is a comment by BreadLover — can't find header, but body text "This recipe changed my life" appears at [203.6].
+>>> 10: 203.6"
+
+Remember: these example timestamps (0.0, 2.8, 18.5, 35.1, 3.2, 47.9, 203.6) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided above.
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}

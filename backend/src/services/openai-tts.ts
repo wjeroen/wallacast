@@ -270,13 +270,18 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       }
 
       // 5. Construct Narration or Remove
+      // IMPORTANT: Use a <p> element, NOT a bare text node.
+      // A text node floating between HTML elements gets dropped by the
+      // scriptwriter LLM (it treats floating text as "junk" to remove).
+      // A <p> element is treated as real article content and preserved.
       let replacementNode;
       if (description) {
-          replacementNode = doc.createTextNode(` An image shows ${description}. End of description. `);
+          replacementNode = doc.createElement('p');
+          replacementNode.textContent = `An image shows ${description}. End of description.`;
       } else {
-          // If no description and no alt text, remove the image entirely 
+          // If no description and no alt text, remove the image entirely
           // to prevent "An image is shown here" spam for decorative icons.
-          replacementNode = doc.createTextNode(' '); 
+          replacementNode = doc.createTextNode(' ');
       }
       
       img.replaceWith(replacementNode);
@@ -648,6 +653,12 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
         articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
+    }
+
+    // Log whether image narrations survived the scriptwriter
+    const imageNarrationCount = (articleBodyScript.match(/An image shows/g) || []).length;
+    if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
+      console.log(`[TTS] Script contains ${imageNarrationCount} image narration(s) (expected ${Object.keys(imageAltTextData.descriptions).length})`);
     }
 
     await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [30, contentId]);
