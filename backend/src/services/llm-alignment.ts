@@ -394,6 +394,85 @@ function buildTimedTranscript(words: TranscriptWord[]): string {
 }
 
 /**
+ * Search for a phrase in the Whisper transcript words within a time window.
+ * Tokenizes both the search phrase and the transcript, then looks for a
+ * sliding window where enough key tokens match (60% threshold).
+ * Returns the start timestamp of the best match, or null.
+ */
+function findPhraseTimestamp(
+  searchText: string,
+  words: TranscriptWord[],
+  maxTime: number
+): number | null {
+  // Tokenize: lowercase, strip punctuation, keep words > 2 chars
+  const tokens = searchText.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2);
+  if (tokens.length === 0) return null;
+
+  const keyTokens = tokens.slice(0, Math.min(5, tokens.length));
+  const threshold = Math.ceil(keyTokens.length * 0.6);
+  const earlyWords = words.filter(w => w.start <= maxTime);
+
+  for (let i = 0; i < earlyWords.length; i++) {
+    const windowSize = Math.min(keyTokens.length + 4, earlyWords.length - i);
+    const windowText = earlyWords.slice(i, i + windowSize)
+      .map(w => (w.word || '').trim().toLowerCase().replace(/[^\w]/g, ''))
+      .join(' ');
+
+    const matched = keyTokens.filter(t => windowText.includes(t)).length;
+    if (matched >= threshold) {
+      return earlyWords[i].start;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Pre-assign timestamps for metadata elements (title, author+date, karma)
+ * by directly searching the Whisper transcript words.
+ *
+ * These elements are ALWAYS spoken at the very beginning of the audio.
+ * Searching the transcript directly is far more reliable than asking the LLM,
+ * which can confuse author names in metadata with the same names in comments
+ * (e.g. matching "Written by MaxDalton" to a comment "A reply to JP Addison
+ * by MaxDalton" at 301s instead of the actual author attribution at 2s).
+ */
+function preAssignMetadataTimestamps(
+  elements: ContentElement[],
+  words: TranscriptWord[]
+): Map<number, number> {
+  const assigned = new Map<number, number>();
+  if (words.length === 0) return assigned;
+
+  const audioStart = words[0].start;
+  const totalDuration = words[words.length - 1].end;
+  // Only search first 15% of audio or 60s, whichever is smaller
+  const maxSearch = Math.min(60, totalDuration * 0.15);
+  let lastTime = Math.max(0, audioStart - 0.5);
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    if (el.type !== 'title' && el.type !== 'meta') break; // Stop at first body element
+
+    const found = findPhraseTimestamp(el.text, words, maxSearch);
+    if (found !== null && found >= lastTime) {
+      assigned.set(i, found);
+      lastTime = found;
+    } else {
+      // Fallback: place slightly after previous metadata element
+      const fallback = Math.round((lastTime + 1.0) * 10) / 10;
+      assigned.set(i, fallback);
+      lastTime = fallback;
+    }
+  }
+
+  return assigned;
+}
+
+/**
  * Main entry point: generate LLM-based content alignment.
  * Extracts content elements, builds timed transcript, calls LLM,
  * and returns structured alignment data for the read-along tab.
@@ -480,6 +559,25 @@ export async function generateLLMAlignment(
 
   console.log(`[LLM-Align] Total audio duration: ${totalAudioDuration}s`);
 
+  // Pre-assign metadata timestamps by searching the transcript directly.
+  // This prevents the LLM from confusing author names with comment mentions.
+  const preAssigned = preAssignMetadataTimestamps(allElements, transcriptWords);
+  if (preAssigned.size > 0) {
+    console.log(`[LLM-Align] Pre-assigned ${preAssigned.size} metadata timestamps via transcript search:`);
+    for (const [idx, time] of preAssigned) {
+      console.log(`[LLM-Align]   [${idx}] ${allElements[idx].type} → ${time.toFixed(1)}s`);
+    }
+  }
+
+  // Build anchor info for the prompt so the LLM knows these are already matched
+  let anchorInfo = '';
+  if (preAssigned.size > 0) {
+    const anchorLines = Array.from(preAssigned.entries()).map(([idx, time]) =>
+      `Element ${idx} is ALREADY MATCHED at ${time.toFixed(1)}s — accept this timestamp, do not re-match it.`
+    );
+    anchorInfo = `\nPRE-MATCHED ELEMENTS (accept these timestamps as given):\n${anchorLines.join('\n')}\n`;
+  }
+
   // Diagnostic: search CHUNKED transcript lines for "comment"
   const transcriptLines = timedTranscript.split('\n');
   const commentLines = transcriptLines.filter(line => /comment/i.test(line));
@@ -537,13 +635,17 @@ export async function generateLLMAlignment(
   console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
 
   // Single prompt — LLM reasons through each match, marks answers with >>>
-  const prompt = `I have an article that was read aloud as audio. Below is the timestamped transcript from the audio, followed by the article's content elements. Your job is to find where each element starts being spoken in the transcript, so that we can sync the original text with the audio.
+  // Elements come FIRST so the LLM knows what to look for, then the transcript.
+  const prompt = `I have an article that was read aloud as audio. Below are the article's content elements, followed by the timestamped transcript from the audio. Your job is to find where each element starts being spoken in the transcript, so that we can sync the original text with the audio.
 Keep in mind that the transcription is generated by AI, so some words and names won't always be transcribed accurately. You need to find the best matches, not exact matches.
 
-For each element, explain which transcript line matches it and why, then write the answer on a new line starting with >>>. 
+For each element, explain which transcript line matches it and why, then write the answer on a new line starting with >>>.
+
+CRITICAL: Process elements STRICTLY in sequential order: element 0, then 1, then 2, then 3, etc. Do NOT skip ahead or go back. After matching element N, start searching for element N+1 from where you left off (or slightly before).
 
 IMPORTANT RULES:
 - Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
+- The title, author attribution ("Written by ..."), and karma count are ALWAYS spoken at the very START of the audio (first ~15 seconds). Do NOT confuse them with later mentions of the same author name in comments.
 - For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
 - If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
@@ -551,7 +653,7 @@ IMPORTANT RULES:
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 - Images are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript.
 - Footnotes, endnotes, acknowledgments, and reference sections at the end of an article are typically NOT spoken in the audio. Reuse the previous element's timestamp for these.
-- CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section above. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
+- CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
 Below are two examples from other articles showing the expected output format. Note how the timestamps are completely different between the two — YOUR timestamps will also be different because they come from a different transcript entirely.
 
@@ -584,15 +686,15 @@ Element 5 is a footnote — not spoken in audio, reusing previous timestamp.
 Element 10 is a comment by BreadLover — can't find header, but body text "This recipe changed my life" appears at [203.6].
 >>> 10: 203.6"
 
-Remember: these example timestamps (0.0, 2.8, 18.5, 35.1, 3.2, 47.9, 203.6) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided above.
+Remember: these example timestamps (0.0, 2.8, 18.5, 35.1, 3.2, 47.9, 203.6) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.
+${anchorInfo}
+ELEMENTS TO MATCH (${allElements.length} total):
+${elementsList}
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-ELEMENTS TO MATCH (${allElements.length} total):
-${elementsList}
-
-Now go through each element 0 to ${allElements.length - 1}. For each one, explain your reasoning, then write >>> followed by the element number and timestamp.`;
+Now go through each element 0 to ${allElements.length - 1} IN ORDER. For each one, explain your reasoning, then write >>> followed by the element number and timestamp.`;
 
   // Call LLM
   const chatConfig = await getChatClientForUser(userId);
@@ -695,6 +797,49 @@ Now go through each element 0 to ${allElements.length - 1}. For each one, explai
         const seconds = Math.round((t - minutes) * 100);
         return minutes * 60 + seconds;
       });
+    }
+
+    // Override LLM timestamps for metadata elements with pre-assigned values.
+    // Pre-assigned values come from direct transcript search and are far more
+    // reliable than the LLM for title/author/karma (which can be confused with
+    // mentions of the same names in comments).
+    for (const [idx, time] of preAssigned) {
+      if (timestamps[idx] !== time) {
+        console.log(`[LLM-Align] Override: [${idx}] ${allElements[idx].type} ${timestamps[idx]}s → ${time}s (pre-assigned)`);
+        timestamps[idx] = time;
+      }
+    }
+
+    // Outlier detection: find body elements whose timestamp jumps dramatically
+    // higher than the NEXT several elements. This catches cases where the LLM
+    // matched an element to the wrong part of the transcript (e.g. matching
+    // "Written by Author" at 2s to a comment mentioning "Author" at 301s).
+    // Without this fix, monotonicity enforcement would cascade the error
+    // and push ALL subsequent elements to the wrong timestamp.
+    const commentDivIdx = allElements.findIndex(el => el.type === 'comment-divider');
+    const bodyEndIdx = commentDivIdx >= 0 ? commentDivIdx : allElements.length;
+
+    for (let i = 0; i < bodyEndIdx; i++) {
+      // Skip pre-assigned elements (already correct)
+      if (preAssigned.has(i)) continue;
+
+      // Gather timestamps of the next 3-5 body elements
+      const ahead: number[] = [];
+      for (let j = i + 1; j < Math.min(i + 6, bodyEndIdx); j++) {
+        ahead.push(timestamps[j]);
+      }
+      if (ahead.length < 2) continue;
+
+      const sorted = [...ahead].sort((a, b) => a - b);
+      const nextMedian = sorted[Math.floor(sorted.length / 2)];
+
+      // If this element is way higher than the next few, it's an outlier
+      if (timestamps[i] > nextMedian + 30 && timestamps[i] > nextMedian * 1.5) {
+        const prevTime = i > 0 ? timestamps[i - 1] : 0;
+        const fixed = Math.round(((prevTime + nextMedian) / 2) * 10) / 10;
+        console.log(`[LLM-Align] Outlier: [${i}] ${allElements[i].type} at ${timestamps[i]}s >> next median ${nextMedian}s. Fixed → ${fixed}s`);
+        timestamps[i] = fixed;
+      }
     }
 
     // Ensure non-decreasing
