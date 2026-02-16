@@ -54,7 +54,7 @@ Wallacast supports multiple users with complete data isolation:
 | Wallabag sync | `backend/src/routes/wallabag.ts`, `backend/src/services/wallabag-sync.ts`, `backend/src/services/wallabag-service.ts` |
 | TTS generation | `backend/src/services/openai-tts.ts` |
 | Image descriptions | `backend/src/services/image-alt-text.ts` |
-| Transcription | `backend/src/services/transcription.ts` |
+| Transcription | `backend/src/services/transcription.ts`, `backend/src/services/whisper-prompt.ts` |
 | Content-transcript alignment (LLM) | `backend/src/services/llm-alignment.ts` |
 | Content-transcript alignment (legacy) | `backend/src/services/content-alignment.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
@@ -236,11 +236,15 @@ Wallacast supports multiple users with complete data isolation:
   - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
+- **`services/whisper-prompt.ts`**: Shared utility for building Whisper prompt hints
+  - `buildWhisperPrompt(item)`: Builds a prompt string from content metadata (title, author, date, podcast show name, comments) so Whisper recognizes key phrases like "Comments section:", commenter names, and dates
+  - Used in all three transcription paths: POST / (auto-transcribe), PATCH /:id (regenerate), and transcription route
+
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
-  - `transcribeAudio()`: Basic transcription
-  - `transcribeWithTimestamps(audioUrl, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint (max 224 chars) to improve recognition of key phrases like "Comments section:" and comment headers
+  - `transcribeWithTimestamps(audioUrl, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint to improve recognition of key phrases like "Comments section:" and comment headers
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
+  - Hybrid prompt strategy: chunk 1 uses full prompt (up to 1000 chars), chunk 2+ combines metadata (first 600 chars) with continuity (last 200 chars of previous transcript)
 
 - **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
@@ -251,6 +255,7 @@ Wallacast supports multiple users with complete data isolation:
   - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
   - Enforces non-decreasing timestamps in output
   - Post-processing: fixes comment-divider placement and searches for body text in raw Whisper words when headers are dropped (applies to ALL comments, not just the first)
+  - Prompt includes explicit rules for images (spoken as "An image shows...") and footnotes (not spoken, inherit previous timestamp)
   - Stored in `content_alignment` JSONB column (same column as old Needleman-Wunsch data)
 
 - **`services/content-alignment.ts`**: Legacy Needleman-Wunsch content alignment (no longer used for new alignments, kept for backward compatibility with existing data)

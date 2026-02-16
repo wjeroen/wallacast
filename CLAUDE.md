@@ -1,7 +1,7 @@
 # Claude Code Instructions
 
 ## TL;DR
-The user is a coding noob. ELI5 (Explain Like I'm 5) frequently when discussing technical concepts, code changes, and tradeoffs. Always make sure to update the README.md and TODO.md when making changes.
+The user is a coding noob. ELI5 (Explain Like I'm 5) frequently when discussing technical concepts, code changes, and tradeoffs. Always make sure to update the README.md and TODO.md when making changes. Always consider at least 3 possible causes when something isn't working.
 
 ## User's Working Environment
 The user primarily works on **mobile** and deploys via Railway, so they **do not have access to browser developer tools**. When debugging:
@@ -26,11 +26,9 @@ Ex. When Solving a Bug or Implementing a Feature
    - This gives you the BIG PICTURE before diving into code
 
 3. **Only THEN read the actual files**
-   - Now that you know where to look, read the specific files
-   - Use Grep only for finding specific patterns within the right files
-   - Don't grep blindly across the entire codebase
+   - Now that you know where to look, read the specific files IN THEIR ENTIRETY, not just a few lines
 
-4. **Generate at least 3 possible approaches** based on what you read
+4. **Generate at least 3 possible hypotheses and approaches** based on what you read
 5. **Briefly explain the tradeoffs** of each (ELI5)
 6. **Ask the user which approach they prefer** before writing code
 
