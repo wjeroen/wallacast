@@ -58,6 +58,9 @@ export async function transcribeWithTimestamps(
   text: string;
   words: Array<{ word: string; start: number; end: number }>;
 }> {
+  // Declare outside try so finally can clean up even if transcription fails
+  const tempFiles: string[] = [];
+
   try {
     const provider = await getTranscriptionClientForUser(userId);
     if (!provider) throw new Error('No API key set. Please configure OpenAI or DeepInfra in Settings.');
@@ -78,7 +81,7 @@ export async function transcribeWithTimestamps(
     await pipeline(response.body, createWriteStream(audioPath));
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
-    const tempFiles: string[] = [audioPath];
+    tempFiles.push(audioPath);
 
     let transcriptText = '';
     let allWords: any[] = [];
@@ -156,12 +159,12 @@ export async function transcribeWithTimestamps(
       allWords = (transcription as any).words || [];
     }
 
-    // Cleanup
-    for (const f of tempFiles) await fs.unlink(f).catch(console.error);
-
     return { text: transcriptText, words: allWords };
   } catch (error) {
     console.error('Error transcribing:', error);
     throw error;
+  } finally {
+    // Cleanup temp files regardless of success or failure
+    for (const f of tempFiles) await fs.unlink(f).catch(() => {});
   }
 }
