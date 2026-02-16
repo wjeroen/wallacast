@@ -255,6 +255,7 @@ Wallacast supports multiple users with complete data isolation:
   - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
   - Enforces non-decreasing timestamps in output
   - Post-processing: fixes comment-divider placement and searches for body text in raw Whisper words when headers are dropped (applies to ALL comments, not just the first)
+  - Prompt includes explicit rules for images (spoken as "An image shows...") and footnotes (not spoken, inherit previous timestamp)
   - Stored in `content_alignment` JSONB column (same column as old Needleman-Wunsch data)
 
 - **`services/content-alignment.ts`**: Legacy Needleman-Wunsch content alignment (no longer used for new alignments, kept for backward compatibility with existing data)
