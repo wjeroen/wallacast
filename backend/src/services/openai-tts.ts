@@ -349,13 +349,21 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
     // Use the cleaner HTML which retains structure but drops junk
     const cleanHtml = doc.body.innerHTML || htmlContent;
 
+    // Diagnostic Logging (count images in INPUT)
+    console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
+    const inputImageCount = (cleanHtml.match(/An image shows.*?End of description\./gs) || []).length;
+    console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
+
+    if (inputImageCount > 0) {
+      // Log sample image narration from input
+      const sampleImage = cleanHtml.match(/An image shows.*?End of description\./s);
+      if (sampleImage) {
+        console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
+      }
+    }
+    
     console.log(`[TTS] Scriptwriting with model: ${modelId}`);
-    const response = await openai.chat.completions.create({
-      model: modelId,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a scriptwriter for an audio narration service.
+        const systemPrompt = `You are a scriptwriter for an audio narration service.
 
  Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
 
@@ -364,19 +372,34 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  DO NOT rewrite sentences.
  DO NOT simplify the language.
 
+ 🚨 IMAGE DESCRIPTIONS:
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
+ 1. ALWAYS keep text that starts with "An image shows"
+ 2. ALWAYS keep text that ends with "End of description."
+ 3. These image descriptions are REQUIRED accessibility content
+ 4. If you see image descriptions, they MUST appear in your output VERBATIM
+ 5. Image descriptions are NOT extraneous - they are essential
+ 6. PRESERVE THE EXACT WORDING - do not paraphrase or summarize them
+
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
  * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
- * End every header (h1, h2, h3) with a period or colon to enforce a breath pause.
+ * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
- * DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
 
  Output ONLY the clean narration text.
 
- Input HTML follows.`
+ Input HTML follows.`;
+
+    const response = await openai.chat.completions.create({
+      model: modelId,
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt
         },
         {
           role: 'user',
@@ -385,9 +408,74 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
           content: cleanHtml.slice(0, 400000)
         }
       ],
-      max_completion_tokens: 16000,
+      temperature: 0.0, // Maximum determinism for content preservation
     });
-    return response.choices[0]?.message?.content || htmlToNarrationText(htmlContent);
+
+    let scriptBody = response.choices[0]?.message?.content || '';
+
+    // Validation and Retry
+    const outputImageCount = (scriptBody.match(/An image shows.*?End of description\./gs) || []).length;
+    console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
+
+    // Detect if images were dropped
+    if (inputImageCount > 0 && outputImageCount === 0) {
+      console.error('[TTS] ❌ SCRIPTWRITER DROPPED ALL IMAGE NARRATIONS');
+      console.error('[TTS] Scriptwriter is actively removing image descriptions');
+
+      // Log scriptwriter output sample for debugging
+      console.error('[TTS] === SCRIPTWRITER OUTPUT SAMPLE (first 1000 chars) ===');
+      console.error(scriptBody.substring(0, 1000));
+      console.error('[TTS] === END SAMPLE ===');
+
+      // Retry with even more explicit instruction
+      console.warn('[TTS] 🔄 Retrying with explicit instruction...');
+
+      const retrySystemPrompt = systemPrompt + `
+
+🚨🚨🚨 CRITICAL ALERT 🚨🚨🚨
+The previous output dropped ${inputImageCount} image descriptions.
+
+YOU MUST PRESERVE ALL TEXT that matches this pattern:
+"An image shows [description]. End of description."
+
+DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
+Copy them VERBATIM from input to output.
+
+Failure to preserve image descriptions is a critical error.`;
+
+      const retryResponse = await openai.chat.completions.create({
+        model: modelId,
+        messages: [
+          { role: 'system', content: retrySystemPrompt },
+          { role: 'user', content: cleanHtml.slice(0, 400000) }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 16000
+      });
+
+      const retryBody = retryResponse.choices[0]?.message?.content || '';
+      const retryImageCount = (retryBody.match(/An image shows.*?End of description\./gs) || []).length;
+
+      if (retryImageCount > outputImageCount) {
+        console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
+        scriptBody = retryBody;
+      } else {
+        console.error(`[TTS] ❌ Retry failed: only ${retryImageCount} image(s)`);
+        // Use retry body anyway if it's not worse
+        if (retryImageCount >= outputImageCount) {
+          scriptBody = retryBody;
+        }
+      }
+    } else if (inputImageCount > 0 && outputImageCount < inputImageCount) {
+      console.warn(`[TTS] ⚠️  Scriptwriter dropped some images`);
+      console.warn(`[TTS] Input: ${inputImageCount}, Output: ${outputImageCount}`);
+    } else if (outputImageCount > 0) {
+      console.log('[TTS] ✓ Image narrations preserved correctly');
+    }
+
+    console.log('[TTS] ===== IMAGE NARRATION PIPELINE END =====');
+
+    return scriptBody;
   } catch (e) {
     console.warn('Scriptwriting failed, falling back to simple text extraction:', e);
     return htmlToNarrationText(htmlContent);
@@ -650,6 +738,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     const chatConfig = await getChatClientForUser(content.user_id);
     if (chatConfig && sourceContent.includes('<')) {
+        console.log(`[TTS] Scriptwriter using model: ${chatConfig.model}`);
         articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
