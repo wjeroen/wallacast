@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForUser } from './ai-providers.js';
+import { getChatClientForUser, getUserSetting } from './ai-providers.js';
 import { query } from '../database/db.js';
 
 interface TranscriptWord {
@@ -417,6 +417,12 @@ export async function generateLLMAlignment(
 
   const content = result.rows[0];
 
+  // Check if image descriptions are enabled — if disabled, don't pass old Gemini data
+  // to extractContentElements. When disabled, images show as plain [Image] in the element
+  // list (matching what's in the audio, since injectImageNarrations also checks this toggle).
+  const imageAltTextEnabled = await getUserSetting(userId, 'image_alt_text_enabled');
+  const imageAltTextData = imageAltTextEnabled !== 'false' ? content.image_alt_text_data : null;
+
   // Extract content elements from HTML
   const contentElements = extractContentElements(
     content.html_content || '',
@@ -425,7 +431,7 @@ export async function generateLLMAlignment(
     content.published_at,
     content.karma,
     content.url,
-    content.image_alt_text_data
+    imageAltTextData
   );
 
   // Extract comment elements
