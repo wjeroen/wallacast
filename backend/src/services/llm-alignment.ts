@@ -611,8 +611,7 @@ Now go through each element 0 to ${allElements.length - 1} IN ORDER. For each on
     messages: [
       { role: 'user', content: prompt },
     ],
-    temperature: 0.1,
-    max_completion_tokens: 16000,
+    max_completion_tokens: 128000,
   });
 
   const responseText = response.choices[0]?.message?.content || '';
