@@ -866,6 +866,19 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt.slice(0, 224))
       .then(async (transcriptResult) => {
+          // Fix Whisper dropping the title: if the first word starts after 3s,
+          // Whisper likely "consumed" the title (because the prompt matches the
+          // spoken opening). Inject a synthetic anchor word at 0.0s so the LLM
+          // alignment can anchor the title element to the start of the audio.
+          if (transcriptResult.words.length > 0 && transcriptResult.words[0].start > 3.0) {
+            console.log(`[TTS] Whisper dropped opening ${transcriptResult.words[0].start.toFixed(1)}s — injecting title anchor at 0.0s`);
+            transcriptResult.words.unshift({
+              word: content.title || 'Title',
+              start: 0.0,
+              end: Math.min(transcriptResult.words[0].start, 3.0),
+            });
+          }
+
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
           await query(
             'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
