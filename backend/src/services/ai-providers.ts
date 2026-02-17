@@ -15,7 +15,6 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   model?: string;
-  temperature?: number;
   maxTokens?: number;
 }
 
@@ -53,8 +52,7 @@ class OpenAIProvider implements AIProvider {
       model: model,
       messages: messages as any,
       // UPDATED: gpt-5-nano supports a larger output limit (128k), ensuring long tasks don't get cut off
-      max_tokens: options?.maxTokens || 128000, 
-      temperature: options?.temperature ?? 0.0,
+      max_tokens: options?.maxTokens || 128000,
     });
 
     return response.choices[0]?.message?.content || '';
