@@ -716,14 +716,20 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       }
     }
 
-    // Step 2: Replace images with narration text (if we have descriptions)
-    if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
+    // Step 2: Replace images with narration text (if we have descriptions AND the feature is enabled)
+    // IMPORTANT: Must check imageAltTextEnabled here too! Old Gemini descriptions persist in the
+    // database (image_alt_text_data column) even after the user turns off the toggle. Without this
+    // check, stale English descriptions get injected into non-English articles, causing Whisper to
+    // drop content during English→native language transitions (8+ seconds of missing transcript).
+    if (imageAltTextEnabled !== 'false' && imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
       // PASS content.url as the third argument here:
       sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions, content.url || undefined);
-      
+
       console.log('[TTS] Injected image narrations into HTML for audio script');
       // sourceContent now has "An image shows..." text instead of <img> tags
       // Original html_content in database remains unchanged
+    } else if (imageAltTextEnabled === 'false') {
+      console.log('[TTS] Image descriptions disabled by user, skipping injection');
     }
 
     // Step 3: Script content for listening (20-30% progress)
