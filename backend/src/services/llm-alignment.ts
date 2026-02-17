@@ -582,44 +582,56 @@ IMPORTANT RULES:
 - Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
-Below are two examples from other articles showing the expected output format.
+Below are two examples from other articles showing the expected output format. Note how EVERY element is processed in order — none are skipped.
 
-EXAMPLE 1 (from an article about cars):
+EXAMPLE 1 (from a short article about cars with 7 elements):
 "Element 0 is the title "How To Flex Your Car" — the transcript has "How To Flex Your Car," at [0.0] which matches.
 >>> 0: 0.0
 
-Element 1 is "Written by Car McVroom" — I see "written by Car McVroom." at [2.8].
+Element 1 is meta "Written by Car McVroom. Published on January 15, 2026." — I see "written by Car McVroom." at [2.8] followed by a date.
 >>> 1: 2.8
 
-Element 2 is an image — looking for "an image shows" in the transcript... found at [18.5].
->>> 2: 18.5
+Element 2 is a paragraph about car maintenance — the transcript says "Taking care of your car is not just about keeping it clean," at [5.4] which matches the opening sentence of this paragraph.
+>>> 2: 5.4
 
-Element 3 is a comment-divider — I see "comments section" at [35.1].
->>> 3: 35.1
+Element 3 is an image — looking for "an image shows" in the transcript... found "An image shows a red sports car parked in a driveway." at [18.5].
+>>> 3: 18.5
 
-Element 4 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [35.1].
->>> 4: 35.1"
+Element 4 is a paragraph about waxing techniques — the transcript has "The most important step is applying the wax in circular motions," at [24.1] which matches the body text.
+>>> 4: 24.1
 
-EXAMPLE 2 (from a longer article about cooking):
-"Element 0 is the title "The Science of Baking Bread" — transcript line at 0.0s says "The Science of Baking Bread."
+Element 5 is a comment-divider — I see "comments section" at [35.1].
+>>> 5: 35.1
+
+Element 6 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [36.4].
+>>> 6: 36.4"
+
+EXAMPLE 2 (from a longer article about cooking with 8 elements):
+"Element 0 is the title "The Science of Baking Bread" — transcript line at [0.0] says "The Science of Baking Bread."
 >>> 0: 0.0
 
-Element 1 is "Written by Mr. Chef" — I see "written by Mr. Chef." at 3.2s.
+Element 1 is meta "Written by Mr. Chef. Published on February 3, 2026." — I see "written by Mr. Chef." at [3.2].
 >>> 1: 3.2
 
-Element 2 is an image — I see "an image shows" in the transcript at 14.3s.
->>> 2: 14.3
+Element 2 is a paragraph about gluten development — the transcript says "When you mix flour and water together," at [6.8] which matches the start of this paragraph about how gluten forms.
+>>> 2: 6.8
 
-Element 3 is a heading "Ingredients" — transcript has "Ingredients." at 47.9s.
+Element 3 is a heading "Ingredients" — transcript has "Ingredients." at [47.9].
 >>> 3: 47.9
 
-Element 4 is a footnote — not spoken in audio, reusing previous timestamp.
->>> 4: 47.9
+Element 4 is a list of ingredients — the transcript has "First, you will need 500 grams of bread flour." at [49.2]. The scriptwriter added "First, ..." numbering but the content matches the list items.
+>>> 4: 49.2
 
-Element 5 is a comment by BreadLover — can't find header, but body text "This recipe changed my life" appears at 203.6s.
->>> 5: 203.6"
+Element 5 is a paragraph about kneading — the transcript says "Kneading is where the magic happens," at [62.3] which matches this paragraph.
+>>> 5: 62.3
 
-Remember: these example timestamps (0.0, 2.8, 18.5, 35.1, 3.2, 47.9, 203.6) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.
+Element 6 is a footnote — footnotes are not spoken in the audio, so I reuse the previous timestamp.
+>>> 6: 62.3
+
+Element 7 is a comment by BreadLover — can't find the header in the transcript (Whisper dropped it), but the body text "This recipe changed my life" appears at [203.6].
+>>> 7: 203.6"
+
+Remember: these example timestamps (0.0, 2.8, 5.4, 18.5, etc.) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.
 
 ELEMENTS TO MATCH (${allElements.length} total):
 ${elementsList}
