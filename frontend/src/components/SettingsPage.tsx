@@ -375,7 +375,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <select value={formData.narration_llm} onChange={(e) => handleChange('narration_llm', e.target.value)}>
                   <option value="auto">Auto (prefers DeepSeek if DeepInfra key is set)</option>
                   <option value="deepseek">DeepSeek V3.2 (via DeepInfra)</option>
-                  <option value="openai">OpenAI GPT-5-nano</option>
+                  <option value="openai">OpenAI GPT-5-Nano (fast, cheap)</option>
+                  <option value="openai-mini">OpenAI GPT-5-Mini (smarter, slower)</option>
                 </select>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
                   Prepares article text for speech.
