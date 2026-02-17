@@ -140,6 +140,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Fix image description toggle not fully working — root cause: English Gemini descriptions injected into non-English articles caused Whisper to drop 8+ seconds of content during English→Dutch language transitions (headings, dates, paragraph starts completely missing from transcript). Fixed: `injectImageNarrations()` and `extractContentElements()` now check `image_alt_text_enabled` toggle before using stored descriptions (2026-02-17)
 - [x] **[P2]** Fix images being highlighted instead of text in read-along — when image descriptions are disabled, bare `[Image: image]` placeholders were still included in the alignment element list, causing the LLM to assign them timestamps that overlap with actual text. Fixed: filter out image elements from alignment when toggle is off (2026-02-17)
 - [x] **[P2]** Investigate Whisper dropping first ~7.5s of audio (title/author/date not transcribed) — fixed by injecting synthetic title anchor word at 0.0s when Whisper's first word starts after 3s (2026-02-17)
+- [x] **[P2]** Add GPT-5-Mini as narration LLM option — users can now choose between GPT-5-Nano (fast, cheap) and GPT-5-Mini (smarter, slower) in Settings; also fixed stale DB model values overriding defaults (2026-02-17)
+- [x] **[P2]** Add batched LLM alignment for long articles — articles with >30 elements are now split into batches of 20, each getting the full transcript but only their subset of elements, preventing GPT-5-Nano from losing sequential discipline on long content (2026-02-17)
 - [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
 
 #### Queue Tab Implementation (Do Later)
@@ -161,6 +163,12 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - Discovered key insight: GPT-5-Nano's refusal to align revealed that `buildTimedTranscript()` merges short elements (dates, headings) into surrounding text when Whisper doesn't add punctuation, making alignment unreliable
   - **RULE**: Never suppress GPT-5-Nano's reasoning — its feedback about data quality issues is valuable diagnostic information
   - **RULE**: Never use fuzzy matching or algorithmic alignment for read-along sync (see CLAUDE.md). Fix input data quality instead.
+- [x] **Added GPT-5-Mini as narration LLM option + batched alignment** (2026-02-17):
+  - Users can now choose GPT-5-Mini (smarter, slower) in Settings alongside GPT-5-Nano
+  - Setting: `narration_llm` now supports `'openai-mini'` value → routes to `gpt-5-mini`
+  - Fixed stale DB model values: removed `getUserSetting('openai_model')` lookups that could return old `gpt-4o-mini`
+  - Batched alignment: articles with >30 elements split into batches of 20, each getting full transcript + subset of elements
+  - Prevents GPT-5-Nano from losing sequential discipline on long articles (observed jumps every ~25 elements)
 - [x] **LLM-Based Read-Along Alignment (v3)** (2026-02-14):
   - Replaced Needleman-Wunsch algorithm with LLM-based alignment that semantically maps HTML content elements to Whisper timestamps
   - Read-along tab now renders content EXACTLY like the content tab + comments tab (same CSS classes, same layout)
@@ -204,7 +212,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
   - User can override with explicit choice (Auto/DeepSeek/OpenAI) in settings
   - With just a DeepInfra key, users get full functionality (no OpenAI key needed)
   - Reorganized Settings page: API Keys section + Audio Generation section (clearer layout)
-  - New setting: `narration_llm` ('auto'|'deepseek'|'openai')
+  - New setting: `narration_llm` ('auto'|'deepseek'|'openai'|'openai-mini')
   - New function: `getChatClientForUser()` in ai-providers.ts
 - [x] **Image Alt-Text Generation for TTS** (2026-02-04):
   - Implemented Gemini 3 Flash powered image description generation for audio narration
