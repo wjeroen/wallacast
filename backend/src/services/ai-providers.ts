@@ -46,13 +46,15 @@ class OpenAIProvider implements AIProvider {
   }
 
   async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
-    const model = options?.model || await getUserSetting(this.userId, 'openai_model') || 'gpt-4o-mini';
+    // UPDATED: Default to 'gpt-5-nano' instead of 'gpt-4o-mini'
+    const model = options?.model || await getUserSetting(this.userId, 'openai_model') || 'gpt-5-nano';
 
     const response = await this.client.chat.completions.create({
-      model,
-      messages,
-      temperature: options?.temperature ?? 0.3,
-      max_tokens: options?.maxTokens ?? 16384,
+      model: model,
+      messages: messages as any,
+      // UPDATED: gpt-5-nano supports a larger output limit (128k), ensuring long tasks don't get cut off
+      max_tokens: options?.maxTokens || 128000, 
+      temperature: options?.temperature ?? 0.0,
     });
 
     return response.choices[0]?.message?.content || '';
@@ -164,7 +166,7 @@ export async function getOpenAIClientForUser(userId: number): Promise<OpenAI | n
 /**
  * INTELLIGENT ROUTER FOR NARRATION PREP LLM
  * Returns the client + model for scriptwriting (preparing text for TTS).
- * Supports: OpenAI gpt-4o-mini, DeepSeek-V3.2 via DeepInfra.
+ * Supports: OpenAI gpt-4o-mini or gpt-5-nano, DeepSeek-V3.2 via DeepInfra.
  *
  * Routing logic:
  *   1. If user explicitly chose 'deepseek' or 'openai', use that
@@ -182,7 +184,7 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
   if (narrationLlm === 'openai') {
     const client = await getOpenAIClientForUser(userId);
     if (client) {
-      const model = await getUserSetting(userId, 'openai_model') || 'gpt-4o-mini';
+      const model = await getUserSetting(userId, 'openai_model') || 'gpt-5-nano';
       return { client, model };
     }
     console.warn('[AI] User chose OpenAI but no OpenAI key, falling back to DeepInfra');
@@ -198,7 +200,7 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
   // Fallback to OpenAI
   const openaiClient = await getOpenAIClientForUser(userId);
   if (openaiClient) {
-    const model = await getUserSetting(userId, 'openai_model') || 'gpt-4o-mini';
+    const model = await getUserSetting(userId, 'openai_model') || 'gpt-5-nano';
     console.log(`[AI] Auto-routing narration LLM to OpenAI ${model}`);
     return { client: openaiClient, model };
   }
