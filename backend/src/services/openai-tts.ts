@@ -774,7 +774,10 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (comments && comments.length > 0) {
               console.log(`[TTS] Formatting ${comments.length} comments for narration`);
               const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-              fullScript += '\n\nComments section:\n\n' + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              // Use a longer, more natural announcement so Whisper doesn't skip it.
+              // "Comments section:" (2 words) was consistently dropped by Whisper.
+              // A full sentence (~15 words) is much harder for Whisper to miss.
+              fullScript += `\n\nNow, let's move on to the comments section, where ${comments.length} ${comments.length === 1 ? 'reader has' : 'readers have'} shared their thoughts.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);
@@ -833,38 +836,14 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       ['transcribing', 95, contentId]
     );
 
-    // Build Whisper prompt hint (max 224 chars) to improve transcription accuracy.
-    // Whisper often drops short transitional phrases like "Comments section:" and
-    // misrecognizes proper nouns in comment headers. Providing a prompt with these
-    // key phrases helps Whisper recognize them correctly.
-    let whisperPrompt = '';
-    if (content.title) {
-      whisperPrompt += `Title: ${content.title}. `;
-    }
-    if (content.author) {
-      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-      whisperPrompt += `Written by ${cleanAuthor}. `;
-    }
-    if (content.comments) {
-      try {
-        const commentsData = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-        if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
-          whisperPrompt += 'Comments section: ';
-          const firstComment = commentsData[0];
-          const username = (firstComment.username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-          whisperPrompt += username;
-          if (firstComment.date) {
-            whisperPrompt += ` on ${formatDateForNarration(firstComment.date)}`;
-          }
-          if (firstComment.karma !== undefined) {
-            whisperPrompt += ` with ${firstComment.karma} upvotes`;
-          }
-        }
-      } catch { /* ignore parse errors */ }
-    }
-    console.log(`[TTS] Whisper prompt hint (${whisperPrompt.length} chars): "${whisperPrompt.slice(0, 100)}..."`);
+    // Whisper prompt: keep it minimal. Whisper's prompt only influences the first
+    // ~30-60 seconds of audio, so adding metadata about comments (which appear at
+    // the end) does nothing. Just pass an empty string — for chunked transcription
+    // the continuity strategy (previous chunk text) works better than static metadata.
+    const whisperPrompt = '';
+    console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
 
-    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt.slice(0, 224))
+    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt)
       .then(async (transcriptResult) => {
           // Fix Whisper dropping the title: if the first word starts after 3s,
           // Whisper likely "consumed" the title (because the prompt matches the

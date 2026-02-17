@@ -463,10 +463,14 @@ export async function generateLLMAlignment(
   const allElements: ContentElement[] = [...filteredContentElements];
 
   if (commentElements.length > 0) {
+    // The TTS says a full sentence: "Now, let's move on to the comments section,
+    // where N readers have shared their thoughts." — the LLM needs to match this
+    // longer text in the transcript. Frontend renders it as "Comments (N):" regardless.
+    const commentCount = commentElements.filter(el => el.type === 'comment').length;
     allElements.push({
       type: 'comment-divider',
       html: '',
-      text: 'Comments section:',
+      text: `Now, let's move on to the comments section, where ${commentCount} ${commentCount === 1 ? 'reader has' : 'readers have'} shared their thoughts.`,
     });
     allElements.push(...commentElements);
   }
@@ -575,7 +579,7 @@ IMPORTANT RULES:
 - For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
 - If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
-- For the comment-divider, look for "Comments section:" in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
+- For the comment-divider, look for "let's move on to the comments section" or similar phrasing in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 - Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
@@ -598,7 +602,7 @@ Element 3 is an image — looking for "an image shows" in the transcript... foun
 Element 4 is a paragraph about waxing techniques — the transcript has "The most important step is applying the wax in circular motions," at [24.1] which matches the body text.
 >>> 4: 24.1
 
-Element 5 is a comment-divider — I see "comments section" at [35.1].
+Element 5 is a comment-divider — I see "let's move on to the comments section" at [35.1].
 >>> 5: 35.1
 
 Element 6 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [36.4].
