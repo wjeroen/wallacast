@@ -45,7 +45,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // AI Settings
     ai_provider: 'openai',
     openai_api_key: '',
-    openai_model: 'gpt-4o-mini',
+    openai_model: 'gpt-5-nano',
     openai_tts_model: 'gpt-4o-mini-tts',
     openai_tts_voice: 'coral',
 
@@ -101,7 +101,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         ...prev,
         ai_provider: loaded.ai_provider || 'openai',
         openai_api_key: loaded.openai_api_key === '••••••••' ? '' : (loaded.openai_api_key || ''),
-        openai_model: loaded.openai_model || 'gpt-4o-mini',
+        openai_model: loaded.openai_model || 'gpt-5-nano',
         openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
 
@@ -375,10 +375,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <select value={formData.narration_llm} onChange={(e) => handleChange('narration_llm', e.target.value)}>
                   <option value="auto">Auto (prefers DeepSeek if DeepInfra key is set)</option>
                   <option value="deepseek">DeepSeek V3.2 (via DeepInfra)</option>
-                  <option value="openai">OpenAI GPT-4o-mini</option>
+                  <option value="openai">OpenAI GPT-5-nano</option>
                 </select>
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                  Prepares article text for speech. DeepSeek is much cheaper than GPT-4o-mini.
+                  Prepares article text for speech.
                 </small>
             </div>
 
