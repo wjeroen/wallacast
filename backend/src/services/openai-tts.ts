@@ -408,7 +408,6 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
           content: cleanHtml.slice(0, 1000000)
         }
       ],
-      temperature: 0.0, // Maximum determinism for content preservation
     });
 
     let scriptBody = response.choices[0]?.message?.content || '';
@@ -449,7 +448,6 @@ Failure to preserve image descriptions is a critical error.`;
           { role: 'system', content: retrySystemPrompt },
           { role: 'user', content: cleanHtml.slice(0, 400000) }
         ],
-        temperature: 0.0,
         max_completion_tokens: 16000
       });
 
