@@ -19,7 +19,7 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
-| TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-4o-mini via OpenAI. Auto-routes based on available keys. |
+| TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
@@ -94,7 +94,7 @@ Wallacast supports multiple users with complete data isolation:
                     ┌─────────────────────┐
                     │    OpenAI APIs      │
                     │  (TTS, Whisper,     │
-                    │   GPT-4o-mini)      │
+                    │   GPT-5-Nano)       │
                     └─────────────────────┘
 ```
 
@@ -158,7 +158,7 @@ Wallacast supports multiple users with complete data isolation:
     - Archiving deletes audio to save space (unless item is favorited)
     - Un-archiving regenerates audio if missing
     - `audio_data: null, audio_url: null` removes audio from articles/texts
-    - `regenerate_content: true` re-extracts article content through GPT-4o-mini
+    - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
@@ -200,7 +200,7 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
   - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
-  - `getChatClientForUser(userId)`: Intelligent router for narration LLM - prefers DeepSeek-V3.2 via DeepInfra (cheaper), falls back to OpenAI GPT-4o-mini. User can override with `narration_llm` setting ('auto'|'deepseek'|'openai')
+  - `getChatClientForUser(userId)`: Intelligent router for narration LLM - prefers DeepSeek-V3.2 via DeepInfra (cheaper), falls back to OpenAI GPT-5-Nano. User can override with `narration_llm` setting ('auto'|'deepseek'|'openai')
   - `getTTSClientForUser(userId, modelId)`: Intelligent router - returns DeepInfra client for Kokoro models, OpenAI client otherwise
   - `getTranscriptionClientForUser(userId)`: Prefers DeepInfra Whisper if configured (cheaper), falls back to OpenAI
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
@@ -223,7 +223,7 @@ Wallacast supports multiple users with complete data isolation:
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
-  - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-4o-mini) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
+  - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent(contentId, regenerate)`: Orchestrates the full pipeline with progress tracking:
     - 0-20%: Process image descriptions (if enabled) using Gemini, save to JSONB. When `regenerate=true`, regenerates ALL images instead of just new ones
@@ -251,7 +251,8 @@ Wallacast supports multiple users with complete data isolation:
   - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
   - `buildTimedTranscript()`: Groups Whisper words into sentences (splitting at `.?!` boundaries) with one timestamp per line (e.g., `[14.2] I've just started a blog about effective altruism.`), giving the LLM natural sentence context for text matching
-  - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI fallback)
+  - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI GPT-5-Nano fallback)
+  - **IMPORTANT**: Alignment is done EXCLUSIVELY by the LLM. Never use fuzzy matching or algorithmic alignment (see CLAUDE.md)
   - Returns `LLMAlignmentResult` with `version: 'llm-v1'`, `elements[]` (each with type, html, startTime), `commentsStartTime`
   - Enforces non-decreasing timestamps in output
   - Post-processing: fixes comment-divider placement and searches for body text in raw Whisper words when headers are dropped (applies to ALL comments, not just the first)
