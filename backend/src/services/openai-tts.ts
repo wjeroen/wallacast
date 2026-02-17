@@ -336,7 +336,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
-async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-4o-mini'): Promise<string> {
+async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-5-nano'): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
@@ -404,8 +404,8 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
         {
           role: 'user',
           // UPDATED: Increased slice limit to 400k characters (approx 100k tokens)
-          // Safe for gpt-4o-mini's 128k context window
-          content: cleanHtml.slice(0, 400000)
+          // Safe for gpt-5-nano's 400k context window
+          content: cleanHtml.slice(0, 1000000)
         }
       ],
       temperature: 0.0, // Maximum determinism for content preservation
