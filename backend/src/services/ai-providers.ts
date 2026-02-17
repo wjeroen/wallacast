@@ -45,8 +45,9 @@ class OpenAIProvider implements AIProvider {
   }
 
   async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
-    // UPDATED: Default to 'gpt-5-nano' instead of 'gpt-4o-mini'
-    const model = options?.model || await getUserSetting(this.userId, 'openai_model') || 'gpt-5-nano';
+    // Always default to gpt-5-nano — don't read openai_model from DB which may
+    // contain stale values like 'gpt-4o-mini' from before migration
+    const model = options?.model || 'gpt-5-nano';
 
     const response = await this.client.chat.completions.create({
       model: model,
@@ -195,12 +196,12 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
     return { client: deepInfraClient, model: 'deepseek-ai/DeepSeek-V3.2' };
   }
 
-  // Fallback to OpenAI
+  // Fallback to OpenAI — always use gpt-5-nano (don't read openai_model from DB,
+  // which may contain stale values like 'gpt-4o-mini' from before migration)
   const openaiClient = await getOpenAIClientForUser(userId);
   if (openaiClient) {
-    const model = await getUserSetting(userId, 'openai_model') || 'gpt-5-nano';
-    console.log(`[AI] Auto-routing narration LLM to OpenAI ${model}`);
-    return { client: openaiClient, model };
+    console.log('[AI] Auto-routing narration LLM to OpenAI gpt-5-nano');
+    return { client: openaiClient, model: 'gpt-5-nano' };
   }
 
   return null;
