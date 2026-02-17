@@ -453,7 +453,14 @@ export async function generateLLMAlignment(
   }
 
   // Combine all elements
-  const allElements: ContentElement[] = [...contentElements];
+  // Filter out bare image placeholders when image descriptions are disabled —
+  // they aren't spoken in the audio, so including them confuses the LLM and
+  // causes the frontend to highlight images instead of the text being spoken.
+  const filteredContentElements = imageAltTextEnabled !== 'false'
+    ? contentElements
+    : contentElements.filter(el => el.type !== 'image');
+
+  const allElements: ContentElement[] = [...filteredContentElements];
 
   if (commentElements.length > 0) {
     allElements.push({
@@ -464,7 +471,8 @@ export async function generateLLMAlignment(
     allElements.push(...commentElements);
   }
 
-  console.log(`[LLM-Align] ${contentElements.length} content elements, ${commentElements.length} comment elements`);
+  const filteredCount = contentElements.length - filteredContentElements.length;
+  console.log(`[LLM-Align] ${filteredContentElements.length} content elements${filteredCount > 0 ? ` (${filteredCount} images filtered out — descriptions disabled)` : ''}, ${commentElements.length} comment elements`);
 
   // Build timed transcript
   const timedTranscript = buildTimedTranscript(transcriptWords);
@@ -508,17 +516,17 @@ export async function generateLLMAlignment(
     console.log(`[LLM-Align] DIAGNOSTIC: No raw Whisper words match comm/sect! Whisper may have dropped "Comments section" entirely.`);
   }
 
-  // Log last 15 transcript lines (comment section transition area)
-  console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
-  transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
+  // Log last 5 transcript lines (comment section transition area)
+  console.log(`[LLM-Align] DIAGNOSTIC: Last 5 transcript lines:`);
+  transcriptLines.slice(-5).forEach(line => console.log(`[LLM-Align]   ${line}`));
 
   // Diagnostic: dump raw Whisper words in the transition zone (last content → first comment)
   // This shows EXACTLY what Whisper captured, word by word, including the "Comments section" gap
   const lastTranscriptLine = transcriptLines[transcriptLines.length - 1];
   const lastTimestampMatch = lastTranscriptLine?.match(/^\[([\d.]+)\]/);
   const lastContentTime = lastTimestampMatch ? parseFloat(lastTimestampMatch[1]) : 0;
-  // Show words from 10s before last content to 45s after (covers the transition to first comment)
-  const transitionStart = Math.max(0, lastContentTime - 180); // ~3 min before end
+  // Show words from 30s before end to 10s after (covers the transition to first comment)
+  const transitionStart = Math.max(0, lastContentTime - 30);
   const transitionEnd = lastContentTime + 10;
   const transitionWords = transcriptWords.filter(w => w.start >= transitionStart && w.start <= transitionEnd);
   if (transitionWords.length > 0) {
@@ -539,8 +547,18 @@ export async function generateLLMAlignment(
     }
   }
 
-  // Log the elements list being sent to the LLM
-  console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
+  // Log the elements list being sent to the LLM (first 10 + last 10)
+  const elementsLines = elementsList.split('\n');
+  if (elementsLines.length <= 20) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM (${elementsLines.length} total):\n${elementsList}`);
+  } else {
+    const first10 = elementsLines.slice(0, 10).join('\n');
+    const last10 = elementsLines.slice(-10).join('\n');
+    console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM (${elementsLines.length} total, showing first 10 + last 10):\n${first10}\n  ... (${elementsLines.length - 20} more) ...\n${last10}`);
+  }
+
+  // Log first 500 chars of the timed transcript sent to LLM
+  console.log(`[LLM-Align] DIAGNOSTIC: Timed transcript preview (first 500 chars of ${timedTranscript.length} total):\n${timedTranscript.slice(0, 500)}${timedTranscript.length > 500 ? '\n  ...' : ''}`);
 
   // Single prompt — LLM reasons through each match, marks answers with >>>
   // Elements come FIRST so the LLM knows what to look for, then the transcript.
@@ -559,7 +577,7 @@ IMPORTANT RULES:
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
 - For the comment-divider, look for "Comments section:" in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
-- Images are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript.
+- Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - Footnotes, endnotes, acknowledgments, and reference sections at the end of an article are typically NOT spoken in the audio. Reuse the previous element's timestamp for these.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
