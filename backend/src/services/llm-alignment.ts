@@ -579,7 +579,7 @@ IMPORTANT RULES:
 - For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
 - If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
-- For the comment-divider, look for "let's move on to the comments section" or similar phrasing in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
+- For the comment-divider, look for "Now, let's move on to the comments section" or similar phrasing in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
 - Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
