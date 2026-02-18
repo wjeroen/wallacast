@@ -239,57 +239,6 @@ export function FullscreenPlayer({
   }, [isLLMAlignment, parsedAlignment, currentTime]);
 
   // Legacy: Extract HTML sections for old aligned read-along (non-LLM)
-  const extractedSections = useMemo(() => {
-    // Only compute for old-style alignment
-    if (isLLMAlignment || !parsedAlignment || !content.html_content) return [];
-
-    let augmentedHtml = '';
-    if (content.title) augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
-    if (content.author) {
-      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-      augmentedHtml += `<p>Written by ${cleanAuthor}.</p>\n`;
-    }
-    if (content.published_at) {
-      const date = new Date(content.published_at);
-      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
-    }
-    const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
-    if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
-      augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
-    }
-    augmentedHtml += content.html_content;
-
-    if (content.comments) {
-      try {
-        const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-        if (comments && Array.isArray(comments) && comments.length > 0) {
-          augmentedHtml += `\n<h2>Comments section:</h2>\n`;
-          function commentsToHTML(commentsList: any[], depth: number = 0): string {
-            let html = '';
-            for (const comment of commentsList) {
-              const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
-              html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
-              if (comment.replies && comment.replies.length > 0) html += commentsToHTML(comment.replies, depth + 1);
-            }
-            return html;
-          }
-          augmentedHtml += commentsToHTML(comments);
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(augmentedHtml, 'text/html');
-    const sections: string[] = [];
-    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
-    elements.forEach((el) => {
-      if (el.tagName === 'IMG') el.setAttribute('style', 'max-width: 100%; height: auto;');
-      sections.push(el.outerHTML);
-    });
-    return sections;
-  }, [isLLMAlignment, parsedAlignment, content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
-
   // Determine which tabs are available
   // NOTE: 'content' (Original Content) and 'comments' tabs are hidden — the read-along
   // tab now renders content AND comments with per-element timestamps and is the default.
@@ -319,25 +268,11 @@ export function FullscreenPlayer({
       if (element) {
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    } else if (parsedAlignment && !isLLMAlignment && extractedSections.length > 0) {
-      // Legacy alignment
-      const alignmentSections = parsedAlignment.sections;
-      let activeSectionIndex = -1;
-      for (let i = 0; i < alignmentSections.length; i++) {
-        if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
-          activeSectionIndex = i;
-          break;
-        }
-      }
-      if (activeSectionIndex >= 0) {
-        const element = document.getElementById(`section-${activeSectionIndex}`);
-        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
     } else if (activeWordIndex >= 0) {
       const element = document.getElementById(`word-${activeWordIndex}`);
       if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [activeWordIndex, activeElementIndex, isLLMAlignment, parsedAlignment, extractedSections, currentTime]);
+  }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime]);
 
   // Keep a ref to scrollToActive so the tab-switch effect can use the latest
   // version without re-firing on every currentTime tick
@@ -565,47 +500,6 @@ export function FullscreenPlayer({
             </div>
           );
         })()}
-      </div>
-    );
-  };
-
-  // Legacy aligned read-along (Needleman-Wunsch, for old data)
-  const renderLegacyAlignedReadAlong = () => {
-    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) return null;
-    const alignmentSections = parsedAlignment.sections;
-
-    let activeSectionIndex = -1;
-    for (let i = 0; i < alignmentSections.length; i++) {
-      if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
-        activeSectionIndex = i;
-        break;
-      }
-    }
-
-    return (
-      <div className="aligned-read-along">
-        {alignmentSections.map((alignSection: any, index: number) => {
-          const isActive = index === activeSectionIndex;
-          const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
-          return (
-            <div
-              key={index}
-              id={`section-${index}`}
-              className={`read-along-section ${isActive ? 'active' : ''}`}
-              style={{
-                backgroundColor: isActive ? 'rgba(96, 165, 250, 0.1)' : 'transparent',
-                borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
-                paddingLeft: '1rem',
-                marginBottom: '1rem',
-                transition: 'all 0.3s ease',
-                cursor: 'pointer',
-              }}
-              onClick={() => onSeek(alignSection.startTime)}
-            >
-              <div dangerouslySetInnerHTML={{ __html: htmlContent }} style={{ color: isActive ? '#60a5fa' : undefined }} />
-            </div>
-          );
-        })}
       </div>
     );
   };
