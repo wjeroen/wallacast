@@ -26,7 +26,7 @@
 - [x] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress (2026-02-06)
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
-- [ ] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab
+- [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
   - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
@@ -142,7 +142,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P2]** Investigate Whisper dropping first ~7.5s of audio (title/author/date not transcribed) — fixed by injecting synthetic title anchor word at 0.0s when Whisper's first word starts after 3s (2026-02-17)
 - [x] **[P2]** Add GPT-5-Mini as narration LLM option — users can now choose between GPT-5-Nano (fast, cheap) and GPT-5-Mini (smarter, slower) in Settings; also fixed stale DB model values overriding defaults (2026-02-17)
 - [x] **[P2]** Add batched LLM alignment for long articles — articles with >30 elements are now split into batches of 20, each getting the full transcript but only their subset of elements, preventing GPT-5-Nano from losing sequential discipline on long content (2026-02-17)
-- [ ] **[P3]** Consider making read-along tab the default content tab once quality is proven
+- [x] **[P3]** Make read-along tab the default content tab — done! Renamed to "Content", old Content/Comments tabs hidden but kept in code (2026-02-18)
 
 #### Queue Tab Implementation (Do Later)
 - [ ] **[P6]** Connect existing queue table/routes to UI - add queue state to App.tsx or Zustand store
