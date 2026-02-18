@@ -690,6 +690,7 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along': {
+        const isPodcast = content.type === 'podcast_episode';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
         const isTranscribing = content.current_operation === 'transcribing';
         const isAligning = content.current_operation === 'aligning_content';
@@ -703,47 +704,124 @@ export function FullscreenPlayer({
           ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
           : fallbackText.split(/\s+/).filter(w => w.length > 0);
 
-        let readAlongMessage: string | null = null;
-        if (!hasAudio && isGenerating) {
-          readAlongMessage = 'Audio is being generated... The read-along will appear once audio generation and transcription are complete.';
-        } else if (!hasAudio) {
-          readAlongMessage = 'No audio has been generated yet. Generate audio first to use the read-along feature.';
-        } else if (isTranscribing) {
-          readAlongMessage = 'Transcript is being generated... This may take a minute.';
-        } else if (isAligning) {
-          readAlongMessage = 'Aligning content with audio... Almost done.';
-        } else if (!hasTranscript) {
-          readAlongMessage = 'No transcript available yet. The transcript is generated automatically after audio creation.';
+        // For articles/texts: if we have LLM alignment, use it (with read-along features).
+        // If not, show the raw content + comments (like the old Content tab) without timestamps.
+        // For podcasts: show transcript words or status messages.
+        if (isPodcast) {
+          // Podcast: show word-by-word transcript or status messages
+          let podcastMessage: string | null = null;
+          if (!hasAudio && isGenerating) {
+            podcastMessage = 'Audio is being generated...';
+          } else if (isTranscribing) {
+            podcastMessage = 'Transcript is being generated... This may take a minute.';
+          } else if (!hasTranscript) {
+            podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
+          }
+
+          return (
+            <div className="tab-read-along-display">
+              {podcastMessage ? (
+                <p className="no-content">{podcastMessage}</p>
+              ) : displayWords.length > 0 ? (
+                <p className="read-along-text">
+                  {displayWords.map((word, index) => {
+                    const isRead = index <= activeWordIndex;
+                    return (
+                      <span
+                        key={index}
+                        id={`word-${index}`}
+                        className={`transcript-word ${isRead ? 'read' : ''}`}
+                        style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
+                        onClick={() => onTranscriptWordClick(index)}
+                      >
+                        {word}{' '}
+                      </span>
+                    );
+                  })}
+                </p>
+              ) : (
+                <p className="no-content">No transcript available</p>
+              )}
+            </div>
+          );
         }
 
+        // Article/text: if LLM alignment exists, use the rich read-along view
+        if (isLLMAlignment) {
+          // Show generating/transcribing status above the content if applicable
+          const statusMsg = isGenerating ? 'Audio is being generated...'
+            : isTranscribing ? 'Transcribing...'
+            : isAligning ? 'Aligning content with audio...'
+            : null;
+          return (
+            <div className="tab-read-along-display">
+              {statusMsg && <p className="no-content" style={{ marginBottom: '1rem' }}>{statusMsg}</p>}
+              {renderLLMReadAlong()}
+            </div>
+          );
+        }
+
+        // Article/text WITHOUT alignment: show raw content + comments (no timestamps)
+        // This ensures articles are readable even before audio is generated.
         return (
           <div className="tab-read-along-display">
-            {readAlongMessage ? (
-              <p className="no-content">{readAlongMessage}</p>
-            ) : isLLMAlignment ? (
-              renderLLMReadAlong()
-            ) : parsedAlignment && extractedSections.length > 0 ? (
-              renderLegacyAlignedReadAlong()
-            ) : displayWords.length > 0 ? (
-              <p className="read-along-text">
-                {displayWords.map((word, index) => {
-                  const isRead = index <= activeWordIndex;
-                  return (
-                    <span
-                      key={index}
-                      id={`word-${index}`}
-                      className={`transcript-word ${isRead ? 'read' : ''}`}
-                      style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
-                      onClick={() => onTranscriptWordClick(index)}
-                    >
-                      {word}{' '}
-                    </span>
-                  );
-                })}
-              </p>
-            ) : (
-              <p className="no-content">No transcript available</p>
+            {isGenerating && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
             )}
+            {isTranscribing && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcribing... Read-along highlighting will appear once complete.</p>
+            )}
+            {isAligning && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Aligning content with audio... Almost done.</p>
+            )}
+            <div className="tab-content-display">
+              <div className="content-header-with-button">
+                <div className="content-header">
+                  <h2>{content.title}</h2>
+                  {content.author && (
+                    <p className="content-author">
+                      By {content.author}
+                      {content.published_at && (
+                        <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
+                      )}
+                      {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
+                        <> {content.karma} karma</>
+                      )}
+                    </p>
+                  )}
+                  {content.type === 'article' && content.content_source && (
+                    <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                      Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+                    </p>
+                  )}
+                </div>
+                {content.type === 'article' && content.url && onRefetch && (
+                  <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
+                    <RefreshCw size={16} />
+                    <span className="refetch-text-full">Refetch from web</span>
+                    <span className="refetch-text-short">Refetch</span>
+                  </button>
+                )}
+              </div>
+              <div
+                className="article-content"
+                dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+              />
+              {/* Show comments if available */}
+              {parsedComments.length > 0 && (
+                <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+                  <div className="read-along-comments-divider" />
+                  <div className="comments-header">
+                    <h3>Comments ({totalCommentCount})</h3>
+                  </div>
+                  <div className="comments-list">
+                    {parsedComments.map((comment, index) => (
+                      <CommentComponent key={index} comment={comment} depth={0} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         );
       }
