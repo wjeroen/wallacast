@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link, RefreshCw } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast as PodcastType } from '../types';
 
@@ -46,6 +46,15 @@ function formatRefreshTime(date: Date): string {
   return date.toLocaleDateString('en-GB');
 }
 
+function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
 const EPISODES_PER_PAGE = 20;
 
 // Helper function to detect if query looks like a URL
@@ -57,7 +66,7 @@ function looksLikeUrl(query: string): boolean {
   );
 }
 
-export function FeedTab() {
+export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void }) {
   const [podcasts, setPodcasts] = useState<PodcastType[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
   const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(EPISODES_PER_PAGE);
@@ -124,6 +133,7 @@ export function FeedTab() {
       // Reload cached data
       await loadCachedData();
       await loadLastRefreshTime();
+      onRefreshComplete?.();
     } catch (error) {
       console.error('Failed to refresh feeds:', error);
     } finally {
@@ -418,6 +428,14 @@ export function FeedTab() {
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
+                  {episode.url && episode.item_type === 'article' && (
+                    <p className="content-source-link">
+                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                        {getDomainFromUrl(episode.url)}
+                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+                      </a>
+                    </p>
+                  )}
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}
@@ -503,6 +521,14 @@ export function FeedTab() {
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
+                  {episode.url && episode.item_type === 'article' && (
+                    <p className="content-source-link">
+                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                        {getDomainFromUrl(episode.url)}
+                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+                      </a>
+                    </p>
+                  )}
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}
@@ -620,6 +646,14 @@ export function FeedTab() {
                     {episode.podcast_title}
                     {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString('en-GB')}</>}
                   </p>
+                  {episode.url && episode.item_type === 'article' && (
+                    <p className="content-source-link">
+                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                        {getDomainFromUrl(episode.url)}
+                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+                      </a>
+                    </p>
+                  )}
                   {episode.description && (
                     <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
                   )}

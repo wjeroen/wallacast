@@ -226,7 +226,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        {activeTab === 'feed' && <FeedTab />}
+        {activeTab === 'feed' && <FeedTab onRefreshComplete={() => setFeedDaysStale(0)} />}
         {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} />}
         {activeTab === 'library' && (
           <LibraryTab onPlayContent={handlePlayContent} />
