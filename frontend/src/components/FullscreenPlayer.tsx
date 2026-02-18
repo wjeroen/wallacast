@@ -87,6 +87,21 @@ function isEAForumOrLessWrong(url: string): boolean {
   return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
 }
 
+/**
+ * Count total comments including all nested replies.
+ * parsedComments only gives top-level count; this recurses into replies.
+ */
+function countAllComments(comments: Comment[]): number {
+  let count = 0;
+  for (const c of comments) {
+    count += 1;
+    if (c.replies && c.replies.length > 0) {
+      count += countAllComments(c.replies);
+    }
+  }
+  return count;
+}
+
 function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
 
@@ -151,7 +166,10 @@ export function FullscreenPlayer({
   onTranscriptWordClick,
   onRefetch,
 }: FullscreenPlayerProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('content');
+  // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
+  const [activeTab, setActiveTab] = useState<TabType>(
+    content.type === 'podcast_episode' ? 'description' : 'read-along'
+  );
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
@@ -174,6 +192,9 @@ export function FullscreenPlayer({
       return [];
     }
   }, [content?.comments]);
+
+  // Total comment count including all nested replies
+  const totalCommentCount = useMemo(() => countAllComments(parsedComments), [parsedComments]);
 
   // Parse content alignment data if available
   const parsedAlignment = useMemo(() => {
@@ -270,11 +291,15 @@ export function FullscreenPlayer({
   }, [isLLMAlignment, parsedAlignment, content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
 
   // Determine which tabs are available
+  // NOTE: 'content' (Original Content) and 'comments' tabs are hidden — the read-along
+  // tab now renders content AND comments with per-element timestamps and is the default.
+  // The old tabs are kept in the code so they can be re-enabled easily if needed.
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
-    if (content.type === 'article' || content.type === 'text') tabs.push('content');
+    // Hidden tabs (uncomment to re-enable):
+    // if (content.type === 'article' || content.type === 'text') tabs.push('content');  // Original Content tab
+    // if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');  // Comments tab
     if (content.type === 'podcast_episode') tabs.push('description');
-    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');
     tabs.push('read-along');
     tabs.push('queue');
     return tabs;
@@ -644,7 +669,7 @@ export function FullscreenPlayer({
         return (
           <div className="tab-comments-display">
             <div className="comments-header">
-              <h3>Comments ({parsedComments.length})</h3>
+              <h3>Comments ({totalCommentCount})</h3>
               {onRefetch && (
                 <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
                   <RefreshCw size={16} />
@@ -797,10 +822,10 @@ export function FullscreenPlayer({
             className={`tab-button ${activeTab === tab ? 'active' : ''}`}
             onClick={() => handleTabClick(tab)}
           >
-            {tab === 'content' && 'Content'}
+            {tab === 'content' && 'Original Content'}
             {tab === 'description' && 'Description'}
-            {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
-            {tab === 'read-along' && 'Read-along'}
+            {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
+            {tab === 'read-along' && 'Content'}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}
@@ -811,7 +836,7 @@ export function FullscreenPlayer({
             title={autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
           >
             <ArrowDownToLine size={14} />
-            <span className="autoscroll-label">Auto-scroll</span>
+            Auto-scroll
           </button>
         )}
       </div>

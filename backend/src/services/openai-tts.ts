@@ -99,6 +99,20 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
   });
 }
 
+/**
+ * Count all comments including nested replies.
+ */
+function countAllComments(comments: any[]): number {
+  let count = 0;
+  for (const c of comments) {
+    count += 1;
+    if (c.replies && Array.isArray(c.replies) && c.replies.length > 0) {
+      count += countAllComments(c.replies);
+    }
+  }
+  return count;
+}
+
 function formatDateForNarration(dateString: string): string {
   try {
     const date = new Date(dateString);
@@ -772,12 +786,14 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
        try {
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
-              console.log(`[TTS] Formatting ${comments.length} comments for narration`);
+              const totalCount = countAllComments(comments);
+              console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
               const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
               // Use a longer, more natural announcement so Whisper doesn't skip it.
               // "Comments section:" (2 words) was consistently dropped by Whisper.
               // A full sentence (~15 words) is much harder for Whisper to miss.
-              fullScript += `\n\nNow, let's move on to the comments section, where ${comments.length} ${comments.length === 1 ? 'reader has' : 'readers have'} shared their thoughts.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              // Use totalCount (includes replies) so listeners know the full scope.
+              fullScript += `\n\nNow, let's move on to the comments section, where ${totalCount} ${totalCount === 1 ? 'reader has' : 'readers have'} shared their thoughts.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);
