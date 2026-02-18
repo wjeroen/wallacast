@@ -793,7 +793,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               // "Comments section:" (2 words) was consistently dropped by Whisper.
               // A full sentence (~15 words) is much harder for Whisper to miss.
               // Use totalCount (includes replies) so listeners know the full scope.
-              fullScript += `\n\nNow, let's move on to the comments section, where ${totalCount} ${totalCount === 1 ? 'reader has' : 'readers have'} shared their thoughts.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);
