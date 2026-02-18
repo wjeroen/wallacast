@@ -8,7 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
-import { wallabagAPI, contentAPI } from './api';
+import { wallabagAPI, contentAPI, podcastAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -28,6 +28,9 @@ function App() {
   // Get addItem and fetchContent from store
   const { addItem, fetchContent } = useContentStore();
 
+  // Feed staleness (days since last refresh)
+  const [feedDaysStale, setFeedDaysStale] = useState(0);
+
   // Wallabag sync state
   const [wallabagEnabled, setWallabagEnabled] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -38,6 +41,18 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Load feed staleness (days since last refresh)
+  useEffect(() => {
+    if (isAuthenticated) {
+      podcastAPI.getLastRefresh().then(res => {
+        if (res.data.lastRefresh) {
+          const days = Math.floor((Date.now() - new Date(res.data.lastRefresh).getTime()) / 86400000);
+          setFeedDaysStale(days);
+        }
+      }).catch(() => {});
+    }
+  }, [isAuthenticated]);
 
   // Load Wallabag status
   useEffect(() => {
@@ -233,7 +248,7 @@ function App() {
             onClick={() => setActiveTab('feed')}
           >
             <Rss size={24} />
-            <span>Feed</span>
+            <span>Feed{feedDaysStale >= 1 ? ` (${feedDaysStale})` : ''}</span>
           </button>
           <button
             className={`add-button ${activeTab === 'add' ? 'active' : ''}`}
