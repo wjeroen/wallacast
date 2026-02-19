@@ -99,6 +99,20 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
   });
 }
 
+/**
+ * Count all comments including nested replies.
+ */
+function countAllComments(comments: any[]): number {
+  let count = 0;
+  for (const c of comments) {
+    count += 1;
+    if (c.replies && Array.isArray(c.replies) && c.replies.length > 0) {
+      count += countAllComments(c.replies);
+    }
+  }
+  return count;
+}
+
 function formatDateForNarration(dateString: string): string {
   try {
     const date = new Date(dateString);
@@ -196,8 +210,8 @@ function htmlToNarrationText(html: string): string {
     let text = doc.body.textContent || '';
 
     // Replace quote markers with spoken announcements
-    text = text.replace(/<<<QUOTE>>>/g, 'Start quote:');
-    text = text.replace(/<<<ENDQUOTE>>>/g, 'End quote.');
+    text = text.replace(/<<<QUOTE>>>/g, 'Start of a quote:');
+    text = text.replace(/<<<ENDQUOTE>>>/g, 'End of the quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
@@ -277,7 +291,7 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       let replacementNode;
       if (description) {
           replacementNode = doc.createElement('p');
-          replacementNode.textContent = `An image shows ${description}. End of description.`;
+          replacementNode.textContent = `An image shows ${description}. End of the image description.`;
       } else {
           // If no description and no alt text, remove the image entirely
           // to prevent "An image is shown here" spam for decorative icons.
@@ -351,12 +365,12 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 
     // Diagnostic Logging (count images in INPUT)
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
-    const inputImageCount = (cleanHtml.match(/An image shows.*?End of description\./gs) || []).length;
+    const inputImageCount = (cleanHtml.match(/An image shows.*?\./gs) || []).length;
     console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
 
     if (inputImageCount > 0) {
       // Log sample image narration from input
-      const sampleImage = cleanHtml.match(/An image shows.*?End of description\./s);
+      const sampleImage = cleanHtml.match(/An image shows.*?End of the image description\./s);
       if (sampleImage) {
         console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
       }
@@ -373,9 +387,9 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  DO NOT simplify the language.
 
  🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of the image description."
  1. ALWAYS keep text that starts with "An image shows"
- 2. ALWAYS keep text that ends with "End of description."
+ 2. ALWAYS keep text that ends with "End of the image description."
  3. These image descriptions are REQUIRED accessibility content
  4. If you see image descriptions, they MUST appear in your output VERBATIM
  5. Image descriptions are NOT extraneous - they are essential
@@ -387,7 +401,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
+ * Wrap significant quotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
@@ -413,7 +427,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
     let scriptBody = response.choices[0]?.message?.content || '';
 
     // Validation and Retry
-    const outputImageCount = (scriptBody.match(/An image shows.*?End of description\./gs) || []).length;
+    const outputImageCount = (scriptBody.match(/An image shows.*?End of the image description\./gs) || []).length;
     console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
 
     // Detect if images were dropped
@@ -435,7 +449,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 The previous output dropped ${inputImageCount} image descriptions.
 
 YOU MUST PRESERVE ALL TEXT that matches this pattern:
-"An image shows [description]. End of description."
+"An image shows [description]. End of the image description."
 
 DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
 Copy them VERBATIM from input to output.
@@ -452,7 +466,7 @@ Failure to preserve image descriptions is a critical error.`;
       });
 
       const retryBody = retryResponse.choices[0]?.message?.content || '';
-      const retryImageCount = (retryBody.match(/An image shows.*?End of description\./gs) || []).length;
+      const retryImageCount = (retryBody.match(/An image shows.*?End of the image description\./gs) || []).length;
 
       if (retryImageCount > outputImageCount) {
         console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
@@ -716,14 +730,20 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       }
     }
 
-    // Step 2: Replace images with narration text (if we have descriptions)
-    if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
+    // Step 2: Replace images with narration text (if we have descriptions AND the feature is enabled)
+    // IMPORTANT: Must check imageAltTextEnabled here too! Old Gemini descriptions persist in the
+    // database (image_alt_text_data column) even after the user turns off the toggle. Without this
+    // check, stale English descriptions get injected into non-English articles, causing Whisper to
+    // drop content during English→native language transitions (8+ seconds of missing transcript).
+    if (imageAltTextEnabled !== 'false' && imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
       // PASS content.url as the third argument here:
       sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions, content.url || undefined);
-      
+
       console.log('[TTS] Injected image narrations into HTML for audio script');
       // sourceContent now has "An image shows..." text instead of <img> tags
       // Original html_content in database remains unchanged
+    } else if (imageAltTextEnabled === 'false') {
+      console.log('[TTS] Image descriptions disabled by user, skipping injection');
     }
 
     // Step 3: Script content for listening (20-30% progress)
@@ -766,9 +786,14 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
        try {
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
-              console.log(`[TTS] Formatting ${comments.length} comments for narration`);
+              const totalCount = countAllComments(comments);
+              console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
               const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-              fullScript += '\n\nComments section:\n\n' + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              // Use a longer, more natural announcement so Whisper doesn't skip it.
+              // "Comments section:" (2 words) was consistently dropped by Whisper.
+              // A full sentence (~15 words) is much harder for Whisper to miss.
+              // Use totalCount (includes replies) so listeners know the full scope.
+              fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);
@@ -827,39 +852,28 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       ['transcribing', 95, contentId]
     );
 
-    // Build Whisper prompt hint (max 224 chars) to improve transcription accuracy.
-    // Whisper often drops short transitional phrases like "Comments section:" and
-    // misrecognizes proper nouns in comment headers. Providing a prompt with these
-    // key phrases helps Whisper recognize them correctly.
-    let whisperPrompt = '';
-    if (content.title) {
-      whisperPrompt += `Title: ${content.title}. `;
-    }
-    if (content.author) {
-      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-      whisperPrompt += `Written by ${cleanAuthor}. `;
-    }
-    if (content.comments) {
-      try {
-        const commentsData = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-        if (commentsData && Array.isArray(commentsData) && commentsData.length > 0) {
-          whisperPrompt += 'Comments section: ';
-          const firstComment = commentsData[0];
-          const username = (firstComment.username || 'Anonymous').replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-          whisperPrompt += username;
-          if (firstComment.date) {
-            whisperPrompt += ` on ${formatDateForNarration(firstComment.date)}`;
-          }
-          if (firstComment.karma !== undefined) {
-            whisperPrompt += ` with ${firstComment.karma} upvotes`;
-          }
-        }
-      } catch { /* ignore parse errors */ }
-    }
-    console.log(`[TTS] Whisper prompt hint (${whisperPrompt.length} chars): "${whisperPrompt.slice(0, 100)}..."`);
+    // Whisper prompt: keep it minimal. Whisper's prompt only influences the first
+    // ~30-60 seconds of audio, so adding metadata about comments (which appear at
+    // the end) does nothing. Just pass an empty string — for chunked transcription
+    // the continuity strategy (previous chunk text) works better than static metadata.
+    const whisperPrompt = '';
+    console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
 
-    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt.slice(0, 224))
+    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt)
       .then(async (transcriptResult) => {
+          // Fix Whisper dropping the title: if the first word starts after 3s,
+          // Whisper likely "consumed" the title (because the prompt matches the
+          // spoken opening). Inject a synthetic anchor word at 0.0s so the LLM
+          // alignment can anchor the title element to the start of the audio.
+          if (transcriptResult.words.length > 0 && transcriptResult.words[0].start > 3.0) {
+            console.log(`[TTS] Whisper dropped opening ${transcriptResult.words[0].start.toFixed(1)}s — injecting title anchor at 0.0s`);
+            transcriptResult.words.unshift({
+              word: content.title || 'Title',
+              start: 0.0,
+              end: Math.min(transcriptResult.words[0].start, 3.0),
+            });
+          }
+
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
           await query(
             'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
