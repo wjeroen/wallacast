@@ -210,8 +210,8 @@ function htmlToNarrationText(html: string): string {
     let text = doc.body.textContent || '';
 
     // Replace quote markers with spoken announcements
-    text = text.replace(/<<<QUOTE>>>/g, 'Start quote:');
-    text = text.replace(/<<<ENDQUOTE>>>/g, 'End quote.');
+    text = text.replace(/<<<QUOTE>>>/g, 'Start of a quote:');
+    text = text.replace(/<<<ENDQUOTE>>>/g, 'End of the quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
@@ -401,7 +401,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap significant quotes with explicit spoken markers: "Quote: [The quote] End quote."
+ * Wrap significant quotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
