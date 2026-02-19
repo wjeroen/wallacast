@@ -291,7 +291,7 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       let replacementNode;
       if (description) {
           replacementNode = doc.createElement('p');
-          replacementNode.textContent = `An image shows ${description}. End of description.`;
+          replacementNode.textContent = `An image shows ${description}. End of the image description.`;
       } else {
           // If no description and no alt text, remove the image entirely
           // to prevent "An image is shown here" spam for decorative icons.
@@ -365,12 +365,12 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 
     // Diagnostic Logging (count images in INPUT)
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
-    const inputImageCount = (cleanHtml.match(/An image shows.*?End of description\./gs) || []).length;
+    const inputImageCount = (cleanHtml.match(/An image shows.*?\./gs) || []).length;
     console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
 
     if (inputImageCount > 0) {
       // Log sample image narration from input
-      const sampleImage = cleanHtml.match(/An image shows.*?End of description\./s);
+      const sampleImage = cleanHtml.match(/An image shows.*?End of the image description\./s);
       if (sampleImage) {
         console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
       }
@@ -387,9 +387,9 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  DO NOT simplify the language.
 
  🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of description."
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of the image description."
  1. ALWAYS keep text that starts with "An image shows"
- 2. ALWAYS keep text that ends with "End of description."
+ 2. ALWAYS keep text that ends with "End of the image description."
  3. These image descriptions are REQUIRED accessibility content
  4. If you see image descriptions, they MUST appear in your output VERBATIM
  5. Image descriptions are NOT extraneous - they are essential
@@ -427,7 +427,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
     let scriptBody = response.choices[0]?.message?.content || '';
 
     // Validation and Retry
-    const outputImageCount = (scriptBody.match(/An image shows.*?End of description\./gs) || []).length;
+    const outputImageCount = (scriptBody.match(/An image shows.*?End of the image description\./gs) || []).length;
     console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
 
     // Detect if images were dropped
@@ -449,7 +449,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 The previous output dropped ${inputImageCount} image descriptions.
 
 YOU MUST PRESERVE ALL TEXT that matches this pattern:
-"An image shows [description]. End of description."
+"An image shows [description]. End of the image description."
 
 DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
 Copy them VERBATIM from input to output.
@@ -466,7 +466,7 @@ Failure to preserve image descriptions is a critical error.`;
       });
 
       const retryBody = retryResponse.choices[0]?.message?.content || '';
-      const retryImageCount = (retryBody.match(/An image shows.*?End of description\./gs) || []).length;
+      const retryImageCount = (retryBody.match(/An image shows.*?End of the image description\./gs) || []).length;
 
       if (retryImageCount > outputImageCount) {
         console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
