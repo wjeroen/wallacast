@@ -839,7 +839,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
     await query(
-      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL WHERE id = $7',
+      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL, audio_generated_at = NOW() WHERE id = $7',
       [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
     );
 
