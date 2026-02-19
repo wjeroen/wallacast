@@ -102,12 +102,17 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      // Cache busting: use file_size+duration so it only changes when audio is
-      // actually regenerated, not on every star/archive/update (which was causing
-      // full audio re-downloads and wasting massive bandwidth)
-      const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
-      const separator = content.audio_url?.includes('?') ? '&' : '?';
-      audio.src = content.audio_url ? `${content.audio_url}${separator}v=${cacheBuster}` : '';
+      // Cache busting: only for our own generated audio (/api/content/:id/audio),
+      // NOT for external podcast episode URLs. External podcast CDNs can behave
+      // unexpectedly with unknown query parameters (range requests may fail,
+      // causing audio to stop after the first second on some shows).
+      let audioSrc = content.audio_url || '';
+      if (content.audio_url && content.type !== 'podcast_episode') {
+        const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
+        const separator = content.audio_url.includes('?') ? '&' : '?';
+        audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
+      }
+      audio.src = audioSrc;
       
       // Use global speed from localStorage (instant, no API call needed)
       const storedSpeed = getStoredSpeed();
@@ -202,10 +207,20 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     if (isPlaying) {
       savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
+      setIsPlaying(false);
     } else {
-      audioRef.current.play();
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => setIsPlaying(true))
+          .catch((err) => {
+            console.error('[AudioPlayer] play() rejected:', err);
+            setIsPlaying(false);
+          });
+      } else {
+        setIsPlaying(true);
+      }
     }
-    setIsPlaying(!isPlaying);
   };
 
   const handleSeek = (time: number) => {
