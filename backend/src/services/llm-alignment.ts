@@ -581,7 +581,7 @@ IMPORTANT RULES:
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
 - For the comment-divider, look for "Now, let's move on to the comments section" or similar phrasing in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
-- Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of the image description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
+- Images (if present in the elements list) are spoken in the audio as "An image is displayed showing [description]. End of the image description." Match images by looking for "an image is displayed showing" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
 Below are two examples from other articles showing the expected output format. Note how EVERY element is processed in order — none are skipped.
@@ -596,7 +596,7 @@ Element 1 is meta "Written by Car McVroom. Published on January 15, 2026." — I
 Element 2 is a paragraph about car maintenance — the transcript says "Taking care of your car is not just about keeping it clean," at [5.4] which matches the opening sentence of this paragraph.
 >>> 2: 5.4
 
-Element 3 is an image — looking for "an image shows" in the transcript... found "An image shows a red sports car parked in a driveway." at [18.5].
+Element 3 is an image — looking for "an image is displayed showing" in the transcript... found "An image is displayed showing a red sports car parked in a driveway." at [18.5].
 >>> 3: 18.5
 
 Element 4 is a paragraph about waxing techniques — the transcript has "The most important step is applying the wax in circular motions," at [24.1] which matches the body text.
