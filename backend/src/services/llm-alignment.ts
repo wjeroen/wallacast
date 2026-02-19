@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForUser } from './ai-providers.js';
+import { getChatClientForUser, getUserSetting } from './ai-providers.js';
 import { query } from '../database/db.js';
 
 interface TranscriptWord {
@@ -417,6 +417,12 @@ export async function generateLLMAlignment(
 
   const content = result.rows[0];
 
+  // Check if image descriptions are enabled — if disabled, don't pass old Gemini data
+  // to extractContentElements. When disabled, images show as plain [Image] in the element
+  // list (matching what's in the audio, since injectImageNarrations also checks this toggle).
+  const imageAltTextEnabled = await getUserSetting(userId, 'image_alt_text_enabled');
+  const imageAltTextData = imageAltTextEnabled !== 'false' ? content.image_alt_text_data : null;
+
   // Extract content elements from HTML
   const contentElements = extractContentElements(
     content.html_content || '',
@@ -425,7 +431,7 @@ export async function generateLLMAlignment(
     content.published_at,
     content.karma,
     content.url,
-    content.image_alt_text_data
+    imageAltTextData
   );
 
   // Extract comment elements
@@ -447,18 +453,30 @@ export async function generateLLMAlignment(
   }
 
   // Combine all elements
-  const allElements: ContentElement[] = [...contentElements];
+  // Filter out bare image placeholders when image descriptions are disabled —
+  // they aren't spoken in the audio, so including them confuses the LLM and
+  // causes the frontend to highlight images instead of the text being spoken.
+  const filteredContentElements = imageAltTextEnabled !== 'false'
+    ? contentElements
+    : contentElements.filter(el => el.type !== 'image');
+
+  const allElements: ContentElement[] = [...filteredContentElements];
 
   if (commentElements.length > 0) {
+    // The TTS says a full sentence: "Now, let's move on to the comments section,
+    // where N readers have shared their thoughts." — the LLM needs to match this
+    // longer text in the transcript. Frontend renders it as "Comments (N):" regardless.
+    const commentCount = commentElements.filter(el => el.type === 'comment').length;
     allElements.push({
       type: 'comment-divider',
       html: '',
-      text: 'Comments section:',
+      text: `Now, let's move on to the comments section, where ${commentCount} ${commentCount === 1 ? 'reader has' : 'readers have'} shared their thoughts.`,
     });
     allElements.push(...commentElements);
   }
 
-  console.log(`[LLM-Align] ${contentElements.length} content elements, ${commentElements.length} comment elements`);
+  const filteredCount = contentElements.length - filteredContentElements.length;
+  console.log(`[LLM-Align] ${filteredContentElements.length} content elements${filteredCount > 0 ? ` (${filteredCount} images filtered out — descriptions disabled)` : ''}, ${commentElements.length} comment elements`);
 
   // Build timed transcript
   const timedTranscript = buildTimedTranscript(transcriptWords);
@@ -502,17 +520,17 @@ export async function generateLLMAlignment(
     console.log(`[LLM-Align] DIAGNOSTIC: No raw Whisper words match comm/sect! Whisper may have dropped "Comments section" entirely.`);
   }
 
-  // Log last 15 transcript lines (comment section transition area)
-  console.log(`[LLM-Align] DIAGNOSTIC: Last 15 transcript lines:`);
-  transcriptLines.slice(-15).forEach(line => console.log(`[LLM-Align]   ${line}`));
+  // Log last 5 transcript lines (comment section transition area)
+  console.log(`[LLM-Align] DIAGNOSTIC: Last 5 transcript lines:`);
+  transcriptLines.slice(-5).forEach(line => console.log(`[LLM-Align]   ${line}`));
 
   // Diagnostic: dump raw Whisper words in the transition zone (last content → first comment)
   // This shows EXACTLY what Whisper captured, word by word, including the "Comments section" gap
   const lastTranscriptLine = transcriptLines[transcriptLines.length - 1];
   const lastTimestampMatch = lastTranscriptLine?.match(/^\[([\d.]+)\]/);
   const lastContentTime = lastTimestampMatch ? parseFloat(lastTimestampMatch[1]) : 0;
-  // Show words from 10s before last content to 45s after (covers the transition to first comment)
-  const transitionStart = Math.max(0, lastContentTime - 180); // ~3 min before end
+  // Show words from 30s before end to 10s after (covers the transition to first comment)
+  const transitionStart = Math.max(0, lastContentTime - 30);
   const transitionEnd = lastContentTime + 10;
   const transitionWords = transcriptWords.filter(w => w.start >= transitionStart && w.start <= transitionEnd);
   if (transitionWords.length > 0) {
@@ -533,144 +551,230 @@ export async function generateLLMAlignment(
     }
   }
 
-  // Log the elements list being sent to the LLM
-  console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM:\n${elementsList}`);
+  // Log the elements list being sent to the LLM (first 10 + last 10)
+  const elementsLines = elementsList.split('\n');
+  if (elementsLines.length <= 20) {
+    console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM (${elementsLines.length} total):\n${elementsList}`);
+  } else {
+    const first10 = elementsLines.slice(0, 10).join('\n');
+    const last10 = elementsLines.slice(-10).join('\n');
+    console.log(`[LLM-Align] DIAGNOSTIC: Elements list being sent to LLM (${elementsLines.length} total, showing first 10 + last 10):\n${first10}\n  ... (${elementsLines.length - 20} more) ...\n${last10}`);
+  }
 
-  // Single prompt — LLM reasons through each match, marks answers with >>>
-  // Elements come FIRST so the LLM knows what to look for, then the transcript.
-  const prompt = `I have an article that was read aloud as audio. Below are the article's content elements, followed by the timestamped transcript from the audio. Your job is to find where each element starts being spoken in the transcript, so that we can sync the original text with the audio.
-Keep in mind that the transcription is generated by AI, so some words and names won't always be transcribed accurately. You need to find the best matches, not exact matches.
+  // Log first 500 chars of the timed transcript sent to LLM
+  console.log(`[LLM-Align] DIAGNOSTIC: Timed transcript preview (first 500 chars of ${timedTranscript.length} total):\n${timedTranscript.slice(0, 500)}${timedTranscript.length > 500 ? '\n  ...' : ''}`);
+
+  // Build the shared rules/examples section used by all prompts (single or batched)
+  const sharedRules = `Keep in mind that the transcription is generated by AI, so some words and names won't always be transcribed accurately. You need to find the best matches, not exact matches.
+If you are struggling with this task because you can't find good matches, please explain what is going wrong first and what you are struggling with, but then still try to continue and find the best matches and follow all of these rules.
 
 For each element, explain which transcript line matches it and why, then write the answer on a new line starting with >>>.
 
-CRITICAL: Process elements STRICTLY in sequential order: element 0, then 1, then 2, then 3, etc. Do NOT skip ahead or go back. After matching element N, start searching for element N+1 from where you left off (or slightly before).
+CRITICAL: Process elements STRICTLY in sequential order. Do NOT skip ahead or go back. After matching one element, start searching for the next one from where you left off.
 
 IMPORTANT RULES:
 - Each timestamp must be >= the previous one. If an element isn't spoken, reuse the previous timestamp.
+- Make sure you process every single element strictly in sequential order.
 - The title, author attribution ("Written by ..."), and karma count are ALWAYS spoken at the very START of the audio (first ~15 seconds). Do NOT confuse them with later mentions of the same author name in comments.
 - For comments, first try to match the HEADER (the "Username on Date with N upvotes:" line).
 - If the header is NOT in the transcript (Whisper sometimes drops comment headers), match the START of the comment BODY text instead.
 - Note: A username like "Johnny Bravo" might appear in ANOTHER comment's header (e.g. "A reply to Johnny Bravo by Car McVroom"). That is NOT Johnny Bravo's own comment!
-- For the comment-divider, look for "Comments section:" in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
+- For the comment-divider, look for "Now, let's move on to the comments section" or similar phrasing in the transcript. If the phrase isn't there, use the timestamp just before the first comment starts.
 - The scriptwriter may have rephrased text, added numbering to lists ("First, ...", "Second, ..."), or changed wording. Match by meaning, not exact wording.
-- Images are spoken in the audio as "An image shows [description]. End of description." Match images by looking for "an image shows" followed by similar description words in the transcript.
-- Footnotes, endnotes, acknowledgments, and reference sections at the end of an article are typically NOT spoken in the audio. Reuse the previous element's timestamp for these.
+- Images (if present in the elements list) are spoken in the audio as "An image shows [description]. End of the image description." Match images by looking for "an image shows" followed by similar description words in the transcript. If no image elements appear in the list, ignore this rule.
 - CRITICAL: Use ONLY real [timestamp] values from the TRANSCRIPT section below. The two examples below are from DIFFERENT articles and their timestamps do NOT apply here. You MUST find timestamps from YOUR transcript, not from these examples.
 
-Below are two examples from other articles showing the expected output format. Note how the timestamps are completely different between the two — YOUR timestamps will also be different because they come from a different transcript entirely.
+Below are two examples from other articles showing the expected output format. Note how EVERY element is processed in order — none are skipped.
 
-EXAMPLE 1 (from an article about cars):
+EXAMPLE 1 (from a short article about cars with 7 elements):
 "Element 0 is the title "How To Flex Your Car" — the transcript has "How To Flex Your Car," at [0.0] which matches.
 >>> 0: 0.0
 
-Element 1 is "Written by Car McVroom" — I see "written by Car McVroom." at [2.8].
+Element 1 is meta "Written by Car McVroom. Published on January 15, 2026." — I see "written by Car McVroom." at [2.8] followed by a date.
 >>> 1: 2.8
 
-Element 4 is an image — looking for "an image shows" in the transcript... found at [18.5].
->>> 4: 18.5
+Element 2 is a paragraph about car maintenance — the transcript says "Taking care of your car is not just about keeping it clean," at [5.4] which matches the opening sentence of this paragraph.
+>>> 2: 5.4
 
-Element 7 is a comment-divider — I see "comments section" at [35.1].
->>> 7: 35.1
+Element 3 is an image — looking for "an image shows" in the transcript... found "An image shows a red sports car parked in a driveway." at [18.5].
+>>> 3: 18.5
 
-Element 8 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [35.1].
->>> 8: 35.1"
+Element 4 is a paragraph about waxing techniques — the transcript has "The most important step is applying the wax in circular motions," at [24.1] which matches the body text.
+>>> 4: 24.1
 
-EXAMPLE 2 (from a longer article about cooking):
-"Element 0 is the title "The Science of Baking Bread" — transcript line at [3.2] says "The Science of Baking Bread."
->>> 0: 3.2
+Element 5 is a comment-divider — I see "let's move on to the comments section" at [35.1].
+>>> 5: 35.1
+
+Element 6 is a comment by SmartyPants — found "SmartyPants on 28th of January" at [36.4].
+>>> 6: 36.4"
+
+EXAMPLE 2 (from a longer article about cooking with 8 elements):
+"Element 0 is the title "The Science of Baking Bread" — transcript line at [0.0] says "The Science of Baking Bread."
+>>> 0: 0.0
+
+Element 1 is meta "Written by Mr. Chef. Published on February 3, 2026." — I see "written by Mr. Chef." at [3.2].
+>>> 1: 3.2
+
+Element 2 is a paragraph about gluten development — the transcript says "When you mix flour and water together," at [6.8] which matches the start of this paragraph about how gluten forms.
+>>> 2: 6.8
 
 Element 3 is a heading "Ingredients" — transcript has "Ingredients." at [47.9].
 >>> 3: 47.9
 
-Element 5 is a footnote — not spoken in audio, reusing previous timestamp.
->>> 5: 47.9
+Element 4 is a list of ingredients — the transcript has "First, you will need 500 grams of bread flour." at [49.2]. The scriptwriter added "First, ..." numbering but the content matches the list items.
+>>> 4: 49.2
 
-Element 10 is a comment by BreadLover — can't find header, but body text "This recipe changed my life" appears at [203.6].
->>> 10: 203.6"
+Element 5 is a paragraph about kneading — the transcript says "Kneading is where the magic happens," at [62.3] which matches this paragraph.
+>>> 5: 62.3
 
-Remember: these example timestamps (0.0, 2.8, 18.5, 35.1, 3.2, 47.9, 203.6) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.
+Element 6 is a footnote — footnotes are not spoken in the audio, so I reuse the previous timestamp.
+>>> 6: 62.3
 
-ELEMENTS TO MATCH (${allElements.length} total):
-${elementsList}
+Element 7 is a comment by BreadLover — can't find the header in the transcript (Whisper dropped it), but the body text "This recipe changed my life" appears at [203.6].
+>>> 7: 203.6"
+
+Remember: these example timestamps (0.0, 2.8, 5.4, 18.5, etc.) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.`;
+
+  // Helper: build prompt for a set of element indices
+  function buildAlignmentPrompt(
+    indices: number[],
+    batchInfo?: { batchNum: number; totalBatches: number }
+  ): string {
+    const batchElementsList = indices.map(i => {
+      const el = allElements[i];
+      const typeLabel = el.type === 'comment'
+        ? `comment by ${el.commentMeta?.username || 'Unknown'}`
+        : el.type;
+      const maxLen = el.type === 'comment' ? 300 : 200;
+      const displayText = el.text.length > maxLen ? el.text.slice(0, maxLen) + '...' : el.text;
+      return `${i}. (${typeLabel}) ${displayText}`;
+    }).join('\n');
+
+    const firstIdx = indices[0];
+    const lastIdx = indices[indices.length - 1];
+
+    let intro = `I have an article that was read aloud as audio. Below are the article's content elements, followed by the timestamped transcript from the audio. Your job is to find where each element starts being spoken in the transcript, so that we can sync the original text with the audio.`;
+
+    // Add batch context if this is a batched call
+    if (batchInfo) {
+      intro += `\n\nIMPORTANT: The full article has ${allElements.length} elements, but you are only matching a SUBSET: elements ${firstIdx} through ${lastIdx} (batch ${batchInfo.batchNum} of ${batchInfo.totalBatches}). Only match the elements listed below — do NOT try to match elements outside this range. The element numbers are their ORIGINAL indices from the full article.`;
+    }
+
+    const closingInstruction = batchInfo
+      ? `Now go through each of the ${indices.length} elements listed above (${firstIdx} to ${lastIdx}) IN ORDER. For every single one, explain your reasoning, then write >>> followed by the element number and timestamp.`
+      : `Now go through each element 0 to ${allElements.length - 1} IN ORDER. For every single one of them, explain your reasoning, then write >>> followed by the element number and timestamp.`;
+
+    return `${intro}
+${sharedRules}
+
+ELEMENTS TO MATCH (${indices.length}${batchInfo ? ` of ${allElements.length} total` : ' total'}):
+${batchElementsList}
 
 TRANSCRIPT (${totalAudioDuration}s audio):
 ${timedTranscript}
 
-Now go through each element 0 to ${allElements.length - 1} IN ORDER. For each one, explain your reasoning, then write >>> followed by the element number and timestamp.`;
-
-  // Call LLM
-  const chatConfig = await getChatClientForUser(userId);
-  if (!chatConfig) {
-    throw new Error('No LLM configured. Please set up a DeepInfra or OpenAI API key in Settings.');
+${closingInstruction}`;
   }
 
-  console.log(`[LLM-Align] Calling ${chatConfig.model} with ${allElements.length} elements...`);
+  // Helper: call LLM and parse >>> markers from response
+  async function callAndParse(
+    prompt: string,
+    chatConfig: { client: any; model: string },
+    label: string
+  ): Promise<Map<number, number>> {
+    console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
 
-  const response = await chatConfig.client.chat.completions.create({
-    model: chatConfig.model,
-    messages: [
-      { role: 'user', content: prompt },
-    ],
-    max_completion_tokens: 128000,
-  });
+    const response = await chatConfig.client.chat.completions.create({
+      model: chatConfig.model,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 128000,
+    });
 
-  const responseText = response.choices[0]?.message?.content || '';
-  console.log(`[LLM-Align] LLM response length: ${responseText.length} chars`);
-  // Log full response so reasoning is visible in Railway logs
-  console.log(`[LLM-Align] Full LLM response:\n${responseText}`);
+    const responseText = response.choices[0]?.message?.content || '';
+    console.log(`[LLM-Align] ${label}: response ${responseText.length} chars`);
+    console.log(`[LLM-Align] ${label} response:\n${responseText}`);
 
-  // Parse response — only extract lines starting with >>>
-  let timestamps: number[];
-  let usedFallback = false;
-  try {
-    const timestampMap = new Map<number, number>();
+    const map = new Map<number, number>();
     const lines = responseText.split('\n');
     for (const line of lines) {
-      // Primary: match ">>> 0: 0.0" lines (the marked answers)
       const markedMatch = line.match(/^>>>\s*(\d+)\s*:\s*([\d.]+)/);
       if (markedMatch) {
         const index = parseInt(markedMatch[1], 10);
         const timestamp = parseFloat(markedMatch[2]);
         if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
-          timestampMap.set(index, timestamp);
+          map.set(index, timestamp);
         }
       }
     }
 
-    console.log(`[LLM-Align] Parsed ${timestampMap.size}/${allElements.length} >>> markers`);
-
-    // Fallback 1: if no >>> markers, try plain "0: 0.0" lines
-    if (timestampMap.size === 0) {
-      console.warn('[LLM-Align] No >>> markers found, trying plain index:timestamp lines...');
+    // Fallback: plain "0: 0.0" lines
+    if (map.size === 0) {
       for (const line of lines) {
         const match = line.match(/^\s*\[?(\d+)\]?\s*[:=]\s*([\d.]+)/);
         if (match) {
           const index = parseInt(match[1], 10);
           const timestamp = parseFloat(match[2]);
           if (!isNaN(index) && !isNaN(timestamp) && index >= 0 && index < allElements.length) {
-            timestampMap.set(index, timestamp);
+            map.set(index, timestamp);
           }
         }
       }
-      if (timestampMap.size > 0) {
-        console.log(`[LLM-Align] Plain format fallback: parsed ${timestampMap.size} pairs`);
-      }
     }
 
-    // Fallback 2: try JSON array
-    if (timestampMap.size === 0) {
-      console.warn('[LLM-Align] No index:timestamp pairs found, trying JSON array fallback...');
-      const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
-      if (!jsonMatch) {
-        throw new Error('No timestamps found in LLM response');
+    console.log(`[LLM-Align] ${label}: parsed ${map.size} >>> markers`);
+    return map;
+  }
+
+  // Get LLM client
+  const chatConfig = await getChatClientForUser(userId);
+  if (!chatConfig) {
+    throw new Error('No LLM configured. Please set up a DeepInfra or OpenAI API key in Settings.');
+  }
+
+  // Decide whether to batch: if >30 elements, split into batches of 20
+  const BATCH_THRESHOLD = 30;
+  const BATCH_SIZE = 20;
+  const useBatching = allElements.length > BATCH_THRESHOLD;
+
+  let timestamps: number[];
+  let usedFallback = false;
+  try {
+    let timestampMap: Map<number, number>;
+
+    if (!useBatching) {
+      // Single call for small articles
+      const allIndices = allElements.map((_, i) => i);
+      const prompt = buildAlignmentPrompt(allIndices);
+      console.log(`[LLM-Align] Single call with ${allElements.length} elements`);
+      timestampMap = await callAndParse(prompt, chatConfig, 'Single');
+    } else {
+      // Batched calls for large articles
+      const batches: number[][] = [];
+      for (let i = 0; i < allElements.length; i += BATCH_SIZE) {
+        batches.push(
+          allElements.map((_, idx) => idx).slice(i, i + BATCH_SIZE)
+        );
       }
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (!Array.isArray(parsed)) throw new Error('Parsed result is not an array');
-      parsed.forEach((val: any, i: number) => {
-        const n = typeof val === 'number' ? val : parseFloat(String(val));
-        if (!isNaN(n) && i < allElements.length) timestampMap.set(i, n);
-      });
-      console.log(`[LLM-Align] JSON fallback: parsed ${timestampMap.size} timestamps`);
+      console.log(`[LLM-Align] Batching: ${allElements.length} elements into ${batches.length} batches of up to ${BATCH_SIZE}`);
+
+      timestampMap = new Map<number, number>();
+      for (let b = 0; b < batches.length; b++) {
+        const batchIndices = batches[b];
+        const prompt = buildAlignmentPrompt(batchIndices, {
+          batchNum: b + 1,
+          totalBatches: batches.length,
+        });
+        const batchMap = await callAndParse(
+          prompt,
+          chatConfig,
+          `Batch ${b + 1}/${batches.length} (elements ${batchIndices[0]}-${batchIndices[batchIndices.length - 1]})`
+        );
+        // Merge batch results into main map
+        for (const [idx, ts] of batchMap) {
+          timestampMap.set(idx, ts);
+        }
+      }
+      console.log(`[LLM-Align] All batches complete: ${timestampMap.size}/${allElements.length} elements matched`);
     }
 
     // Build timestamps array from map — missing elements get previous value
@@ -827,8 +931,7 @@ Now go through each element 0 to ${allElements.length - 1} IN ORDER. For each on
 
   } catch (parseError) {
     usedFallback = true;
-    console.error('[LLM-Align] Failed to parse LLM response, using FALLBACK even distribution:', parseError);
-    console.error('[LLM-Align] Full LLM response was:', responseText);
+    console.error('[LLM-Align] Failed during LLM alignment, using FALLBACK even distribution:', parseError);
     // Fallback: distribute timestamps evenly across the audio duration
     const totalDuration = transcriptWords.length > 0
       ? transcriptWords[transcriptWords.length - 1].end

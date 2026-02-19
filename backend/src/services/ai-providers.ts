@@ -45,8 +45,9 @@ class OpenAIProvider implements AIProvider {
   }
 
   async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
-    // UPDATED: Default to 'gpt-5-nano' instead of 'gpt-4o-mini'
-    const model = options?.model || await getUserSetting(this.userId, 'openai_model') || 'gpt-5-nano';
+    // Always default to gpt-5-nano — don't read openai_model from DB which may
+    // contain stale values like 'gpt-4o-mini' from before migration
+    const model = options?.model || 'gpt-5-nano';
 
     const response = await this.client.chat.completions.create({
       model: model,
@@ -164,7 +165,7 @@ export async function getOpenAIClientForUser(userId: number): Promise<OpenAI | n
 /**
  * INTELLIGENT ROUTER FOR NARRATION PREP LLM
  * Returns the client + model for scriptwriting (preparing text for TTS).
- * Supports: OpenAI gpt-4o-mini or gpt-5-nano, DeepSeek-V3.2 via DeepInfra.
+ * Supports: OpenAI gpt-5-nano or gpt-5-mini, DeepSeek-V3.2 via DeepInfra.
  *
  * Routing logic:
  *   1. If user explicitly chose 'deepseek' or 'openai', use that
@@ -179,10 +180,10 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
     console.warn('[AI] User chose DeepSeek but no DeepInfra key, falling back to OpenAI');
   }
 
-  if (narrationLlm === 'openai') {
+  if (narrationLlm === 'openai' || narrationLlm === 'openai-mini') {
     const client = await getOpenAIClientForUser(userId);
     if (client) {
-      const model = await getUserSetting(userId, 'openai_model') || 'gpt-5-nano';
+      const model = narrationLlm === 'openai-mini' ? 'gpt-5-mini' : 'gpt-5-nano';
       return { client, model };
     }
     console.warn('[AI] User chose OpenAI but no OpenAI key, falling back to DeepInfra');
@@ -195,12 +196,12 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
     return { client: deepInfraClient, model: 'deepseek-ai/DeepSeek-V3.2' };
   }
 
-  // Fallback to OpenAI
+  // Fallback to OpenAI — always use gpt-5-nano (don't read openai_model from DB,
+  // which may contain stale values like 'gpt-4o-mini' from before migration)
   const openaiClient = await getOpenAIClientForUser(userId);
   if (openaiClient) {
-    const model = await getUserSetting(userId, 'openai_model') || 'gpt-5-nano';
-    console.log(`[AI] Auto-routing narration LLM to OpenAI ${model}`);
-    return { client: openaiClient, model };
+    console.log('[AI] Auto-routing narration LLM to OpenAI gpt-5-nano');
+    return { client: openaiClient, model: 'gpt-5-nano' };
   }
 
   return null;
