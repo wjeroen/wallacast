@@ -156,6 +156,10 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Comments count in fullscreen player header** (2026-02-19): Added total comment count (including replies) to article header next to upvotes — now shows "Author • Date • N upvotes • N comments"
+- [x] **"Narration generated on" provenance display** (2026-02-19): Added `audio_generated_at` and `content_fetched_at` DB columns; fullscreen player now shows "Fetched by X on DD/MM/YYYY • Narration generated on DD/MM/YYYY"
+- [x] **"Show newest fetch (not synced)" toggle** (2026-02-19): When article is refetched after audio generation, a link appears to toggle between newest html_content (not synced) and LLM alignment (synced with audio)
+- [x] **Fix podcast audio only playing first second** (2026-02-19): Removed cache-buster query parameter from external podcast episode URLs — only applies it to our own /api/content/:id/audio endpoint now. Also fixed play() promise rejection handling.
 - [x] **Switched narration/alignment LLM from GPT-4o-mini to GPT-5-Nano** (2026-02-17):
   - Model change in `ai-providers.ts` — default OpenAI model now `gpt-5-nano` instead of `gpt-4o-mini`
   - GPT-5-Nano provides detailed reasoning about alignment difficulties (e.g., explains when headings/dates aren't clean standalone lines in Whisper transcript)

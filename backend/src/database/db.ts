@@ -201,6 +201,11 @@ export async function initializeDatabase() {
     const contentAlignmentMigration = await fs.readFile(contentAlignmentMigrationPath, 'utf-8');
     await client.query(contentAlignmentMigration);
 
+    // Run migration to add content_fetched_at and audio_generated_at timestamps
+    const contentTimestampsMigrationPath = path.join(__dirname, 'migrations', '016_add_content_timestamps.sql');
+    const contentTimestampsMigration = await fs.readFile(contentTimestampsMigrationPath, 'utf-8');
+    await client.query(contentTimestampsMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
