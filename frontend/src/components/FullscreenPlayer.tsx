@@ -87,6 +87,21 @@ function isEAForumOrLessWrong(url: string): boolean {
   return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
 }
 
+/**
+ * Count total comments including all nested replies.
+ * parsedComments only gives top-level count; this recurses into replies.
+ */
+function countAllComments(comments: Comment[]): number {
+  let count = 0;
+  for (const c of comments) {
+    count += 1;
+    if (c.replies && c.replies.length > 0) {
+      count += countAllComments(c.replies);
+    }
+  }
+  return count;
+}
+
 function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
 
@@ -151,7 +166,10 @@ export function FullscreenPlayer({
   onTranscriptWordClick,
   onRefetch,
 }: FullscreenPlayerProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('content');
+  // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
+  const [activeTab, setActiveTab] = useState<TabType>(
+    content.type === 'podcast_episode' ? 'description' : 'read-along'
+  );
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
@@ -174,6 +192,9 @@ export function FullscreenPlayer({
       return [];
     }
   }, [content?.comments]);
+
+  // Total comment count including all nested replies
+  const totalCommentCount = useMemo(() => countAllComments(parsedComments), [parsedComments]);
 
   // Parse content alignment data if available
   const parsedAlignment = useMemo(() => {
@@ -218,63 +239,16 @@ export function FullscreenPlayer({
   }, [isLLMAlignment, parsedAlignment, currentTime]);
 
   // Legacy: Extract HTML sections for old aligned read-along (non-LLM)
-  const extractedSections = useMemo(() => {
-    // Only compute for old-style alignment
-    if (isLLMAlignment || !parsedAlignment || !content.html_content) return [];
-
-    let augmentedHtml = '';
-    if (content.title) augmentedHtml += `<p>Title: ${content.title}.</p>\n`;
-    if (content.author) {
-      const cleanAuthor = content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-      augmentedHtml += `<p>Written by ${cleanAuthor}.</p>\n`;
-    }
-    if (content.published_at) {
-      const date = new Date(content.published_at);
-      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      augmentedHtml += `<p>Published on ${formatted}.</p>\n`;
-    }
-    const isEAForumOrLW = content.url && (content.url.includes('forum.effectivealtruism.org') || content.url.includes('lesswrong.com'));
-    if (isEAForumOrLW && content.karma !== undefined && content.karma !== null) {
-      augmentedHtml += `<p>It has ${content.karma} karma.</p>\n`;
-    }
-    augmentedHtml += content.html_content;
-
-    if (content.comments) {
-      try {
-        const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
-        if (comments && Array.isArray(comments) && comments.length > 0) {
-          augmentedHtml += `\n<h2>Comments section:</h2>\n`;
-          function commentsToHTML(commentsList: any[], depth: number = 0): string {
-            let html = '';
-            for (const comment of commentsList) {
-              const indent = depth > 0 ? `<p style="margin-left: ${depth * 20}px">` : '<p>';
-              html += `${indent}<strong>${comment.username || 'Anonymous'}</strong>: ${comment.content || ''}</p>\n`;
-              if (comment.replies && comment.replies.length > 0) html += commentsToHTML(comment.replies, depth + 1);
-            }
-            return html;
-          }
-          augmentedHtml += commentsToHTML(comments);
-        }
-      } catch (e) { /* ignore */ }
-    }
-
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(augmentedHtml, 'text/html');
-    const sections: string[] = [];
-    const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, img');
-    elements.forEach((el) => {
-      if (el.tagName === 'IMG') el.setAttribute('style', 'max-width: 100%; height: auto;');
-      sections.push(el.outerHTML);
-    });
-    return sections;
-  }, [isLLMAlignment, parsedAlignment, content.html_content, content.title, content.author, content.published_at, content.karma, content.comments]);
-
   // Determine which tabs are available
+  // NOTE: 'content' (Original Content) and 'comments' tabs are hidden — the read-along
+  // tab now renders content AND comments with per-element timestamps and is the default.
+  // The old tabs are kept in the code so they can be re-enabled easily if needed.
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
-    if (content.type === 'article' || content.type === 'text') tabs.push('content');
+    // Hidden tabs (uncomment to re-enable):
+    // if (content.type === 'article' || content.type === 'text') tabs.push('content');  // Original Content tab
+    // if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');  // Comments tab
     if (content.type === 'podcast_episode') tabs.push('description');
-    if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');
     tabs.push('read-along');
     tabs.push('queue');
     return tabs;
@@ -294,25 +268,11 @@ export function FullscreenPlayer({
       if (element) {
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    } else if (parsedAlignment && !isLLMAlignment && extractedSections.length > 0) {
-      // Legacy alignment
-      const alignmentSections = parsedAlignment.sections;
-      let activeSectionIndex = -1;
-      for (let i = 0; i < alignmentSections.length; i++) {
-        if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
-          activeSectionIndex = i;
-          break;
-        }
-      }
-      if (activeSectionIndex >= 0) {
-        const element = document.getElementById(`section-${activeSectionIndex}`);
-        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
     } else if (activeWordIndex >= 0) {
       const element = document.getElementById(`word-${activeWordIndex}`);
       if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [activeWordIndex, activeElementIndex, isLLMAlignment, parsedAlignment, extractedSections, currentTime]);
+  }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime]);
 
   // Keep a ref to scrollToActive so the tab-switch effect can use the latest
   // version without re-firing on every currentTime tick
@@ -544,47 +504,6 @@ export function FullscreenPlayer({
     );
   };
 
-  // Legacy aligned read-along (Needleman-Wunsch, for old data)
-  const renderLegacyAlignedReadAlong = () => {
-    if (!parsedAlignment || !parsedAlignment.sections || extractedSections.length === 0) return null;
-    const alignmentSections = parsedAlignment.sections;
-
-    let activeSectionIndex = -1;
-    for (let i = 0; i < alignmentSections.length; i++) {
-      if (currentTime >= alignmentSections[i].startTime && currentTime < alignmentSections[i].endTime) {
-        activeSectionIndex = i;
-        break;
-      }
-    }
-
-    return (
-      <div className="aligned-read-along">
-        {alignmentSections.map((alignSection: any, index: number) => {
-          const isActive = index === activeSectionIndex;
-          const htmlContent = extractedSections[index] || `<p>${alignSection.text}</p>`;
-          return (
-            <div
-              key={index}
-              id={`section-${index}`}
-              className={`read-along-section ${isActive ? 'active' : ''}`}
-              style={{
-                backgroundColor: isActive ? 'rgba(96, 165, 250, 0.1)' : 'transparent',
-                borderLeft: isActive ? '3px solid #60a5fa' : '3px solid transparent',
-                paddingLeft: '1rem',
-                marginBottom: '1rem',
-                transition: 'all 0.3s ease',
-                cursor: 'pointer',
-              }}
-              onClick={() => onSeek(alignSection.startTime)}
-            >
-              <div dangerouslySetInnerHTML={{ __html: htmlContent }} style={{ color: isActive ? '#60a5fa' : undefined }} />
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
   const renderTabContent = () => {
     switch (activeTab) {
       case 'content':
@@ -644,7 +563,7 @@ export function FullscreenPlayer({
         return (
           <div className="tab-comments-display">
             <div className="comments-header">
-              <h3>Comments ({parsedComments.length})</h3>
+              <h3>Comments ({totalCommentCount})</h3>
               {onRefetch && (
                 <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
                   <RefreshCw size={16} />
@@ -665,6 +584,7 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along': {
+        const isPodcast = content.type === 'podcast_episode';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
         const isTranscribing = content.current_operation === 'transcribing';
         const isAligning = content.current_operation === 'aligning_content';
@@ -678,47 +598,124 @@ export function FullscreenPlayer({
           ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
           : fallbackText.split(/\s+/).filter(w => w.length > 0);
 
-        let readAlongMessage: string | null = null;
-        if (!hasAudio && isGenerating) {
-          readAlongMessage = 'Audio is being generated... The read-along will appear once audio generation and transcription are complete.';
-        } else if (!hasAudio) {
-          readAlongMessage = 'No audio has been generated yet. Generate audio first to use the read-along feature.';
-        } else if (isTranscribing) {
-          readAlongMessage = 'Transcript is being generated... This may take a minute.';
-        } else if (isAligning) {
-          readAlongMessage = 'Aligning content with audio... Almost done.';
-        } else if (!hasTranscript) {
-          readAlongMessage = 'No transcript available yet. The transcript is generated automatically after audio creation.';
+        // For articles/texts: if we have LLM alignment, use it (with read-along features).
+        // If not, show the raw content + comments (like the old Content tab) without timestamps.
+        // For podcasts: show transcript words or status messages.
+        if (isPodcast) {
+          // Podcast: show word-by-word transcript or status messages
+          let podcastMessage: string | null = null;
+          if (!hasAudio && isGenerating) {
+            podcastMessage = 'Audio is being generated...';
+          } else if (isTranscribing) {
+            podcastMessage = 'Transcript is being generated... This may take a minute.';
+          } else if (!hasTranscript) {
+            podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
+          }
+
+          return (
+            <div className="tab-read-along-display">
+              {podcastMessage ? (
+                <p className="no-content">{podcastMessage}</p>
+              ) : displayWords.length > 0 ? (
+                <p className="read-along-text">
+                  {displayWords.map((word, index) => {
+                    const isRead = index <= activeWordIndex;
+                    return (
+                      <span
+                        key={index}
+                        id={`word-${index}`}
+                        className={`transcript-word ${isRead ? 'read' : ''}`}
+                        style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
+                        onClick={() => onTranscriptWordClick(index)}
+                      >
+                        {word}{' '}
+                      </span>
+                    );
+                  })}
+                </p>
+              ) : (
+                <p className="no-content">No transcript available</p>
+              )}
+            </div>
+          );
         }
 
+        // Article/text: if LLM alignment exists, use the rich read-along view
+        if (isLLMAlignment) {
+          // Show generating/transcribing status above the content if applicable
+          const statusMsg = isGenerating ? 'Audio is being generated...'
+            : isTranscribing ? 'Transcribing...'
+            : isAligning ? 'Aligning content with audio...'
+            : null;
+          return (
+            <div className="tab-read-along-display">
+              {statusMsg && <p className="no-content" style={{ marginBottom: '1rem' }}>{statusMsg}</p>}
+              {renderLLMReadAlong()}
+            </div>
+          );
+        }
+
+        // Article/text WITHOUT alignment: show raw content + comments (no timestamps)
+        // This ensures articles are readable even before audio is generated.
         return (
           <div className="tab-read-along-display">
-            {readAlongMessage ? (
-              <p className="no-content">{readAlongMessage}</p>
-            ) : isLLMAlignment ? (
-              renderLLMReadAlong()
-            ) : parsedAlignment && extractedSections.length > 0 ? (
-              renderLegacyAlignedReadAlong()
-            ) : displayWords.length > 0 ? (
-              <p className="read-along-text">
-                {displayWords.map((word, index) => {
-                  const isRead = index <= activeWordIndex;
-                  return (
-                    <span
-                      key={index}
-                      id={`word-${index}`}
-                      className={`transcript-word ${isRead ? 'read' : ''}`}
-                      style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
-                      onClick={() => onTranscriptWordClick(index)}
-                    >
-                      {word}{' '}
-                    </span>
-                  );
-                })}
-              </p>
-            ) : (
-              <p className="no-content">No transcript available</p>
+            {isGenerating && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
             )}
+            {isTranscribing && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcribing... Read-along highlighting will appear once complete.</p>
+            )}
+            {isAligning && (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Aligning content with audio... Almost done.</p>
+            )}
+            <div className="tab-content-display">
+              <div className="content-header-with-button">
+                <div className="content-header">
+                  <h2>{content.title}</h2>
+                  {content.author && (
+                    <p className="content-author">
+                      By {content.author}
+                      {content.published_at && (
+                        <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
+                      )}
+                      {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
+                        <> {content.karma} karma</>
+                      )}
+                    </p>
+                  )}
+                  {content.type === 'article' && content.content_source && (
+                    <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                      Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+                    </p>
+                  )}
+                </div>
+                {content.type === 'article' && content.url && onRefetch && (
+                  <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
+                    <RefreshCw size={16} />
+                    <span className="refetch-text-full">Refetch from web</span>
+                    <span className="refetch-text-short">Refetch</span>
+                  </button>
+                )}
+              </div>
+              <div
+                className="article-content"
+                dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+              />
+              {/* Show comments if available */}
+              {parsedComments.length > 0 && (
+                <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+                  <div className="read-along-comments-divider" />
+                  <div className="comments-header">
+                    <h3>Comments ({totalCommentCount})</h3>
+                  </div>
+                  <div className="comments-list">
+                    {parsedComments.map((comment, index) => (
+                      <CommentComponent key={index} comment={comment} depth={0} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         );
       }
@@ -797,10 +794,10 @@ export function FullscreenPlayer({
             className={`tab-button ${activeTab === tab ? 'active' : ''}`}
             onClick={() => handleTabClick(tab)}
           >
-            {tab === 'content' && 'Content'}
+            {tab === 'content' && 'Original Content'}
             {tab === 'description' && 'Description'}
-            {tab === 'comments' && `Comments${parsedComments.length > 0 ? ` (${parsedComments.length})` : ''}`}
-            {tab === 'read-along' && 'Read-along'}
+            {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
+            {tab === 'read-along' && 'Content'}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}
@@ -811,7 +808,7 @@ export function FullscreenPlayer({
             title={autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
           >
             <ArrowDownToLine size={14} />
-            <span className="autoscroll-label">Auto-scroll</span>
+            Auto-scroll
           </button>
         )}
       </div>

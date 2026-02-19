@@ -118,6 +118,25 @@ Don't clutter TODO.md with:
 
 TODO.md is for **actionable tasks**, not documentation.
 
+## NEVER Use Fuzzy Matching or Algorithmic Alignment
+
+**ABSOLUTE RULE — NO EXCEPTIONS:**
+
+Do **NOT** propose, implement, or use any form of:
+- Fuzzy text matching (string similarity, Levenshtein distance, etc.)
+- Algorithmic sequence alignment (Needleman-Wunsch, Smith-Waterman, etc.)
+- Any algorithm that tries to match text between content elements and transcript
+
+This has been tried **multiple times** and **always fails**. The alignment between content elements and Whisper timestamps is done **exclusively by the LLM** (in `llm-alignment.ts`). The LLM understands context, meaning, and intent — algorithms don't.
+
+If there's a problem with read-along alignment, fix the **input data quality** instead:
+- Improve the Whisper prompt so Whisper transcribes more accurately
+- Improve the TTS script so headings/dates are spoken more clearly
+- Improve `buildTimedTranscript()` formatting so the LLM gets cleaner data
+- Keep the LLM alignment prompt as-is (GPT-5-Nano's reasoning about difficulties is valuable feedback)
+
+**Never** propose fuzzy matching again. If you're tempted to, re-read this section.
+
 ## Code Style
 - Backend: ES modules with .js extensions in imports
 - Frontend: Single CSS file (App.css), no CSS modules

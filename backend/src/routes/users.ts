@@ -35,7 +35,7 @@ const VALID_SETTING_KEYS = [
   // App preferences
   'theme',
   'playback_speed',
-  'narration_llm',           // 'auto', 'deepseek', 'openai' - which LLM prepares text for TTS
+  'narration_llm',           // 'auto', 'deepseek', 'openai', 'openai-mini' - which LLM prepares text for TTS
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
@@ -202,7 +202,7 @@ router.get('/ai-providers', async (_req, res) => {
     openai: {
       name: 'OpenAI (Hybrid)',
       models: {
-        chat: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
+        chat: ['gpt-5-nano', 'gpt-5-mini', 'gpt-4o-mini', 'gpt-4o'],
         // Added Kokoro to the list so it appears in dropdowns if the frontend uses this
         tts: ['gpt-4o-mini-tts', 'tts-1', 'hexgrad/Kokoro-82M'],
       },

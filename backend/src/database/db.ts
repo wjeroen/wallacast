@@ -220,7 +220,7 @@ export async function initializeDatabase() {
     // planner to choose slow sequential scans instead of fast index lookups.
     // ANALYZE is fast (reads a sample, not the whole table) and safe to run.
     // Wrapped in try/catch: missing tables should NOT crash initialization.
-    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'podcast_subscriptions', 'feed_items'];
+    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'feed_items'];
     for (const table of tablesToAnalyze) {
       try {
         await client.query(`ANALYZE ${table}`);
