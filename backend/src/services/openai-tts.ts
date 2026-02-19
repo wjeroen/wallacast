@@ -291,7 +291,7 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
       let replacementNode;
       if (description) {
           replacementNode = doc.createElement('p');
-          replacementNode.textContent = `An image shows ${description}. End of the image description.`;
+          replacementNode.textContent = `An image is displayed showing ${description}. End of the image description.`;
       } else {
           // If no description and no alt text, remove the image entirely
           // to prevent "An image is shown here" spam for decorative icons.
@@ -365,12 +365,12 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 
     // Diagnostic Logging (count images in INPUT)
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
-    const inputImageCount = (cleanHtml.match(/An image shows.*?\./gs) || []).length;
+    const inputImageCount = (cleanHtml.match(/An image is displayed showing.*?\./gs) || []).length;
     console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
 
     if (inputImageCount > 0) {
       // Log sample image narration from input
-      const sampleImage = cleanHtml.match(/An image shows.*?End of the image description\./s);
+      const sampleImage = cleanHtml.match(/An image is displayed showing.*?End of the image description\./s);
       if (sampleImage) {
         console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
       }
@@ -387,8 +387,8 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  DO NOT simplify the language.
 
  🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image shows [description]. End of the image description."
- 1. ALWAYS keep text that starts with "An image shows"
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."
+ 1. ALWAYS keep text that starts with "An image is displayed"
  2. ALWAYS keep text that ends with "End of the image description."
  3. These image descriptions are REQUIRED accessibility content
  4. If you see image descriptions, they MUST appear in your output VERBATIM
@@ -427,7 +427,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
     let scriptBody = response.choices[0]?.message?.content || '';
 
     // Validation and Retry
-    const outputImageCount = (scriptBody.match(/An image shows.*?End of the image description\./gs) || []).length;
+    const outputImageCount = (scriptBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
     console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
 
     // Detect if images were dropped
@@ -466,7 +466,7 @@ Failure to preserve image descriptions is a critical error.`;
       });
 
       const retryBody = retryResponse.choices[0]?.message?.content || '';
-      const retryImageCount = (retryBody.match(/An image shows.*?End of the image description\./gs) || []).length;
+      const retryImageCount = (retryBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
 
       if (retryImageCount > outputImageCount) {
         console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
@@ -740,7 +740,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       sourceContent = injectImageNarrations(sourceContent, imageAltTextData.descriptions, content.url || undefined);
 
       console.log('[TTS] Injected image narrations into HTML for audio script');
-      // sourceContent now has "An image shows..." text instead of <img> tags
+      // sourceContent now has "An image is displayed showing..." text instead of <img> tags
       // Original html_content in database remains unchanged
     } else if (imageAltTextEnabled === 'false') {
       console.log('[TTS] Image descriptions disabled by user, skipping injection');
@@ -763,7 +763,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     }
 
     // Log whether image narrations survived the scriptwriter
-    const imageNarrationCount = (articleBodyScript.match(/An image shows/g) || []).length;
+    const imageNarrationCount = (articleBodyScript.match(/An image is displayed showing/g) || []).length;
     if (imageAltTextData?.descriptions && Object.keys(imageAltTextData.descriptions).length > 0) {
       console.log(`[TTS] Script contains ${imageNarrationCount} image narration(s) (expected ${Object.keys(imageAltTextData.descriptions).length})`);
     }
