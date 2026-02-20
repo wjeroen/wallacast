@@ -49,6 +49,7 @@ interface ContentStore {
   filter: FilterType;
   loading: boolean;
   error: string | null;
+  allCount: number; // count of all non-archived items, survives filter changes
 
   // Actions
   setFilter: (filter: FilterType) => void;
@@ -74,6 +75,7 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   filter: 'all',
   loading: false,
   error: null,
+  allCount: 0,
 
   setFilter: (filter) => {
     set({ filter });
@@ -88,7 +90,12 @@ export const useContentStore = create<ContentStore>((set, get) => ({
     try {
       const params = filterToParams(currentFilter);
       const response = await contentAPI.getAll(params);
-      set({ items: response.data, loading: false });
+      // Keep allCount current whenever we have a fresh 'all' result
+      if (currentFilter === 'all') {
+        set({ items: response.data, loading: false, allCount: response.data.length });
+      } else {
+        set({ items: response.data, loading: false });
+      }
     } catch (error) {
       console.error('Failed to fetch content:', error);
       set({ error: 'Failed to fetch content', loading: false });
@@ -124,14 +131,22 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   },
 
   toggleArchived: async (id) => {
-    const { items, filter } = get();
+    const { items, filter, allCount } = get();
     const item = items.find(i => i.id === id);
     if (!item) return;
 
     const newArchivedState = !item.is_archived;
 
+    // Keep allCount in sync: archiving removes from "all", unarchiving adds back
+    const newAllCount = !item.is_archived && newArchivedState
+      ? Math.max(0, allCount - 1)   // archiving
+      : item.is_archived && !newArchivedState
+        ? allCount + 1              // unarchiving
+        : allCount;
+
     // Optimistic update: remove from current view (archived items leave 'all', unarchived leave 'archived')
     set({
+      allCount: newAllCount,
       items: items.map(i =>
         i.id === id ? { ...i, is_archived: newArchivedState } : i
       ).filter(i => itemMatchesFilter(i, filter))
@@ -156,12 +171,16 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   },
 
   deleteItem: async (id) => {
-    const { items } = get();
+    const { items, allCount } = get();
     const item = items.find(i => i.id === id);
     if (!item) return;
 
     // Optimistic update: remove immediately
-    set({ items: items.filter(i => i.id !== id) });
+    set({
+      items: items.filter(i => i.id !== id),
+      // Only decrement if it was a non-archived item (archived items aren't in the allCount)
+      allCount: !item.is_archived ? Math.max(0, allCount - 1) : allCount,
+    });
 
     try {
       await contentAPI.delete(id);
@@ -183,11 +202,14 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   },
 
   addItem: (item) => {
-    const { items, filter } = get();
+    const { items, filter, allCount } = get();
     // Add at the beginning (most recent)
     const newItems = [item, ...items];
     // Only show if it matches current filter
-    set({ items: newItems.filter(i => itemMatchesFilter(i, filter)) });
+    set({
+      items: newItems.filter(i => itemMatchesFilter(i, filter)),
+      allCount: allCount + 1, // new items are never archived
+    });
   },
 
   refreshItem: async (id) => {

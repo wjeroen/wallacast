@@ -42,6 +42,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     items: content,
     filter,
     loading,
+    allCount,
     setFilter,
     fetchContent,
     toggleStarred,
@@ -390,7 +391,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               className={filter === 'all' ? 'active' : ''}
               onClick={() => setFilter('all')}
             >
-              All
+              All ({allCount})
             </button>
             <button
               className={filter === 'articles' ? 'active' : ''}
