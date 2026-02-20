@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
 import contentRouter from './routes/content.js';
@@ -105,11 +106,11 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
       if (!upstreamRes.body) return res.end();
 
-      // Stream chunk by chunk — never buffer the full audio file in memory
-      const { Readable } = await import('stream');
-      const nodeStream = Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]);
-      nodeStream.pipe(res);
-      nodeStream.on('error', (err: Error) => {
+      // node-fetch body is a Node.js ReadableStream — pipe it directly to the
+      // Express response. Same pattern used by transcription.ts for podcast audio.
+      // Never buffers the full file: each chunk flows through as it arrives.
+      upstreamRes.body.pipe(res);
+      upstreamRes.body.on('error', (err: Error) => {
         console.error('[AudioProxy] Stream error:', err.message);
         if (!res.writableEnded) res.end();
       });
