@@ -156,6 +156,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix stuck pause icon when audio errors** (2026-02-20): Added `error` DOM event listener — CDN range-request failures fire `error` not `pause`, so icon got stuck; also fixed stale closure via `contentRef`
+- [x] **Podcast audio error logging** (2026-02-20): Railway logs now show `[PodcastDebug]` (URL on load) and `[AudioError]` (MediaError code, networkState, readyState) to diagnose which CDN pattern causes the 1-second stop
 - [x] **Fix play/pause icon mismatch** (2026-02-20): Added `play`/`pause` DOM event listeners so React `isPlaying` always mirrors actual audio element state — icon is now always correct even after external pauses
 - [x] **Fix headphone disconnect auto-resume** (2026-02-20): Added `userPausedRef` guard — when user explicitly pauses and then removes headphones, iOS-initiated `play` event is immediately cancelled so audio stays paused
 - [x] **Comments count in fullscreen player header** (2026-02-19): Added total comment count (including replies) to article header next to upvotes — now shows "Author • Date • N upvotes • N comments"
