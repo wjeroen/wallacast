@@ -156,6 +156,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix play/pause icon mismatch** (2026-02-20): Added `play`/`pause` DOM event listeners so React `isPlaying` always mirrors actual audio element state — icon is now always correct even after external pauses
+- [x] **Fix headphone disconnect auto-resume** (2026-02-20): Added `userPausedRef` guard — when user explicitly pauses and then removes headphones, iOS-initiated `play` event is immediately cancelled so audio stays paused
 - [x] **Comments count in fullscreen player header** (2026-02-19): Added total comment count (including replies) to article header next to upvotes — now shows "Author • Date • N upvotes • N comments"
 - [x] **"Narration generated on" provenance display** (2026-02-19): Added `audio_generated_at` and `content_fetched_at` DB columns; fullscreen player now shows "Fetched by X on DD/MM/YYYY • Narration generated on DD/MM/YYYY"
 - [x] **"Show newest fetch (not synced)" toggle** (2026-02-19): When article is refetched after audio generation, a link appears to toggle between newest html_content (not synced) and LLM alignment (synced with audio)
