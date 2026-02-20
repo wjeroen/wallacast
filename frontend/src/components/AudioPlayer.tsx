@@ -33,10 +33,18 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(isPlaying);
   const lastSavedPositionRef = useRef<number>(-1);
+  // Tracks whether the user explicitly paused. Used to block OS-initiated plays
+  // (e.g. iOS re-routing audio to speaker when Bluetooth headphones disconnect).
+  const userPausedRef = useRef(false);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  // Reset user-pause intent when switching to a new item
+  useEffect(() => {
+    userPausedRef.current = false;
+  }, [content?.id]);
 
   // Sync speed from backend on mount (for cross-device persistence)
   useEffect(() => {
@@ -144,17 +152,35 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     const handleLoadedMetadata = () => setDuration(audio.duration);
     const handleEnded = () => {
       setIsPlaying(false);
+      userPausedRef.current = false; // natural end — reset intent
       savePlaybackPosition(0);
+    };
+    // Sync React state with actual DOM audio state.
+    // Also blocks OS-initiated plays (e.g. iOS headphone disconnect) when the
+    // user had explicitly paused — we immediately call pause() to cancel it.
+    const handlePlay = () => {
+      if (userPausedRef.current) {
+        audio.pause(); // cancel the unwanted OS-initiated resume
+        return;
+      }
+      setIsPlaying(true);
+    };
+    const handlePause = () => {
+      setIsPlaying(false);
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
     };
   }, []);
 
@@ -205,21 +231,20 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
+      userPausedRef.current = true; // explicit user pause — block OS-initiated resumes
       savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
-      setIsPlaying(false);
+      // State update handled by the 'pause' DOM event listener
     } else {
+      userPausedRef.current = false; // explicit user play — allow plays again
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
-        playPromise
-          .then(() => setIsPlaying(true))
-          .catch((err) => {
-            console.error('[AudioPlayer] play() rejected:', err);
-            setIsPlaying(false);
-          });
-      } else {
-        setIsPlaying(true);
+        playPromise.catch((err) => {
+          console.error('[AudioPlayer] play() rejected:', err);
+          userPausedRef.current = true; // play failed, treat as paused
+        });
       }
+      // State update handled by the 'play' DOM event listener
     }
   };
 
