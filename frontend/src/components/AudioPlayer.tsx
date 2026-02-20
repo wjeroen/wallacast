@@ -117,15 +117,22 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      // Cache busting: only for our own generated audio (/api/content/:id/audio),
-      // NOT for external podcast episode URLs. External podcast CDNs can behave
-      // unexpectedly with unknown query parameters (range requests may fail,
-      // causing audio to stop after the first second on some shows).
-      let audioSrc = content.audio_url || '';
-      if (content.audio_url && content.type !== 'podcast_episode') {
+      // Podcast episodes are proxied through our own backend to avoid CORS issues
+      // with external CDNs (e.g. api.substack.com blocks browser range requests).
+      // The backend forwards Range headers byte-for-byte so only requested chunks
+      // are fetched from upstream — no full-file downloads.
+      // Articles/texts use their stored audio_url (already our /api endpoint) with
+      // a cache-buster to force the browser to re-fetch when audio is regenerated.
+      let audioSrc: string;
+      if (content.type === 'podcast_episode') {
+        const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
+        audioSrc = `${apiBase}/content/${content.id}/audio`;
+      } else if (content.audio_url) {
         const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
         const separator = content.audio_url.includes('?') ? '&' : '?';
         audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
+      } else {
+        audioSrc = '';
       }
       audio.src = audioSrc;
       
