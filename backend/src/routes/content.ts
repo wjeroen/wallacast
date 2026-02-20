@@ -49,11 +49,25 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Debug endpoint: receives audio errors from the frontend and logs them to Railway.
+// IMPORTANT: must be defined before '/:id' so Express doesn't treat 'audio-error-log' as an id.
+router.post('/audio-error-log', (req, res) => {
+  const { contentId, contentType, audioUrl, errorCode, errorMessage, networkState, readyState, showName } = req.body;
+  const errorNames: Record<number, string> = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+  console.log(
+    `[AudioError] type=${contentType} id=${contentId} show="${showName}" ` +
+    `code=${errorCode}(${errorNames[errorCode] ?? 'unknown'}) ` +
+    `networkState=${networkState} readyState=${readyState} ` +
+    `msg="${errorMessage}" url=${audioUrl}`
+  );
+  res.json({ ok: true });
+});
+
 // Get single content item (includes large columns needed for display)
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at FROM content_items WHERE id = $1 AND user_id = $2',
       [req.params.id, req.user!.userId]
     );
 
@@ -61,27 +75,93 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    res.json(result.rows[0]);
+    const item = result.rows[0];
+    // Log podcast episode URLs so we can diagnose CDN/streaming issues in Railway logs
+    if (item.type === 'podcast_episode' && item.audio_url) {
+      console.log(`[PodcastDebug] id=${item.id} show="${item.podcast_show_name}" url=${item.audio_url}`);
+    }
+    res.json(item);
   } catch (error) {
     console.error('Error fetching content item:', error);
     res.status(500).json({ error: 'Failed to fetch content item' });
   }
 });
 
-// Serve audio from database (PUBLIC - no auth required for HTML5 audio player compatibility)
+// Serve audio (PUBLIC - no auth required for HTML5 audio player compatibility)
+// For articles/texts: serves audio_data stored in the database with byte-range support.
+// For podcast episodes: proxies the external CDN URL, forwarding the browser's Range
+// header so only the requested bytes are fetched from upstream — never the whole file.
 router.get('/:id/audio', async (req, res) => {
   try {
     // Note: No user_id filter - audio URLs are public but content IDs are private
     const result = await query(
-      'SELECT audio_data FROM content_items WHERE id = $1',
+      'SELECT audio_data, audio_url, type FROM content_items WHERE id = $1',
       [req.params.id]
     );
 
-    if (result.rows.length === 0 || !result.rows[0].audio_data) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Audio not found' });
     }
 
-    const audioData = result.rows[0].audio_data;
+    const { audio_data: audioData, audio_url: audioUrl, type } = result.rows[0];
+
+    // -------------------------------------------------------------------------
+    // PATH A: podcast episode — proxy the external CDN URL
+    // Range requests are forwarded byte-for-byte so we only pull what the
+    // browser actually needs. This sidesteps CORS issues (e.g. api.substack.com
+    // blocking cross-origin range requests from the browser).
+    // -------------------------------------------------------------------------
+    if (!audioData && audioUrl && type === 'podcast_episode') {
+      const upstreamHeaders: Record<string, string> = {
+        // Identify as a normal browser so CDNs don't block the request
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      };
+      // Forward the browser's Range header so we only fetch what it needs
+      if (req.headers.range) {
+        upstreamHeaders['Range'] = req.headers.range;
+      }
+
+      console.log(`[AudioProxy] ${req.headers.range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
+
+      const upstreamRes = await fetch(audioUrl, { headers: upstreamHeaders });
+
+      if (!upstreamRes.ok && upstreamRes.status !== 206) {
+        console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
+        return res.status(502).json({ error: 'Upstream audio unavailable' });
+      }
+
+      res.status(upstreamRes.status);
+
+      // Forward the headers that matter for audio streaming/seeking
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+        const val = upstreamRes.headers.get(header);
+        if (val) res.setHeader(header, val);
+      }
+
+      if (!upstreamRes.body) {
+        return res.end();
+      }
+
+      // Stream chunk by chunk — Readable.fromWeb bridges the Web ReadableStream
+      // to a Node.js stream that can be piped to the Express response.
+      // This ensures we never buffer the full audio file in memory.
+      const { Readable } = await import('stream');
+      const nodeStream = Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]);
+      nodeStream.pipe(res);
+      nodeStream.on('error', (err) => {
+        console.error('[AudioProxy] Stream error:', err.message);
+        if (!res.writableEnded) res.end();
+      });
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // PATH B: article/text — serve audio_data stored in the database
+    // -------------------------------------------------------------------------
+    if (!audioData) {
+      return res.status(404).json({ error: 'Audio not found' });
+    }
+
     const fileSize = audioData.length;
 
     // Handle range requests for seeking/streaming
@@ -206,12 +286,14 @@ router.post('/', async (req, res) => {
     }
 
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
+    // Set content_fetched_at for articles fetched from a URL
+    const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId]
+      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
     );
 
     const createdItem = result.rows[0];
@@ -664,7 +746,8 @@ router.post('/:id/refetch', async (req, res) => {
             comments = $8,
             preview_picture = COALESCE($9, preview_picture),
             content_source = 'wallacast',
-            updated_at = NOW()
+            updated_at = NOW(),
+            content_fetched_at = NOW()
           WHERE id = $10`,
           [
             articleData.cleaned_html,

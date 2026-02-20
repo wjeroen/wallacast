@@ -93,6 +93,17 @@ export const contentAPI = {
 
   refetch: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/refetch`),
+
+  logAudioError: (data: {
+    contentId?: number;
+    contentType?: string;
+    audioUrl?: string;
+    errorCode?: number;
+    errorMessage?: string | null;
+    networkState?: number;
+    readyState?: number;
+    showName?: string | null;
+  }) => api.post('/content/audio-error-log', data),
 };
 
 export const podcastAPI = {

@@ -173,6 +173,19 @@ export function FullscreenPlayer({
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
+  // Toggle: show newest fetched html_content vs synced LLM alignment
+  const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
+
+  // Reset unsynced toggle when content changes
+  useEffect(() => {
+    setShowUnsyncedContent(false);
+  }, [content.id]);
+
+  // Show "newest fetch" toggle when article was refetched after audio was generated
+  const canShowUnsyncedToggle = useMemo(() => {
+    if (!content.audio_generated_at || !content.content_fetched_at) return false;
+    return new Date(content.content_fetched_at) > new Date(content.audio_generated_at);
+  }, [content.audio_generated_at, content.content_fetched_at]);
 
   // Persist autoscroll preference
   useEffect(() => {
@@ -399,28 +412,49 @@ export function FullscreenPlayer({
           {/* URL removed — already shown in fullscreen player header */}
           {content.type === 'article' && content.content_source && (
             <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px' }}>
-              Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+              Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
+              {content.audio_generated_at && content.audio_url && (
+                <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+              )}
+              {canShowUnsyncedToggle && (
+                <>
+                  <br />
+                  <button
+                    onClick={() => setShowUnsyncedContent(v => !v)}
+                    style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
+                  >
+                    {showUnsyncedContent ? 'Show synced (older fetch)' : 'Show newest fetch (not synced)'}
+                  </button>
+                </>
+              )}
             </p>
           )}
         </div>
 
         {/* Article body (same .article-content CSS as content tab) */}
-        <div className="article-content">
-          {bodyElements.map((el, i) => {
-            const globalIndex = elements.indexOf(el);
-            const isActive = globalIndex === activeElementIndex;
-            return (
-              <div
-                key={`body-${i}`}
-                id={`ra-el-${globalIndex}`}
-                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                onClick={() => onSeek(el.startTime)}
-              >
-                <div dangerouslySetInnerHTML={{ __html: el.html }} />
-              </div>
-            );
-          })}
-        </div>
+        {showUnsyncedContent ? (
+          <div
+            className="article-content"
+            dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+          />
+        ) : (
+          <div className="article-content">
+            {bodyElements.map((el, i) => {
+              const globalIndex = elements.indexOf(el);
+              const isActive = globalIndex === activeElementIndex;
+              return (
+                <div
+                  key={`body-${i}`}
+                  id={`ra-el-${globalIndex}`}
+                  className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(el.startTime)}
+                >
+                  <div dangerouslySetInnerHTML={{ __html: el.html }} />
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Comments section (same nesting as comments tab) */}
         {commentElements.length > 0 && (() => {
@@ -526,7 +560,10 @@ export function FullscreenPlayer({
                 {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+                    Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
+                    {content.audio_generated_at && content.audio_url && (
+                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+                    )}
                   </p>
                 )}
               </div>
@@ -685,7 +722,10 @@ export function FullscreenPlayer({
                   )}
                   {content.type === 'article' && content.content_source && (
                     <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
-                      Fetched by {content.content_source} on {content.updated_at ? new Date(content.updated_at).toLocaleDateString('en-GB') : 'unknown date'}
+                      Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
+                      {content.audio_generated_at && content.audio_url && (
+                        <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+                      )}
                     </p>
                   )}
                 </div>
@@ -763,6 +803,9 @@ export function FullscreenPlayer({
                 )}
                 {(content.karma !== undefined && content.karma !== null) && (
                   <> &bull; {content.karma} upvotes</>
+                )}
+                {totalCommentCount > 0 && (
+                  <> &bull; {totalCommentCount} comment{totalCommentCount !== 1 ? 's' : ''}</>
                 )}
               </p>
             )}
