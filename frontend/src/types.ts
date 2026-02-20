@@ -47,6 +47,8 @@ export interface ContentItem {
   current_operation?: 'initialization' | 'content_extraction' | 'audio_generation' | 'concatenating_audio' | 'audio' | 'transcript' | string;
   created_at: string;
   updated_at: string;
+  content_fetched_at?: string; // When the article was last fetched/refetched from the web
+  audio_generated_at?: string; // When TTS narration was last generated
 }
 
 export interface Podcast {

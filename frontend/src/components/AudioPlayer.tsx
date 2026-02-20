@@ -33,10 +33,32 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(isPlaying);
   const lastSavedPositionRef = useRef<number>(-1);
+  // Tracks whether the user explicitly paused via the app UI. Used to block
+  // OS-initiated plays (e.g. iOS re-routing audio to speaker on disconnect).
+  const userPausedRef = useRef(false);
+  // Timestamp of the last pause event — used to debounce rogue play events
+  // from Sony headphone wear sensors (PAUSE→PLAY flicker on removal, ~100ms).
+  // Intentional hardware play (smartwatch tap, headphone button) takes >1s.
+  const lastPauseTimeRef = useRef<number>(0);
+  // Set to true right before an app-initiated play() call so handlePlay can
+  // distinguish it from hardware/OS-initiated plays (which need debouncing).
+  const appPlayRef = useRef(false);
+  // Mirrors the current content prop so permanent event handlers (with [] deps)
+  // always see the up-to-date item without needing to be re-registered.
+  const contentRef = useRef(content);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+
+  // Reset user-pause intent when switching to a new item
+  useEffect(() => {
+    userPausedRef.current = false;
+  }, [content?.id]);
 
   // Sync speed from backend on mount (for cross-device persistence)
   useEffect(() => {
@@ -102,12 +124,24 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       const audio = audioRef.current;
       const startPosition = content.playback_position || 0;
 
-      // Cache busting: use file_size+duration so it only changes when audio is
-      // actually regenerated, not on every star/archive/update (which was causing
-      // full audio re-downloads and wasting massive bandwidth)
-      const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
-      const separator = content.audio_url?.includes('?') ? '&' : '?';
-      audio.src = content.audio_url ? `${content.audio_url}${separator}v=${cacheBuster}` : '';
+      // Podcast episodes are proxied through our own backend to avoid CORS issues
+      // with external CDNs (e.g. api.substack.com blocks browser range requests).
+      // The backend forwards Range headers byte-for-byte so only requested chunks
+      // are fetched from upstream — no full-file downloads.
+      // Articles/texts use their stored audio_url (already our /api endpoint) with
+      // a cache-buster to force the browser to re-fetch when audio is regenerated.
+      let audioSrc: string;
+      if (content.type === 'podcast_episode') {
+        const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
+        audioSrc = `${apiBase}/content/${content.id}/audio`;
+      } else if (content.audio_url) {
+        const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
+        const separator = content.audio_url.includes('?') ? '&' : '?';
+        audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
+      } else {
+        audioSrc = '';
+      }
+      audio.src = audioSrc;
       
       // Use global speed from localStorage (instant, no API call needed)
       const storedSpeed = getStoredSpeed();
@@ -139,17 +173,77 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
     const handleLoadedMetadata = () => setDuration(audio.duration);
     const handleEnded = () => {
       setIsPlaying(false);
+      userPausedRef.current = false; // natural end — reset intent
       savePlaybackPosition(0);
+    };
+    // Sync React state with actual DOM audio state.
+    // Three guards run in order to decide whether to accept an incoming play:
+    //  1. appPlayRef — app-initiated plays (togglePlay) always pass immediately.
+    //  2. userPausedRef — explicit UI pause blocks OS-initiated resumes.
+    //  3. Debounce — blocks rogue play events that arrive within 800ms of a
+    //     pause (Sony headphone wear-sensor flicker on removal: PAUSE→PLAY
+    //     in ~100ms). Intentional hardware plays (smartwatch, headphone
+    //     button) take >1s and pass through.
+    const handlePlay = () => {
+      // App-initiated play (from togglePlay) — always allow immediately
+      if (appPlayRef.current) {
+        appPlayRef.current = false;
+        setIsPlaying(true);
+        return;
+      }
+      // Explicit user pause via app UI — block OS-initiated resumes
+      if (userPausedRef.current) {
+        audio.pause();
+        return;
+      }
+      // Debounce: block rogue play events that arrive shortly after a pause.
+      const timeSincePause = Date.now() - lastPauseTimeRef.current;
+      if (lastPauseTimeRef.current > 0 && timeSincePause < 800) {
+        console.log(`[AudioPlayer] Blocked rogue play ${timeSincePause}ms after pause`);
+        audio.pause();
+        return;
+      }
+      setIsPlaying(true);
+    };
+    const handlePause = () => {
+      lastPauseTimeRef.current = Date.now();
+      setIsPlaying(false);
+    };
+    // Audio load/playback error — reset icon and report to backend for Railway logging.
+    // We listen for 'error' because when a podcast stream fails (e.g. range request
+    // rejected by CDN), the browser fires 'error', NOT 'pause'. Without this handler
+    // the icon gets stuck showing "pause" even though nothing is playing.
+    const handleError = () => {
+      setIsPlaying(false);
+      userPausedRef.current = true; // treat as paused so nothing auto-resumes
+      const c = contentRef.current;
+      // Fire-and-forget: log to backend so the error appears in Railway logs
+      contentAPI.logAudioError({
+        contentId: c?.id,
+        contentType: c?.type,
+        audioUrl: audio.src,
+        errorCode: audio.error?.code,
+        errorMessage: audio.error?.message,
+        networkState: audio.networkState,
+        readyState: audio.readyState,
+        showName: c?.podcast_show_name,
+      }).catch(() => {});
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('error', handleError);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('error', handleError);
     };
   }, []);
 
@@ -200,12 +294,23 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
+      userPausedRef.current = true; // explicit user pause — block OS-initiated resumes
       savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
+      // State update handled by the 'pause' DOM event listener
     } else {
-      audioRef.current.play();
+      userPausedRef.current = false; // explicit user play — allow plays again
+      appPlayRef.current = true;     // mark as app-initiated so handlePlay skips debounce
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.error('[AudioPlayer] play() rejected:', err);
+          appPlayRef.current = false;
+          userPausedRef.current = true; // play failed, treat as paused
+        });
+      }
+      // State update handled by the 'play' DOM event listener
     }
-    setIsPlaying(!isPlaying);
   };
 
   const handleSeek = (time: number) => {

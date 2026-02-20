@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fetch from 'node-fetch';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
 import contentRouter from './routes/content.js';
@@ -59,12 +60,74 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
   try {
     const range = req.headers.range;
 
+    // Step 0: Cheap metadata check — type + audio_url only, no blob access.
+    // Podcast episodes have an external audio_url and no audio_data in the DB,
+    // so they need to be proxied. Articles/texts have audio_data and go through
+    // the optimised DB path below.
+    const metaResult = await query(
+      'SELECT type, audio_url FROM content_items WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (metaResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Audio not found' });
+    }
+
+    const { type, audio_url: audioUrl } = metaResult.rows[0];
+
+    // -------------------------------------------------------------------------
+    // PATH A: podcast episode — proxy external CDN URL through our server.
+    // This sidesteps CORS issues (e.g. api.substack.com blocks cross-origin
+    // range requests from the browser). We forward the Range header so only
+    // the requested bytes are fetched upstream — never the full file.
+    // -------------------------------------------------------------------------
+    if (type === 'podcast_episode' && audioUrl) {
+      const upstreamHeaders: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      };
+      if (range) {
+        upstreamHeaders['Range'] = range;
+      }
+
+      console.log(`[AudioProxy] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
+
+      const upstreamRes = await fetch(audioUrl, { headers: upstreamHeaders });
+
+      if (!upstreamRes.ok && upstreamRes.status !== 206) {
+        console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
+        return res.status(502).json({ error: 'Upstream audio unavailable' });
+      }
+
+      res.status(upstreamRes.status);
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+        const val = upstreamRes.headers.get(header);
+        if (val) res.setHeader(header, val);
+      }
+
+      if (!upstreamRes.body) return res.end();
+
+      // node-fetch body is a Node.js ReadableStream — pipe it directly to the
+      // Express response. Same pattern used by transcription.ts for podcast audio.
+      // Never buffers the full file: each chunk flows through as it arrives.
+      upstreamRes.body.pipe(res);
+      upstreamRes.body.on('error', (err: Error) => {
+        console.error('[AudioProxy] Stream error:', err.message);
+        if (!res.writableEnded) res.end();
+      });
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // PATH B: article/text — serve audio_data from the database.
+    // Uses PostgreSQL substring() for range requests so only the needed bytes
+    // are read from the TOAST store (no full-blob loads = fast seeking).
+    // -------------------------------------------------------------------------
     if (range) {
       // RANGE REQUEST: Use PostgreSQL substring() to read only the needed bytes
       // instead of loading the entire blob (which could be 50-100MB for long audio).
       // This makes seeking near-instant instead of 4-5 seconds.
 
-      // Step 1: Get file size without reading the blob (fast - no TOAST access)
+      // Get file size without reading the blob (fast - no TOAST access)
       const sizeResult = await query(
         'SELECT COALESCE(file_size, length(audio_data)) as total_size FROM content_items WHERE id = $1 AND audio_data IS NOT NULL',
         [req.params.id]
@@ -85,7 +148,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         : Math.min(start + maxChunk - 1, fileSize - 1);
       const chunkSize = end - start + 1;
 
-      // Step 2: Read only the needed bytes (PostgreSQL substring is 1-based)
+      // Read only the needed bytes (PostgreSQL substring is 1-based)
       const chunkResult = await query(
         'SELECT substring(audio_data FROM $2 FOR $3) as chunk FROM content_items WHERE id = $1',
         [req.params.id, start + 1, chunkSize]

@@ -156,6 +156,15 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Proxy podcast audio through backend** (2026-02-20): Substack (and other CDNs) block cross-origin range requests from the browser. Podcast episodes now stream through `/api/content/:id/audio` — backend forwards the `Range` header byte-for-byte so only requested chunks are fetched from upstream, never the full file
+- [x] **Fix stuck pause icon when audio errors** (2026-02-20): Added `error` DOM event listener — CDN range-request failures fire `error` not `pause`, so icon got stuck; also fixed stale closure via `contentRef`
+- [x] **Podcast audio error logging** (2026-02-20): Railway logs now show `[PodcastDebug]` (URL on load) and `[AudioError]` (MediaError code, networkState, readyState) to diagnose which CDN pattern causes the 1-second stop
+- [x] **Fix play/pause icon mismatch** (2026-02-20): Added `play`/`pause` DOM event listeners so React `isPlaying` always mirrors actual audio element state — icon is now always correct even after external pauses
+- [x] **Fix headphone disconnect auto-resume** (2026-02-20): Added `userPausedRef` guard — when user explicitly pauses and then removes headphones, iOS-initiated `play` event is immediately cancelled so audio stays paused
+- [x] **Comments count in fullscreen player header** (2026-02-19): Added total comment count (including replies) to article header next to upvotes — now shows "Author • Date • N upvotes • N comments"
+- [x] **"Narration generated on" provenance display** (2026-02-19): Added `audio_generated_at` and `content_fetched_at` DB columns; fullscreen player now shows "Fetched by X on DD/MM/YYYY • Narration generated on DD/MM/YYYY"
+- [x] **"Show newest fetch (not synced)" toggle** (2026-02-19): When article is refetched after audio generation, a link appears to toggle between newest html_content (not synced) and LLM alignment (synced with audio)
+- [x] **Fix podcast audio only playing first second** (2026-02-19): Removed cache-buster query parameter from external podcast episode URLs — only applies it to our own /api/content/:id/audio endpoint now. Also fixed play() promise rejection handling.
 - [x] **Switched narration/alignment LLM from GPT-4o-mini to GPT-5-Nano** (2026-02-17):
   - Model change in `ai-providers.ts` — default OpenAI model now `gpt-5-nano` instead of `gpt-4o-mini`
   - GPT-5-Nano provides detailed reasoning about alignment difficulties (e.g., explains when headings/dates aren't clean standalone lines in Whisper transcript)
