@@ -33,9 +33,16 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isPlayingRef = useRef(isPlaying);
   const lastSavedPositionRef = useRef<number>(-1);
-  // Tracks whether the user explicitly paused. Used to block OS-initiated plays
-  // (e.g. iOS re-routing audio to speaker when Bluetooth headphones disconnect).
+  // Tracks whether the user explicitly paused via the app UI. Used to block
+  // OS-initiated plays (e.g. iOS re-routing audio to speaker on disconnect).
   const userPausedRef = useRef(false);
+  // Timestamp of the last pause event — used to debounce rogue play events
+  // from Sony headphone wear sensors (PAUSE→PLAY flicker on removal, ~100ms).
+  // Intentional hardware play (smartwatch tap, headphone button) takes >1s.
+  const lastPauseTimeRef = useRef<number>(0);
+  // Set to true right before an app-initiated play() call so handlePlay can
+  // distinguish it from hardware/OS-initiated plays (which need debouncing).
+  const appPlayRef = useRef(false);
   // Mirrors the current content prop so permanent event handlers (with [] deps)
   // always see the up-to-date item without needing to be re-registered.
   const contentRef = useRef(content);
@@ -170,16 +177,36 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       savePlaybackPosition(0);
     };
     // Sync React state with actual DOM audio state.
-    // Also blocks OS-initiated plays (e.g. iOS headphone disconnect) when the
-    // user had explicitly paused — we immediately call pause() to cancel it.
+    // Three guards run in order to decide whether to accept an incoming play:
+    //  1. appPlayRef — app-initiated plays (togglePlay) always pass immediately.
+    //  2. userPausedRef — explicit UI pause blocks OS-initiated resumes.
+    //  3. Debounce — blocks rogue play events that arrive within 800ms of a
+    //     pause (Sony headphone wear-sensor flicker on removal: PAUSE→PLAY
+    //     in ~100ms). Intentional hardware plays (smartwatch, headphone
+    //     button) take >1s and pass through.
     const handlePlay = () => {
+      // App-initiated play (from togglePlay) — always allow immediately
+      if (appPlayRef.current) {
+        appPlayRef.current = false;
+        setIsPlaying(true);
+        return;
+      }
+      // Explicit user pause via app UI — block OS-initiated resumes
       if (userPausedRef.current) {
-        audio.pause(); // cancel the unwanted OS-initiated resume
+        audio.pause();
+        return;
+      }
+      // Debounce: block rogue play events that arrive shortly after a pause.
+      const timeSincePause = Date.now() - lastPauseTimeRef.current;
+      if (lastPauseTimeRef.current > 0 && timeSincePause < 800) {
+        console.log(`[AudioPlayer] Blocked rogue play ${timeSincePause}ms after pause`);
+        audio.pause();
         return;
       }
       setIsPlaying(true);
     };
     const handlePause = () => {
+      lastPauseTimeRef.current = Date.now();
       setIsPlaying(false);
     };
     // Audio load/playback error — reset icon and report to backend for Railway logging.
@@ -273,10 +300,12 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
       // State update handled by the 'pause' DOM event listener
     } else {
       userPausedRef.current = false; // explicit user play — allow plays again
+      appPlayRef.current = true;     // mark as app-initiated so handlePlay skips debounce
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
         playPromise.catch((err) => {
           console.error('[AudioPlayer] play() rejected:', err);
+          appPlayRef.current = false;
           userPausedRef.current = true; // play failed, treat as paused
         });
       }
