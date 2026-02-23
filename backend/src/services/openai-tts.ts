@@ -880,8 +880,8 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
             [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
           );
 
-          // Run LLM alignment if html_content is available (articles/texts only)
-          if (content.html_content) {
+          // Run LLM alignment for articles and text items
+          if (content.html_content || content.type === 'text') {
             console.log('[TTS] Running LLM-based content alignment...');
             try {
               const alignment = await generateLLMAlignment(

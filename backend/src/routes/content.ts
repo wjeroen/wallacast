@@ -228,6 +228,11 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
+    // For text items, store content in html_content too so read-along works (same as articles)
+    if (type === 'text' && processedContent) {
+      htmlContent = processedContent;
+    }
+
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       const articleData = await fetchArticleContent(url);
@@ -512,10 +517,10 @@ router.patch('/:id', async (req, res) => {
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
               
-              // Run LLM alignment if html_content is available (articles/texts only, not podcasts)
+              // Run LLM alignment for articles and text items (not podcasts)
               if (type === 'article' || type === 'text') {
                 const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
-                if (contentResult.rows.length > 0 && contentResult.rows[0].html_content) {
+                if (contentResult.rows.length > 0 && (contentResult.rows[0].html_content || type === 'text')) {
                   console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
                   await query(
                     'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',

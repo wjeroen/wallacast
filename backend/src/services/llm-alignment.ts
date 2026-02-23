@@ -405,9 +405,9 @@ export async function generateLLMAlignment(
 ): Promise<LLMAlignmentResult> {
   console.log('[LLM-Align] Starting LLM-based content alignment...');
 
-  // Get content from DB
+  // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
-    'SELECT title, author, published_at, karma, url, html_content, comments, image_alt_text_data FROM content_items WHERE id = $1',
+    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, image_alt_text_data FROM content_items WHERE id = $1',
     [contentId]
   );
 
@@ -423,9 +423,12 @@ export async function generateLLMAlignment(
   const imageAltTextEnabled = await getUserSetting(userId, 'image_alt_text_enabled');
   const imageAltTextData = imageAltTextEnabled !== 'false' ? content.image_alt_text_data : null;
 
+  // For text items, html_content may be null if created before the fix — fall back to content column
+  const htmlForAlignment = content.html_content || (content.type === 'text' ? (content.content || '') : '');
+
   // Extract content elements from HTML
   const contentElements = extractContentElements(
-    content.html_content || '',
+    htmlForAlignment,
     content.title,
     content.author,
     content.published_at,
