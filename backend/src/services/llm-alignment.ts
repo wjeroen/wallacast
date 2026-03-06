@@ -184,6 +184,21 @@ function extractContentElements(
     return true;
   });
 
+  // Fallback: if no block elements found (e.g., plain text with no HTML tags),
+  // wrap the entire body text content as a single paragraph element.
+  // This ensures there's always at least one body element for alignment.
+  if (topLevelBlocks.length === 0) {
+    const bodyText = (doc.body.textContent || '').trim();
+    if (bodyText) {
+      elements.push({
+        type: 'paragraph',
+        html: `<p>${doc.body.innerHTML}</p>`,
+        text: bodyText,
+      });
+    }
+    return elements;
+  }
+
   for (const el of topLevelBlocks) {
     const tagName = el.tagName.toLowerCase();
     const text = (el.textContent || '').trim();
@@ -243,7 +258,26 @@ function extractContentElements(
     }
   }
 
-  return elements;
+  // Merge undescribed images into previous element.
+  // When an image has no description (text === '[Image]'), it won't be spoken
+  // in the audio, so it shouldn't be a separate alignment element. Merging its
+  // HTML into the previous element means it still renders visually but shares
+  // the highlight with the content being spoken.
+  const mergedElements: ContentElement[] = [];
+  for (const el of elements) {
+    if (
+      el.type === 'image' &&
+      el.text === '[Image]' &&
+      mergedElements.length > 0
+    ) {
+      const prev = mergedElements[mergedElements.length - 1];
+      prev.html = prev.html + '\n' + el.html;
+    } else {
+      mergedElements.push(el);
+    }
+  }
+
+  return mergedElements;
 }
 
 /**
