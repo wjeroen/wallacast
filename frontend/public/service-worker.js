@@ -1,31 +1,30 @@
 // Service Worker for Wallacast PWA
+// CACHE_NAME is replaced at build time by the Vite plugin in vite.config.ts
 const CACHE_NAME = 'wallacast-v1';
-const STATIC_CACHE_URLS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon-16x16.png',
-  '/favicon-32x32.png',
-  '/icon-192.png',
-  '/icon-512.png'
-];
 
-// Install event - cache static assets
+// Install: pre-cache only immutable static assets (not index.html)
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(STATIC_CACHE_URLS);
+        return cache.addAll([
+          '/manifest.json',
+          '/favicon-16x16.png',
+          '/favicon-32x32.png',
+          '/icon-192.png',
+          '/icon-512.png'
+        ]);
       })
       .catch((error) => {
         console.error('Cache installation failed:', error);
       })
   );
-  self.skipWaiting();
+  // Do NOT call skipWaiting() - let the new service worker wait until
+  // all tabs using the old one are closed before taking over.
+  // This prevents serving a mix of old and new files.
 });
 
-// Activate event - clean up old caches
+// Activate: clean up old caches, then take control of open pages
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
@@ -42,76 +41,85 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch event - implement caching strategy
+// Fetch: apply the right caching strategy per request type
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET requests
+  // Skip non-GET requests entirely
   if (request.method !== 'GET') {
     return;
   }
 
-  // Network-first strategy for API calls
+  // API calls: pass straight through to the network, never cache.
+  // Caching API responses risks serving stale auth data or stale content.
   if (url.pathname.startsWith('/api/')) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // Navigation requests (HTML pages / SPA routes): network-first.
+  // index.html is NOT content-hashed, so we must always fetch the latest
+  // version from the network. A stale index.html points to old JS/CSS
+  // bundles, which is what caused the "old version after logout" bug.
+  // Fall back to cached index.html only when fully offline.
+  if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          // Clone the response because it can only be consumed once
-          const responseToCache = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, responseToCache);
-          });
+          if (response && response.status === 200) {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, responseToCache);
+            });
+          }
           return response;
         })
         .catch(() => {
-          // If network fails, try cache
-          return caches.match(request);
+          // Offline fallback only
+          return caches.match('/index.html');
         })
     );
     return;
   }
 
-  // Cache-first strategy for static assets
-  event.respondWith(
-    caches.match(request)
-      .then((cachedResponse) => {
+  // Hashed assets (/assets/index-Abc123.js, /assets/index-Xyz.css):
+  // cache-first. Vite content-hashes these filenames, so a cached copy
+  // is always correct. If the hash changes, it's a new URL — new cache entry.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
         if (cachedResponse) {
-          // Return cached version and update cache in background
-          fetch(request).then((response) => {
-            if (response && response.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(request, response);
-              });
-            }
-          }).catch(() => {
-            // Ignore fetch errors in background
-          });
           return cachedResponse;
         }
-
-        // If not in cache, fetch from network
-        return fetch(request)
-          .then((response) => {
-            // Don't cache non-successful responses
-            if (!response || response.status !== 200 || response.type === 'error') {
-              return response;
-            }
-
-            // Clone the response
+        return fetch(request).then((response) => {
+          if (response && response.status === 200) {
             const responseToCache = response.clone();
-
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseToCache);
             });
+          }
+          return response;
+        });
+      })
+    );
+    return;
+  }
 
-            return response;
-          })
-          .catch((error) => {
-            console.error('Fetch failed:', error);
-            // Return a custom offline page if available
-            return caches.match('/index.html');
+  // Other static assets (icons, manifest): network-first with cache fallback.
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(request, responseToCache);
           });
+        }
+        return response;
+      })
+      .catch(() => {
+        return caches.match(request);
       })
   );
 });
