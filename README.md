@@ -4,10 +4,13 @@ A personal read-it-later and podcast app that converts articles to audio (TTS) a
 
 ## Core Concept
 
-- **Articles → Audio**: Add article URLs, they're extracted and converted to speech via OpenAI TTS
-- **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via OpenAI Whisper
+- **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
+- **HTML Upload → Audio**: Upload `.html`/`.htm` files directly — treated exactly like articles
+- **Texts → Audio**: Paste plain text or HTML — converted to audio with read-along alignment
+- **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
+- **Read-Along**: Every audio item gets a synced read-along view with per-paragraph highlighting and auto-scroll
 
 ## Tech Stack
 
@@ -59,11 +62,14 @@ Wallacast supports multiple users with complete data isolation:
 | Content-transcript alignment (legacy) | `backend/src/services/content-alignment.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
-| Audio player | `frontend/src/components/AudioPlayer.tsx` |
+| Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
+| Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
+| Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
 | Settings UI | `frontend/src/components/SettingsPage.tsx` |
+| All CSS styles | `frontend/src/App.css` |
 | Database schema | `backend/src/database/schema.sql` |
 | All types | `frontend/src/types.ts` |
 
@@ -79,6 +85,9 @@ Wallacast supports multiple users with complete data isolation:
 | Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 133-147. Note: saves are debounced (3s minimum change) and effects depend on `content?.id` not `content` |
 | Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
 | Read-along not working for text items | `backend/src/services/openai-tts.ts` (alignment gate), `backend/src/services/llm-alignment.ts` (content fallback), `backend/src/routes/content.ts` (html_content population) |
+| Read-along alignment wrong / missing elements | `backend/src/services/llm-alignment.ts` - check `extractContentElements()` for element extraction, `buildTimedTranscript()` for transcript quality. **Never use fuzzy matching** — fix input data quality instead (see CLAUDE.md) |
+| Read-along autoscroll jumpy or skipping | `frontend/src/components/FullscreenPlayer.tsx` - `scrollToActive()` callback. Short elements use `scrollIntoView`, tall elements use progressive scroll based on audio progress |
+| Tweet embeds show giant profile picture | `frontend/src/App.css` - `.article-content blockquote.twitter-tweet img` rule (should be 24x24, not 100% width) |
 | Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
 | Wallabag sync not working | `backend/src/services/wallabag-service.ts` - OAuth and API client, `backend/src/services/wallabag-sync.ts` - Sync logic, `backend/src/routes/wallabag.ts` - Endpoints |
 | Cost / API usage too high | Check: (1) `backend/src/services/openai-tts.ts` for LLM content extraction, (2) Auto-generation in `backend/src/routes/content.ts` POST endpoint |
@@ -346,15 +355,16 @@ Wallacast supports multiple users with complete data isolation:
   - Test connection buttons for validating credentials
   - Sync controls (pull, push, full sync) with status indicators
 
-- **`components/AudioPlayer.tsx`**: Full audio player with:
-  - Play/pause, seek, skip ±15s
-  - Speed control (1x, 1.25x, 1.5x, 1.75x, 2x)
-  - Sleep timer
-  - Volume control
-  - Transcript display with word-click-to-seek (for podcasts with timestamps)
-  - Comments section display (for EA Forum articles)
-  - Playback position persistence: Auto-saves every 10s during playback, on pause, and on component unmount
-  - **Refetch button**: The "Refetch from web" button in the Content and Comments tabs refetches BOTH content AND comments together from the original URL (calls `POST /api/content/:id/refetch`). This is useful when article content or comments have been updated.
+- **`components/AudioPlayer.tsx`**: Manages audio playback state (HTMLAudioElement, position saving, speed, sleep timer). Renders either the compact MiniPlayer (above the bottom tab bar) or the FullscreenPlayer overlay. Handles the iOS headphone-disconnect guard, play/pause icon sync, and podcast audio proxying through the backend.
+
+- **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
+  - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
+  - **Description tab** (podcasts only): Podcast episode description with HTML formatting
+  - **Queue tab**: Placeholder (work in progress)
+  - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
+  - Clickable elements seek the audio to that timestamp
+  - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
+  - "Newest fetch" toggle when article was refetched after audio generation (content and audio are out of sync)
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
