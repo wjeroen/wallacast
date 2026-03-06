@@ -335,7 +335,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, podcast feeds, plain text, and file uploads (placeholder). Adds created content directly to store.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads (reads file with FileReader, sends as text content), and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content — the read-along/alignment system handles them identically to regular articles.
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - Organized into: API Keys, Audio Generation, Wallabag Sync
