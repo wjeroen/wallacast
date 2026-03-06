@@ -401,7 +401,8 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap significant quotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
+ * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote." 
+ * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
