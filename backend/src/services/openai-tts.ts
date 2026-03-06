@@ -387,13 +387,14 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  DO NOT simplify the language.
 
  🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."*
  1. ALWAYS keep text that starts with "An image is displayed"
- 2. ALWAYS keep text that ends with "End of the image description."
+ 2. ALWAYS keep text that ends with "End of the image description."*
  3. These image descriptions are REQUIRED accessibility content
  4. If you see image descriptions, they MUST appear in your output VERBATIM
  5. Image descriptions are NOT extraneous - they are essential
  6. PRESERVE THE EXACT WORDING - do not paraphrase or summarize them
+ *EXCEPTION: If the image description is announced but no actual description is present, just say "An image is displayed but the description is missing." without announcing the end.
 
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
