@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Newspaper, NotebookPen, FileText, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
-type ContentType = 'article' | 'text' | 'pdf' | 'podcast_episode';
+type ContentType = 'article' | 'text' | 'html_upload' | 'podcast_episode';
 
 interface AddTabProps {
   onContentAdded: (item: ContentItem) => void;
@@ -16,6 +16,16 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [uploadedHtml, setUploadedHtml] = useState<string>('');
+  const [uploadedFileName, setUploadedFileName] = useState<string>('');
+
+  // Clear upload state when switching away from html_upload tab
+  useEffect(() => {
+    if (contentType !== 'html_upload') {
+      setUploadedHtml('');
+      setUploadedFileName('');
+    }
+  }, [contentType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,6 +51,15 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         data.url = url;
       } else if (contentType === 'text') {
         data.content = text;
+      } else if (contentType === 'html_upload') {
+        if (!uploadedHtml || !title) {
+          setMessage('Please select an HTML file and enter a title');
+          setLoading(false);
+          return;
+        }
+        data.type = 'text';
+        data.title = title;
+        data.content = uploadedHtml;
       }
 
       const response = await contentAPI.create(data);
@@ -52,6 +71,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setUrl('');
       setTitle('');
       setText('');
+      setUploadedHtml('');
+      setUploadedFileName('');
     } catch (error) {
       console.error('Failed to save content:', error);
       setMessage('Failed to save content. Please try again.');
@@ -80,11 +101,11 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           <span>Text</span>
         </button>
         <button
-          className={contentType === 'pdf' ? 'active' : ''}
-          onClick={() => setContentType('pdf')}
+          className={contentType === 'html_upload' ? 'active' : ''}
+          onClick={() => setContentType('html_upload')}
         >
           <FileText size={20} />
-          <span>PDF</span>
+          <span>HTML</span>
         </button>
         <button
           className={contentType === 'podcast_episode' ? 'active' : ''}
@@ -149,27 +170,41 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           </>
         )}
 
-        {contentType === 'pdf' && (
+        {contentType === 'html_upload' && (
           <>
             <div className="form-group">
-              <label htmlFor="url">PDF URL</label>
+              <label>HTML File</label>
               <input
-                id="url"
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com/document.pdf"
-                required
+                type="file"
+                accept=".html,.htm"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setUploadedFileName(file.name);
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                      setUploadedHtml(event.target?.result as string || '');
+                    };
+                    reader.readAsText(file);
+                    if (!title) {
+                      setTitle(file.name.replace(/\.(html|htm)$/i, ''));
+                    }
+                  }
+                }}
               />
+              {uploadedFileName && (
+                <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
+                  Selected: {uploadedFileName}
+                </p>
+              )}
             </div>
             <div className="form-group">
-              <label htmlFor="title">Title</label>
+              <label>Title (required)</label>
               <input
-                id="title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="PDF document title"
+                placeholder="Enter a title..."
                 required
               />
             </div>

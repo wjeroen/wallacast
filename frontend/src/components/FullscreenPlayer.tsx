@@ -274,18 +274,59 @@ export function FullscreenPlayer({
     }
   });
 
-  // Scroll active element to center
+  // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
-    if (isLLMAlignment && activeElementIndex >= 0) {
-      const element = document.getElementById(`ra-el-${activeElementIndex}`);
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Legacy word-by-word scroll for podcasts
+    if (!isLLMAlignment || activeElementIndex < 0) {
+      if (activeWordIndex >= 0) {
+        const el = document.getElementById(`word-${activeWordIndex}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-    } else if (activeWordIndex >= 0) {
-      const element = document.getElementById(`word-${activeWordIndex}`);
-      if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
     }
-  }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime]);
+
+    const element = document.getElementById(`ra-el-${activeElementIndex}`);
+    if (!element) return;
+
+    // Find the scrollable container
+    const container = element.closest('.fullscreen-tab-content') as HTMLElement | null;
+    if (!container) return;
+
+    const elementRect = element.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const viewportHeight = container.clientHeight;
+    const elementHeight = elementRect.height;
+
+    // For short elements (< 60% of viewport), use simple center scroll
+    if (elementHeight < viewportHeight * 0.6) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    // Progressive scroll for tall elements: smoothly move through them as audio plays
+    const elements = (parsedAlignment?.elements || []) as LLMAlignmentElement[];
+    const elStartTime = elements[activeElementIndex].startTime;
+    const elEndTime = activeElementIndex + 1 < elements.length
+      ? elements[activeElementIndex + 1].startTime
+      : (duration || elStartTime + 10);
+
+    const elDuration = elEndTime - elStartTime;
+    if (elDuration <= 0) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    // Progress: 0 = start of element's audio, 1 = end
+    const progress = Math.max(0, Math.min(1, (currentTime - elStartTime) / elDuration));
+
+    // At progress=0: top of element ~15% from top of viewport
+    // At progress=1: bottom of element ~15% from bottom of viewport
+    const padding = viewportHeight * 0.15;
+    const scrollOffset = progress * Math.max(0, elementHeight - viewportHeight + 2 * padding);
+    const targetScroll = container.scrollTop + (elementRect.top - containerRect.top) - padding + scrollOffset;
+
+    container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+  }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime, duration, parsedAlignment]);
 
   // Keep a ref to scrollToActive so the tab-switch effect can use the latest
   // version without re-firing on every currentTime tick
