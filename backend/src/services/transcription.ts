@@ -50,6 +50,34 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
   return chunkFiles;
 }
 
+// Retry a chunk API call on network errors (ECONNRESET, socket hang up, etc.)
+// Waits 2s, 4s, 8s between attempts. Throws immediately on non-network errors (e.g. auth failures).
+async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRetries = 3): Promise<T> {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const isNetworkError =
+        error?.code === 'ECONNRESET' ||
+        error?.cause?.code === 'ECONNRESET' ||
+        error?.cause?.type === 'system' ||
+        error?.constructor?.name === 'APIConnectionError' ||
+        (typeof error?.message === 'string' && /connection|socket hang up|network/i.test(error.message));
+
+      if (!isNetworkError || attempt > maxRetries) {
+        console.error(`${chunkLabel} failed after ${attempt} attempt(s), giving up.`);
+        throw error;
+      }
+
+      const delayMs = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`${chunkLabel} network error (${error?.cause?.code || error?.message}), retrying in ${delayMs / 1000}s (attempt ${attempt}/${maxRetries})...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  // TypeScript requires this but the loop always returns or throws
+  throw new Error('Unreachable');
+}
+
 export async function transcribeWithTimestamps(
   audioUrl: string, 
   userId: number,
@@ -116,13 +144,16 @@ export async function transcribeWithTimestamps(
             currentPrompt = `${metadataPart} ... ${continuityPart}`;
         }
 
-        const transcription = await client.audio.transcriptions.create({
-          file: createReadStream(chunkFiles[i]),
-          model: model,
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: currentPrompt,
-        });
+        const transcription = await withChunkRetry(
+          () => client.audio.transcriptions.create({
+            file: createReadStream(chunkFiles[i]),
+            model: model,
+            response_format: 'verbose_json',
+            timestamp_granularities: ['word'],
+            prompt: currentPrompt,
+          }),
+          `Chunk ${i + 1}/${chunkFiles.length}`
+        );
 
         transcriptText += (i > 0 ? ' ' : '') + transcription.text;
         previousTranscript = transcription.text;
@@ -147,13 +178,16 @@ export async function transcribeWithTimestamps(
       }
 
       console.log(`Transcribing file using model ${model}...`);
-      const transcription = await client.audio.transcriptions.create({
-        file: createReadStream(fileToTranscribe),
-        model: model,
-        response_format: 'verbose_json',
-        timestamp_granularities: ['word'],
-        prompt: previousTranscript,
-      });
+      const transcription = await withChunkRetry(
+        () => client.audio.transcriptions.create({
+          file: createReadStream(fileToTranscribe),
+          model: model,
+          response_format: 'verbose_json',
+          timestamp_granularities: ['word'],
+          prompt: previousTranscript,
+        }),
+        'Single file'
+      );
 
       transcriptText = transcription.text;
       allWords = (transcription as any).words || [];
