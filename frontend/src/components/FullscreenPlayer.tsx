@@ -497,84 +497,101 @@ export function FullscreenPlayer({
           </div>
         )}
 
-        {/* Comments section (same nesting as comments tab) */}
-        {commentElements.length > 0 && (() => {
-          // Build tree from flat depth-tracked comments to match comments tab nesting
-          interface CommentNode {
-            element: LLMAlignmentElement;
-            globalIndex: number;
-            children: CommentNode[];
-          }
-          const roots: CommentNode[] = [];
-          const stack: CommentNode[] = [];
-          for (const el of commentElements) {
-            const depth = el.commentMeta?.depth ?? 0;
-            const node: CommentNode = { element: el, globalIndex: elements.indexOf(el), children: [] };
-            while (stack.length > depth) stack.pop();
-            if (stack.length === 0) {
-              roots.push(node);
-            } else {
-              stack[stack.length - 1].children.push(node);
-            }
-            stack.push(node);
-          }
+        {/* Comments section */}
+        {(showUnsyncedContent ? parsedComments.length > 0 : commentElements.length > 0) && (
+          <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+            <div className="read-along-comments-divider" />
+            {showUnsyncedContent ? (
+              // Newest fetch: show fresh parsedComments (no timestamps)
+              <>
+                <div className="comments-header">
+                  <h3>Comments ({totalCommentCount})</h3>
+                </div>
+                <div className="comments-list">
+                  {parsedComments.map((comment, index) => (
+                    <CommentComponent key={index} comment={comment} depth={0} />
+                  ))}
+                </div>
+              </>
+            ) : (
+              // Synced view: show timestamped commentElements from alignment
+              (() => {
+                interface CommentNode {
+                  element: LLMAlignmentElement;
+                  globalIndex: number;
+                  children: CommentNode[];
+                }
+                const roots: CommentNode[] = [];
+                const stack: CommentNode[] = [];
+                for (const el of commentElements) {
+                  const depth = el.commentMeta?.depth ?? 0;
+                  const node: CommentNode = { element: el, globalIndex: elements.indexOf(el), children: [] };
+                  while (stack.length > depth) stack.pop();
+                  if (stack.length === 0) {
+                    roots.push(node);
+                  } else {
+                    stack[stack.length - 1].children.push(node);
+                  }
+                  stack.push(node);
+                }
 
-          const renderCommentNode = (node: CommentNode): React.ReactNode => {
-            const { element: el, globalIndex, children } = node;
-            const isActive = globalIndex === activeElementIndex;
-            const meta = el.commentMeta;
-            const metaStr = buildCommentMetadata(meta, isLW);
-            return (
-              <div className="comment" key={`comment-${globalIndex}`}>
-                <div
-                  id={`ra-el-${globalIndex}`}
-                  className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); onSeek(el.startTime); }}
-                >
-                  <div className="comment-header">
-                    <span className="comment-username">{meta?.username || 'Anonymous'}</span>
-                    {meta?.date && (
-                      <span className="comment-date">
-                        {' \u00B7 '}
-                        {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
-                      </span>
-                    )}
-                  </div>
-                  {metaStr && (
-                    <div className="comment-metadata">
-                      <span className="comment-votes">{metaStr}</span>
+                const renderCommentNode = (node: CommentNode): React.ReactNode => {
+                  const { element: el, globalIndex, children } = node;
+                  const isActive = globalIndex === activeElementIndex;
+                  const meta = el.commentMeta;
+                  const metaStr = buildCommentMetadata(meta, isLW);
+                  return (
+                    <div className="comment" key={`comment-${globalIndex}`}>
+                      <div
+                        id={`ra-el-${globalIndex}`}
+                        className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); onSeek(el.startTime); }}
+                      >
+                        <div className="comment-header">
+                          <span className="comment-username">{meta?.username || 'Anonymous'}</span>
+                          {meta?.date && (
+                            <span className="comment-date">
+                              {' \u00B7 '}
+                              {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
+                            </span>
+                          )}
+                        </div>
+                        {metaStr && (
+                          <div className="comment-metadata">
+                            <span className="comment-votes">{metaStr}</span>
+                          </div>
+                        )}
+                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
+                      </div>
+                      {children.length > 0 && (
+                        <div className="comment-replies">
+                          {children.map(child => renderCommentNode(child))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
-                </div>
-                {children.length > 0 && (
-                  <div className="comment-replies">
-                    {children.map(child => renderCommentNode(child))}
-                  </div>
-                )}
-              </div>
-            );
-          };
+                  );
+                };
 
-          return (
-            <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
-              {/* Orange divider line — matches the orange timeline marker */}
-              <div className="read-along-comments-divider" />
-              {commentDivider && (
-                <div
-                  id={`ra-el-${elements.indexOf(commentDivider)}`}
-                  className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(commentDivider.startTime)}
-                >
-                  <h3>Comments ({commentElements.length})</h3>
-                </div>
-              )}
-              <div className="comments-list">
-                {roots.map(node => renderCommentNode(node))}
-              </div>
-            </div>
-          );
-        })()}
+                return (
+                  <>
+                    {commentDivider && (
+                      <div
+                        id={`ra-el-${elements.indexOf(commentDivider)}`}
+                        className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
+                        onClick={() => onSeek(commentDivider.startTime)}
+                      >
+                        <h3>Comments ({commentElements.length})</h3>
+                      </div>
+                    )}
+                    <div className="comments-list">
+                      {roots.map(node => renderCommentNode(node))}
+                    </div>
+                  </>
+                );
+              })()
+            )}
+          </div>
+        )}
       </div>
     );
   };
