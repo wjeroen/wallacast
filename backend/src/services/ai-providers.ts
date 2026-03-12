@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { query } from '../database/db.js';
+import { decrypt } from './encryption.js';
 
 // AI Provider interface
 export interface AIProvider {
@@ -24,13 +25,15 @@ export interface TTSOptions {
   instructions?: string;
 }
 
-// Get user setting from database
+// Get user setting from database (decrypts encrypted values transparently)
 export async function getUserSetting(userId: number, key: string): Promise<string | null> {
   const result = await query(
     'SELECT setting_value FROM user_settings WHERE user_id = $1 AND setting_key = $2',
     [userId, key]
   );
-  return result.rows[0]?.setting_value || null;
+  const value = result.rows[0]?.setting_value;
+  if (!value) return null;
+  return decrypt(value);
 }
 
 // OpenAI Provider implementation

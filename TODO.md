@@ -7,7 +7,7 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
-- [ ] **[P2]** Replace broken PDF tab with HTML file upload in AddTab (see PLAN-html-readalong-fixes.md, Issue 0)
+- [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
 - [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
 - [ ] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong)
@@ -27,7 +27,7 @@
 - [x] **[P2]** Fix embedded tweets showing giant profile pictures instead of readable content — CSS-only fix (see PLAN-html-readalong-fixes.md, Issue 1)
 - [x] **[P2]** Fix undescribed images stealing read-along highlight from paragraphs — merge undescribed images into previous element (2026-03-06)
 - [x] **[P2]** Fix plain text items (no HTML tags) showing zero content in read-along — wrap body text in `<p>` fallback (2026-03-06)
-- [ ] **[P2]** Progressive autoscroll for long elements (bullet lists, comments) — intra-element scrolling instead of center snap (see PLAN-html-readalong-fixes.md, Issue 3)
+- [x] **[P2]** Progressive autoscroll for long elements (bullet lists, comments) — intra-element scrolling instead of center snap (2026-03-06)
 - [x] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress (2026-02-06)
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
