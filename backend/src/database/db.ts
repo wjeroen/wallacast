@@ -2,6 +2,7 @@ import pg from 'pg';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { encrypt, isEncrypted } from '../services/encryption.js';
 
 const { Pool } = pg;
 
@@ -231,6 +232,34 @@ export async function initializeDatabase() {
         await client.query(`ANALYZE ${table}`);
       } catch (e) {
         // Table might not exist yet — that's fine, skip it
+      }
+    }
+
+    // Encrypt any existing plaintext secret values (one-time migration)
+    // Only runs if ENCRYPTION_KEY is set. Safe to run every startup — already-encrypted
+    // values are detected by the 'enc:' prefix and skipped.
+    if (process.env.ENCRYPTION_KEY) {
+      try {
+        const secretRows = await client.query(
+          `SELECT user_id, setting_key, setting_value FROM user_settings WHERE is_secret = true AND setting_value IS NOT NULL`
+        );
+        let encryptedCount = 0;
+        for (const row of secretRows.rows) {
+          if (!isEncrypted(row.setting_value)) {
+            const encryptedValue = encrypt(row.setting_value);
+            await client.query(
+              `UPDATE user_settings SET setting_value = $1 WHERE user_id = $2 AND setting_key = $3`,
+              [encryptedValue, row.user_id, row.setting_key]
+            );
+            encryptedCount++;
+          }
+        }
+        if (encryptedCount > 0) {
+          console.log(`✓ Encrypted ${encryptedCount} existing plaintext secret value(s)`);
+        }
+      } catch (e) {
+        // Don't crash startup if this fails — user_settings table might not exist yet
+        console.warn('Could not run secret encryption migration:', e);
       }
     }
 

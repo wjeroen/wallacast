@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query } from '../database/db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { encrypt } from '../services/encryption.js';
 
 const router = Router();
 
@@ -118,6 +119,7 @@ router.put('/settings/:key', async (req, res) => {
     }
 
     const isSecret = SECRET_KEYS.includes(key);
+    const storedValue = isSecret && value ? encrypt(value) : value;
 
     await query(
       `INSERT INTO user_settings (user_id, setting_key, setting_value, is_secret)
@@ -125,7 +127,7 @@ router.put('/settings/:key', async (req, res) => {
        ON CONFLICT (user_id, setting_key) DO UPDATE SET
          setting_value = EXCLUDED.setting_value,
          updated_at = NOW()`,
-      [req.user!.userId, key, value, isSecret]
+      [req.user!.userId, key, storedValue, isSecret]
     );
 
     res.json({ success: true });
@@ -160,6 +162,7 @@ router.put('/settings', async (req, res) => {
       // console.log(`[SETTINGS] ✓ Saving ${key} = ${typeof value === 'string' && value.length > 50 ? '[REDACTED]' : value}`);
 
       const isSecret = SECRET_KEYS.includes(key);
+      const storedValue = isSecret && value ? encrypt(value as string) : value as string;
 
       await query(
         `INSERT INTO user_settings (user_id, setting_key, setting_value, is_secret)
@@ -167,7 +170,7 @@ router.put('/settings', async (req, res) => {
          ON CONFLICT (user_id, setting_key) DO UPDATE SET
          setting_value = EXCLUDED.setting_value,
          updated_at = NOW()`,
-        [req.user!.userId, key, value as string, isSecret]
+        [req.user!.userId, key, storedValue, isSecret]
       );
     }
 
