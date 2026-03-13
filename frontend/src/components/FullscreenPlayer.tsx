@@ -181,11 +181,14 @@ export function FullscreenPlayer({
     setShowUnsyncedContent(false);
   }, [content.id]);
 
-  // Show "newest fetch" toggle when article was refetched after audio was generated
-  const canShowUnsyncedToggle = useMemo(() => {
-    if (!content.audio_generated_at || !content.content_fetched_at) return false;
-    return new Date(content.content_fetched_at) > new Date(content.audio_generated_at);
-  }, [content.audio_generated_at, content.content_fetched_at]);
+  // Show content version toggle when alignment data exists (articles and texts)
+  const hasAlignment = !!parsedAlignment && isLLMAlignment;
+  const isContentNewer = useMemo(() => {
+    if (!content.audio_generated_at) return false;
+    const contentDate = content.content_fetched_at || content.updated_at;
+    if (!contentDate) return false;
+    return new Date(contentDate) > new Date(content.audio_generated_at);
+  }, [content.audio_generated_at, content.content_fetched_at, content.updated_at]);
 
   // Persist autoscroll preference
   useEffect(() => {
@@ -450,25 +453,53 @@ export function FullscreenPlayer({
             </div>
           ))}
 
-          {/* URL removed — already shown in fullscreen player header */}
-          {content.type === 'article' && content.content_source && (
-            <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px' }}>
-              Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
-              {content.audio_generated_at && content.audio_url && (
-                <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+          {/* Content provenance: two lines for content version and audio/read-along version */}
+          {(content.type === 'article' || content.type === 'text') && (
+            <div className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
+              {/* Line 1: Content version */}
+              <div>
+                {content.type === 'article'
+                  ? `Content ${isContentNewer ? 'updated in' : 'fetched by'} ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
+                  : `Content updated in wallacast on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`
+                }
+                {hasAlignment && (
+                  <>
+                    {' - '}
+                    {showUnsyncedContent ? (
+                      <span style={{ color: '#9ca3af' }}>Shown</span>
+                    ) : (
+                      <button
+                        onClick={() => setShowUnsyncedContent(true)}
+                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
+                      >
+                        Show{isContentNewer ? ' (newer)' : ''}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              {/* Line 2: Audio & read-along version (only when alignment exists) */}
+              {hasAlignment && content.audio_generated_at && (
+                <div>
+                  Audio &amp; read-along generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}
+                  {' - '}
+                  {showUnsyncedContent ? (
+                    <button
+                      onClick={() => setShowUnsyncedContent(false)}
+                      style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
+                    >
+                      Show{isContentNewer ? ' (older)' : ''}
+                    </button>
+                  ) : (
+                    <span style={{ color: '#9ca3af' }}>Shown</span>
+                  )}
+                </div>
               )}
-              {canShowUnsyncedToggle && (
-                <>
-                  <br />
-                  <button
-                    onClick={() => setShowUnsyncedContent(v => !v)}
-                    style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
-                  >
-                    {showUnsyncedContent ? 'Show synced (older fetch)' : 'Show newest fetch (not synced)'}
-                  </button>
-                </>
+              {/* Fallback: just show audio date when no alignment (e.g. still generating) */}
+              {!hasAlignment && content.audio_generated_at && content.audio_url && (
+                <div>Audio generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</div>
               )}
-            </p>
+            </div>
           )}
         </div>
 
