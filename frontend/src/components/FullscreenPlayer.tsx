@@ -217,6 +217,9 @@ export function FullscreenPlayer({
     }
   }, [content?.content_alignment]);
 
+  // Check if this is the new LLM-based alignment
+  const isLLMAlignment = parsedAlignment?.version === 'llm-v1';
+
   // Show content version toggle when alignment data exists (articles and texts)
   const hasAlignment = !!parsedAlignment && isLLMAlignment;
   const isContentNewer = useMemo(() => {
