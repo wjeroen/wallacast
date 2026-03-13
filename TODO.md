@@ -161,6 +161,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix archived article read-along still clickable + content versioning for texts** (2026-03-13): Archiving now clears `content_alignment`, `transcript`, `transcript_words`, and `tts_chunks` alongside audio data (unless favorited). Replaced single-line provenance with two-line Show/Shown toggle showing content version and audio version separately, with "(newer)"/"(older)" labels when out of sync. Works for both articles and texts.
 - [x] **Fix read-along not triggering for text items** (2026-02-23): Text items stored content in `content` column but read-along gates only checked `html_content` (articles only). Fixed: text item creation now populates `html_content`, alignment gates accept `type='text'`, `llm-alignment.ts` falls back to `content` column for existing items
 - [x] **Proxy podcast audio through backend** (2026-02-20): Substack (and other CDNs) block cross-origin range requests from the browser. Podcast episodes now stream through `/api/content/:id/audio` — backend forwards the `Range` header byte-for-byte so only requested chunks are fetched from upstream, never the full file
 - [x] **Fix stuck pause icon when audio errors** (2026-02-20): Added `error` DOM event listener — CDN range-request failures fire `error` not `pause`, so icon got stuck; also fixed stale closure via `contentRef`

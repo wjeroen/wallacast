@@ -585,7 +585,11 @@ router.patch('/:id', async (req, res) => {
           updates.audio_data = null;
           updates.audio_url = null;
           updates.duration = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration');
+          updates.content_alignment = null;
+          updates.transcript = null;
+          updates.transcript_words = null;
+          updates.tts_chunks = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks');
         } else if (audio_data && effectiveStarred) {
           console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
