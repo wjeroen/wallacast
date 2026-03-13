@@ -181,15 +181,6 @@ export function FullscreenPlayer({
     setShowUnsyncedContent(false);
   }, [content.id]);
 
-  // Show content version toggle when alignment data exists (articles and texts)
-  const hasAlignment = !!parsedAlignment && isLLMAlignment;
-  const isContentNewer = useMemo(() => {
-    if (!content.audio_generated_at) return false;
-    const contentDate = content.content_fetched_at || content.updated_at;
-    if (!contentDate) return false;
-    return new Date(contentDate) > new Date(content.audio_generated_at);
-  }, [content.audio_generated_at, content.content_fetched_at, content.updated_at]);
-
   // Persist autoscroll preference
   useEffect(() => {
     localStorage.setItem('readAlongAutoScroll', String(autoScroll));
@@ -226,8 +217,14 @@ export function FullscreenPlayer({
     }
   }, [content?.content_alignment]);
 
-  // Check if this is the new LLM-based alignment
-  const isLLMAlignment = parsedAlignment?.version === 'llm-v1';
+  // Show content version toggle when alignment data exists (articles and texts)
+  const hasAlignment = !!parsedAlignment && isLLMAlignment;
+  const isContentNewer = useMemo(() => {
+    if (!content.audio_generated_at) return false;
+    const contentDate = content.content_fetched_at || content.updated_at;
+    if (!contentDate) return false;
+    return new Date(contentDate) > new Date(content.audio_generated_at);
+  }, [content.audio_generated_at, content.content_fetched_at, content.updated_at]);
 
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
