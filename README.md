@@ -167,8 +167,8 @@ Wallacast supports multiple users with complete data isolation:
   - `GET /:id` - Get single item (includes comments and transcript for display)
   - `POST /` - Create content, auto-extracts article HTML if URL provided. **Text items**: content is stored in both `content` and `html_content` columns so read-along/alignment works identically to articles
   - `PATCH /:id` - Update playback position, archive status, etc. Special operations:
-    - Archiving deletes audio to save space (unless item is favorited)
-    - Un-archiving regenerates audio if missing
+    - Archiving deletes audio, alignment data, and transcript to save space (unless item is favorited)
+    - Un-archiving regenerates audio, transcript, and alignment if missing
     - `audio_data: null, audio_url: null` removes audio from articles/texts
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
@@ -366,7 +366,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
-  - "Newest fetch" toggle when article was refetched after audio generation (content and audio are out of sync)
+  - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
