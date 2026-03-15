@@ -9,6 +9,7 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
+import { extractTextFromPdf } from '../services/pdf-extractor.js';
 
 const router = express.Router();
 
@@ -229,9 +230,28 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
+    // PDF upload: decode base64, extract text with unpdf, then treat as text item
+    if (type === 'pdf_upload' && req.body.pdf_data) {
+      try {
+        const pdfBuffer = Buffer.from(req.body.pdf_data, 'base64');
+        const { text: pdfText, totalPages } = await extractTextFromPdf(pdfBuffer);
+        processedContent = pdfText;
+        // Wrap extracted text in <p> tags (split on double newlines for paragraphs)
+        htmlContent = pdfText
+          .split(/\n\n+/)
+          .filter(para => para.trim().length > 0)
+          .map(para => `<p>${para.replace(/\n/g, '<br>')}</p>`)
+          .join('\n');
+        console.log(`[PDF] Processed "${finalTitle}" — ${totalPages} pages, ${pdfText.length} chars`);
+      } catch (pdfError) {
+        console.error('[PDF] Extraction failed:', pdfError);
+        return res.status(400).json({ error: 'Failed to extract text from PDF. The file may be corrupted or image-only (scanned).' });
+      }
+    }
+
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
-    if (type === 'text' && processedContent) {
+    if ((type === 'text' || type === 'pdf_upload') && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
@@ -295,6 +315,9 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // PDF uploads are stored as 'text' type in the database (same as HTML uploads)
+    const dbType = type === 'pdf_upload' ? 'text' : type;
+
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
     // Set content_fetched_at for articles fetched from a URL
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
@@ -303,13 +326,13 @@ router.post('/', async (req, res) => {
        (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
-      [type, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
     );
 
     const createdItem = result.rows[0];
     
     // Auto-generate audio for articles
-    if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
+    if ((type === 'article' || type === 'text' || type === 'pdf_upload') && !audioUrlValue && (processedContent || htmlContent)) {
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
