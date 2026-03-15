@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
@@ -229,8 +230,12 @@ router.post('/', async (req, res) => {
     let podcastShowName: string | null = null;
 
     // For text items, store content in html_content too so read-along works (same as articles)
+    // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
     if (type === 'text' && processedContent) {
-      htmlContent = processedContent;
+      const dom = new JSDOM(processedContent);
+      const doc = dom.window.document;
+      doc.querySelectorAll('script, style').forEach(el => el.remove());
+      htmlContent = doc.body.innerHTML;
     }
 
     // Fetch article content if URL is provided
