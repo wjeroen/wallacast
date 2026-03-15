@@ -6,7 +6,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 
 **Warning: This is a vibe-coded project.** Use at your own risk. The codebase was largely written by Claude. While it works, it has not been professionally audited for security or reliability.
 
-**If you're using the public instance** at wallacast.up.railway.app: Your API keys (OpenAI, DeepInfra, Gemini) are encrypted in the database using AES-256-GCM, but the server operator could technically decrypt them since they hold the encryption key. Your password is bcrypt-hashed (one-way, not recoverable), but a unique password is still highly recommended. If this makes you uncomfortable, you can deploy your own instance, the source code is right here.
+**If you're using the public instance** at [wallacast.up.railway.app](https://wallacast.up.railway.app): Your API keys (OpenAI, DeepInfra, Gemini) are encrypted in the database using AES-256-GCM, but the server operator could technically decrypt them since they hold the encryption key. Your password is bcrypt-hashed (one-way, not recoverable), but a unique password is still highly recommended. If this makes you uncomfortable, you can deploy your own instance, the source code is right here.
 
 ## Core Concept
 
