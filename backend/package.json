@@ -28,7 +28,8 @@
     "node-fetch": "^3.3.2",
     "openai": "^4.24.1",
     "pg": "^8.11.3",
-    "seqalign": "^1.0.6"
+    "seqalign": "^1.0.6",
+    "unpdf": "^1.4.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
