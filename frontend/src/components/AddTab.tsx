@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Newspaper, NotebookPen, FileText, Podcast } from 'lucide-react';
+import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
-type ContentType = 'article' | 'text' | 'html_upload' | 'podcast_episode';
+type ContentType = 'article' | 'text' | 'upload' | 'podcast_episode';
 
 interface AddTabProps {
   onContentAdded: (item: ContentItem) => void;
@@ -16,16 +16,51 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [uploadedHtml, setUploadedHtml] = useState<string>('');
+  const [uploadedContent, setUploadedContent] = useState<string>('');
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
+  const [uploadedFileType, setUploadedFileType] = useState<'html' | 'pdf' | ''>('');
 
-  // Clear upload state when switching away from html_upload tab
+  // Clear upload state when switching away from upload tab
   useEffect(() => {
-    if (contentType !== 'html_upload') {
-      setUploadedHtml('');
+    if (contentType !== 'upload') {
+      setUploadedContent('');
       setUploadedFileName('');
+      setUploadedFileType('');
     }
   }, [contentType]);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedFileName(file.name);
+    const isPdf = file.name.toLowerCase().endsWith('.pdf');
+    setUploadedFileType(isPdf ? 'pdf' : 'html');
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (isPdf) {
+        // For PDFs, read as base64 (strip the data URL prefix)
+        const dataUrl = event.target?.result as string || '';
+        const base64 = dataUrl.split(',')[1] || '';
+        setUploadedContent(base64);
+      } else {
+        // For HTML, read as text
+        setUploadedContent(event.target?.result as string || '');
+      }
+    };
+
+    if (isPdf) {
+      reader.readAsDataURL(file);
+    } else {
+      reader.readAsText(file);
+    }
+
+    // Auto-fill title from filename (strip extension)
+    if (!title) {
+      setTitle(file.name.replace(/\.(html|htm|pdf)$/i, ''));
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,15 +86,23 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         data.url = url;
       } else if (contentType === 'text') {
         data.content = text;
-      } else if (contentType === 'html_upload') {
-        if (!uploadedHtml || !title) {
-          setMessage('Please select an HTML file and enter a title');
+      } else if (contentType === 'upload') {
+        if (!uploadedContent || !title) {
+          setMessage('Please select a file and enter a title');
           setLoading(false);
           return;
         }
-        data.type = 'text';
-        data.title = title;
-        data.content = uploadedHtml;
+        if (uploadedFileType === 'pdf') {
+          // PDF: send base64 data to backend for server-side extraction
+          data.type = 'pdf_upload';
+          data.title = title;
+          data.pdf_data = uploadedContent;
+        } else {
+          // HTML: send as text content (existing behavior)
+          data.type = 'text';
+          data.title = title;
+          data.content = uploadedContent;
+        }
       }
 
       const response = await contentAPI.create(data);
@@ -71,11 +114,13 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setUrl('');
       setTitle('');
       setText('');
-      setUploadedHtml('');
+      setUploadedContent('');
       setUploadedFileName('');
-    } catch (error) {
+      setUploadedFileType('');
+    } catch (error: any) {
       console.error('Failed to save content:', error);
-      setMessage('Failed to save content. Please try again.');
+      const errorMsg = error?.response?.data?.error || 'Failed to save content. Please try again.';
+      setMessage(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -101,11 +146,11 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           <span>Text</span>
         </button>
         <button
-          className={contentType === 'html_upload' ? 'active' : ''}
-          onClick={() => setContentType('html_upload')}
+          className={contentType === 'upload' ? 'active' : ''}
+          onClick={() => setContentType('upload')}
         >
-          <FileText size={20} />
-          <span>HTML</span>
+          <Upload size={20} />
+          <span>Upload</span>
         </button>
         <button
           className={contentType === 'podcast_episode' ? 'active' : ''}
@@ -170,31 +215,25 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           </>
         )}
 
-        {contentType === 'html_upload' && (
+        {contentType === 'upload' && (
           <>
             <div className="form-group">
-              <label>HTML File</label>
+              <label>PDF or HTML File</label>
               <input
                 type="file"
-                accept=".html,.htm"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    setUploadedFileName(file.name);
-                    const reader = new FileReader();
-                    reader.onload = (event) => {
-                      setUploadedHtml(event.target?.result as string || '');
-                    };
-                    reader.readAsText(file);
-                    if (!title) {
-                      setTitle(file.name.replace(/\.(html|htm)$/i, ''));
-                    }
-                  }
-                }}
+                accept=".pdf,.html,.htm"
+                onChange={handleFileSelect}
               />
               {uploadedFileName && (
                 <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
                   Selected: {uploadedFileName}
+                  {uploadedFileType === 'pdf' && ' (PDF — text will be extracted on server)'}
+                  {uploadedFileType === 'html' && ' (HTML)'}
+                </p>
+              )}
+              {!uploadedFileName && (
+                <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
+                  Supports PDF and HTML files
                 </p>
               )}
             </div>
@@ -245,7 +284,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         )}
 
         <button type="submit" disabled={loading} className="submit-btn">
-          {loading ? 'Saving...' : 'Save Content'}
+          {loading ? (uploadedFileType === 'pdf' ? 'Extracting & saving...' : 'Saving...') : 'Save Content'}
         </button>
       </form>
 
@@ -253,9 +292,9 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         <h3>Quick Tips</h3>
         <ul>
           <li>Articles will be automatically parsed and formatted for easy reading</li>
+          <li>Upload PDFs or HTML files to convert them to audio</li>
           <li>Text content can be converted to audio using AI text-to-speech</li>
           <li>For podcasts, use the Feed tab to subscribe to your favorite shows</li>
-          <li>Saved content is accessible across all your devices</li>
         </ul>
       </div>
     </div>
