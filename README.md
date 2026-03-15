@@ -1,5 +1,9 @@
 # Wallacast
 
+> **Warning: This is a vibe-coded project.** Use at your own risk. The codebase was largely written by AI assistants (Claude, Gemini) with human guidance. While it works, it has not been professionally audited for security or reliability.
+>
+> **If you're using the public instance** at wallacast.up.railway.app: Your API keys (OpenAI, DeepInfra, Gemini) are encrypted in the database using AES-256-GCM, but the server operator could technically decrypt them since they hold the encryption key. Your password is bcrypt-hashed (one-way, not recoverable), but a unique password is still highly recommended. If this makes you uncomfortable, you can deploy your own instance — the source code is right here.
+
 A personal read-it-later and podcast app that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Spotify Podcasts. It has bidirectional wallabag sync.
 
 Try it out at https://wallacast.up.railway.app or deploy it yourself.
@@ -7,7 +11,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 ## Core Concept
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
-- **HTML Upload → Audio**: Upload `.html`/`.htm` files directly — treated exactly like articles
+- **File Upload → Audio**: Upload `.pdf`, `.html`, or `.htm` files directly — PDFs are text-extracted server-side via `unpdf`, HTML files treated exactly like articles
 - **Texts → Audio**: Paste plain text or HTML — converted to audio with read-along alignment
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
@@ -26,6 +30,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
+| PDF Extraction | unpdf (PDF.js wrapper) for server-side text extraction from uploaded PDFs |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -66,7 +71,8 @@ Wallacast supports multiple users with complete data isolation:
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
-| Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
+| Adding content (URL/text/PDF+HTML upload) | `frontend/src/components/AddTab.tsx` |
+| PDF text extraction | `backend/src/services/pdf-extractor.ts` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
@@ -234,6 +240,12 @@ Wallacast supports multiple users with complete data isolation:
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
+- **`services/pdf-extractor.ts`**: PDF text extraction using `unpdf` (PDF.js wrapper)
+  - `extractTextFromPdf(pdfBuffer)`: Takes a PDF file as a Buffer, returns extracted plain text and page count
+  - Text is extracted per-page and joined with double newlines
+  - Used by POST `/api/content/` when `type='pdf_upload'` — the extracted text is wrapped in `<p>` tags and stored as a text item
+  - Limitations: returns plain text only (no headings, bold, or structural info), scanned/image-only PDFs return empty text
+
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
@@ -346,7 +358,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads (reads file with FileReader, sends as text content), and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content — the read-along/alignment system handles them identically to regular articles.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, file uploads (PDF + HTML), and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content. PDF uploads send the file as base64 to the backend, which extracts text server-side via `unpdf` and stores as `type='text'`. Both upload types get the same read-along/alignment/TTS treatment as regular articles.
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - Organized into: API Keys, Audio Generation, Wallabag Sync
