@@ -7,6 +7,7 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
+- [ ] **[P1]** Display LessWrong article content properly — LessWrong HTML uses custom CSS classes for headings, blockquotes, images, and other elements that don't render correctly with Wallacast's generic article styling. Investigate what LessWrong-specific CSS or HTML transformations are needed so articles look right in the Content tab.
 - [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
 - [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
