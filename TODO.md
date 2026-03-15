@@ -7,6 +7,7 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
+- [ ] **[P1]** Display LessWrong article content properly — LessWrong HTML uses custom CSS classes for headings, blockquotes, images, and other elements that don't render correctly with Wallacast's generic article styling. Investigate what LessWrong-specific CSS or HTML transformations are needed so articles look right in the Content tab.
 - [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
 - [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
@@ -161,6 +162,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **PDF upload support + rename HTML tab to Upload** (2026-03-15): AddTab "HTML" button renamed to "Upload" (with Upload icon), now accepts both PDF and HTML files. PDFs are sent as base64 to backend, text extracted server-side via `unpdf` (PDF.js wrapper), stored as text items with `<p>` tags. HTML uploads unchanged. New service: `backend/src/services/pdf-extractor.ts`. Both file types get full TTS/read-along/alignment support.
 - [x] **Fix archived article read-along still clickable + content versioning for texts** (2026-03-13): Archiving now clears `content_alignment`, `transcript`, `transcript_words`, and `tts_chunks` alongside audio data (unless favorited). Replaced single-line provenance with two-line Show/Shown toggle showing content version and audio version separately, with "(newer)"/"(older)" labels when out of sync. Works for both articles and texts.
 - [x] **Fix read-along not triggering for text items** (2026-02-23): Text items stored content in `content` column but read-along gates only checked `html_content` (articles only). Fixed: text item creation now populates `html_content`, alignment gates accept `type='text'`, `llm-alignment.ts` falls back to `content` column for existing items
 - [x] **Proxy podcast audio through backend** (2026-02-20): Substack (and other CDNs) block cross-origin range requests from the browser. Podcast episodes now stream through `/api/content/:id/audio` — backend forwards the `Range` header byte-for-byte so only requested chunks are fetched from upstream, never the full file
