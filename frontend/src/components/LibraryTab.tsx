@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, Download } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -246,6 +246,31 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
       alert('Failed to regenerate transcript');
+    }
+  };
+
+  const handleDownloadHtml = async (item: ContentItem) => {
+    try {
+      setOpenDropdown(null);
+      const response = await contentAPI.getById(item.id);
+      const fullItem = response.data;
+      const html = fullItem.html_content || fullItem.content || '';
+      if (!html) {
+        alert('No content available to download');
+        return;
+      }
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '')}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download HTML:', error);
+      alert('Failed to download content');
     }
   };
 
@@ -603,6 +628,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                               </button>
                             )}
                           </>
+                        )}
+                        {(item.type === 'article' || item.type === 'text') && (
+                          <button onClick={() => handleDownloadHtml(item)}>
+                            Download HTML
+                          </button>
                         )}
                       </div>
                     )}

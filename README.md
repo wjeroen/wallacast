@@ -30,7 +30,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
-| PDF Extraction | unpdf (PDF.js wrapper) for server-side text extraction from uploaded PDFs |
+| PDF Extraction | Gemini 3 Flash (structured HTML) + unpdf (image extraction) + sharp (PNG conversion) for uploaded PDFs |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -240,11 +240,14 @@ Wallacast supports multiple users with complete data isolation:
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
-- **`services/pdf-extractor.ts`**: PDF text extraction using `unpdf` (PDF.js wrapper)
-  - `extractTextFromPdf(pdfBuffer)`: Takes a PDF file as a Buffer, returns extracted plain text and page count
-  - Text is extracted per-page and joined with double newlines
-  - Used by POST `/api/content/` when `type='pdf_upload'` — the extracted text is wrapped in `<p>` tags and stored as a text item
-  - Limitations: returns plain text only (no headings, bold, or structural info), scanned/image-only PDFs return empty text
+- **`services/pdf-extractor.ts`**: PDF conversion using Gemini + `unpdf` + `sharp` ("Gemini reads, unpdf illustrates")
+  - `extractTextFromPdf(pdfBuffer)`: Basic text-only fallback (returns plain text and page count)
+  - `extractPdfWithGemini(pdfBuffer, userId)`: Full pipeline — sends PDF to Gemini in 10-page chunks for structured HTML (headings, bold, tables, lists), then extracts actual images from unpdf to replace Gemini's `<figure>` placeholders
+  - **How it works**: Gemini converts the PDF to clean HTML and outputs `<figure data-page="N" data-index="M"><figcaption>Description</figcaption></figure>` placeholders for each image. unpdf's `extractImages()` grabs the actual image data from each referenced page, `sharp` converts raw pixels to PNG, and the placeholders are replaced with real `<img>` tags + Gemini's figcaptions
+  - 10-page chunking prevents Gemini context window overflow on large documents
+  - Gemini's figcaption descriptions are pre-populated into `image_alt_text_data` JSONB so `ImageAltTextService` doesn't re-process the same images during TTS generation
+  - Falls back to text-only extraction if user has no Gemini API key
+  - Limitations: scanned/image-only PDFs depend on Gemini's OCR, image matching by page+index can be fragile if Gemini miscounts images
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
