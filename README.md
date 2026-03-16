@@ -30,7 +30,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
-| PDF Extraction | Gemini 3 Flash (structured HTML) + unpdf (image extraction) + sharp (PNG conversion) for uploaded PDFs |
+| PDF Extraction | [marker-pdf](https://github.com/VikParuchuri/marker) (Python) — high-quality PDF → HTML with images, tables, equations. Optionally uses Gemini `--use_llm` for highest accuracy |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -72,7 +72,7 @@ Wallacast supports multiple users with complete data isolation:
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
 | Adding content (URL/text/PDF+HTML upload) | `frontend/src/components/AddTab.tsx` |
-| PDF text extraction | `backend/src/services/pdf-extractor.ts` |
+| PDF → HTML conversion (marker-pdf) | `backend/src/services/pdf-extractor.ts` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
@@ -240,14 +240,13 @@ Wallacast supports multiple users with complete data isolation:
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
-- **`services/pdf-extractor.ts`**: PDF conversion using Gemini + `unpdf` + `sharp` ("Gemini reads, unpdf illustrates")
-  - `extractTextFromPdf(pdfBuffer)`: Basic text-only fallback (returns plain text and page count)
-  - `extractPdfWithGemini(pdfBuffer, userId)`: Full pipeline — sends PDF to Gemini in 10-page chunks for structured HTML (headings, bold, tables, lists), then extracts actual images from unpdf to replace Gemini's `<figure>` placeholders
-  - **How it works**: Gemini converts the PDF to clean HTML and outputs `<figure data-page="N" data-index="M"><figcaption>Description</figcaption></figure>` placeholders for each image. unpdf's `extractImages()` grabs the actual image data from each referenced page, `sharp` converts raw pixels to PNG, and the placeholders are replaced with real `<img>` tags + Gemini's figcaptions
-  - 10-page chunking prevents Gemini context window overflow on large documents
-  - Gemini's figcaption descriptions are pre-populated into `image_alt_text_data` JSONB so `ImageAltTextService` doesn't re-process the same images during TTS generation
-  - Falls back to text-only extraction if user has no Gemini API key
-  - Limitations: scanned/image-only PDFs depend on Gemini's OCR, image matching by page+index can be fragile if Gemini miscounts images
+- **`services/pdf-extractor.ts`**: PDF → HTML conversion using [marker-pdf](https://github.com/VikParuchuri/marker) (Python CLI)
+  - `extractPdfWithMarker(pdfBuffer, userId)`: Saves PDF to temp file, runs `marker_single --output_format html`, reads output, embeds extracted images as data URIs
+  - **With Gemini API key**: Passes `--use_llm --gemini_api_key KEY` for highest accuracy (better tables, math, forms)
+  - **Without Gemini API key**: Runs without `--use_llm` — still high quality using marker's built-in deep learning models (surya OCR/layout, texify math)
+  - Images extracted by marker are embedded as data URIs in the HTML. Image descriptions are NOT generated here — the existing `ImageAltTextService` in the TTS pipeline handles that with its own carefully tuned prompt
+  - Requires Python 3 + marker-pdf installed (see Dockerfile)
+  - 5-minute timeout for large PDFs, temp files cleaned up automatically
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
