@@ -250,15 +250,17 @@ export class ImageAltTextService {
       if (img.width < 100 && img.height < 100) return true;
     }
 
-    // 2. Filename patterns
+    // 2. Filename patterns (skip for data: URIs — base64 can randomly match patterns)
     const url = img.url.toLowerCase();
-    const decorativePatterns = [
-      /icon/i, /logo/i, /avatar/i, /profile/i, /badge/i,
-      /button/i, /separator/i, /divider/i, /banner/i,
-      /header/i, /footer/i, /share/i, /social/i,
-      /spacer/i, /transparent\.png/i, /1x1/i, /pixel/i
-    ];
-    if (decorativePatterns.some(pattern => pattern.test(url))) return true;
+    if (!url.startsWith('data:')) {
+      const decorativePatterns = [
+        /icon/i, /logo/i, /avatar/i, /profile/i, /badge/i,
+        /button/i, /separator/i, /divider/i, /banner/i,
+        /header/i, /footer/i, /share/i, /social/i,
+        /spacer/i, /transparent\.png/i, /1x1/i, /pixel/i
+      ];
+      if (decorativePatterns.some(pattern => pattern.test(url))) return true;
+    }
 
     // 3. CSS classes
     const decorativeClasses = [
@@ -308,9 +310,29 @@ export class ImageAltTextService {
   }
 
   /**
-   * Download image and convert to base64 for Gemini
+   * Download image and convert to base64 for Gemini.
+   * Handles data: URIs directly (from PDF image extraction) without network requests.
    */
   private async downloadImage(imageUrl: string): Promise<{ data: string; mimeType: string } | null> {
+    // Handle data: URIs (from PDF extraction) - already base64, no download needed
+    if (imageUrl.startsWith('data:')) {
+      try {
+        const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!match) {
+          console.warn(`[ImageAltText] Invalid data URI format`);
+          return null;
+        }
+        const mimeType = match[1];
+        const data = match[2];
+        const sizeMB = (data.length * 0.75) / (1024 * 1024); // base64 → bytes estimate
+        console.log(`[ImageAltText] ✅ Using inline data URI: ${sizeMB.toFixed(2)}MB, type: ${mimeType}`);
+        return { data, mimeType };
+      } catch (e) {
+        console.warn(`[ImageAltText] Failed to parse data URI:`, e);
+        return null;
+      }
+    }
+
     try {
       console.log(`[ImageAltText] Downloading image: ${imageUrl}`);
 
