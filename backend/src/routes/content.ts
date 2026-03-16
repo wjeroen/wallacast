@@ -9,7 +9,7 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { extractTextFromPdf, extractTextAndImagesFromPdf } from '../services/pdf-extractor.js';
+import { extractTextFromPdf, extractPdfWithGemini } from '../services/pdf-extractor.js';
 
 const router = express.Router();
 
@@ -230,14 +230,14 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
-    // PDF upload: decode base64, extract text + images with unpdf, then treat as text item
+    // PDF upload: Gemini reads the PDF for structured HTML, unpdf extracts actual images
     if (type === 'pdf_upload' && req.body.pdf_data) {
       try {
         const pdfBuffer = Buffer.from(req.body.pdf_data, 'base64');
-        const { text: pdfText, html: pdfHtml, totalPages, imageCount } = await extractTextAndImagesFromPdf(pdfBuffer);
+        const { text: pdfText, html: pdfHtml, totalPages, imageCount } = await extractPdfWithGemini(pdfBuffer, req.user!.userId);
         processedContent = pdfText;
-        // Use the HTML with embedded images (data URIs) so the existing
-        // Gemini image description pipeline can pick them up for TTS narration
+        // Gemini provides structured HTML (headings, bold, tables) with real images
+        // embedded as data URIs. The existing TTS pipeline handles these naturally.
         htmlContent = pdfHtml;
         console.log(`[PDF] Processed "${finalTitle}" — ${totalPages} pages, ${pdfText.length} chars, ${imageCount} images`);
       } catch (pdfError) {
@@ -312,6 +312,34 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // For PDFs: pre-populate image_alt_text_data with Gemini's figcaption descriptions
+    // so ImageAltTextService.smartRegenerate() sees them as already processed and skips them.
+    // This avoids sending the same images to Gemini twice (once during PDF conversion, once during TTS).
+    let pdfImageAltTextData: any = null;
+    if (type === 'pdf_upload' && htmlContent) {
+      const figcaptionRegex = /<figure><img\s+src="([^"]+)"\s+alt="([^"]*)"[^>]*><figcaption>([\s\S]*?)<\/figcaption><\/figure>/g;
+      const descriptions: Record<string, string> = {};
+      let figMatch;
+      while ((figMatch = figcaptionRegex.exec(htmlContent)) !== null) {
+        const imgSrc = figMatch[1].split('?')[0].split('#')[0]; // normalizeUrl equivalent
+        const figcaption = figMatch[3].trim();
+        if (figcaption) {
+          descriptions[imgSrc] = figcaption;
+        }
+      }
+      if (Object.keys(descriptions).length > 0) {
+        pdfImageAltTextData = {
+          descriptions,
+          total_images: Object.keys(descriptions).length,
+          decorative_images: 0,
+          cost_usd: 0, // Already paid for during PDF conversion
+          model: 'gemini-3-flash-preview',
+          processed_at: new Date().toISOString()
+        };
+        console.log(`[PDF] Pre-populated ${Object.keys(descriptions).length} image descriptions from Gemini figcaptions`);
+      }
+    }
+
     // PDF uploads are stored as 'text' type in the database (same as HTML uploads)
     const dbType = type === 'pdf_upload' ? 'text' : type;
 
@@ -320,10 +348,10 @@ router.post('/', async (req, res) => {
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at, image_alt_text_data, images_processed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt, pdfImageAltTextData ? JSON.stringify(pdfImageAltTextData) : null, pdfImageAltTextData ? true : null]
     );
 
     const createdItem = result.rows[0];
