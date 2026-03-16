@@ -9,7 +9,7 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { extractTextFromPdf } from '../services/pdf-extractor.js';
+import { extractTextFromPdf, extractTextAndImagesFromPdf } from '../services/pdf-extractor.js';
 
 const router = express.Router();
 
@@ -230,19 +230,16 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
-    // PDF upload: decode base64, extract text with unpdf, then treat as text item
+    // PDF upload: decode base64, extract text + images with unpdf, then treat as text item
     if (type === 'pdf_upload' && req.body.pdf_data) {
       try {
         const pdfBuffer = Buffer.from(req.body.pdf_data, 'base64');
-        const { text: pdfText, totalPages } = await extractTextFromPdf(pdfBuffer);
+        const { text: pdfText, html: pdfHtml, totalPages, imageCount } = await extractTextAndImagesFromPdf(pdfBuffer);
         processedContent = pdfText;
-        // Wrap extracted text in <p> tags (split on double newlines for paragraphs)
-        htmlContent = pdfText
-          .split(/\n\n+/)
-          .filter(para => para.trim().length > 0)
-          .map(para => `<p>${para.replace(/\n/g, '<br>')}</p>`)
-          .join('\n');
-        console.log(`[PDF] Processed "${finalTitle}" — ${totalPages} pages, ${pdfText.length} chars`);
+        // Use the HTML with embedded images (data URIs) so the existing
+        // Gemini image description pipeline can pick them up for TTS narration
+        htmlContent = pdfHtml;
+        console.log(`[PDF] Processed "${finalTitle}" — ${totalPages} pages, ${pdfText.length} chars, ${imageCount} images`);
       } catch (pdfError) {
         console.error('[PDF] Extraction failed:', pdfError);
         return res.status(400).json({ error: 'Failed to extract text from PDF. The file may be corrupted or image-only (scanned).' });
