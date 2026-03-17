@@ -246,6 +246,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Without Gemini API key**: Runs without `--use_llm` — still high quality using marker's built-in deep learning models (surya OCR/layout, texify math)
   - Images extracted by marker are embedded as data URIs in the HTML. Image descriptions are NOT generated here — the existing `ImageAltTextService` in the TTS pipeline handles that with its own carefully tuned prompt
   - Requires Python 3 + marker-pdf installed (see Dockerfile)
+  - Uses `--pdftext_workers 1` to limit parallel processes and avoid OOM on Railway
   - 5-minute timeout for large PDFs, temp files cleaned up automatically
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
