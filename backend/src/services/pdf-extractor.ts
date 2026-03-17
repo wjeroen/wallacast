@@ -46,10 +46,13 @@ export async function extractPdfWithMarker(
     console.log(`[PDF] Saved ${pdfBuffer.length} bytes to ${inputPath}`);
 
     // Build marker_single command args
+    // --pdftext_workers 1: limit to single worker process to avoid OOM on Railway
+    // (default spawns one worker per CPU, which exhausts container memory)
     const args = [
       inputPath,
       '--output_format', 'html',
       '--output_dir', outputDir,
+      '--pdftext_workers', '1',
     ];
 
     // Check if user has Gemini API key for LLM-enhanced accuracy
