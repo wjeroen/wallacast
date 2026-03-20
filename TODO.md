@@ -38,8 +38,8 @@
   - Reduce repetition in narration
   - NOTE: Quote announcements (2026-01-29) and LessWrong score filtering (2026-01-29) already implemented
   - [x] Fix TTS reading emoji names in comment author usernames (e.g. "small orange diamond" for 🔸) - stripped emojis from usernames and article author in narration (2026-02-06)
-  - [x] Fix numbers/symbols/currencies mangled by Kokoro TTS — scriptwriter prompt now explicitly requires writing all numbers, symbols, and currencies as spoken words; `htmlToNarrationText()` (used by comments) now replaces currency symbols, %, multipliers (10x), shorthand (100k/M/B), and math symbols before TTS (2026-03-20)
-  - [x] Fix links read in full in comments — `htmlToNarrationText()` already replaced links with "anchor text, link to domain"; strengthened scriptwriter prompt to never read full URLs (2026-03-20)
+  - [x] Fix numbers/symbols/currencies in articles — scriptwriter prompt now explicitly requires writing all numbers, symbols, and currencies as fully spoken words with examples (2026-03-20)
+  - [x] Fix full URLs read aloud in LessWrong/EA Forum comments — when anchor text IS a URL (e.g. `<a href="https://...">https://...</a>`), now replaced with just "link to domain"; also catches bare URLs not in `<a>` tags (2026-03-20)
 - [x] **[P2]** CRITICAL: Fixed 80GB mobile data usage and slow queries (2026-01-27):
   - App was returning entire audio files with every click and update (caused 80GB mobile data usage)
   - Root cause: `RETURNING *` in PATCH, list queries included audio_data for all items
