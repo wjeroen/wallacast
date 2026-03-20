@@ -216,6 +216,35 @@ function htmlToNarrationText(html: string): string {
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
 
+    // Replace common symbols that TTS engines mangle
+    text = text.replace(/~/g, 'approximately ');
+    text = text.replace(/§/g, 'section ');
+    text = text.replace(/#(\d)/g, 'number $1');
+    text = text.replace(/(\d)\+/g, '$1 plus ');
+    text = text.replace(/≈/g, 'approximately ');
+    text = text.replace(/≥/g, 'greater than or equal to ');
+    text = text.replace(/≤/g, 'less than or equal to ');
+    text = text.replace(/→/g, ' leads to ');
+    text = text.replace(/←/g, ' from ');
+    text = text.replace(/&/g, ' and ');
+
+    // Replace currency symbols with words (before the number, rewrite to after)
+    text = text.replace(/\$\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} dollars`);
+    text = text.replace(/€\s?([\d,.]+)/g, (_, num) => `${num.replace(/\./g, '')} euros`);
+    text = text.replace(/£\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} pounds`);
+    text = text.replace(/¥\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} yen`);
+
+    // Replace % with "percent"
+    text = text.replace(/([\d,.]+)\s?%/g, '$1 percent');
+
+    // Replace "10x" style multipliers
+    text = text.replace(/(\d+)x\b/g, '$1 times');
+
+    // Replace "100k" / "100M" / "100B" shorthand
+    text = text.replace(/(\d+)k\b/gi, '$1 thousand');
+    text = text.replace(/(\d+)M\b/g, '$1 million');
+    text = text.replace(/(\d+)B\b/g, '$1 billion');
+
     // Clean up whitespace (including any gaps left by emoji removal)
     text = text.replace(/\s+/g, ' ').trim();
     return text;
@@ -399,12 +428,25 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words. The TTS engine cannot interpret symbols — it will say gibberish. Examples:
+   - "$1,200" -> "twelve hundred dollars"
+   - "€100.000" -> "one hundred thousand euros"
+   - "£50m" -> "fifty million pounds"
+   - "3.5%" -> "three point five percent"
+   - "10x" -> "ten times"
+   - "§4.2" -> "section four point two"
+   - "2024" (as a year) -> "twenty twenty-four"
+   - "1990s" -> "nineteen nineties"
+   - "#5" -> "number five"
+   - "100k" -> "one hundred thousand"
+   - "~50" -> "approximately fifty"
+   - "<10" -> "less than ten"
+   - "2+2=4" -> "two plus two equals four"
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote." 
+ * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
- * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
+ * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
 

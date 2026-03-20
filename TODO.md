@@ -35,10 +35,11 @@
 - [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
-  - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
   - NOTE: Quote announcements (2026-01-29) and LessWrong score filtering (2026-01-29) already implemented
   - [x] Fix TTS reading emoji names in comment author usernames (e.g. "small orange diamond" for 🔸) - stripped emojis from usernames and article author in narration (2026-02-06)
+  - [x] Fix numbers/symbols/currencies mangled by Kokoro TTS — scriptwriter prompt now explicitly requires writing all numbers, symbols, and currencies as spoken words; `htmlToNarrationText()` (used by comments) now replaces currency symbols, %, multipliers (10x), shorthand (100k/M/B), and math symbols before TTS (2026-03-20)
+  - [x] Fix links read in full in comments — `htmlToNarrationText()` already replaced links with "anchor text, link to domain"; strengthened scriptwriter prompt to never read full URLs (2026-03-20)
 - [x] **[P2]** CRITICAL: Fixed 80GB mobile data usage and slow queries (2026-01-27):
   - App was returning entire audio files with every click and update (caused 80GB mobile data usage)
   - Root cause: `RETURNING *` in PATCH, list queries included audio_data for all items
