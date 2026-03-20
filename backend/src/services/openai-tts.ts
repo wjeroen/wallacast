@@ -169,27 +169,39 @@ function htmlToNarrationText(html: string): string {
     unwanted.forEach(el => el.remove());
 
     // Handle links: Replace with anchor text + domain name
+    // If the anchor text itself IS a URL (common in LessWrong/EA Forum comments),
+    // replace it with just the domain name to avoid Kokoro reading full URLs
     const links = doc.querySelectorAll('a[href]');
     links.forEach(link => {
       const anchorText = link.textContent?.trim() || '';
       const href = link.getAttribute('href') || '';
 
-      // Extract domain name from URL
-      let domainText = '';
+      // Extract domain name from href
+      let domain = '';
       try {
-        const url = new URL(href, 'https://example.com'); // Base URL for relative links
+        const url = new URL(href, 'https://example.com');
         const hostname = url.hostname;
-        // Remove www. prefix if present
-        const domain = hostname.replace(/^www\./, '');
-        // Only use the main domain (before first slash of path)
-        domainText = `, link to ${domain}`;
+        domain = hostname.replace(/^www\./, '');
       } catch (e) {
-        // If URL parsing fails, use generic text
-        domainText = ', a link is shown here';
+        domain = '';
       }
 
-      // Replace the link element with anchor text + domain description
-      const textNode = doc.createTextNode(anchorText + domainText);
+      // Check if anchor text itself looks like a URL
+      const anchorIsUrl = /^https?:\/\//i.test(anchorText) || /^www\./i.test(anchorText);
+
+      let replacement: string;
+      if (anchorIsUrl) {
+        // Anchor text IS a URL — just say "link to domain.com"
+        replacement = `link to ${domain || 'a website'}`;
+      } else if (anchorText && domain && domain !== 'example.com') {
+        replacement = `${anchorText}, link to ${domain}`;
+      } else if (anchorText) {
+        replacement = anchorText;
+      } else {
+        replacement = domain ? `link to ${domain}` : 'a link is shown here';
+      }
+
+      const textNode = doc.createTextNode(replacement);
       link.replaceWith(textNode);
     });
 
@@ -216,34 +228,17 @@ function htmlToNarrationText(html: string): string {
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
 
-    // Replace common symbols that TTS engines mangle
-    text = text.replace(/~/g, 'approximately ');
-    text = text.replace(/§/g, 'section ');
-    text = text.replace(/#(\d)/g, 'number $1');
-    text = text.replace(/(\d)\+/g, '$1 plus ');
-    text = text.replace(/≈/g, 'approximately ');
-    text = text.replace(/≥/g, 'greater than or equal to ');
-    text = text.replace(/≤/g, 'less than or equal to ');
-    text = text.replace(/→/g, ' leads to ');
-    text = text.replace(/←/g, ' from ');
-    text = text.replace(/&/g, ' and ');
-
-    // Replace currency symbols with words (before the number, rewrite to after)
-    text = text.replace(/\$\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} dollars`);
-    text = text.replace(/€\s?([\d,.]+)/g, (_, num) => `${num.replace(/\./g, '')} euros`);
-    text = text.replace(/£\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} pounds`);
-    text = text.replace(/¥\s?([\d,.]+)/g, (_, num) => `${num.replace(/,/g, '')} yen`);
-
-    // Replace % with "percent"
-    text = text.replace(/([\d,.]+)\s?%/g, '$1 percent');
-
-    // Replace "10x" style multipliers
-    text = text.replace(/(\d+)x\b/g, '$1 times');
-
-    // Replace "100k" / "100M" / "100B" shorthand
-    text = text.replace(/(\d+)k\b/gi, '$1 thousand');
-    text = text.replace(/(\d+)M\b/g, '$1 million');
-    text = text.replace(/(\d+)B\b/g, '$1 billion');
+    // Replace bare URLs in text (not caught by <a> tag handling above)
+    // with just "link to domain.com"
+    text = text.replace(/https?:\/\/[^\s)>\]]+/gi, (url) => {
+      try {
+        const parsed = new URL(url);
+        const domain = parsed.hostname.replace(/^www\./, '');
+        return `link to ${domain}`;
+      } catch {
+        return 'a link';
+      }
+    });
 
     // Clean up whitespace (including any gaps left by emoji removal)
     text = text.replace(/\s+/g, ' ').trim();
