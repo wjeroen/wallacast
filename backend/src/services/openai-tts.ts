@@ -727,7 +727,16 @@ export async function generateArticleAudio(
   }
 }
 
+// Guard against concurrent generation for the same content
+const activeGenerations = new Set<number>();
+
 export async function generateAudioForContent(contentId: number, regenerate: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
+  if (activeGenerations.has(contentId)) {
+    console.log(`[TTS] Generation already in progress for content ${contentId}, skipping duplicate`);
+    return { audioUrl: '', warning: 'Generation already in progress' };
+  }
+  activeGenerations.add(contentId);
+
   try {
     const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
     if (contentResult.rows.length === 0) throw new Error('Content not found');
@@ -914,7 +923,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const whisperPrompt = '';
     console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
 
-    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt)
+    transcribeWithTimestamps(audioBuffer, content.user_id, whisperPrompt)
       .then(async (transcriptResult) => {
           // Fix Whisper dropping the title: if the first word starts after 3s,
           // Whisper likely "consumed" the title (because the prompt matches the
@@ -981,5 +990,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
   } catch (error) {
     console.error('Error generating audio for content:', error);
     throw error;
+  } finally {
+    activeGenerations.delete(contentId);
   }
 }

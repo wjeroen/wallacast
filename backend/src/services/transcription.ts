@@ -79,7 +79,7 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
 }
 
 export async function transcribeWithTimestamps(
-  audioUrl: string, 
+  audioSource: string | Buffer,
   userId: number,
   initialPrompt?: string
 ): Promise<{
@@ -101,12 +101,19 @@ export async function transcribeWithTimestamps(
     const audioFilename = `audio_transcribe_${Date.now()}.mp3`;
     const audioPath = path.join(tempDir, audioFilename);
 
-    console.log(`[Transcription] Downloading audio from ${audioUrl}...`);
-    const response = await fetch(audioUrl);
-    if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
-    if (!response.body) throw new Error('No response body');
+    if (Buffer.isBuffer(audioSource)) {
+      // Audio buffer passed directly — write to temp file (avoids HTTP round-trip)
+      console.log(`[Transcription] Writing audio buffer (${(audioSource.length / 1024 / 1024).toFixed(1)} MB) to temp file...`);
+      await fs.writeFile(audioPath, audioSource);
+    } else {
+      // URL passed — download it (legacy path, used for podcast transcription)
+      console.log(`[Transcription] Downloading audio from ${audioSource}...`);
+      const response = await fetch(audioSource);
+      if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
+      if (!response.body) throw new Error('No response body');
+      await pipeline(response.body, createWriteStream(audioPath));
+    }
 
-    await pipeline(response.body, createWriteStream(audioPath));
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
     tempFiles.push(audioPath);
