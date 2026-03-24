@@ -33,7 +33,6 @@ interface LLMAlignmentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
-  modelName?: string; // For llm-block elements: AI model attribution
 }
 
 interface FullscreenPlayerProps {
@@ -624,9 +623,6 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                     onSeek(el.startTime);
                   }}
                 >
-                  {el.type === 'llm-block' && el.modelName && (
-                    <div className="llm-block-badge">{el.modelName}</div>
-                  )}
                   <div dangerouslySetInnerHTML={{ __html: el.html }} />
                 </div>
               );
