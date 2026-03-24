@@ -19,9 +19,13 @@ interface AudioPlayerProps {
   content: ContentItem | null;
   onClose: () => void;
   onRefetch?: () => void;
+  onGenerateAudio?: (regenerate: boolean) => void;
+  onRemoveAudio?: () => void;
+  onRegenerateTranscript?: () => void;
+  onContentUpdated?: (updated: ContentItem) => void;
 }
 
-export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
+export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript, onContentUpdated }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -489,6 +493,10 @@ export function AudioPlayer({ content, onClose, onRefetch }: AudioPlayerProps) {
           onClose={onClose}
           onTranscriptWordClick={handleTranscriptClick}
           onRefetch={onRefetch}
+          onGenerateAudio={onGenerateAudio}
+          onRemoveAudio={onRemoveAudio}
+          onRegenerateTranscript={onRegenerateTranscript}
+          onContentUpdated={onContentUpdated}
         />
       ) : (
         <MiniPlayer
