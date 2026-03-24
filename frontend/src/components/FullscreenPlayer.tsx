@@ -174,7 +174,6 @@ export function FullscreenPlayer({
   onGenerateAudio,
   onRemoveAudio,
   onRegenerateTranscript,
-  onContentUpdated,
 }: FullscreenPlayerProps) {
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
