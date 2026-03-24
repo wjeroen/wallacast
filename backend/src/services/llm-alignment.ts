@@ -27,7 +27,7 @@ interface TranscriptWord {
 }
 
 interface ContentElement {
-  type: 'title' | 'meta' | 'heading' | 'paragraph' | 'image' | 'blockquote' | 'list' | 'code-block' | 'comment-divider' | 'comment';
+  type: 'title' | 'meta' | 'heading' | 'paragraph' | 'image' | 'blockquote' | 'list' | 'code-block' | 'comment-divider' | 'comment' | 'llm-block';
   html: string;
   text: string; // Plain text for LLM matching (not stored in final result)
   commentMeta?: {
@@ -37,6 +37,7 @@ interface ContentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
+  modelName?: string; // For llm-block elements: the AI model that generated the content
 }
 
 export interface LLMAlignmentElement {
@@ -50,6 +51,7 @@ export interface LLMAlignmentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
+  modelName?: string; // For llm-block elements: AI model attribution
 }
 
 export interface LLMAlignmentResult {
@@ -169,8 +171,8 @@ function extractContentElements(
   // Get image descriptions for matching
   const imageDescriptions: Record<string, string> = imageAltTextData?.descriptions || {};
 
-  // Select meaningful block elements
-  const BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, figure, img, pre, table';
+  // Select meaningful block elements (includes LLM content blocks from LessWrong/EA Forum)
+  const BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block';
   const allBlocks = Array.from(doc.querySelectorAll(BLOCK_SELECTOR));
 
   // Filter out elements that are descendants of other selected elements
@@ -249,6 +251,17 @@ function extractContentElements(
     } else if (tagName === 'table') {
       if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text: text.slice(0, 300) });
+      }
+    } else if ((el as Element).classList?.contains('llm-content-block')) {
+      // LessWrong/EA Forum LLM Content Block — AI-generated section with model attribution
+      const modelName = el.getAttribute('data-model-name') || 'AI';
+      if (text) {
+        elements.push({
+          type: 'llm-block',
+          html: (el as Element).outerHTML,
+          text: `The following was written by ${modelName}: ${text}`,
+          modelName,
+        });
       }
     } else {
       // p, div, etc.
@@ -1031,6 +1044,7 @@ ${closingInstruction}`;
     html: el.html,
     startTime: timestamps[i],
     ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
+    ...(el.modelName ? { modelName: el.modelName } : {}),
   }));
 
   // Find comments start time

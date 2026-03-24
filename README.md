@@ -265,7 +265,7 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
-  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
+  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block), prepends title/author/date/karma as meta elements. LessWrong/EA Forum LLM content blocks are extracted as `llm-block` type with `modelName` from `data-model-name` attribute
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
   - `buildTimedTranscript()`: Groups Whisper words into sentences (splitting at `.?!` boundaries) with one timestamp per line (e.g., `[14.2] I've just started a blog about effective altruism.`), giving the LLM natural sentence context for text matching
   - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI GPT-5-Nano fallback)
@@ -371,6 +371,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
+  - LLM content blocks (LessWrong/EA Forum `div.llm-content-block`): displayed in serif font with purple left border and model name badge (e.g., "Claude Opus 4.6"). TTS narration announces model attribution
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
   - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, and three HTML download options (cleaned, read-along, original via refetch)
 

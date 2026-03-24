@@ -33,6 +33,7 @@ interface LLMAlignmentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
+  modelName?: string; // For llm-block elements: AI model attribution
 }
 
 interface FullscreenPlayerProps {
@@ -516,7 +517,7 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
     const titleEl = elements.find(e => e.type === 'title');
     const metaElements = elements.filter(e => e.type === 'meta');
     const bodyElements = elements.filter(e =>
-      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block'].includes(e.type)
+      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
     );
     const commentDivider = elements.find(e => e.type === 'comment-divider');
     const commentElements = elements.filter(e => e.type === 'comment');
@@ -616,6 +617,9 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                   onClick={() => onSeek(el.startTime)}
                 >
+                  {el.type === 'llm-block' && el.modelName && (
+                    <div className="llm-block-badge">{el.modelName}</div>
+                  )}
                   <div dangerouslySetInnerHTML={{ __html: el.html }} />
                 </div>
               );
