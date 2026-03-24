@@ -252,7 +252,19 @@ function extractContentElements(
       }
     } else {
       // p, div, etc.
-      if (text) {
+      const embeddedImg = el.querySelector('img');
+      if (embeddedImg) {
+        // Image wrapped in <p> or <a> — treat as image element
+        const src = embeddedImg.getAttribute('src') || '';
+        const alt = embeddedImg.getAttribute('alt') || '';
+        const description = findImageDescription(src, imageDescriptions, url) || alt;
+        embeddedImg.setAttribute('style', 'max-width: 100%; height: auto; border-radius: 0.5rem; margin: 0.5em 0;');
+        elements.push({
+          type: 'image',
+          html: (el as Element).outerHTML,
+          text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+        });
+      } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });
       }
     }
