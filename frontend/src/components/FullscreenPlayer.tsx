@@ -496,15 +496,9 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
       return;
     }
     try {
-      // Refetch from web, then download the updated html_content
-      await contentAPI.refetch(content.id);
-      // Wait for backend to finish fetching
-      await new Promise(r => setTimeout(r, 2000));
-      const response = await contentAPI.getById(content.id);
-      const html = response.data.html_content || '';
-      if (!html) { alert('Refetch returned no content'); return; }
-      // Also update parent so the content tab refreshes
-      if (onContentUpdated) onContentUpdated(response.data);
+      const response = await contentAPI.getOriginalHtml(content.id);
+      const html = typeof response.data === 'string' ? response.data : String(response.data);
+      if (!html) { alert('No content returned from source'); return; }
       downloadFile(`${safeName} (original).html`, html);
     } catch { alert('Failed to fetch original HTML'); }
   };
