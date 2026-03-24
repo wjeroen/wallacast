@@ -615,7 +615,14 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   key={`body-${i}`}
                   id={`ra-el-${globalIndex}`}
                   className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(el.startTime)}
+                  onClick={(e) => {
+                    // Prevent links (especially image links) from navigating — clicking should only seek audio
+                    const target = e.target as HTMLElement;
+                    if (target.closest('a')) {
+                      e.preventDefault();
+                    }
+                    onSeek(el.startTime);
+                  }}
                 >
                   {el.type === 'llm-block' && el.modelName && (
                     <div className="llm-block-badge">{el.modelName}</div>
@@ -675,7 +682,12 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                       <div
                         id={`ra-el-${globalIndex}`}
                         className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); onSeek(el.startTime); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const target = e.target as HTMLElement;
+                          if (target.closest('a')) e.preventDefault();
+                          onSeek(el.startTime);
+                        }}
                       >
                         <div className="comment-header">
                           <span className="comment-username">{meta?.username || 'Anonymous'}</span>
