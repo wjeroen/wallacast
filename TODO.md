@@ -32,7 +32,8 @@
 - [x] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress (2026-02-06)
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
 - [ ] **[P2]** Images not displaying in read-along view for some articles (descriptions ARE read aloud, so images should be in alignment data — likely stale alignment from before image extraction was added; try regenerating transcript to fix)
-- [ ] **[P2]** Marker PDF extraction fails with SIGKILL at "Recognizing Layout: 0%" — NOT a timeout or maxBuffer issue. SIGKILL comes from outside Node.js. Likely PyTorch model loading memory spike or Railway process limits. Switched to spawn() for real-time logging to diagnose.
+- [x] **[P2]** Removed marker-pdf entirely — models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load due to memory limits. Upload tab now only accepts HTML files. (2026-03-24)
+- [ ] **[P4]** Add link to online PDF-to-HTML converter tool in Upload tab hint text
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
 - [ ] **[P2]** TTS narration improvements:

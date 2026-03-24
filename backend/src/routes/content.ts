@@ -10,7 +10,6 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { extractPdfWithMarker } from '../services/pdf-extractor.js';
 
 const router = express.Router();
 
@@ -231,27 +230,9 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
-    // PDF upload: use marker-pdf for structured HTML (headings, tables, equations, images)
-    // With Gemini API key → --use_llm for highest accuracy. Without → still good quality.
-    // Images are extracted by marker and embedded as data URIs.
-    // Image DESCRIPTIONS are left to the TTS narration pipeline (ImageAltTextService)
-    // which has its own carefully tuned prompt for generating audio-friendly descriptions.
-    if (type === 'pdf_upload' && req.body.pdf_data) {
-      try {
-        const pdfBuffer = Buffer.from(req.body.pdf_data, 'base64');
-        const { text: pdfText, html: pdfHtml, totalPages, imageCount } = await extractPdfWithMarker(pdfBuffer, req.user!.userId);
-        processedContent = pdfText;
-        htmlContent = pdfHtml;
-        console.log(`[PDF] Processed "${finalTitle}" — ~${totalPages} pages, ${pdfText.length} chars, ${imageCount} images`);
-      } catch (pdfError) {
-        console.error('[PDF] Extraction failed:', pdfError);
-        return res.status(400).json({ error: 'Failed to extract text from PDF. The file may be corrupted or image-only (scanned).' });
-      }
-    }
-
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
-    if ((type === 'text' || type === 'pdf_upload') && processedContent && !htmlContent) {
+    if (type === 'text' && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
@@ -315,8 +296,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // PDF uploads are stored as 'text' type in the database (same as HTML uploads)
-    const dbType = type === 'pdf_upload' ? 'text' : type;
+    const dbType = type;
 
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
     // Set content_fetched_at for articles fetched from a URL
@@ -332,7 +312,7 @@ router.post('/', async (req, res) => {
     const createdItem = result.rows[0];
     
     // Auto-generate audio for articles
-    if ((type === 'article' || type === 'text' || type === 'pdf_upload') && !audioUrlValue && (processedContent || htmlContent)) {
+    if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
