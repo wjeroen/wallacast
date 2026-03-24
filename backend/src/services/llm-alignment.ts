@@ -37,7 +37,6 @@ interface ContentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
-  modelName?: string; // For llm-block elements: the AI model that generated the content
 }
 
 export interface LLMAlignmentElement {
@@ -51,7 +50,6 @@ export interface LLMAlignmentElement {
     extendedScore?: Record<string, number>;
     depth: number;
   };
-  modelName?: string; // For llm-block elements: AI model attribution
 }
 
 export interface LLMAlignmentResult {
@@ -254,13 +252,30 @@ function extractContentElements(
       }
     } else if ((el as Element).classList?.contains('llm-content-block')) {
       // LessWrong/EA Forum LLM Content Block — AI-generated section with model attribution
+      // Explode into individual child elements for read-along granularity.
+      // Each child gets wrapped in a div.llm-content-block for the purple border.
+      // Only the first child gets data-model-name so the CSS ::before badge appears once per block.
       const modelName = el.getAttribute('data-model-name') || 'AI';
-      if (text) {
+      const children = Array.from(el.children);
+      let isFirstChild = true;
+      for (const child of children) {
+        const childText = (child.textContent || '').trim();
+        if (!childText) continue;
+        const modelAttr = isFirstChild ? ` data-model-name="${modelName}"` : '';
+        const wrappedHtml = `<div class="llm-content-block"${modelAttr}>${(child as Element).outerHTML}</div>`;
+        elements.push({
+          type: 'llm-block',
+          html: wrappedHtml,
+          text: isFirstChild ? `The following was written by ${modelName}: ${childText}` : childText,
+        });
+        isFirstChild = false;
+      }
+      // Fallback: if no children (text-only block), push the whole block
+      if (isFirstChild && text) {
         elements.push({
           type: 'llm-block',
           html: (el as Element).outerHTML,
           text: `The following was written by ${modelName}: ${text}`,
-          modelName,
         });
       }
     } else {
@@ -1044,7 +1059,6 @@ ${closingInstruction}`;
     html: el.html,
     startTime: timestamps[i],
     ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
-    ...(el.modelName ? { modelName: el.modelName } : {}),
   }));
 
   // Find comments start time
