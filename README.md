@@ -382,6 +382,7 @@ Wallacast supports multiple users with complete data isolation:
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
+  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, and three HTML download options (cleaned, read-along, original via refetch)
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth

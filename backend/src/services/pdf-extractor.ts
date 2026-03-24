@@ -1,11 +1,8 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { getUserSetting } from './ai-providers.js';
-
-const execFileAsync = promisify(execFile);
 
 interface PdfExtractionResult {
   text: string;
@@ -64,11 +61,65 @@ export async function extractPdfWithMarker(
       console.log('[PDF] Using marker without LLM (no Gemini API key)');
     }
 
-    // Run marker_single
+    // Run marker_single using spawn for real-time stderr logging
+    // (execFile buffers all output, so if marker gets SIGKILL we see nothing)
     console.log(`[PDF] Running: marker_single ${args.filter(a => a !== geminiApiKey).join(' ')}`);
-    const { stdout, stderr } = await execFileAsync('marker_single', args, {
-      timeout: 5 * 60 * 1000, // 5 minute timeout for large PDFs
-      maxBuffer: 50 * 1024 * 1024, // 50MB output buffer
+
+    // Log system memory before starting marker
+    try {
+      const memInfo = os.freemem();
+      const totalMem = os.totalmem();
+      console.log(`[PDF] System memory: ${(memInfo / 1024 / 1024).toFixed(0)}MB free / ${(totalMem / 1024 / 1024).toFixed(0)}MB total`);
+    } catch { /* ignore */ }
+
+    const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn('marker_single', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdoutBuf = '';
+      let stderrBuf = '';
+      const TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+      const timer = setTimeout(() => {
+        console.log('[PDF] marker_single timed out after 5 minutes, killing...');
+        child.kill('SIGTERM');
+        setTimeout(() => child.kill('SIGKILL'), 5000);
+      }, TIMEOUT);
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stdoutBuf += text;
+        console.log(`[PDF][stdout] ${text.trimEnd()}`);
+      });
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderrBuf += text;
+        // Log every stderr line in real-time so Railway logs capture progress before any crash
+        console.log(`[PDF][stderr] ${text.trimEnd()}`);
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (signal) {
+          // Log memory again after crash to help diagnose OOM
+          try {
+            const memInfo = os.freemem();
+            console.log(`[PDF] After crash: ${(memInfo / 1024 / 1024).toFixed(0)}MB free`);
+          } catch { /* ignore */ }
+          reject(new Error(`marker_single was killed by signal ${signal}. stderr: ${stderrBuf.substring(0, 500)}`));
+        } else if (code !== 0) {
+          reject(new Error(`marker_single exited with code ${code}. stderr: ${stderrBuf.substring(0, 500)}`));
+        } else {
+          resolve({ stdout: stdoutBuf, stderr: stderrBuf });
+        }
+      });
     });
 
     if (stdout) console.log(`[PDF] marker stdout: ${stdout.substring(0, 500)}`);
