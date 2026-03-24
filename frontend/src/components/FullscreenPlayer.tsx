@@ -466,7 +466,7 @@ export function FullscreenPlayer({
     }
     const elements = (parsedAlignment.elements as LLMAlignmentElement[]);
     const bodyHtml = elements
-      .filter(e => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'title', 'meta'].includes(e.type))
+      .filter(e => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block', 'title', 'meta'].includes(e.type))
       .map(e => e.html)
       .join('\n');
     const commentHtml = elements
@@ -479,7 +479,7 @@ export function FullscreenPlayer({
       .join('\n');
     const fullHtml = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${content.title || 'Read-Along'}</title>
-<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}</style>
+<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}.llm-content-block{font-family:Georgia,'Times New Roman',serif;border-left:4px solid #8b5cf6;padding-left:1em;margin:1em 0;position:relative}.llm-content-block[data-model-name]::before{content:attr(data-model-name);display:block;font-family:system-ui,sans-serif;font-size:.7rem;color:#a78bfa;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:4px;padding:.15em .5em;margin-bottom:.5em;width:fit-content}</style>
 </head><body>
 <h1>${content.title || ''}</h1>
 ${bodyHtml}
