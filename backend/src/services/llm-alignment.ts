@@ -252,26 +252,29 @@ function extractContentElements(
       }
     } else if ((el as Element).classList?.contains('llm-content-block')) {
       // LessWrong/EA Forum LLM Content Block — AI-generated section with model attribution
-      // Explode into individual child elements for read-along granularity.
-      // Each child gets wrapped in a div.llm-content-block for the purple border.
-      // Only the first child gets data-model-name so the CSS ::before badge appears once per block.
+      // Explode into individual block-level descendants for read-along granularity.
+      // Uses querySelectorAll to handle inner wrappers (e.g. div.llm-content-block-content).
+      // Each descendant gets wrapped in a div.llm-content-block for the purple border.
+      // Only the first gets data-model-name so the CSS ::before badge appears once per block.
       const modelName = el.getAttribute('data-model-name') || 'AI';
-      const children = Array.from(el.children);
-      let isFirstChild = true;
-      for (const child of children) {
-        const childText = (child.textContent || '').trim();
-        if (!childText) continue;
-        const modelAttr = isFirstChild ? ` data-model-name="${modelName}"` : '';
-        const wrappedHtml = `<div class="llm-content-block"${modelAttr}>${(child as Element).outerHTML}</div>`;
+      const descendants = Array.from(
+        el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table, figure')
+      );
+      let isFirst = true;
+      for (const desc of descendants) {
+        const descText = (desc.textContent || '').trim();
+        if (!descText) continue;
+        const modelAttr = isFirst ? ` data-model-name="${modelName}"` : '';
+        const wrappedHtml = `<div class="llm-content-block"${modelAttr}>${(desc as Element).outerHTML}</div>`;
         elements.push({
           type: 'llm-block',
           html: wrappedHtml,
-          text: isFirstChild ? `The following was written by ${modelName}: ${childText}` : childText,
+          text: isFirst ? `The following was written by ${modelName}: ${descText}` : descText,
         });
-        isFirstChild = false;
+        isFirst = false;
       }
-      // Fallback: if no children (text-only block), push the whole block
-      if (isFirstChild && text) {
+      // Fallback: if no block-level descendants found (text-only block), push the whole block
+      if (isFirst && text) {
         elements.push({
           type: 'llm-block',
           html: (el as Element).outerHTML,
