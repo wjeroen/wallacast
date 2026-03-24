@@ -149,7 +149,7 @@ router.get('/:id/audio', async (req, res) => {
       // to a Node.js stream that can be piped to the Express response.
       // This ensures we never buffer the full audio file in memory.
       const { Readable } = await import('stream');
-      const nodeStream = Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]);
+      const nodeStream = Readable.fromWeb(upstreamRes.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
       nodeStream.pipe(res);
       nodeStream.on('error', (err) => {
         console.error('[AudioProxy] Stream error:', err.message);
