@@ -205,6 +205,17 @@ function htmlToNarrationText(html: string): string {
       link.replaceWith(textNode);
     });
 
+    // Mark LLM content blocks (LessWrong/EA Forum AI-generated sections)
+    // with spoken attribution before text extraction
+    const llmBlocks = doc.querySelectorAll('div.llm-content-block');
+    llmBlocks.forEach(block => {
+      const modelName = block.getAttribute('data-model-name') || 'AI';
+      const llmStart = doc.createTextNode(` <<<LLMBLOCK:${modelName}>>> `);
+      const llmEnd = doc.createTextNode(' <<<ENDLLMBLOCK>>> ');
+      block.insertBefore(llmStart, block.firstChild);
+      block.appendChild(llmEnd);
+    });
+
     // Mark quote blocks with special delimiters before text extraction
     // This preserves quote structure in the narration
     const blockquotes = doc.querySelectorAll('blockquote');
@@ -220,6 +231,10 @@ function htmlToNarrationText(html: string): string {
 
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
+
+    // Replace LLM block markers with spoken attribution
+    text = text.replace(/<<<LLMBLOCK:(.*?)>>>/g, (_match, modelName) => `The following was written by ${modelName}:`);
+    text = text.replace(/<<<ENDLLMBLOCK>>>/g, 'End of AI-generated section.');
 
     // Replace quote markers with spoken announcements
     text = text.replace(/<<<QUOTE>>>/g, 'Start of a quote:');
@@ -440,6 +455,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
+ * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
 
