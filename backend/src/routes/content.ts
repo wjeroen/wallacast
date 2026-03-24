@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { JSDOM } from 'jsdom';
+import fetch from 'node-fetch';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
@@ -736,6 +737,42 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting content item:', error);
     res.status(500).json({ error: 'Failed to delete content item' });
+  }
+});
+
+// Download original (raw) HTML from source URL — no cleaning, for debugging
+router.get('/:id/original-html', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contentResult = await query(
+      'SELECT url FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const { url } = contentResult.rows[0];
+    if (!url) {
+      return res.status(400).json({ error: 'No source URL available for this content' });
+    }
+
+    console.log(`[Original HTML] Fetching raw HTML from: ${url}`);
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(502).json({ error: `Source returned HTTP ${response.status}` });
+    }
+
+    const html = await response.text();
+    console.log(`[Original HTML] Got ${html.length} bytes of raw HTML`);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (error) {
+    console.error('Error fetching original HTML:', error);
+    res.status(500).json({ error: 'Failed to fetch original HTML' });
   }
 });
 
