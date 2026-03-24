@@ -616,9 +616,9 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   id={`ra-el-${globalIndex}`}
                   className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                   onClick={(e) => {
-                    // Prevent links (especially image links) from navigating — clicking should only seek audio
+                    // Prevent image-wrapping links from navigating — clicking images should only seek audio
                     const target = e.target as HTMLElement;
-                    if (target.closest('a')) {
+                    if (target.tagName === 'IMG') {
                       e.preventDefault();
                     }
                     onSeek(el.startTime);
@@ -685,7 +685,7 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                         onClick={(e) => {
                           e.stopPropagation();
                           const target = e.target as HTMLElement;
-                          if (target.closest('a')) e.preventDefault();
+                          if (target.tagName === 'IMG') e.preventDefault();
                           onSeek(el.startTime);
                         }}
                       >
