@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { JSDOM } from 'jsdom';
+import fetch from 'node-fetch';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
@@ -9,7 +10,6 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { extractTextFromPdf, extractPdfWithGemini } from '../services/pdf-extractor.js';
 
 const router = express.Router();
 
@@ -148,7 +148,7 @@ router.get('/:id/audio', async (req, res) => {
       // to a Node.js stream that can be piped to the Express response.
       // This ensures we never buffer the full audio file in memory.
       const { Readable } = await import('stream');
-      const nodeStream = Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]);
+      const nodeStream = Readable.fromWeb(upstreamRes.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
       nodeStream.pipe(res);
       nodeStream.on('error', (err) => {
         console.error('[AudioProxy] Stream error:', err.message);
@@ -230,25 +230,9 @@ router.post('/', async (req, res) => {
     let extractedComments: any = null;
     let podcastShowName: string | null = null;
 
-    // PDF upload: Gemini reads the PDF for structured HTML, unpdf extracts actual images
-    if (type === 'pdf_upload' && req.body.pdf_data) {
-      try {
-        const pdfBuffer = Buffer.from(req.body.pdf_data, 'base64');
-        const { text: pdfText, html: pdfHtml, totalPages, imageCount } = await extractPdfWithGemini(pdfBuffer, req.user!.userId);
-        processedContent = pdfText;
-        // Gemini provides structured HTML (headings, bold, tables) with real images
-        // embedded as data URIs. The existing TTS pipeline handles these naturally.
-        htmlContent = pdfHtml;
-        console.log(`[PDF] Processed "${finalTitle}" — ${totalPages} pages, ${pdfText.length} chars, ${imageCount} images`);
-      } catch (pdfError) {
-        console.error('[PDF] Extraction failed:', pdfError);
-        return res.status(400).json({ error: 'Failed to extract text from PDF. The file may be corrupted or image-only (scanned).' });
-      }
-    }
-
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
-    if ((type === 'text' || type === 'pdf_upload') && processedContent && !htmlContent) {
+    if (type === 'text' && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
@@ -312,52 +296,23 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // For PDFs: pre-populate image_alt_text_data with Gemini's figcaption descriptions
-    // so ImageAltTextService.smartRegenerate() sees them as already processed and skips them.
-    // This avoids sending the same images to Gemini twice (once during PDF conversion, once during TTS).
-    let pdfImageAltTextData: any = null;
-    if (type === 'pdf_upload' && htmlContent) {
-      const figcaptionRegex = /<figure><img\s+src="([^"]+)"\s+alt="([^"]*)"[^>]*><figcaption>([\s\S]*?)<\/figcaption><\/figure>/g;
-      const descriptions: Record<string, string> = {};
-      let figMatch;
-      while ((figMatch = figcaptionRegex.exec(htmlContent)) !== null) {
-        const imgSrc = figMatch[1].split('?')[0].split('#')[0]; // normalizeUrl equivalent
-        const figcaption = figMatch[3].trim();
-        if (figcaption) {
-          descriptions[imgSrc] = figcaption;
-        }
-      }
-      if (Object.keys(descriptions).length > 0) {
-        pdfImageAltTextData = {
-          descriptions,
-          total_images: Object.keys(descriptions).length,
-          decorative_images: 0,
-          cost_usd: 0, // Already paid for during PDF conversion
-          model: 'gemini-3-flash-preview',
-          processed_at: new Date().toISOString()
-        };
-        console.log(`[PDF] Pre-populated ${Object.keys(descriptions).length} image descriptions from Gemini figcaptions`);
-      }
-    }
-
-    // PDF uploads are stored as 'text' type in the database (same as HTML uploads)
-    const dbType = type === 'pdf_upload' ? 'text' : type;
+    const dbType = type;
 
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
     // Set content_fetched_at for articles fetched from a URL
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at, image_alt_text_data, images_processed)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt, pdfImageAltTextData ? JSON.stringify(pdfImageAltTextData) : null, pdfImageAltTextData ? true : null]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
     );
 
     const createdItem = result.rows[0];
     
     // Auto-generate audio for articles
-    if ((type === 'article' || type === 'text' || type === 'pdf_upload') && !audioUrlValue && (processedContent || htmlContent)) {
+    if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
@@ -762,6 +717,42 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting content item:', error);
     res.status(500).json({ error: 'Failed to delete content item' });
+  }
+});
+
+// Download original (raw) HTML from source URL — no cleaning, for debugging
+router.get('/:id/original-html', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contentResult = await query(
+      'SELECT url FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const { url } = contentResult.rows[0];
+    if (!url) {
+      return res.status(400).json({ error: 'No source URL available for this content' });
+    }
+
+    console.log(`[Original HTML] Fetching raw HTML from: ${url}`);
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(502).json({ error: `Source returned HTTP ${response.status}` });
+    }
+
+    const html = await response.text();
+    console.log(`[Original HTML] Got ${html.length} bytes of raw HTML`);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (error) {
+    console.error('Error fetching original HTML:', error);
+    res.status(500).json({ error: 'Failed to fetch original HTML' });
   }
 });
 

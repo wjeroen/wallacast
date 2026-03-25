@@ -2657,6 +2657,43 @@
   font-style: italic;
 }
 
+/* LLM Content Blocks (LessWrong/EA Forum AI-generated sections) */
+.article-content .llm-content-block {
+  font-family: Georgia, 'Times New Roman', serif;
+  border-left: 4px solid #8b5cf6;
+  padding-left: 1em;
+  margin: 1.5em 0;
+  position: relative;
+}
+
+/* In read-along, each paragraph is its own element — reduce vertical margin */
+.read-along-element .llm-content-block {
+  font-family: Georgia, 'Times New Roman', serif;
+  border-left: 4px solid #8b5cf6;
+  padding-left: 1em;
+  margin: 0;
+  position: relative;
+}
+
+/* CSS-only model badge — works in raw HTML views (Content tab) via data attribute */
+.article-content .llm-content-block[data-model-name]::before,
+.read-along-element .llm-content-block[data-model-name]::before {
+  content: attr(data-model-name);
+  display: block;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.7rem;
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 4px;
+  padding: 0.15em 0.5em;
+  margin-bottom: 0.5em;
+  font-style: normal;
+  letter-spacing: 0.02em;
+  width: fit-content;
+}
+
+
 .article-content code {
   background: #1e293b;
   padding: 0.2em 0.4em;

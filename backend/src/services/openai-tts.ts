@@ -169,28 +169,51 @@ function htmlToNarrationText(html: string): string {
     unwanted.forEach(el => el.remove());
 
     // Handle links: Replace with anchor text + domain name
+    // If the anchor text itself IS a URL (common in LessWrong/EA Forum comments),
+    // replace it with just the domain name to avoid Kokoro reading full URLs
     const links = doc.querySelectorAll('a[href]');
     links.forEach(link => {
       const anchorText = link.textContent?.trim() || '';
       const href = link.getAttribute('href') || '';
 
-      // Extract domain name from URL
-      let domainText = '';
+      // Extract domain name from href
+      let domain = '';
       try {
-        const url = new URL(href, 'https://example.com'); // Base URL for relative links
+        const url = new URL(href, 'https://example.com');
         const hostname = url.hostname;
-        // Remove www. prefix if present
-        const domain = hostname.replace(/^www\./, '');
-        // Only use the main domain (before first slash of path)
-        domainText = `, link to ${domain}`;
+        domain = hostname.replace(/^www\./, '');
       } catch (e) {
-        // If URL parsing fails, use generic text
-        domainText = ', a link is shown here';
+        domain = '';
       }
 
-      // Replace the link element with anchor text + domain description
-      const textNode = doc.createTextNode(anchorText + domainText);
+      // Check if anchor text itself looks like a URL
+      const anchorIsUrl = /^https?:\/\//i.test(anchorText) || /^www\./i.test(anchorText);
+
+      let replacement: string;
+      if (anchorIsUrl) {
+        // Anchor text IS a URL — just say "link to domain.com"
+        replacement = `link to ${domain || 'a website'}`;
+      } else if (anchorText && domain && domain !== 'example.com') {
+        replacement = `${anchorText}, link to ${domain}`;
+      } else if (anchorText) {
+        replacement = anchorText;
+      } else {
+        replacement = domain ? `link to ${domain}` : 'a link is shown here';
+      }
+
+      const textNode = doc.createTextNode(replacement);
       link.replaceWith(textNode);
+    });
+
+    // Mark LLM content blocks (LessWrong/EA Forum AI-generated sections)
+    // with spoken attribution before text extraction
+    const llmBlocks = doc.querySelectorAll('div.llm-content-block');
+    llmBlocks.forEach(block => {
+      const modelName = block.getAttribute('data-model-name') || 'AI';
+      const llmStart = doc.createTextNode(` <<<LLMBLOCK:${modelName}>>> `);
+      const llmEnd = doc.createTextNode(' <<<ENDLLMBLOCK>>> ');
+      block.insertBefore(llmStart, block.firstChild);
+      block.appendChild(llmEnd);
     });
 
     // Mark quote blocks with special delimiters before text extraction
@@ -209,12 +232,28 @@ function htmlToNarrationText(html: string): string {
     // Get text content (handles entities like &quot; correctly)
     let text = doc.body.textContent || '';
 
+    // Replace LLM block markers with spoken attribution
+    text = text.replace(/<<<LLMBLOCK:(.*?)>>>/g, (_match, modelName) => `The following was written by ${modelName}:`);
+    text = text.replace(/<<<ENDLLMBLOCK>>>/g, 'End of AI-generated section.');
+
     // Replace quote markers with spoken announcements
     text = text.replace(/<<<QUOTE>>>/g, 'Start of a quote:');
     text = text.replace(/<<<ENDQUOTE>>>/g, 'End of the quote.');
 
     // Remove emojis (for narration only - they don't render well in TTS)
     text = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '');
+
+    // Replace bare URLs in text (not caught by <a> tag handling above)
+    // with just "link to domain.com"
+    text = text.replace(/https?:\/\/[^\s)>\]]+/gi, (url) => {
+      try {
+        const parsed = new URL(url);
+        const domain = parsed.hostname.replace(/^www\./, '');
+        return `link to ${domain}`;
+      } catch {
+        return 'a link';
+      }
+    });
 
     // Clean up whitespace (including any gaps left by emoji removal)
     text = text.replace(/\s+/g, ' ').trim();
@@ -399,12 +438,26 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Format numbers/dates to be readable (e.g., "1990s" -> "nineteen nineties").
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words. The TTS engine cannot interpret symbols — it will say gibberish. Examples:
+   - "$1,200" -> "twelve hundred dollars"
+   - "€100.000" -> "one hundred thousand euros"
+   - "£50m" -> "fifty million pounds"
+   - "3.5%" -> "three point five percent"
+   - "10x" -> "ten times"
+   - "§4.2" -> "section four point two"
+   - "2024" (as a year) -> "twenty twenty-four"
+   - "1990s" -> "nineteen nineties"
+   - "#5" -> "number five"
+   - "100k" -> "one hundred thousand"
+   - "~50" -> "approximately fifty"
+   - "<10" -> "less than ten"
+   - "2+2=4" -> "two plus two equals four"
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote." 
+ * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
+ * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
- * Ignore URLs. Read only the anchor text. If the context relies on the link, append "linked here."
+ * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
 
  Output ONLY the clean narration text.
 
@@ -674,7 +727,16 @@ export async function generateArticleAudio(
   }
 }
 
+// Guard against concurrent generation for the same content
+const activeGenerations = new Set<number>();
+
 export async function generateAudioForContent(contentId: number, regenerate: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
+  if (activeGenerations.has(contentId)) {
+    console.log(`[TTS] Generation already in progress for content ${contentId}, skipping duplicate`);
+    return { audioUrl: '', warning: 'Generation already in progress' };
+  }
+  activeGenerations.add(contentId);
+
   try {
     const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
     if (contentResult.rows.length === 0) throw new Error('Content not found');
@@ -861,7 +923,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const whisperPrompt = '';
     console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
 
-    transcribeWithTimestamps(audioUrl, content.user_id, whisperPrompt)
+    transcribeWithTimestamps(audioBuffer, content.user_id, whisperPrompt)
       .then(async (transcriptResult) => {
           // Fix Whisper dropping the title: if the first word starts after 3s,
           // Whisper likely "consumed" the title (because the prompt matches the
@@ -928,5 +990,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
   } catch (error) {
     console.error('Error generating audio for content:', error);
     throw error;
+  } finally {
+    activeGenerations.delete(contentId);
   }
 }
