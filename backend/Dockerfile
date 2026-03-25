@@ -9,20 +9,20 @@ COPY --from=mwader/static-ffmpeg:6.0 /ffprobe /usr/local/bin/
 
 WORKDIR /app
 
-# 3. Copy package files
+# 5. Copy package files
 COPY package*.json ./
 
-# 4. Install dependencies (uses cache if package.json hasn't changed)
+# 6. Install dependencies (uses cache if package.json hasn't changed)
 RUN npm ci
 
-# 5. Copy application code
+# 7. Copy application code
 COPY . .
 
-# 6. Build TypeScript
+# 8. Build TypeScript
 RUN npm run build
 
-# 7. Expose port
+# 9. Expose port
 EXPOSE 3001
 
-# 8. Start the application
+# 10. Start the application
 CMD ["npm", "start"]
