@@ -1,6 +1,6 @@
 # Wallacast
 
-A personal read-it-later and podcast app that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Podcasting. It has bidirectional wallabag sync. Optimized for LessWrong and the Effective Altruism Forum (supports comments and LLM blocks).
+A personal read-it-later and podcast PWA that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Podcasting. It has bidirectional wallabag sync. Optimized for LessWrong and the Effective Altruism Forum (supports comments and LLM blocks).
 
 Try it out at https://wallacast.up.railway.app or deploy it yourself.
 
