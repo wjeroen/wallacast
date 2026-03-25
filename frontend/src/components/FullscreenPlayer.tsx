@@ -11,7 +11,9 @@ import {
   SquareArrowOutUpRight,
   RefreshCw,
   ArrowDownToLine,
+  MoreVertical,
 } from 'lucide-react';
+import { contentAPI } from '../api';
 import type { ContentItem, Comment } from '../types';
 
 interface TranscriptWord {
@@ -53,6 +55,10 @@ interface FullscreenPlayerProps {
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
   onRefetch?: () => void;
+  onGenerateAudio?: (regenerate: boolean) => void;
+  onRemoveAudio?: () => void;
+  onRegenerateTranscript?: () => void;
+  onContentUpdated?: (updated: ContentItem) => void;
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
@@ -165,6 +171,9 @@ export function FullscreenPlayer({
   onClose,
   onTranscriptWordClick,
   onRefetch,
+  onGenerateAudio,
+  onRemoveAudio,
+  onRegenerateTranscript,
 }: FullscreenPlayerProps) {
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
@@ -175,6 +184,21 @@ export function FullscreenPlayer({
   });
   // Toggle: show newest fetched html_content vs synced LLM alignment
   const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
+  // Dropdown menu state
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showDropdown) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDropdown]);
 
   // Reset unsynced toggle when content changes
   useEffect(() => {
@@ -408,6 +432,77 @@ export function FullscreenPlayer({
   };
 
   // --------------------------------------------------------------------------
+  // Download helpers
+  // --------------------------------------------------------------------------
+  const downloadFile = (filename: string, data: string, mime = 'text/html') => {
+    const blob = new Blob([data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
+
+  const handleDownloadCleanedHtml = async () => {
+    setShowDropdown(false);
+    try {
+      const response = await contentAPI.getById(content.id);
+      const html = response.data.html_content || response.data.content || '';
+      if (!html) { alert('No content available'); return; }
+      downloadFile(`${safeName}.html`, html);
+    } catch { alert('Failed to download'); }
+  };
+
+  const handleDownloadReadAlongHtml = () => {
+    setShowDropdown(false);
+    if (!parsedAlignment || !isLLMAlignment) {
+      alert('No read-along alignment available for this item');
+      return;
+    }
+    const elements = (parsedAlignment.elements as LLMAlignmentElement[]);
+    const bodyHtml = elements
+      .filter(e => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block', 'title', 'meta'].includes(e.type))
+      .map(e => e.html)
+      .join('\n');
+    const commentHtml = elements
+      .filter(e => e.type === 'comment')
+      .map(e => {
+        const meta = e.commentMeta;
+        const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
+        return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
+      })
+      .join('\n');
+    const fullHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${content.title || 'Read-Along'}</title>
+<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}.llm-content-block{font-family:Georgia,'Times New Roman',serif;border-left:4px solid #8b5cf6;padding-left:1em;margin:1em 0;position:relative}.llm-content-block[data-model-name]::before{content:attr(data-model-name);display:block;font-family:system-ui,sans-serif;font-size:.7rem;color:#a78bfa;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:4px;padding:.15em .5em;margin-bottom:.5em;width:fit-content}</style>
+</head><body>
+<h1>${content.title || ''}</h1>
+${bodyHtml}
+${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
+</body></html>`;
+    downloadFile(`${safeName} (read-along).html`, fullHtml);
+  };
+
+  const handleDownloadOriginalHtml = async () => {
+    setShowDropdown(false);
+    if (!content.url) {
+      alert('No source URL available — cannot fetch original HTML');
+      return;
+    }
+    try {
+      const response = await contentAPI.getOriginalHtml(content.id);
+      const html = typeof response.data === 'string' ? response.data : String(response.data);
+      if (!html) { alert('No content returned from source'); return; }
+      downloadFile(`${safeName} (original).html`, html);
+    } catch { alert('Failed to fetch original HTML'); }
+  };
+
+  // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
   // Renders content EXACTLY like content tab + comments tab, with timestamps
   // --------------------------------------------------------------------------
@@ -421,7 +516,7 @@ export function FullscreenPlayer({
     const titleEl = elements.find(e => e.type === 'title');
     const metaElements = elements.filter(e => e.type === 'meta');
     const bodyElements = elements.filter(e =>
-      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block'].includes(e.type)
+      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
     );
     const commentDivider = elements.find(e => e.type === 'comment-divider');
     const commentElements = elements.filter(e => e.type === 'comment');
@@ -519,7 +614,14 @@ export function FullscreenPlayer({
                   key={`body-${i}`}
                   id={`ra-el-${globalIndex}`}
                   className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(el.startTime)}
+                  onClick={(e) => {
+                    // Prevent image-wrapping links from navigating — clicking images should only seek audio
+                    const target = e.target as HTMLElement;
+                    if (target.tagName === 'IMG') {
+                      e.preventDefault();
+                    }
+                    onSeek(el.startTime);
+                  }}
                 >
                   <div dangerouslySetInnerHTML={{ __html: el.html }} />
                 </div>
@@ -576,7 +678,12 @@ export function FullscreenPlayer({
                       <div
                         id={`ra-el-${globalIndex}`}
                         className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); onSeek(el.startTime); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const target = e.target as HTMLElement;
+                          if (target.tagName === 'IMG') e.preventDefault();
+                          onSeek(el.startTime);
+                        }}
                       >
                         <div className="comment-header">
                           <span className="comment-username">{meta?.username || 'Anonymous'}</span>
@@ -909,6 +1016,71 @@ export function FullscreenPlayer({
           </div>
         </div>
         <div className="fullscreen-header-buttons">
+          {/* Dropdown menu (same options as library item) */}
+          <div className="dropdown-container" ref={showDropdown ? dropdownRef : null} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowDropdown(!showDropdown)}
+              className="header-button"
+              title="More options"
+            >
+              <MoreVertical size={20} />
+            </button>
+            {showDropdown && (
+              <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
+                {(content.type === 'article' || content.type === 'text') && (
+                  <>
+                    {!content.audio_url && onGenerateAudio && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateAudio(false); }}>
+                        Generate audio
+                      </button>
+                    )}
+                    {content.audio_url && onGenerateAudio && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateAudio(true); }}>
+                        Regenerate audio
+                      </button>
+                    )}
+                    {content.audio_url && onRemoveAudio && (
+                      <button onClick={() => { setShowDropdown(false); onRemoveAudio(); }}>
+                        Remove audio
+                      </button>
+                    )}
+                  </>
+                )}
+                {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
+                  <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    Regenerate transcript
+                  </button>
+                )}
+                {content.type === 'podcast_episode' && onRegenerateTranscript && (
+                  <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    {content.transcript ? 'Regenerate' : 'Generate'} transcript
+                  </button>
+                )}
+                {content.type === 'article' && content.url && (
+                  <button onClick={() => { setShowDropdown(false); if (onRefetch) onRefetch(); }}>
+                    Refetch from web
+                  </button>
+                )}
+                {(content.type === 'article' || content.type === 'text') && (
+                  <>
+                    <button onClick={handleDownloadCleanedHtml}>
+                      Download cleaned HTML
+                    </button>
+                    {parsedAlignment && isLLMAlignment && (
+                      <button onClick={handleDownloadReadAlongHtml}>
+                        Download read-along HTML
+                      </button>
+                    )}
+                    {content.url && (
+                      <button onClick={handleDownloadOriginalHtml}>
+                        Download original (refetch)
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <button onClick={onMinimize} className="header-button" title="Minimize">
             <Minimize2 size={20} />
           </button>

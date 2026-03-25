@@ -31,14 +31,18 @@
 - [x] **[P2]** Progressive autoscroll for long elements (bullet lists, comments) — intra-element scrolling instead of center snap (2026-03-06)
 - [x] **[P1]** CRITICAL: Add stop/cancel button for audio generation in progress (2026-02-06)
 - [ ] **[P1]** CRITICAL: Frontend doesn't refresh after refetch - content updates in database but UI still shows old data (need to reload content item after refetch completes)
+- [ ] **[P2]** Images not displaying in read-along view for some articles (descriptions ARE read aloud, so images should be in alignment data — likely stale alignment from before image extraction was added; try regenerating transcript to fix)
+- [x] **[P2]** Removed marker-pdf entirely — models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load due to memory limits. Upload tab now only accepts HTML files. (2026-03-24)
+- [ ] **[P4]** Add link to online PDF-to-HTML converter tool in Upload tab hint text
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
-  - Fix vote numbers on EA Forum and LessWrong being read as concatenated digits: "4 upvotes, 3 agree votes, 2 disagree votes" is currently read as "fourhundredthirtytwo"
   - Reduce repetition in narration
   - NOTE: Quote announcements (2026-01-29) and LessWrong score filtering (2026-01-29) already implemented
   - [x] Fix TTS reading emoji names in comment author usernames (e.g. "small orange diamond" for 🔸) - stripped emojis from usernames and article author in narration (2026-02-06)
+  - [x] Fix numbers/symbols/currencies in articles — scriptwriter prompt now explicitly requires writing all numbers, symbols, and currencies as fully spoken words with examples (2026-03-20)
+  - [x] Fix full URLs read aloud in LessWrong/EA Forum comments — when anchor text IS a URL (e.g. `<a href="https://...">https://...</a>`), now replaced with just "link to domain"; also catches bare URLs not in `<a>` tags (2026-03-20)
 - [x] **[P2]** CRITICAL: Fixed 80GB mobile data usage and slow queries (2026-01-27):
   - App was returning entire audio files with every click and update (caused 80GB mobile data usage)
   - Root cause: `RETURNING *` in PATCH, list queries included audio_data for all items
@@ -162,7 +166,10 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
-- [x] **PDF "Gemini reads, unpdf illustrates" conversion** (2026-03-16): Uploaded PDFs are now converted to structured HTML (headings, bold, tables, lists) by sending the PDF to Gemini 3 Flash in 10-page chunks. For images, Gemini outputs `<figure>` placeholders with page+index references and figcaption descriptions. unpdf's `extractImages()` then grabs the actual image data, sharp converts raw pixels to PNG, and placeholders are replaced with real `<img>` tags. Gemini's image descriptions are pre-saved to `image_alt_text_data` JSONB so the TTS pipeline doesn't re-process them. Falls back to text-only extraction without Gemini API key. `ImageAltTextService` updated to handle `data:` URIs (skip download for base64 images) and skip decorative regex patterns for data URIs.
+- [x] **LLM Content Block support for LessWrong/EA Forum** (2026-03-24): AI-generated sections (`div.llm-content-block` with `data-model-name`) are now detected, narrated with model attribution ("The following was written by Claude Opus 4.6:"), displayed in serif font with purple left border and model name badge in read-along view.
+- [x] **Removed marker-pdf and PDF upload** (2026-03-24): marker-pdf models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load. Upload tab now HTML-only.
+- [x] **Unified HTML download menus + raw original download** (2026-03-24): Library dropdown now has same 3 download options as fullscreen player (cleaned HTML, read-along HTML, original). "Download original" now fetches raw HTML from source URL with zero cleaning (new `GET /:id/original-html` endpoint), instead of re-running the article extraction pipeline which gave identical cleaned output.
+- [x] **PDF → HTML via marker-pdf** (2026-03-16): Replaced Gemini+unpdf PDF pipeline with [marker-pdf](https://github.com/VikParuchuri/marker), a purpose-built PDF conversion tool using deep learning models (surya OCR/layout, texify math). Runs as Python CLI (`marker_single --output_format html`) called from Node.js. With user's Gemini API key → `--use_llm` for highest accuracy (tables, math, forms). Without → still high quality. Images extracted by marker are embedded as data URIs; image descriptions left to the existing TTS narration pipeline (`ImageAltTextService`). Removed `unpdf` and `sharp` npm dependencies. Added Python 3 + marker-pdf to Dockerfile.
 - [x] **PDF upload support + rename HTML tab to Upload** (2026-03-15): AddTab "HTML" button renamed to "Upload" (with Upload icon), now accepts both PDF and HTML files. PDFs are sent as base64 to backend, text extracted server-side via `unpdf` (PDF.js wrapper), stored as text items with `<p>` tags. HTML uploads unchanged. New service: `backend/src/services/pdf-extractor.ts`. Both file types get full TTS/read-along/alignment support.
 - [x] **Fix archived article read-along still clickable + content versioning for texts** (2026-03-13): Archiving now clears `content_alignment`, `transcript`, `transcript_words`, and `tts_chunks` alongside audio data (unless favorited). Replaced single-line provenance with two-line Show/Shown toggle showing content version and audio version separately, with "(newer)"/"(older)" labels when out of sync. Works for both articles and texts.
 - [x] **Fix read-along not triggering for text items** (2026-02-23): Text items stored content in `content` column but read-along gates only checked `html_content` (articles only). Fixed: text item creation now populates `html_content`, alignment gates accept `type='text'`, `llm-alignment.ts` falls back to `content` column for existing items

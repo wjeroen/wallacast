@@ -27,7 +27,7 @@ interface TranscriptWord {
 }
 
 interface ContentElement {
-  type: 'title' | 'meta' | 'heading' | 'paragraph' | 'image' | 'blockquote' | 'list' | 'code-block' | 'comment-divider' | 'comment';
+  type: 'title' | 'meta' | 'heading' | 'paragraph' | 'image' | 'blockquote' | 'list' | 'code-block' | 'comment-divider' | 'comment' | 'llm-block';
   html: string;
   text: string; // Plain text for LLM matching (not stored in final result)
   commentMeta?: {
@@ -169,8 +169,8 @@ function extractContentElements(
   // Get image descriptions for matching
   const imageDescriptions: Record<string, string> = imageAltTextData?.descriptions || {};
 
-  // Select meaningful block elements
-  const BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, figure, img, pre, table';
+  // Select meaningful block elements (includes LLM content blocks from LessWrong/EA Forum)
+  const BLOCK_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block';
   const allBlocks = Array.from(doc.querySelectorAll(BLOCK_SELECTOR));
 
   // Filter out elements that are descendants of other selected elements
@@ -250,9 +250,52 @@ function extractContentElements(
       if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text: text.slice(0, 300) });
       }
+    } else if ((el as Element).classList?.contains('llm-content-block')) {
+      // LessWrong/EA Forum LLM Content Block — AI-generated section with model attribution
+      // Explode into individual block-level descendants for read-along granularity.
+      // Uses querySelectorAll to handle inner wrappers (e.g. div.llm-content-block-content).
+      // Each descendant gets wrapped in a div.llm-content-block for the purple border.
+      // Only the first gets data-model-name so the CSS ::before badge appears once per block.
+      const modelName = el.getAttribute('data-model-name') || 'AI';
+      const descendants = Array.from(
+        el.querySelectorAll('p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table, figure')
+      );
+      let isFirst = true;
+      for (const desc of descendants) {
+        const descText = (desc.textContent || '').trim();
+        if (!descText) continue;
+        const modelAttr = isFirst ? ` data-model-name="${modelName}"` : '';
+        const wrappedHtml = `<div class="llm-content-block"${modelAttr}>${(desc as Element).outerHTML}</div>`;
+        elements.push({
+          type: 'llm-block',
+          html: wrappedHtml,
+          text: isFirst ? `The following was written by ${modelName}: ${descText}` : descText,
+        });
+        isFirst = false;
+      }
+      // Fallback: if no block-level descendants found (text-only block), push the whole block
+      if (isFirst && text) {
+        elements.push({
+          type: 'llm-block',
+          html: (el as Element).outerHTML,
+          text: `The following was written by ${modelName}: ${text}`,
+        });
+      }
     } else {
       // p, div, etc.
-      if (text) {
+      const embeddedImg = el.querySelector('img');
+      if (embeddedImg) {
+        // Image wrapped in <p> or <a> — treat as image element
+        const src = embeddedImg.getAttribute('src') || '';
+        const alt = embeddedImg.getAttribute('alt') || '';
+        const description = findImageDescription(src, imageDescriptions, url) || alt;
+        embeddedImg.setAttribute('style', 'max-width: 100%; height: auto; border-radius: 0.5rem; margin: 0.5em 0;');
+        elements.push({
+          type: 'image',
+          html: (el as Element).outerHTML,
+          text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+        });
+      } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });
       }
     }

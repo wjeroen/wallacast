@@ -126,6 +126,46 @@ function App() {
     }
   };
 
+  const handleGenerateAudio = async (regenerate: boolean) => {
+    if (!currentContent) return;
+    try {
+      await contentAPI.generateAudio(currentContent.id, regenerate);
+      setTimeout(async () => {
+        const response = await contentAPI.getById(currentContent.id);
+        setCurrentContent(response.data);
+      }, 1000);
+    } catch (error: any) {
+      console.error('Failed to generate audio:', error);
+      alert(error?.response?.data?.error || 'Failed to generate audio');
+    }
+  };
+
+  const handleRemoveAudio = async () => {
+    if (!currentContent) return;
+    try {
+      await contentAPI.update(currentContent.id, { audio_data: null, audio_url: null } as any);
+      const response = await contentAPI.getById(currentContent.id);
+      setCurrentContent(response.data);
+    } catch (error) {
+      console.error('Failed to remove audio:', error);
+      alert('Failed to remove audio');
+    }
+  };
+
+  const handleRegenerateTranscript = async () => {
+    if (!currentContent) return;
+    try {
+      await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
+      setTimeout(async () => {
+        const response = await contentAPI.getById(currentContent.id);
+        setCurrentContent(response.data);
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to regenerate transcript:', error);
+      alert('Failed to regenerate transcript');
+    }
+  };
+
   // Callback for AddTab when content is added
   const handleContentAdded = (item: ContentItem) => {
     addItem(item);
@@ -239,6 +279,10 @@ function App() {
             content={currentContent}
             onClose={() => setCurrentContent(null)}
             onRefetch={handleRefetchContent}
+            onGenerateAudio={handleGenerateAudio}
+            onRemoveAudio={handleRemoveAudio}
+            onRegenerateTranscript={handleRegenerateTranscript}
+            onContentUpdated={(updated) => setCurrentContent(updated)}
           />
         )}
 

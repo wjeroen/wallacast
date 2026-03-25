@@ -11,7 +11,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 ## Core Concept
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
-- **File Upload → Audio**: Upload `.pdf`, `.html`, or `.htm` files directly — PDFs are text-extracted server-side via `unpdf`, HTML files treated exactly like articles
+- **File Upload → Audio**: Upload `.html` or `.htm` files directly — treated exactly like articles
 - **Texts → Audio**: Paste plain text or HTML — converted to audio with read-along alignment
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
@@ -30,7 +30,6 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
-| PDF Extraction | Gemini 3 Flash (structured HTML) + unpdf (image extraction) + sharp (PNG conversion) for uploaded PDFs |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -71,8 +70,7 @@ Wallacast supports multiple users with complete data isolation:
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
-| Adding content (URL/text/PDF+HTML upload) | `frontend/src/components/AddTab.tsx` |
-| PDF text extraction | `backend/src/services/pdf-extractor.ts` |
+| Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
@@ -180,6 +178,7 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
+  - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
   - `DELETE /:id` - Delete content and clean up audio files
 
 - **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
@@ -240,15 +239,6 @@ Wallacast supports multiple users with complete data isolation:
   - Stores descriptions in JSONB (image_alt_text_data) with metadata (cost, model, processed_at)
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
-- **`services/pdf-extractor.ts`**: PDF conversion using Gemini + `unpdf` + `sharp` ("Gemini reads, unpdf illustrates")
-  - `extractTextFromPdf(pdfBuffer)`: Basic text-only fallback (returns plain text and page count)
-  - `extractPdfWithGemini(pdfBuffer, userId)`: Full pipeline — sends PDF to Gemini in 10-page chunks for structured HTML (headings, bold, tables, lists), then extracts actual images from unpdf to replace Gemini's `<figure>` placeholders
-  - **How it works**: Gemini converts the PDF to clean HTML and outputs `<figure data-page="N" data-index="M"><figcaption>Description</figcaption></figure>` placeholders for each image. unpdf's `extractImages()` grabs the actual image data from each referenced page, `sharp` converts raw pixels to PNG, and the placeholders are replaced with real `<img>` tags + Gemini's figcaptions
-  - 10-page chunking prevents Gemini context window overflow on large documents
-  - Gemini's figcaption descriptions are pre-populated into `image_alt_text_data` JSONB so `ImageAltTextService` doesn't re-process the same images during TTS generation
-  - Falls back to text-only extraction if user has no Gemini API key
-  - Limitations: scanned/image-only PDFs depend on Gemini's OCR, image matching by page+index can be fragile if Gemini miscounts images
-
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
   - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
@@ -275,7 +265,7 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
-  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table), prepends title/author/date/karma as meta elements
+  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block), prepends title/author/date/karma as meta elements. LessWrong/EA Forum LLM content blocks are extracted as `llm-block` type with `modelName` from `data-model-name` attribute
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
   - `buildTimedTranscript()`: Groups Whisper words into sentences (splitting at `.?!` boundaries) with one timestamp per line (e.g., `[14.2] I've just started a blog about effective altruism.`), giving the LLM natural sentence context for text matching
   - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI GPT-5-Nano fallback)
@@ -361,7 +351,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, file uploads (PDF + HTML), and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content. PDF uploads send the file as base64 to the backend, which extracts text server-side via `unpdf` and stores as `type='text'`. Both upload types get the same read-along/alignment/TTS treatment as regular articles.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles.
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - Organized into: API Keys, Audio Generation, Wallabag Sync
@@ -381,7 +371,9 @@ Wallacast supports multiple users with complete data isolation:
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
+  - LLM content blocks (LessWrong/EA Forum `div.llm-content-block`): displayed in serif font with purple left border and model name badge (e.g., "Claude Opus 4.6"). TTS narration announces model attribution
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
+  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, and three HTML download options (cleaned, read-along, original via refetch)
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
