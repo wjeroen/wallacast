@@ -28,7 +28,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
-| TTS Preparation | DeepSeek-V3.2 via DeepInfra (preferred, cheaper) or GPT-5-Nano via OpenAI. Auto-routes based on available keys. |
+| TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
