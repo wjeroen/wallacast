@@ -336,6 +336,89 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           el.remove();
         }
       });
+
+      // Remove SVG elements (icons, share buttons, decorative graphics - never article content)
+      contentEl.querySelectorAll('svg').forEach(el => el.remove());
+
+      // Remove newsletter/email signup forms (Vox, Substack, etc.)
+      contentEl.querySelectorAll('form').forEach(el => {
+        const hasEmailInput = el.querySelector('input[type="email"], input[name="email"]');
+        if (hasEmailInput) {
+          el.remove();
+        }
+      });
+
+      // Remove "Related" article boxes (Vox and other sites)
+      contentEl.querySelectorAll('[class*="related"]').forEach(el => {
+        const heading = el.querySelector('h2, h3, h4');
+        if (heading && /^related$/i.test(heading.textContent?.trim() || '')) {
+          el.remove();
+        }
+      });
+
+      // Remove share button containers
+      contentEl.querySelectorAll('[class*="share-buttons"], [class*="share-tools"], [class*="social-share"]').forEach(el => el.remove());
+
+      // Remove the first <h1> if it matches the already-extracted title (prevents title being narrated twice)
+      if (title && title !== 'Untitled') {
+        const firstH1 = contentEl.querySelector('h1');
+        if (firstH1) {
+          const h1Text = firstH1.textContent?.trim() || '';
+          // Normalize both for comparison (collapse whitespace, ignore case)
+          const normalizeText = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+          if (normalizeText(h1Text) === normalizeText(title)) {
+            firstH1.remove();
+          }
+        }
+      }
+
+      // Remove subtitle/dek that matches the og:description (often repeated under title in lede sections)
+      const ogDescription = doc.querySelector('meta[property="og:description"]')?.getAttribute('content');
+      if (ogDescription) {
+        const normalizeText = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+        const normalizedDesc = normalizeText(ogDescription);
+        // Search all paragraphs — the dek might be anywhere in the lede wrapper
+        contentEl.querySelectorAll('p').forEach(p => {
+          const pText = p.textContent?.trim() || '';
+          if (normalizeText(pText) === normalizedDesc) {
+            p.remove();
+          }
+        });
+      }
+
+      // Remove author byline/bio sections from article body (we already extract author from metadata)
+      // These typically contain a small headshot image + bio text
+      contentEl.querySelectorAll('[class*="byline"], [class*="author-bio"], [class*="article-byline"]').forEach(el => el.remove());
+
+      // Remove article timestamp elements (we already extract published_date from meta)
+      contentEl.querySelectorAll('[class*="article--timestamp"]').forEach(el => el.remove());
+
+      // Remove lede metadata sections (Vox-style: category labels, author cards with headshots)
+      // The lede wrapper contains title/subtitle/byline/author which we extract separately
+      contentEl.querySelectorAll('[class*="article--lede"], [class*="lede--standard"]').forEach(el => {
+        // Only remove if it does NOT contain actual article body paragraphs
+        const hasArticleBody = el.querySelector('[class*="article-body"], [class*="entry-body"]');
+        if (!hasArticleBody) {
+          el.remove();
+        }
+      });
+
+      // Deduplicate images with the same src URL (e.g., Vox uses two <img> for responsive - mobile + desktop)
+      const seenImageSrcs = new Set<string>();
+      contentEl.querySelectorAll('img').forEach(img => {
+        const src = (img.getAttribute('src') || '').split('?')[0].split('#')[0];
+        if (!src) return;
+        if (seenImageSrcs.has(src)) {
+          // Remove the duplicate image. Also remove parent container if it's now empty.
+          const parent = img.parentElement;
+          img.remove();
+          if (parent && !parent.textContent?.trim() && !parent.querySelector('img, video, iframe')) {
+            parent.remove();
+          }
+        } else {
+          seenImageSrcs.add(src);
+        }
+      });
     }
 
     const cleanedHtml = contentEl.innerHTML;

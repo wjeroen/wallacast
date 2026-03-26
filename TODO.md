@@ -36,6 +36,7 @@
 - [ ] **[P4]** Add link to online PDF-to-HTML converter tool in Upload tab hint text
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
+- [x] **[P2]** Fix Vox (and similar sites) article extraction issues — duplicate title, duplicate responsive images, author bio/headshot, newsletter forms, "Related" boxes all now cleaned up in article-fetcher.ts (2026-03-26)
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
   - Reduce repetition in narration
