@@ -89,7 +89,7 @@ Wallacast supports multiple users with complete data isolation:
 | Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
 | Generation stuck or failing | `backend/src/routes/content.ts` - Check status updates in PATCH endpoint and `backend/src/services/openai-tts.ts` - Check error handling |
 | Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 133-147. Note: saves are debounced (3s minimum change) and effects depend on `content?.id` not `content` |
-| Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching, then `backend/src/services/openai-tts.ts` - LLM extraction |
+| Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching and cleanup (dedup images, strip title/subtitle/byline/lede, remove forms/related boxes), then `backend/src/services/openai-tts.ts` - LLM extraction |
 | Read-along not working for text items | `backend/src/services/openai-tts.ts` (alignment gate), `backend/src/services/llm-alignment.ts` (content fallback), `backend/src/routes/content.ts` (html_content population) |
 | Read-along alignment wrong / missing elements | `backend/src/services/llm-alignment.ts` - check `extractContentElements()` for element extraction, `buildTimedTranscript()` for transcript quality. **Never use fuzzy matching** — fix input data quality instead (see CLAUDE.md) |
 | Read-along autoscroll jumpy or skipping | `frontend/src/components/FullscreenPlayer.tsx` - `scrollToActive()` callback. Short elements use `scrollIntoView`, tall elements use progressive scroll based on audio progress |
