@@ -214,6 +214,191 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
 // --- NEW GRAPHQL LOGIC END ---
 
+// --- SUBSTACK HELPERS START ---
+
+/**
+ * Detect if a page is Substack by checking for substackcdn.com references.
+ * Works on custom domains too (e.g., www.update.news uses Substack).
+ */
+function isSubstackPage(html: string): boolean {
+  return html.includes('substackcdn.com');
+}
+
+/**
+ * Build the /comments URL from an article URL.
+ * Strips query params, fragments, existing /comments, then appends /comments.
+ */
+function buildSubstackCommentsUrl(articleUrl: string): string {
+  const parsed = new URL(articleUrl);
+  // Strip query params and fragment
+  let path = parsed.pathname;
+  // Strip trailing slash
+  path = path.replace(/\/+$/, '');
+  // Strip /comments if already present
+  path = path.replace(/\/comments$/, '');
+  return `${parsed.origin}${path}/comments`;
+}
+
+/**
+ * Extract window._preloads JSON from raw HTML.
+ * Substack embeds hydration data as: window._preloads = JSON.parse("...escaped...")
+ */
+function parseSubstackPreloads(html: string): any | null {
+  const marker = 'window._preloads = JSON.parse("';
+  const startIdx = html.indexOf(marker);
+  if (startIdx === -1) return null;
+
+  const jsonStart = startIdx + marker.length;
+  // Walk forward to find the closing " accounting for backslash escapes
+  let i = jsonStart;
+  while (i < html.length) {
+    if (html[i] === '\\') {
+      i += 2; // Skip escaped character
+    } else if (html[i] === '"') {
+      break;
+    } else {
+      i++;
+    }
+  }
+
+  if (i >= html.length) return null;
+
+  const escapedJson = html.substring(jsonStart, i);
+  try {
+    // First JSON.parse unescapes the JavaScript string literal
+    const unescaped = JSON.parse('"' + escapedJson + '"');
+    // Second JSON.parse parses the actual object
+    return JSON.parse(unescaped);
+  } catch (e) {
+    console.error('[Fetcher] Failed to parse Substack _preloads JSON:', e);
+    return null;
+  }
+}
+
+/**
+ * Convert a Substack comment from _preloads JSON to our Comment interface.
+ * Recursively processes children (replies).
+ */
+function mapSubstackComment(raw: any): Comment {
+  // body can be plain text or HTML. Wrap plain text in <p> tags for consistency.
+  let content = raw.body || '';
+  if (content && !content.includes('<')) {
+    // Plain text — convert newlines to paragraphs
+    content = content.split(/\n\n+/).map((p: string) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+  }
+
+  const replies: Comment[] = [];
+  if (raw.children && Array.isArray(raw.children) && raw.children.length > 0) {
+    for (const child of raw.children) {
+      replies.push(mapSubstackComment(child));
+    }
+  }
+
+  return {
+    id: String(raw.id),
+    username: raw.name || 'Anonymous',
+    date: raw.date || undefined,
+    karma: raw.reaction_count || undefined,
+    content,
+    replies: replies.length > 0 ? replies : undefined,
+  };
+}
+
+/**
+ * Fetch and extract comments from a Substack article's /comments page.
+ * Uses the window._preloads JSON (Approach B) — stable structured data,
+ * unlike CSS class names which are hashed and change frequently.
+ */
+async function fetchSubstackComments(articleUrl: string): Promise<Comment[]> {
+  const commentsUrl = buildSubstackCommentsUrl(articleUrl);
+  console.log(`[Fetcher] Fetching Substack comments from: ${commentsUrl}`);
+
+  try {
+    const response = await fetch(commentsUrl);
+    if (!response.ok) {
+      console.log(`[Fetcher] Comments page HTTP ${response.status}, skipping comments`);
+      return [];
+    }
+
+    const html = await response.text();
+    const preloads = parseSubstackPreloads(html);
+
+    if (!preloads || !preloads.initialComments) {
+      console.log('[Fetcher] No initialComments found in Substack _preloads');
+      return [];
+    }
+
+    const rawComments = preloads.initialComments;
+    if (!Array.isArray(rawComments) || rawComments.length === 0) {
+      console.log('[Fetcher] Substack article has 0 comments');
+      return [];
+    }
+
+    const comments = rawComments.map(mapSubstackComment);
+    const totalCount = countCommentsRecursive(comments);
+    console.log(`[Fetcher] Extracted ${comments.length} top-level comments (${totalCount} total with replies) from Substack`);
+    return comments;
+  } catch (error) {
+    console.error('[Fetcher] Failed to fetch Substack comments:', error);
+    return [];
+  }
+}
+
+function countCommentsRecursive(comments: Comment[]): number {
+  let count = 0;
+  for (const c of comments) {
+    count++;
+    if (c.replies) count += countCommentsRecursive(c.replies);
+  }
+  return count;
+}
+
+/**
+ * Apply Substack-specific HTML cleanup using stable selectors.
+ * Uses data-component-name, data-testid, and generic patterns — NOT hashed class names.
+ */
+function cleanSubstackContent(contentEl: Element): void {
+  // Remove subscribe widgets (data-component-name is stable, semantic attribute)
+  contentEl.querySelectorAll('[data-component-name="SubscribeWidget"]').forEach(el => el.remove());
+
+  // Remove "Subscribe now" CTA buttons — only if they link to /subscribe
+  contentEl.querySelectorAll('[data-component-name="ButtonCreateButton"]').forEach(el => {
+    const link = el.querySelector('a');
+    if (link && (link.getAttribute('href') || '').includes('/subscribe')) {
+      el.remove();
+    }
+  });
+
+  // Remove top navbar (data-testid is stable, used for testing)
+  contentEl.querySelectorAll('[data-testid="navbar"]').forEach(el => {
+    // Also remove the spacer div that follows it
+    const next = el.nextElementSibling;
+    if (next && next.getAttribute('style')?.includes('height:88px') || next?.getAttribute('style')?.includes('height: 88px')) {
+      next.remove();
+    }
+    el.remove();
+  });
+
+  // Remove footer
+  contentEl.querySelectorAll('.footer-wrap').forEach(el => el.remove());
+
+  // Remove notification regions
+  contentEl.querySelectorAll('[role="region"][aria-label*="Notification"]').forEach(el => el.remove());
+
+  // Remove comment input forms
+  contentEl.querySelectorAll('form').forEach(el => {
+    const hasCommentTextarea = el.querySelector('textarea[name="body"], textarea[placeholder*="comment"]');
+    if (hasCommentTextarea) {
+      el.remove();
+    }
+  });
+
+  // Remove share dialog overlays
+  contentEl.querySelectorAll('[data-component-name="ShareMenuDialog"]').forEach(el => el.remove());
+}
+
+// --- SUBSTACK HELPERS END ---
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
@@ -247,6 +432,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Log if potential Cloudflare challenge but continue anyway
     if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
       console.log('[Fetcher] ⚠️ Potential Cloudflare challenge detected, but attempting to parse anyway');
+    }
+
+    // Detect Substack BEFORE removing scripts (needs to check for substackcdn.com links)
+    const isSubstack = isSubstackPage(html);
+    if (isSubstack) {
+      console.log('[Fetcher] Detected Substack page (via substackcdn.com references)');
     }
 
     const dom = new JSDOM(html, { url });
@@ -295,9 +486,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Smart content selection
     let contentEl;
 
-    // Substack-specific selectors (more precise)
-    if (url.includes('substack.com')) {
-      console.log('[Fetcher] Detected Substack, using specific content selectors');
+    // Substack-specific selectors (more precise) — works on custom domains too
+    if (isSubstack) {
+      console.log('[Fetcher] Using Substack-specific content selectors');
       contentEl = doc.querySelector('.available-content .body.markup') ||
                   doc.querySelector('.body.markup') ||
                   doc.querySelector('.available-content');
@@ -403,6 +594,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         }
       });
 
+      // Apply Substack-specific cleanup (subscribe widgets, navbar, footer, etc.)
+      if (isSubstack) {
+        cleanSubstackContent(contentEl);
+      }
+
       // Deduplicate images with the same src URL (e.g., Vox uses two <img> for responsive - mobile + desktop)
       const seenImageSrcs = new Set<string>();
       contentEl.querySelectorAll('img').forEach(img => {
@@ -424,16 +620,24 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
 
+    // Fetch Substack comments from /comments page (uses structured JSON, not CSS selectors)
+    let comments: Comment[] | undefined;
+    if (isSubstack) {
+      comments = await fetchSubstackComments(url);
+      if (comments.length === 0) comments = undefined;
+    }
+
     return {
       title,
       content: textContent,
-      html: html, 
+      html: html,
       cleaned_html: cleanedHtml,
       author,
       byline: author,
       site_name: siteName,
       published_date: publishedDate,
-      lead_image_url: leadImageUrl, // <--- RETURN EXTRACTED IMAGE
+      lead_image_url: leadImageUrl,
+      comments,
     };
 
   } catch (error) {

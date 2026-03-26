@@ -30,7 +30,7 @@ Try it out at https://wallacast.up.railway.app or deploy it yourself.
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
 | Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
-| Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), standard scraper for other sites |
+| Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), Substack comment extraction (via _preloads JSON), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
@@ -227,7 +227,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
-- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). Substack-specific optimizations: targets `.body.markup` for cleaner content, removes UI chrome (social buttons, navigation footers, Previous/Next buttons). Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
+- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). **Substack support**: Detects Substack pages via `substackcdn.com` references (works on custom domains), targets `.body.markup` for cleaner content, extracts comments from `/comments` page via `window._preloads` JSON (structured data, not fragile CSS selectors), cleans up subscribe widgets/navbar/footer using stable `data-component-name` and `data-testid` attributes. **General cleanup**: Deduplicates images with same src URL, removes first h1 matching og:title, strips subtitle matching og:description, removes byline/lede sections, newsletter forms, "Related" boxes, share buttons, SVGs. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
 
 - **`services/image-alt-text.ts`**: Gemini-powered image description generation for TTS (requires per-user Gemini API key)
   - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions. Accepts `forceRegenerate` parameter to regenerate ALL images (used when regenerating audio)

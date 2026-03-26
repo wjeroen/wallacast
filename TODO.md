@@ -11,7 +11,7 @@
 - [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
 - [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
-- [ ] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong)
+- [x] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong) — implemented via window._preloads JSON parsing from /comments page (2026-03-26)
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
