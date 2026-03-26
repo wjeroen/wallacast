@@ -248,12 +248,34 @@ function buildSubstackCommentsUrl(articleUrl: string): string {
  * Handles whitespace variations and different quote styles.
  */
 function parseSubstackPreloads(html: string): any | null {
-  // Find the window._preloads assignment with flexible whitespace
-  const preloadsIdx = html.indexOf('window._preloads');
-  if (preloadsIdx === -1) return null;
+  // Find the window._preloads ASSIGNMENT (not property accesses like window._preloads.sentry_dsn)
+  // We need to find "window._preloads" followed by optional whitespace then "=" (not ".something")
+  const needle = 'window._preloads';
+  let searchFrom = 0;
+  let preloadsIdx = -1;
+  let afterPreloads = '';
 
-  // Get a chunk of text after "window._preloads" to inspect the format
-  const afterPreloads = html.substring(preloadsIdx + 'window._preloads'.length, preloadsIdx + 'window._preloads'.length + 200);
+  while (true) {
+    const idx = html.indexOf(needle, searchFrom);
+    if (idx === -1) break;
+
+    // Check what follows: skip property accesses (window._preloads.foo)
+    const after = html.substring(idx + needle.length, idx + needle.length + 200);
+    const firstNonSpace = after.match(/^\s*(.)/);
+    if (firstNonSpace && firstNonSpace[1] === '=') {
+      // This is an assignment — use it
+      preloadsIdx = idx;
+      afterPreloads = after;
+      break;
+    }
+    // Not an assignment (property access like .sentry_dsn), keep searching
+    searchFrom = idx + needle.length;
+  }
+
+  if (preloadsIdx === -1) {
+    console.log('[Fetcher] _preloads: found references but no assignment (window._preloads = ...)');
+    return null;
+  }
 
   // Try Format 1: JSON.parse("...") or JSON.parse('...')
   const jsonParseMatch = afterPreloads.match(/^\s*=\s*JSON\.parse\((['"])/);
