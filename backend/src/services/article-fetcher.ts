@@ -305,13 +305,88 @@ function mapSubstackComment(raw: any): Comment {
 }
 
 /**
- * Fetch and extract comments from a Substack article's /comments page.
- * Uses the window._preloads JSON (Approach B) — stable structured data,
- * unlike CSS class names which are hashed and change frequently.
+ * Extract comments from a Substack _preloads object.
+ * Searches for comment data under various possible key names.
  */
-async function fetchSubstackComments(articleUrl: string): Promise<Comment[]> {
+function extractCommentsFromPreloads(preloads: any): any[] | null {
+  // Try known key names for comments
+  const commentKeys = ['initialComments', 'comments', 'postComments', 'commentList'];
+  for (const key of commentKeys) {
+    if (preloads[key] && Array.isArray(preloads[key]) && preloads[key].length > 0) {
+      console.log(`[Fetcher] Found Substack comments under _preloads.${key} (${preloads[key].length} items)`);
+      return preloads[key];
+    }
+  }
+
+  // Deep search: look for any array of objects that have comment-like shape (id + body/name fields)
+  for (const key of Object.keys(preloads)) {
+    const val = preloads[key];
+    if (Array.isArray(val) && val.length > 0 && val[0] && typeof val[0] === 'object') {
+      if ('body' in val[0] && ('name' in val[0] || 'user_id' in val[0])) {
+        console.log(`[Fetcher] Found comment-like array under _preloads.${key} (${val.length} items)`);
+        return val;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract Substack comments from raw HTML.
+ * Tries _preloads JSON first. Returns empty array if no comments found.
+ */
+function extractSubstackCommentsFromHtml(html: string, source: string): Comment[] {
+  const preloads = parseSubstackPreloads(html);
+
+  if (!preloads) {
+    console.log(`[Fetcher] No _preloads found in ${source} HTML`);
+    // Log what data hydration patterns exist
+    if (html.includes('window._preloads')) {
+      console.log(`[Fetcher] window._preloads IS present but parsing failed`);
+    }
+    if (html.includes('__NEXT_DATA__')) {
+      console.log(`[Fetcher] __NEXT_DATA__ found in ${source} (Next.js hydration)`);
+    }
+    return [];
+  }
+
+  // Log available top-level keys for debugging
+  const topKeys = Object.keys(preloads);
+  console.log(`[Fetcher] _preloads from ${source} has keys: ${topKeys.join(', ')}`);
+
+  const rawComments = extractCommentsFromPreloads(preloads);
+  if (!rawComments) {
+    console.log(`[Fetcher] No comment arrays found in ${source} _preloads`);
+    return [];
+  }
+
+  // Log the shape of the first comment for debugging
+  const first = rawComments[0];
+  console.log(`[Fetcher] First comment shape: ${JSON.stringify(Object.keys(first))}`);
+  if (first.name) console.log(`[Fetcher] First comment by: ${first.name}`);
+
+  const comments = rawComments.map(mapSubstackComment);
+  const totalCount = countCommentsRecursive(comments);
+  console.log(`[Fetcher] Extracted ${comments.length} top-level comments (${totalCount} total with replies) from Substack ${source}`);
+  return comments;
+}
+
+/**
+ * Fetch and extract comments from a Substack article.
+ * First tries the article page HTML (already fetched), then falls back to /comments page.
+ * Uses window._preloads JSON — stable structured data, not fragile CSS selectors.
+ */
+async function fetchSubstackComments(articleUrl: string, articleHtml: string): Promise<Comment[]> {
+  // First: try to extract from the article page we already have
+  const fromArticle = extractSubstackCommentsFromHtml(articleHtml, 'article page');
+  if (fromArticle.length > 0) {
+    return fromArticle;
+  }
+
+  // Second: fetch the /comments page
   const commentsUrl = buildSubstackCommentsUrl(articleUrl);
-  console.log(`[Fetcher] Fetching Substack comments from: ${commentsUrl}`);
+  console.log(`[Fetcher] No comments on article page, trying: ${commentsUrl}`);
 
   try {
     const response = await fetch(commentsUrl);
@@ -321,23 +396,8 @@ async function fetchSubstackComments(articleUrl: string): Promise<Comment[]> {
     }
 
     const html = await response.text();
-    const preloads = parseSubstackPreloads(html);
-
-    if (!preloads || !preloads.initialComments) {
-      console.log('[Fetcher] No initialComments found in Substack _preloads');
-      return [];
-    }
-
-    const rawComments = preloads.initialComments;
-    if (!Array.isArray(rawComments) || rawComments.length === 0) {
-      console.log('[Fetcher] Substack article has 0 comments');
-      return [];
-    }
-
-    const comments = rawComments.map(mapSubstackComment);
-    const totalCount = countCommentsRecursive(comments);
-    console.log(`[Fetcher] Extracted ${comments.length} top-level comments (${totalCount} total with replies) from Substack`);
-    return comments;
+    console.log(`[Fetcher] Comments page: ${html.length} bytes`);
+    return extractSubstackCommentsFromHtml(html, 'comments page');
   } catch (error) {
     console.error('[Fetcher] Failed to fetch Substack comments:', error);
     return [];
@@ -623,7 +683,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Fetch Substack comments from /comments page (uses structured JSON, not CSS selectors)
     let comments: Comment[] | undefined;
     if (isSubstack) {
-      comments = await fetchSubstackComments(url);
+      comments = await fetchSubstackComments(url, html);
       if (comments.length === 0) comments = undefined;
     }
 
