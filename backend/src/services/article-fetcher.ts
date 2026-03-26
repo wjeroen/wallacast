@@ -241,38 +241,109 @@ function buildSubstackCommentsUrl(articleUrl: string): string {
 
 /**
  * Extract window._preloads JSON from raw HTML.
- * Substack embeds hydration data as: window._preloads = JSON.parse("...escaped...")
+ * Substack embeds hydration data in various formats:
+ *   - window._preloads = JSON.parse("...escaped...")
+ *   - window._preloads = JSON.parse('...escaped...')
+ *   - window._preloads = {...}  (direct assignment)
+ * Handles whitespace variations and different quote styles.
  */
 function parseSubstackPreloads(html: string): any | null {
-  const marker = 'window._preloads = JSON.parse("';
-  const startIdx = html.indexOf(marker);
-  if (startIdx === -1) return null;
+  // Find the window._preloads assignment with flexible whitespace
+  const preloadsIdx = html.indexOf('window._preloads');
+  if (preloadsIdx === -1) return null;
 
-  const jsonStart = startIdx + marker.length;
-  // Walk forward to find the closing " accounting for backslash escapes
-  let i = jsonStart;
-  while (i < html.length) {
-    if (html[i] === '\\') {
-      i += 2; // Skip escaped character
-    } else if (html[i] === '"') {
-      break;
-    } else {
-      i++;
+  // Get a chunk of text after "window._preloads" to inspect the format
+  const afterPreloads = html.substring(preloadsIdx + 'window._preloads'.length, preloadsIdx + 'window._preloads'.length + 200);
+
+  // Try Format 1: JSON.parse("...") or JSON.parse('...')
+  const jsonParseMatch = afterPreloads.match(/^\s*=\s*JSON\.parse\((['"])/);
+  if (jsonParseMatch) {
+    const quoteChar = jsonParseMatch[1]; // " or '
+    const contentStart = preloadsIdx + 'window._preloads'.length + jsonParseMatch[0].length;
+
+    // Walk forward to find the closing quote, accounting for backslash escapes
+    let i = contentStart;
+    while (i < html.length) {
+      if (html[i] === '\\') {
+        i += 2; // Skip escaped character
+      } else if (html[i] === quoteChar) {
+        break;
+      } else {
+        i++;
+      }
+    }
+
+    if (i >= html.length) {
+      console.log(`[Fetcher] _preloads: found JSON.parse(${quoteChar}) but couldn't find closing quote`);
+      return null;
+    }
+
+    const escapedJson = html.substring(contentStart, i);
+    try {
+      // Unescape the JavaScript string literal, then parse the JSON
+      const unescaped = JSON.parse(quoteChar + escapedJson + quoteChar);
+      return JSON.parse(unescaped);
+    } catch (e: any) {
+      console.log(`[Fetcher] _preloads: JSON.parse format found but parse failed: ${e.message?.substring(0, 100)}`);
+      // Try alternative: maybe the escaped content needs different unescaping
+      try {
+        // Some Substack pages double-encode: try just one JSON.parse
+        return JSON.parse(escapedJson);
+      } catch {
+        // Show a snippet of what we're trying to parse
+        console.log(`[Fetcher] _preloads content starts with: ${escapedJson.substring(0, 150)}`);
+        return null;
+      }
     }
   }
 
-  if (i >= html.length) return null;
+  // Try Format 2: Direct assignment: window._preloads = {...}
+  const directMatch = afterPreloads.match(/^\s*=\s*(\{)/);
+  if (directMatch) {
+    console.log('[Fetcher] _preloads: found direct assignment format');
+    // Find the matching closing brace by counting depth
+    const objStart = preloadsIdx + 'window._preloads'.length + afterPreloads.indexOf('{');
+    let depth = 0;
+    let inString = false;
+    let stringChar = '';
+    let i = objStart;
 
-  const escapedJson = html.substring(jsonStart, i);
-  try {
-    // First JSON.parse unescapes the JavaScript string literal
-    const unescaped = JSON.parse('"' + escapedJson + '"');
-    // Second JSON.parse parses the actual object
-    return JSON.parse(unescaped);
-  } catch (e) {
-    console.error('[Fetcher] Failed to parse Substack _preloads JSON:', e);
+    while (i < html.length) {
+      const ch = html[i];
+      if (inString) {
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === stringChar) inString = false;
+      } else {
+        if (ch === '"' || ch === "'") {
+          inString = true;
+          stringChar = ch;
+        } else if (ch === '{') {
+          depth++;
+        } else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try {
+              const jsonStr = html.substring(objStart, i + 1);
+              return JSON.parse(jsonStr);
+            } catch (e: any) {
+              console.log(`[Fetcher] _preloads: direct assignment parse failed: ${e.message?.substring(0, 100)}`);
+              return null;
+            }
+          }
+        }
+      }
+      i++;
+    }
+    console.log('[Fetcher] _preloads: could not find matching closing brace');
     return null;
   }
+
+  // Unknown format — log what we see for debugging
+  console.log(`[Fetcher] _preloads: unknown format after "window._preloads": ${afterPreloads.substring(0, 80)}`);
+  return null;
 }
 
 /**
