@@ -28,6 +28,8 @@ export interface ArticleContent {
   disagree_votes?: number;
   comments_html?: string;
   comments?: Comment[];
+  comment_source?: string; // 'ea_forum', 'lesswrong', 'substack', or undefined
+  comment_count_total?: number; // total comments including nested replies
 }
 
 // --- NEW GRAPHQL LOGIC START ---
@@ -208,7 +210,9 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     agree_votes: postReactions.agree,
     disagree_votes: postReactions.disagree,
     comments: rootComments,
-    comments_html: '' 
+    comment_source: isEAForum ? 'ea_forum' : 'lesswrong',
+    comment_count_total: countCommentsRecursive(rootComments),
+    comments_html: ''
   };
 }
 
@@ -825,9 +829,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Fetch Substack comments from /comments page (uses structured JSON, not CSS selectors)
     let comments: Comment[] | undefined;
+    let comment_source: string | undefined;
+    let comment_count_total: number | undefined;
     if (isSubstack) {
       comments = await fetchSubstackComments(url, html);
-      if (comments.length === 0) comments = undefined;
+      if (comments.length === 0) {
+        comments = undefined;
+      } else {
+        comment_source = 'substack';
+        comment_count_total = countCommentsRecursive(comments);
+      }
     }
 
     return {
@@ -841,6 +852,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       published_date: publishedDate,
       lead_image_url: leadImageUrl,
       comments,
+      comment_source,
+      comment_count_total,
     };
 
   } catch (error) {
