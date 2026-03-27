@@ -484,7 +484,7 @@ export async function generateLLMAlignment(
 
   // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
-    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, image_alt_text_data FROM content_items WHERE id = $1',
+    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data FROM content_items WHERE id = $1',
     [contentId]
   );
 
@@ -519,9 +519,9 @@ export async function generateLLMAlignment(
   // so including comment elements here would confuse the LLM (it would try to match
   // text that doesn't exist in the transcript and produce bad timestamps).
   let commentElements: ContentElement[] = [];
-  const isLessWrong = content.url && content.url.includes('lesswrong.com');
-  const isEAForum = content.url && content.url.includes('forum.effectivealtruism.org');
-  const isSubstack = content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com') || false;
+  const isLessWrong = content.comment_source === 'lesswrong' || (content.url && content.url.includes('lesswrong.com'));
+  const isEAForum = content.comment_source === 'ea_forum' || (content.url && content.url.includes('forum.effectivealtruism.org'));
+  const isSubstack = content.comment_source === 'substack';
 
   let commentsNarrated = true;
   if (isLessWrong || isEAForum) {

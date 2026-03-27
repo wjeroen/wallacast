@@ -167,6 +167,9 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix cancel generation not stopping** (2026-03-27): Chunk generation loop now checks DB for cancellation status before each chunk, so cancelling actually stops generating (was previously fire-and-forget).
+- [x] **Reliable Substack detection via comment_source column** (2026-03-27): Added `comment_source` and `comment_count_total` DB columns. Article-fetcher tags comments with their source ('ea_forum', 'lesswrong', 'substack'). TTS and alignment use this instead of fragile URL/HTML detection. Comment count now includes nested replies.
+- [x] **Bulk generate skips 50+ comment articles** (2026-03-27): "Generate All Audio" skips articles with 50+ total comments (including replies) and shows summary of skipped articles. User can still generate those manually.
 - [x] **Fix removing audio not clearing read-along** (2026-03-27): Removing audio now also clears content_alignment, transcript, transcript_words, tts_chunks, and generation status so the read-along view goes away too.
 - [x] **Icons for karma/comments in fullscreen player header** (2026-03-27): Replaced text-only "N upvotes • N comments" with ArrowUp and MessageCircle icons matching the library tab style.
 - [x] **Move "Generate All Audio" to user dropdown menu** (2026-03-27): Moved from library header (too crowded on mobile) to the user dropdown menu alongside Settings and Switch Account.
