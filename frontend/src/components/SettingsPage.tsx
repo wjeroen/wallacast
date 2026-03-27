@@ -63,7 +63,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     auto_generate_audio_for_articles: 'false',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
-    narrate_other_comments: 'true',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -119,7 +118,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
-        narrate_other_comments: loaded.narrate_other_comments !== undefined && loaded.narrate_other_comments !== null ? loaded.narrate_other_comments : 'true',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -152,8 +150,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                  key === 'wallabag_sync_enabled' ||
                                  key === 'image_alt_text_enabled' ||
                                  key === 'narrate_ea_forum_comments' ||
-                                 key === 'narrate_substack_comments' ||
-                                 key === 'narrate_other_comments';
+                                 key === 'narrate_substack_comments';
 
         if (isBooleanSetting) {
           toSave[key] = value;
@@ -465,17 +462,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     onChange={(e) => handleChange('narrate_substack_comments', e.target.checked ? 'true' : 'false')}
                   />
                   Narrate Substack comments
-                </label>
-             </div>
-
-             <div className="form-group checkbox-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={formData.narrate_other_comments === 'true'}
-                    onChange={(e) => handleChange('narrate_other_comments', e.target.checked ? 'true' : 'false')}
-                  />
-                  Narrate other site comments
                 </label>
              </div>
 
