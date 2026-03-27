@@ -89,11 +89,7 @@ function getDomainFromUrl(url: string): string {
   }
 }
 
-function isEAForumOrLessWrong(url: string): boolean {
-  if (!url) return false;
-  const domain = getDomainFromUrl(url);
-  return domain.includes('forum.effectivealtruism.org') || domain.includes('lesswrong.com');
-}
+
 
 /**
  * Count total comments including all nested replies.
@@ -752,8 +748,11 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                     {content.published_at && (
                       <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
                     )}
-                    {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
-                      <> {content.karma} karma</>
+                    {content.karma !== undefined && content.karma !== null && (
+                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+                    )}
+                    {totalCommentCount > 0 && (
+                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
                     )}
                   </p>
                 )}
@@ -915,8 +914,11 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                       {content.published_at && (
                         <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
                       )}
-                      {isEAForumOrLessWrong(content.url || '') && content.karma !== undefined && content.karma !== null && (
-                        <> {content.karma} karma</>
+                      {content.karma !== undefined && content.karma !== null && (
+                        <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+                      )}
+                      {totalCommentCount > 0 && (
+                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
                       )}
                     </p>
                   )}

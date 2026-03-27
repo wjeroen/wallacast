@@ -173,17 +173,32 @@ function App() {
 
   const handleBulkGenerateAudio = async () => {
     setShowUserMenu(false);
-    const eligibleItems = allContent.filter(
+    const COMMENT_THRESHOLD = 50;
+    const allEligible = allContent.filter(
       item => item.type === 'article' && !item.is_archived && !item.audio_url &&
               (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
     );
 
-    if (eligibleItems.length === 0) {
+    if (allEligible.length === 0) {
       alert('No articles need audio generation.');
       return;
     }
 
-    const confirmed = confirm(`Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}? This may take a while.`);
+    // Split into generateable and skipped (too many comments)
+    const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
+    const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
+
+    let message = `Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}?`;
+    if (skippedItems.length > 0) {
+      message += `\n\nSkipping ${skippedItems.length} article${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+    }
+
+    if (eligibleItems.length === 0) {
+      alert(`All ${allEligible.length} article${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
+      return;
+    }
+
+    const confirmed = confirm(message);
     if (!confirmed) return;
 
     let started = 0;
@@ -198,7 +213,11 @@ function App() {
     }
 
     if (started > 0) {
-      alert(`Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`);
+      let summary = `Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`;
+      if (skippedItems.length > 0) {
+        summary += ` Skipped ${skippedItems.length} with ${COMMENT_THRESHOLD}+ comments.`;
+      }
+      alert(summary);
     }
   };
 
