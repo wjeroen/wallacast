@@ -230,8 +230,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     try {
       setOpenDropdown(null);
       await contentAPI.refetch(id);
-      // Wait a bit for backend to process, then refresh
-      setTimeout(() => refreshItem(id), 1000);
+      // Refetch is async on the backend — refresh after delay to pick up updated data.
+      // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
+      setTimeout(() => refreshItem(id), 3000);
+      setTimeout(() => refreshItem(id), 8000);
     } catch (error) {
       console.error('Failed to refetch content:', error);
       alert('Failed to refetch content');
