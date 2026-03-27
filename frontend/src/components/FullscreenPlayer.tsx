@@ -12,6 +12,8 @@ import {
   RefreshCw,
   ArrowDownToLine,
   MoreVertical,
+  ArrowUp,
+  MessageCircle,
 } from 'lucide-react';
 import { contentAPI } from '../api';
 import type { ContentItem, Comment } from '../types';
@@ -1000,10 +1002,10 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
                 )}
                 {(content.karma !== undefined && content.karma !== null) && (
-                  <> &bull; {content.karma} upvotes</>
+                  <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
                 )}
                 {totalCommentCount > 0 && (
-                  <> &bull; {totalCommentCount} comment{totalCommentCount !== 1 ? 's' : ''}</>
+                  <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
                 )}
               </p>
             )}

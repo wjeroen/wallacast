@@ -415,7 +415,13 @@ router.patch('/:id', async (req, res) => {
         if (type === 'article' || type === 'text') {
           console.log(`Manually removing audio for ${type} ${id}`);
           updates.duration = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration');
+          updates.content_alignment = null;
+          updates.transcript = null;
+          updates.transcript_words = null;
+          updates.tts_chunks = null;
+          updates.generation_status = null;
+          updates.generation_progress = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
         }
       }
     }

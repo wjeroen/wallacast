@@ -89,7 +89,8 @@ Wallacast supports multiple users with complete data isolation:
 | Content not showing in library | `frontend/src/components/LibraryTab.tsx` + `frontend/src/store/contentStore.ts` - Check filters and store state |
 | Generation stuck or failing | `backend/src/routes/content.ts` - Check status updates in PATCH endpoint and `backend/src/services/openai-tts.ts` - Check error handling |
 | Playback position not saving | `frontend/src/components/AudioPlayer.tsx` - Check `savePlaybackPosition()` around line 133-147. Note: saves are debounced (3s minimum change) and effects depend on `content?.id` not `content` |
-| Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching and cleanup (dedup images, strip title/subtitle/byline/lede, remove forms/related boxes), then `backend/src/services/openai-tts.ts` - LLM extraction |
+| Article content extraction broken | `backend/src/services/article-fetcher.ts` - HTML fetching and cleanup (dedup images, strip title/subtitle/byline/lede, remove forms/related boxes/author bios/asides/ads), then `backend/src/services/openai-tts.ts` - LLM extraction |
+| Removing audio doesn't clear read-along | `backend/src/routes/content.ts` - PATCH update handler, audio removal section (~line 407). Must clear `content_alignment`, `transcript`, `transcript_words`, `tts_chunks` alongside `audio_data`/`audio_url` |
 | Read-along not working for text items | `backend/src/services/openai-tts.ts` (alignment gate), `backend/src/services/llm-alignment.ts` (content fallback), `backend/src/routes/content.ts` (html_content population) |
 | Read-along alignment wrong / missing elements | `backend/src/services/llm-alignment.ts` - check `extractContentElements()` for element extraction, `buildTimedTranscript()` for transcript quality. **Never use fuzzy matching** — fix input data quality instead (see CLAUDE.md) |
 | Read-along autoscroll jumpy or skipping | `frontend/src/components/FullscreenPlayer.tsx` - `scrollToActive()` callback. Short elements use `scrollIntoView`, tall elements use progressive scroll based on audio progress |
@@ -333,7 +334,7 @@ Wallacast supports multiple users with complete data isolation:
   - Login/registration form with toggle between modes
   - Displays auth errors from authStore
   - Uses lucide-react icons for visual polish
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Cards display karma (upvote count) and comment count for EA Forum/LessWrong articles. "Generate All" button in the header triggers bulk audio generation for all items without audio in the current filtered view. Each content card has a dropdown menu (3 dots) with context-specific options:
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Cards display karma (upvote count) and comment count with icons. "Generate All Audio" button is in the user dropdown menu (top-right) — triggers bulk audio generation for all unread articles without audio. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
@@ -357,7 +358,7 @@ Wallacast supports multiple users with complete data isolation:
   - Organized into: API Keys, Audio Generation, Wallabag Sync
   - API Keys section: DeepInfra (primary/cheapest), OpenAI (optional), Gemini (optional, for image descriptions)
   - Audio Generation: Narration LLM (Auto/DeepSeek/OpenAI), TTS model/voice, auto-generate/transcribe toggles
-  - Comment Narration toggles: separate on/off toggles for EA Forum/LessWrong comments, Substack comments, and other sites' comments (allows users to skip comment audio on a per-platform basis)
+  - Comment Narration toggles: separate on/off toggles for EA Forum/LessWrong comments and Substack comments (allows users to skip comment audio on a per-platform basis). When disabled, comments still display in read-along view but without audio sync
   - With just a DeepInfra key, users get full functionality (narration prep via DeepSeek, TTS via Kokoro, transcription via Whisper)
   - Wallabag integration settings (URL, client ID/secret, username/password)
   - Test connection buttons for validating credentials
