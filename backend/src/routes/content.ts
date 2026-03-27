@@ -19,7 +19,8 @@ router.get('/', async (req, res) => {
     const { type, archived, starred } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE user_id = $1';
+    // Use jsonb_array_length to get comment count without fetching full JSON
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, CASE WHEN comments IS NOT NULL AND comments::text != \'null\' THEN jsonb_array_length(comments) ELSE 0 END AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 

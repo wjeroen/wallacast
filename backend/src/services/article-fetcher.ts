@@ -467,34 +467,34 @@ function extractSubstackCommentsFromHtml(html: string, source: string): Comment[
 
 /**
  * Fetch and extract comments from a Substack article.
- * First tries the article page HTML (already fetched), then falls back to /comments page.
+ * Always fetches the /comments page first (it has ALL comments).
+ * Falls back to article page HTML if /comments fails.
  * Uses window._preloads JSON — stable structured data, not fragile CSS selectors.
  */
 async function fetchSubstackComments(articleUrl: string, articleHtml: string): Promise<Comment[]> {
-  // First: try to extract from the article page we already have
-  const fromArticle = extractSubstackCommentsFromHtml(articleHtml, 'article page');
-  if (fromArticle.length > 0) {
-    return fromArticle;
-  }
-
-  // Second: fetch the /comments page
+  // First: always fetch the /comments page (has the full comment thread)
   const commentsUrl = buildSubstackCommentsUrl(articleUrl);
-  console.log(`[Fetcher] No comments on article page, trying: ${commentsUrl}`);
+  console.log(`[Fetcher] Fetching Substack comments from: ${commentsUrl}`);
 
   try {
     const response = await fetch(commentsUrl);
-    if (!response.ok) {
-      console.log(`[Fetcher] Comments page HTTP ${response.status}, skipping comments`);
-      return [];
+    if (response.ok) {
+      const html = await response.text();
+      console.log(`[Fetcher] Comments page: ${html.length} bytes`);
+      const fromCommentsPage = extractSubstackCommentsFromHtml(html, 'comments page');
+      if (fromCommentsPage.length > 0) {
+        return fromCommentsPage;
+      }
+    } else {
+      console.log(`[Fetcher] Comments page HTTP ${response.status}`);
     }
-
-    const html = await response.text();
-    console.log(`[Fetcher] Comments page: ${html.length} bytes`);
-    return extractSubstackCommentsFromHtml(html, 'comments page');
   } catch (error) {
-    console.error('[Fetcher] Failed to fetch Substack comments:', error);
-    return [];
+    console.error('[Fetcher] Failed to fetch Substack comments page:', error);
   }
+
+  // Fallback: try to extract from the article page we already have
+  console.log('[Fetcher] Trying article page HTML as fallback for comments');
+  return extractSubstackCommentsFromHtml(articleHtml, 'article page');
 }
 
 function countCommentsRecursive(comments: Comment[]): number {
@@ -746,6 +746,56 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           el.remove();
         }
       });
+
+      // Remove small author avatar/headshot images (typically ≤48px) and their containers
+      // These are author profile pictures, not article content images
+      contentEl.querySelectorAll('img').forEach(img => {
+        const w = parseInt(img.getAttribute('width') || '0', 10);
+        const h = parseInt(img.getAttribute('height') || '0', 10);
+        if ((w > 0 && w <= 48) || (h > 0 && h <= 48)) {
+          // Walk up to find the nearest meaningful container to remove
+          let container = img.parentElement;
+          // Go up a few levels if parents are just wrappers with no other content
+          for (let depth = 0; depth < 4 && container; depth++) {
+            const parent = container.parentElement;
+            if (!parent) break;
+            // If this container has sibling elements with article text, stop here
+            const siblingText = Array.from(parent.children)
+              .filter(c => c !== container)
+              .some(c => (c.textContent?.trim().length || 0) > 50);
+            if (siblingText) break;
+            container = parent;
+          }
+          if (container) container.remove();
+          else img.remove();
+        }
+      });
+
+      // Remove <aside> elements (membership pitches, supplementary content — never article body)
+      contentEl.querySelectorAll('aside').forEach(el => el.remove());
+
+      // Remove sidebar rails (Vox "Most Popular", ad slots, etc.)
+      contentEl.querySelectorAll('[class*="layout--rail"]').forEach(el => el.remove());
+
+      // Remove ad containers (Vox uses data-concert attribute for ad slots)
+      contentEl.querySelectorAll('[data-concert]').forEach(el => {
+        // Walk up to remove the ad wrapper too
+        let container = el.parentElement;
+        if (container && !container.textContent?.trim() && !container.querySelector('p, h1, h2, h3, h4, img')) {
+          container.remove();
+        } else {
+          el.remove();
+        }
+      });
+
+      // Remove native ad containers
+      contentEl.querySelectorAll('[class*="native-ad"]').forEach(el => el.remove());
+
+      // Remove "See More" / category tag sections at end of articles
+      contentEl.querySelectorAll('[class*="see-more"], [class*="tag-list"]').forEach(el => el.remove());
+
+      // Remove all remaining forms (membership, donation, etc.) — we already extracted email forms above
+      contentEl.querySelectorAll('form').forEach(el => el.remove());
 
       // Apply Substack-specific cleanup (subscribe widgets, navbar, footer, etc.)
       if (isSubstack) {
