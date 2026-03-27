@@ -32,6 +32,7 @@ export interface ContentItem {
   agree_votes?: number; // EA Forum agree votes
   disagree_votes?: number; // EA Forum disagree votes
   comments?: Comment[]; // Parsed comments with metadata
+  comment_count?: number; // Number of top-level comments (from list endpoint, avoids loading full JSON)
   is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
   tags?: string;  // Comma-separated tags (Wallabag style)

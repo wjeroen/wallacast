@@ -333,7 +333,7 @@ Wallacast supports multiple users with complete data isolation:
   - Login/registration form with toggle between modes
   - Displays auth errors from authStore
   - Uses lucide-react icons for visual polish
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Each content card has a dropdown menu (3 dots) with context-specific options:
+- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Cards display karma (upvote count) and comment count for EA Forum/LessWrong articles. "Generate All" button in the header triggers bulk audio generation for all items without audio in the current filtered view. Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
@@ -357,6 +357,7 @@ Wallacast supports multiple users with complete data isolation:
   - Organized into: API Keys, Audio Generation, Wallabag Sync
   - API Keys section: DeepInfra (primary/cheapest), OpenAI (optional), Gemini (optional, for image descriptions)
   - Audio Generation: Narration LLM (Auto/DeepSeek/OpenAI), TTS model/voice, auto-generate/transcribe toggles
+  - Comment Narration toggles: separate on/off toggles for EA Forum/LessWrong comments, Substack comments, and other sites' comments (allows users to skip comment audio on a per-platform basis)
   - With just a DeepInfra key, users get full functionality (narration prep via DeepSeek, TTS via Kokoro, transcription via Whisper)
   - Wallabag integration settings (URL, client ID/secret, username/password)
   - Test connection buttons for validating credentials

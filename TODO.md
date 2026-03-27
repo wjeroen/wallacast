@@ -167,6 +167,9 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Add bulk generate audio button** (2026-03-27): "Generate All" button in LibraryTab header triggers bulk audio generation for all items without audio in the current filtered view.
+- [x] **Show upvotes/comment count on library tab cards** (2026-03-27): Library cards now display karma (upvote count) and comment count for EA Forum/LessWrong articles.
+- [x] **Add comment narration settings (EA Forum, Substack, other)** (2026-03-27): Three separate on/off toggles in SettingsPage for controlling comment narration per platform — EA Forum/LessWrong, Substack, and other sites.
 - [x] **LLM Content Block support for LessWrong/EA Forum** (2026-03-24): AI-generated sections (`div.llm-content-block` with `data-model-name`) are now detected, narrated with model attribution ("The following was written by Claude Opus 4.6:"), displayed in serif font with purple left border and model name badge in read-along view.
 - [x] **Removed marker-pdf and PDF upload** (2026-03-24): marker-pdf models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load. Upload tab now HTML-only.
 - [x] **Unified HTML download menus + raw original download** (2026-03-24): Library dropdown now has same 3 download options as fullscreen player (cleaned HTML, read-along HTML, original). "Download original" now fetches raw HTML from source URL with zero cleaning (new `GET /:id/original-html` endpoint), instead of re-running the article extraction pipeline which gave identical cleaned output.

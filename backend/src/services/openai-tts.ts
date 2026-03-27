@@ -851,13 +851,34 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
-              console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
               const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-              // Use a longer, more natural announcement so Whisper doesn't skip it.
-              // "Comments section:" (2 words) was consistently dropped by Whisper.
-              // A full sentence (~15 words) is much harder for Whisper to miss.
-              // Use totalCount (includes replies) so listeners know the full scope.
-              fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              const isEAForum = content.url ? content.url.includes('forum.effectivealtruism.org') : false;
+              // Substack detection: substackcdn.com in stored HTML works for custom domains too
+              const isSubstack = content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com') || false;
+
+              // Check user setting for whether to narrate comments
+              let shouldNarrate = true;
+              if (isLessWrong || isEAForum) {
+                const setting = await getUserSetting(content.user_id, 'narrate_ea_forum_comments');
+                shouldNarrate = setting !== 'false'; // Default: true (narrate)
+              } else if (isSubstack) {
+                const setting = await getUserSetting(content.user_id, 'narrate_substack_comments');
+                shouldNarrate = setting !== 'false'; // Default: true (narrate)
+              } else {
+                const setting = await getUserSetting(content.user_id, 'narrate_other_comments');
+                shouldNarrate = setting !== 'false'; // Default: true (narrate)
+              }
+
+              if (shouldNarrate) {
+                console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
+                // Use a longer, more natural announcement so Whisper doesn't skip it.
+                // "Comments section:" (2 words) was consistently dropped by Whisper.
+                // A full sentence (~15 words) is much harder for Whisper to miss.
+                // Use totalCount (includes replies) so listeners know the full scope.
+                fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              } else {
+                console.log(`[TTS] Skipping comment narration (${totalCount} comments) — disabled by user setting`);
+              }
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);
