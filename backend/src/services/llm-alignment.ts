@@ -514,11 +514,25 @@ export async function generateLLMAlignment(
     imageAltTextData
   );
 
-  // Extract comment elements
+  // Extract comment elements — but only if comments were narrated in the audio.
+  // If the user disabled comment narration, the audio won't contain any comment text,
+  // so including comment elements here would confuse the LLM (it would try to match
+  // text that doesn't exist in the transcript and produce bad timestamps).
   let commentElements: ContentElement[] = [];
   const isLessWrong = content.url && content.url.includes('lesswrong.com');
+  const isEAForum = content.url && content.url.includes('forum.effectivealtruism.org');
+  const isSubstack = content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com') || false;
 
-  if (content.comments) {
+  let commentsNarrated = true;
+  if (isLessWrong || isEAForum) {
+    const setting = await getUserSetting(userId, 'narrate_ea_forum_comments');
+    commentsNarrated = setting !== 'false';
+  } else if (isSubstack) {
+    const setting = await getUserSetting(userId, 'narrate_substack_comments');
+    commentsNarrated = setting !== 'false';
+  }
+
+  if (content.comments && commentsNarrated) {
     try {
       const comments = typeof content.comments === 'string'
         ? JSON.parse(content.comments)
@@ -530,6 +544,8 @@ export async function generateLLMAlignment(
     } catch (e) {
       console.error('[LLM-Align] Failed to parse comments:', e);
     }
+  } else if (content.comments && !commentsNarrated) {
+    console.log('[LLM-Align] Skipping comment elements — comment narration disabled by user setting');
   }
 
   // Combine all elements
