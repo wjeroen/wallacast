@@ -864,9 +864,6 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               } else if (isSubstack) {
                 const setting = await getUserSetting(content.user_id, 'narrate_substack_comments');
                 shouldNarrate = setting !== 'false'; // Default: true (narrate)
-              } else {
-                const setting = await getUserSetting(content.user_id, 'narrate_other_comments');
-                shouldNarrate = setting !== 'false'; // Default: true (narrate)
               }
 
               if (shouldNarrate) {
