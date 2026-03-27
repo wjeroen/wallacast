@@ -167,9 +167,13 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
-- [x] **Add bulk generate audio button** (2026-03-27): "Generate All" button in LibraryTab header triggers bulk audio generation for all items without audio in the current filtered view.
-- [x] **Show upvotes/comment count on library tab cards** (2026-03-27): Library cards now display karma (upvote count) and comment count for EA Forum/LessWrong articles.
-- [x] **Add comment narration settings (EA Forum, Substack, other)** (2026-03-27): Three separate on/off toggles in SettingsPage for controlling comment narration per platform — EA Forum/LessWrong, Substack, and other sites.
+- [x] **Fix removing audio not clearing read-along** (2026-03-27): Removing audio now also clears content_alignment, transcript, transcript_words, tts_chunks, and generation status so the read-along view goes away too.
+- [x] **Icons for karma/comments in fullscreen player header** (2026-03-27): Replaced text-only "N upvotes • N comments" with ArrowUp and MessageCircle icons matching the library tab style.
+- [x] **Move "Generate All Audio" to user dropdown menu** (2026-03-27): Moved from library header (too crowded on mobile) to the user dropdown menu alongside Settings and Switch Account.
+- [x] **Unnarrated comments still shown in read-along** (2026-03-27): When comment narration is disabled, comments still appear in read-along view (with startTime: -1) but don't participate in audio sync, seeking, or highlighting.
+- [x] **Add bulk generate audio button** (2026-03-27): "Generate All Audio" in user dropdown menu triggers bulk audio generation for all unread articles without audio.
+- [x] **Show upvotes/comment count on library tab cards** (2026-03-27): Library cards display karma and comment count with ArrowUp and MessageCircle icons.
+- [x] **Add comment narration settings (EA Forum, Substack)** (2026-03-27): Two toggles in SettingsPage — EA Forum/LessWrong and Substack. When disabled, comments still display in read-along but without audio sync.
 - [x] **LLM Content Block support for LessWrong/EA Forum** (2026-03-24): AI-generated sections (`div.llm-content-block` with `data-model-name`) are now detected, narrated with model attribution ("The following was written by Claude Opus 4.6:"), displayed in serif font with purple left border and model name badge in read-along view.
 - [x] **Removed marker-pdf and PDF upload** (2026-03-24): marker-pdf models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load. Upload tab now HTML-only.
 - [x] **Unified HTML download menus + raw original download** (2026-03-24): Library dropdown now has same 3 download options as fullscreen player (cleaned HTML, read-along HTML, original). "Download original" now fetches raw HTML from source URL with zero cleaning (new `GET /:id/original-html` endpoint), instead of re-running the article extraction pipeline which gave identical cleaned output.
