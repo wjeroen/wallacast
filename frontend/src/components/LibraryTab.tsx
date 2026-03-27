@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2 } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -212,37 +212,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
       alert(errorMsg);
-    }
-  };
-
-  const handleBulkGenerateAudio = async () => {
-    // Find unread articles without audio and not currently generating
-    const eligibleItems = content.filter(
-      item => item.type === 'article' && !item.is_archived && !item.audio_url &&
-              (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
-    );
-
-    if (eligibleItems.length === 0) {
-      alert('No articles need audio generation.');
-      return;
-    }
-
-    const confirmed = confirm(`Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}? This may take a while.`);
-    if (!confirmed) return;
-
-    let started = 0;
-    for (const item of eligibleItems) {
-      try {
-        await contentAPI.generateAudio(item.id, false);
-        started++;
-        refreshItem(item.id);
-      } catch (error) {
-        console.error(`Failed to start audio generation for item ${item.id}:`, error);
-      }
-    }
-
-    if (started > 0) {
-      alert(`Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`);
     }
   };
 
@@ -495,13 +464,6 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
             className="select-mode-btn"
           >
             {bulkMode ? 'Cancel' : 'Select'}
-          </button>
-          <button
-            onClick={handleBulkGenerateAudio}
-            className="select-mode-btn"
-            title="Generate audio for all unread articles without audio"
-          >
-            <Volume2 size={16} /> Generate All
           </button>
           <div className="filter-buttons">
             <button

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2 } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -26,7 +26,7 @@ function App() {
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
 
   // Get addItem and fetchContent from store
-  const { addItem, fetchContent } = useContentStore();
+  const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
 
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
@@ -171,6 +171,37 @@ function App() {
     addItem(item);
   };
 
+  const handleBulkGenerateAudio = async () => {
+    setShowUserMenu(false);
+    const eligibleItems = allContent.filter(
+      item => item.type === 'article' && !item.is_archived && !item.audio_url &&
+              (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
+    );
+
+    if (eligibleItems.length === 0) {
+      alert('No articles need audio generation.');
+      return;
+    }
+
+    const confirmed = confirm(`Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}? This may take a while.`);
+    if (!confirmed) return;
+
+    let started = 0;
+    for (const item of eligibleItems) {
+      try {
+        await contentAPI.generateAudio(item.id, false);
+        started++;
+        refreshItem(item.id);
+      } catch (error) {
+        console.error(`Failed to start audio generation for item ${item.id}:`, error);
+      }
+    }
+
+    if (started > 0) {
+      alert(`Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`);
+    }
+  };
+
   const handleLogout = async () => {
     setShowUserMenu(false);
     await logout();
@@ -253,6 +284,11 @@ function App() {
               <button className="user-dropdown-item" onClick={handleOpenSettings}>
                 <Settings size={18} />
                 <span>Settings</span>
+              </button>
+
+              <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
+                <Volume2 size={18} />
+                <span>Generate All Audio</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>
