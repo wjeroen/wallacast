@@ -269,6 +269,7 @@ export function FullscreenPlayer({
 
     let activeIdx = -1;
     for (let i = 0; i < elements.length; i++) {
+      if (elements[i].startTime < 0) continue; // skip unnarrated elements (startTime: -1)
       if (elements[i].startTime <= currentTime) {
         activeIdx = i;
       } else {
@@ -670,7 +671,8 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
 
                 const renderCommentNode = (node: CommentNode): React.ReactNode => {
                   const { element: el, globalIndex, children } = node;
-                  const isActive = globalIndex === activeElementIndex;
+                  const isNarrated = el.startTime >= 0;
+                  const isActive = isNarrated && globalIndex === activeElementIndex;
                   const meta = el.commentMeta;
                   const metaStr = buildCommentMetadata(meta, isLW);
                   return (
@@ -682,7 +684,7 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                           e.stopPropagation();
                           const target = e.target as HTMLElement;
                           if (target.tagName === 'IMG') e.preventDefault();
-                          onSeek(el.startTime);
+                          if (isNarrated) onSeek(el.startTime);
                         }}
                       >
                         <div className="comment-header">
@@ -715,8 +717,8 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                     {commentDivider && (
                       <div
                         id={`ra-el-${elements.indexOf(commentDivider)}`}
-                        className={`comments-header read-along-element ${elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
-                        onClick={() => onSeek(commentDivider.startTime)}
+                        className={`comments-header read-along-element ${commentDivider.startTime >= 0 && elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
+                        onClick={() => { if (commentDivider.startTime >= 0) onSeek(commentDivider.startTime); }}
                       >
                         <h3>Comments ({commentElements.length})</h3>
                       </div>

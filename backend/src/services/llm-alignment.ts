@@ -532,7 +532,7 @@ export async function generateLLMAlignment(
     commentsNarrated = setting !== 'false';
   }
 
-  if (content.comments && commentsNarrated) {
+  if (content.comments) {
     try {
       const comments = typeof content.comments === 'string'
         ? JSON.parse(content.comments)
@@ -544,8 +544,6 @@ export async function generateLLMAlignment(
     } catch (e) {
       console.error('[LLM-Align] Failed to parse comments:', e);
     }
-  } else if (content.comments && !commentsNarrated) {
-    console.log('[LLM-Align] Skipping comment elements — comment narration disabled by user setting');
   }
 
   // Combine all elements
@@ -558,10 +556,8 @@ export async function generateLLMAlignment(
 
   const allElements: ContentElement[] = [...filteredContentElements];
 
-  if (commentElements.length > 0) {
-    // The TTS says a full sentence: "Now, let's move on to the comments section,
-    // where N readers have shared their thoughts." — the LLM needs to match this
-    // longer text in the transcript. Frontend renders it as "Comments (N):" regardless.
+  if (commentElements.length > 0 && commentsNarrated) {
+    // Comments were narrated — include in LLM alignment so they get timestamps
     const commentCount = commentElements.filter(el => el.type === 'comment').length;
     allElements.push({
       type: 'comment-divider',
@@ -1080,10 +1076,30 @@ ${closingInstruction}`;
     ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
   }));
 
+  // If comments exist but weren't narrated, append them with startTime: -1
+  // so the frontend can display them in the read-along view without audio sync
+  if (commentElements.length > 0 && !commentsNarrated) {
+    const commentCount = commentElements.filter(el => el.type === 'comment').length;
+    resultElements.push({
+      type: 'comment-divider',
+      html: '',
+      startTime: -1,
+    });
+    for (const el of commentElements) {
+      resultElements.push({
+        type: el.type as any,
+        html: el.html,
+        startTime: -1,
+        ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
+      });
+    }
+    console.log(`[LLM-Align] Appended ${commentCount} unnarrated comments with startTime: -1`);
+  }
+
   // Find comments start time
   let commentsStartTime: number | null = null;
   const commentDividerIndex = resultElements.findIndex(el => el.type === 'comment-divider');
-  if (commentDividerIndex >= 0) {
+  if (commentDividerIndex >= 0 && resultElements[commentDividerIndex].startTime >= 0) {
     commentsStartTime = resultElements[commentDividerIndex].startTime;
   }
 
