@@ -521,7 +521,7 @@ export async function generateLLMAlignment(
   let commentElements: ContentElement[] = [];
   const isLessWrong = content.comment_source === 'lesswrong' || (content.url && content.url.includes('lesswrong.com'));
   const isEAForum = content.comment_source === 'ea_forum' || (content.url && content.url.includes('forum.effectivealtruism.org'));
-  const isSubstack = content.comment_source === 'substack';
+  const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
   let commentsNarrated = true;
   if (isLessWrong || isEAForum) {
