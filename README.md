@@ -457,7 +457,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `podcast_id`: FK to podcasts table
 - `podcast_show_name`: Denormalized podcast title (for direct display without querying podcasts table)
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
-- `comments`: Structured comments JSON (for EA Forum)
+- `comments`: Structured comments JSON (for EA Forum/LessWrong/Substack)
+- `comment_source`: 'ea_forum' | 'lesswrong' | 'substack' | NULL — reliable comment detection for TTS/alignment
+- `comment_count_total`: Total comments including nested replies (computed by article-fetcher)
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
