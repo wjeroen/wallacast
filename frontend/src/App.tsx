@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2 } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -26,7 +26,7 @@ function App() {
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
 
   // Get addItem and fetchContent from store
-  const { addItem, fetchContent } = useContentStore();
+  const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
 
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
@@ -171,6 +171,56 @@ function App() {
     addItem(item);
   };
 
+  const handleBulkGenerateAudio = async () => {
+    setShowUserMenu(false);
+    const COMMENT_THRESHOLD = 50;
+    const allEligible = allContent.filter(
+      item => item.type === 'article' && !item.is_archived && !item.audio_url &&
+              (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
+    );
+
+    if (allEligible.length === 0) {
+      alert('No articles need audio generation.');
+      return;
+    }
+
+    // Split into generateable and skipped (too many comments)
+    const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
+    const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
+
+    let message = `Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}?`;
+    if (skippedItems.length > 0) {
+      message += `\n\nSkipping ${skippedItems.length} article${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+    }
+
+    if (eligibleItems.length === 0) {
+      alert(`All ${allEligible.length} article${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
+      return;
+    }
+
+    const confirmed = confirm(message);
+    if (!confirmed) return;
+
+    let started = 0;
+    for (const item of eligibleItems) {
+      try {
+        await contentAPI.generateAudio(item.id, false);
+        started++;
+        refreshItem(item.id);
+      } catch (error) {
+        console.error(`Failed to start audio generation for item ${item.id}:`, error);
+      }
+    }
+
+    if (started > 0) {
+      let summary = `Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`;
+      if (skippedItems.length > 0) {
+        summary += ` Skipped ${skippedItems.length} with ${COMMENT_THRESHOLD}+ comments.`;
+      }
+      alert(summary);
+    }
+  };
+
   const handleLogout = async () => {
     setShowUserMenu(false);
     await logout();
@@ -253,6 +303,11 @@ function App() {
               <button className="user-dropdown-item" onClick={handleOpenSettings}>
                 <Settings size={18} />
                 <span>Settings</span>
+              </button>
+
+              <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
+                <Volume2 size={18} />
+                <span>Generate All Audio</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>

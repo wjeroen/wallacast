@@ -207,6 +207,11 @@ export async function initializeDatabase() {
     const contentTimestampsMigration = await fs.readFile(contentTimestampsMigrationPath, 'utf-8');
     await client.query(contentTimestampsMigration);
 
+    // Run migration to add comment_source column
+    const commentSourceMigrationPath = path.join(__dirname, 'migrations', '017_add_comment_source.sql');
+    const commentSourceMigration = await fs.readFile(commentSourceMigrationPath, 'utf-8');
+    await client.query(commentSourceMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items

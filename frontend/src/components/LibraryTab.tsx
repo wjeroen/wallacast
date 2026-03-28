@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -230,8 +230,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     try {
       setOpenDropdown(null);
       await contentAPI.refetch(id);
-      // Wait a bit for backend to process, then refresh
-      setTimeout(() => refreshItem(id), 1000);
+      // Refetch is async on the backend — refresh after delay to pick up updated data.
+      // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
+      setTimeout(() => refreshItem(id), 3000);
+      setTimeout(() => refreshItem(id), 8000);
     } catch (error) {
       console.error('Failed to refetch content:', error);
       alert('Failed to refetch content');
@@ -549,7 +551,13 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   <p className="author">
                     {item.author}
                     {item.published_at && (
-                      <> • {new Date(item.published_at).toLocaleDateString('en-GB')}</>
+                      <> &bull; {new Date(item.published_at).toLocaleDateString('en-GB')}</>
+                    )}
+                    {item.karma !== undefined && item.karma !== null && (
+                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {item.karma}</>
+                    )}
+                    {item.comment_count !== undefined && item.comment_count > 0 && (
+                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {item.comment_count}</>
                     )}
                   </p>
                 )}
