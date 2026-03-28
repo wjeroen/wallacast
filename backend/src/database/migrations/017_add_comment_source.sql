@@ -13,3 +13,15 @@ DO $$ BEGIN
     ALTER TABLE content_items ADD COLUMN comment_count_total INTEGER DEFAULT 0;
   END IF;
 END $$;
+
+-- Backfill comment_source for existing articles based on URL
+UPDATE content_items SET comment_source = 'lesswrong'
+WHERE comment_source IS NULL AND comments IS NOT NULL AND url LIKE '%lesswrong.com%';
+
+UPDATE content_items SET comment_source = 'ea_forum'
+WHERE comment_source IS NULL AND comments IS NOT NULL AND url LIKE '%forum.effectivealtruism.org%';
+
+-- For Substack on custom domains, check html_content for substackcdn.com
+UPDATE content_items SET comment_source = 'substack'
+WHERE comment_source IS NULL AND comments IS NOT NULL
+  AND (url LIKE '%substack.com%' OR html_content LIKE '%substackcdn.com%');
