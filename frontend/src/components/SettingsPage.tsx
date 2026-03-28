@@ -470,18 +470,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
              {(formData.narrate_ea_forum_comments === 'true' || formData.narrate_substack_comments === 'true') && (
                <div className="form-group" style={{ marginLeft: '1.5rem' }}>
                  <label style={{ fontSize: '0.9rem' }}>
-                   Max comments to narrate (including replies)
+                   No auto-generating articles with over
                    <input
                      type="number"
                      min="1"
                      max="9999"
                      value={formData.max_narrated_comments}
                      onChange={(e) => handleChange('max_narrated_comments', e.target.value)}
-                     style={{ marginLeft: '0.5rem', width: '5rem' }}
+                     style={{ marginLeft: '0.5rem', marginRight: '0.5rem', width: '5rem' }}
                    />
+                   comments
                  </label>
                  <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                   Auto-generate and bulk generate skip articles exceeding this limit. Manual generation shows a warning but still works.
+                   Includes replies. You can still generate these articles manually.
                  </small>
                </div>
              )}
