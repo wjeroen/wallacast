@@ -63,6 +63,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     auto_generate_audio_for_articles: 'false',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
+    max_narrated_comments: '50',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -118,6 +119,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
+        max_narrated_comments: loaded.max_narrated_comments || '50',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -464,6 +466,25 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Narrate Substack comments
                 </label>
              </div>
+
+             {(formData.narrate_ea_forum_comments === 'true' || formData.narrate_substack_comments === 'true') && (
+               <div className="form-group" style={{ marginLeft: '1.5rem' }}>
+                 <label style={{ fontSize: '0.9rem' }}>
+                   Max comments to narrate (including replies)
+                   <input
+                     type="number"
+                     min="1"
+                     max="9999"
+                     value={formData.max_narrated_comments}
+                     onChange={(e) => handleChange('max_narrated_comments', e.target.value)}
+                     style={{ marginLeft: '0.5rem', width: '5rem' }}
+                   />
+                 </label>
+                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+                   Auto-generate and bulk generate skip articles exceeding this limit. Manual generation shows a warning but still works.
+                 </small>
+               </div>
+             )}
 
              <div className="form-group checkbox-group">
                 <label>
