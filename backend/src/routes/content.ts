@@ -19,7 +19,8 @@ router.get('/', async (req, res) => {
     const { type, archived, starred } = req.query;
 
     // Exclude large columns (html_content, comments, transcript) for performance
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes FROM content_items WHERE user_id = $1';
+    // Use stored comment_count_total (includes nested replies)
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -69,7 +70,7 @@ router.post('/audio-error-log', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      'SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at FROM content_items WHERE id = $1 AND user_id = $2',
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -228,6 +229,8 @@ router.post('/', async (req, res) => {
     let agreeVotes: number | null = null;
     let disagreeVotes: number | null = null;
     let extractedComments: any = null;
+    let commentSource: string | null = null;
+    let commentCountTotal: number = 0;
     let podcastShowName: string | null = null;
 
     // For text items, store content in html_content too so read-along works (same as articles)
@@ -279,6 +282,9 @@ router.post('/', async (req, res) => {
       if (articleData.comments && articleData.comments.length > 0) {
         extractedComments = JSON.stringify(articleData.comments);
       }
+
+      commentSource = articleData.comment_source || null;
+      commentCountTotal = articleData.comment_count_total || 0;
     }
 
     if (!finalTitle || finalTitle === 'Untitled') {
@@ -303,10 +309,10 @@ router.post('/', async (req, res) => {
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, content_source, user_id, content_fetched_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, 'wallacast', req.user!.userId, contentFetchedAt]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt]
     );
 
     const createdItem = result.rows[0];
@@ -414,7 +420,13 @@ router.patch('/:id', async (req, res) => {
         if (type === 'article' || type === 'text') {
           console.log(`Manually removing audio for ${type} ${id}`);
           updates.duration = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration');
+          updates.content_alignment = null;
+          updates.transcript = null;
+          updates.transcript_words = null;
+          updates.tts_chunks = null;
+          updates.generation_status = null;
+          updates.generation_progress = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
         }
       }
     }
@@ -456,12 +468,14 @@ router.patch('/:id', async (req, res) => {
                   disagree_votes = $7,
                   comments = $8,
                   preview_picture = COALESCE($9, preview_picture),
+                  comment_source = $10,
+                  comment_count_total = $11,
                   content_source = 'wallacast',
                   generation_status = 'completed',
                   generation_progress = 100,
                   current_operation = NULL,
                   updated_at = NOW()
-                WHERE id = $10`,
+                WHERE id = $12`,
                 [
                   articleData.cleaned_html,
                   articleData.content,
@@ -471,7 +485,9 @@ router.patch('/:id', async (req, res) => {
                   articleData.agree_votes,
                   articleData.disagree_votes,
                   commentsJson,
-                  articleData.lead_image_url || null, // Capture image on refetch
+                  articleData.lead_image_url || null,
+                  articleData.comment_source || null,
+                  articleData.comment_count_total || 0,
                   id
                 ]
               );
@@ -798,10 +814,12 @@ router.post('/:id/refetch', async (req, res) => {
             disagree_votes = $7,
             comments = $8,
             preview_picture = COALESCE($9, preview_picture),
+            comment_source = $10,
+            comment_count_total = $11,
             content_source = 'wallacast',
             updated_at = NOW(),
             content_fetched_at = NOW()
-          WHERE id = $10`,
+          WHERE id = $12`,
           [
             articleData.cleaned_html,
             articleData.content,
@@ -811,7 +829,9 @@ router.post('/:id/refetch', async (req, res) => {
             articleData.agree_votes,
             articleData.disagree_votes,
             commentsJson,
-            articleData.lead_image_url || null, // Capture image on refetch
+            articleData.lead_image_url || null,
+            articleData.comment_source || null,
+            articleData.comment_count_total || 0,
             id
           ]
         );
