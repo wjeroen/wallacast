@@ -8,7 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
-import { wallabagAPI, contentAPI, podcastAPI } from './api';
+import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -140,6 +140,22 @@ function App() {
 
   const handleGenerateAudio = async (regenerate: boolean) => {
     if (!currentContent) return;
+
+    // Warn if article has many comments (but don't block — user can still proceed)
+    if (currentContent.comment_count && currentContent.comment_count > 0) {
+      try {
+        const res = await userSettingsAPI.get('max_narrated_comments');
+        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
+        if (currentContent.comment_count > maxComments) {
+          const proceed = confirm(
+            `This article has ${currentContent.comment_count} comments (your auto-generate limit is ${maxComments}). ` +
+            `Generating audio with this many comments may take a long time. Continue?`
+          );
+          if (!proceed) return;
+        }
+      } catch { /* use default — no warning if setting fetch fails */ }
+    }
+
     try {
       await contentAPI.generateAudio(currentContent.id, regenerate);
       setTimeout(async () => {
@@ -185,7 +201,14 @@ function App() {
 
   const handleBulkGenerateAudio = async () => {
     setShowUserMenu(false);
-    const COMMENT_THRESHOLD = 50;
+
+    // Fetch user's max comment limit
+    let COMMENT_THRESHOLD = 50;
+    try {
+      const res = await userSettingsAPI.get('max_narrated_comments');
+      if (res.data.value) COMMENT_THRESHOLD = parseInt(res.data.value, 10) || 50;
+    } catch { /* use default */ }
+
     const allEligible = allContent.filter(
       item => item.type === 'article' && !item.is_archived && !item.audio_url &&
               (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
