@@ -484,7 +484,7 @@ export async function generateLLMAlignment(
 
   // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
-    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, image_alt_text_data FROM content_items WHERE id = $1',
+    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data FROM content_items WHERE id = $1',
     [contentId]
   );
 
@@ -514,9 +514,23 @@ export async function generateLLMAlignment(
     imageAltTextData
   );
 
-  // Extract comment elements
+  // Extract comment elements — but only if comments were narrated in the audio.
+  // If the user disabled comment narration, the audio won't contain any comment text,
+  // so including comment elements here would confuse the LLM (it would try to match
+  // text that doesn't exist in the transcript and produce bad timestamps).
   let commentElements: ContentElement[] = [];
-  const isLessWrong = content.url && content.url.includes('lesswrong.com');
+  const isLessWrong = content.comment_source === 'lesswrong' || (content.url && content.url.includes('lesswrong.com'));
+  const isEAForum = content.comment_source === 'ea_forum' || (content.url && content.url.includes('forum.effectivealtruism.org'));
+  const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
+
+  let commentsNarrated = true;
+  if (isLessWrong || isEAForum) {
+    const setting = await getUserSetting(userId, 'narrate_ea_forum_comments');
+    commentsNarrated = setting !== 'false';
+  } else if (isSubstack) {
+    const setting = await getUserSetting(userId, 'narrate_substack_comments');
+    commentsNarrated = setting !== 'false';
+  }
 
   if (content.comments) {
     try {
@@ -542,10 +556,8 @@ export async function generateLLMAlignment(
 
   const allElements: ContentElement[] = [...filteredContentElements];
 
-  if (commentElements.length > 0) {
-    // The TTS says a full sentence: "Now, let's move on to the comments section,
-    // where N readers have shared their thoughts." — the LLM needs to match this
-    // longer text in the transcript. Frontend renders it as "Comments (N):" regardless.
+  if (commentElements.length > 0 && commentsNarrated) {
+    // Comments were narrated — include in LLM alignment so they get timestamps
     const commentCount = commentElements.filter(el => el.type === 'comment').length;
     allElements.push({
       type: 'comment-divider',
@@ -1064,10 +1076,30 @@ ${closingInstruction}`;
     ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
   }));
 
+  // If comments exist but weren't narrated, append them with startTime: -1
+  // so the frontend can display them in the read-along view without audio sync
+  if (commentElements.length > 0 && !commentsNarrated) {
+    const commentCount = commentElements.filter(el => el.type === 'comment').length;
+    resultElements.push({
+      type: 'comment-divider',
+      html: '',
+      startTime: -1,
+    });
+    for (const el of commentElements) {
+      resultElements.push({
+        type: el.type as any,
+        html: el.html,
+        startTime: -1,
+        ...(el.commentMeta ? { commentMeta: el.commentMeta } : {}),
+      });
+    }
+    console.log(`[LLM-Align] Appended ${commentCount} unnarrated comments with startTime: -1`);
+  }
+
   // Find comments start time
   let commentsStartTime: number | null = null;
   const commentDividerIndex = resultElements.findIndex(el => el.type === 'comment-divider');
-  if (commentDividerIndex >= 0) {
+  if (commentDividerIndex >= 0 && resultElements[commentDividerIndex].startTime >= 0) {
     commentsStartTime = resultElements[commentDividerIndex].startTime;
   }
 

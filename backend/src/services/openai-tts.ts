@@ -639,6 +639,18 @@ export async function generateArticleAudio(
 
     try {
       for (let i = 0; i < textChunks.length; i++) {
+        // Check if generation was cancelled before generating each chunk
+        if (options.contentId) {
+          const statusCheck = await query(
+            'SELECT generation_status FROM content_items WHERE id = $1',
+            [options.contentId]
+          );
+          if (statusCheck.rows.length > 0 && statusCheck.rows[0].generation_status === 'failed') {
+            console.log(`[TTS] Generation cancelled for content ${options.contentId}, stopping at chunk ${i + 1}/${textChunks.length}`);
+            throw new Error('Generation cancelled by user');
+          }
+        }
+
         console.log(`Generating chunk ${i + 1}/${textChunks.length}...`);
         
         if (options.contentId) {
@@ -851,13 +863,30 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
-              console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
-              const isLessWrong = content.url ? content.url.includes('lesswrong.com') : false;
-              // Use a longer, more natural announcement so Whisper doesn't skip it.
-              // "Comments section:" (2 words) was consistently dropped by Whisper.
-              // A full sentence (~15 words) is much harder for Whisper to miss.
-              // Use totalCount (includes replies) so listeners know the full scope.
-              fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              const isLessWrong = content.comment_source === 'lesswrong' || (content.url ? content.url.includes('lesswrong.com') : false);
+              const isEAForum = content.comment_source === 'ea_forum' || (content.url ? content.url.includes('forum.effectivealtruism.org') : false);
+              const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
+
+              // Check user setting for whether to narrate comments
+              let shouldNarrate = true;
+              if (isLessWrong || isEAForum) {
+                const setting = await getUserSetting(content.user_id, 'narrate_ea_forum_comments');
+                shouldNarrate = setting !== 'false'; // Default: true (narrate)
+              } else if (isSubstack) {
+                const setting = await getUserSetting(content.user_id, 'narrate_substack_comments');
+                shouldNarrate = setting !== 'false'; // Default: true (narrate)
+              }
+
+              if (shouldNarrate) {
+                console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
+                // Use a longer, more natural announcement so Whisper doesn't skip it.
+                // "Comments section:" (2 words) was consistently dropped by Whisper.
+                // A full sentence (~15 words) is much harder for Whisper to miss.
+                // Use totalCount (includes replies) so listeners know the full scope.
+                fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+              } else {
+                console.log(`[TTS] Skipping comment narration (${totalCount} comments) — disabled by user setting`);
+              }
           }
        } catch (e) {
            console.error("Failed to parse comments for audio:", e);

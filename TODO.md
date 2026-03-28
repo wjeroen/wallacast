@@ -11,7 +11,7 @@
 - [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
 - [x] **[P4]** Allow following/subscribing to non-podcast RSS feeds in the feed tab (similar to podcast subscriptions, but for general RSS/Atom feeds like blogs) (2026-01-31)
-- [ ] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong)
+- [x] **[P3]** Create comments tab for Substack newsletters (extract and display comments like EA Forum/LessWrong) — implemented via window._preloads JSON parsing from /comments page (2026-03-26)
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
@@ -36,6 +36,7 @@
 - [ ] **[P4]** Add link to online PDF-to-HTML converter tool in Upload tab hint text
 - [ ] **[P2]** Open fullscreen player by default when clicking an item (currently requires 2 clicks: first on item, then on mini player to expand)
 - [x] **[P2]** Default fullscreen player tab should be Content tab, not Read-along tab — read-along is now the default, renamed to "Content"; old Content/Comments tabs hidden (2026-02-18)
+- [x] **[P2]** Fix Vox (and similar sites) article extraction issues — duplicate title, duplicate responsive images, author bio/headshot, newsletter forms, "Related" boxes all now cleaned up in article-fetcher.ts (2026-03-26)
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author list outline that appears before the comment section in LessWrong (sidebar content is being read)
   - Reduce repetition in narration
@@ -166,6 +167,16 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix cancel generation not stopping** (2026-03-27): Chunk generation loop now checks DB for cancellation status before each chunk, so cancelling actually stops generating (was previously fire-and-forget).
+- [x] **Reliable Substack detection via comment_source column** (2026-03-27): Added `comment_source` and `comment_count_total` DB columns. Article-fetcher tags comments with their source ('ea_forum', 'lesswrong', 'substack'). TTS and alignment use this instead of fragile URL/HTML detection. Comment count now includes nested replies.
+- [x] **Bulk generate skips 50+ comment articles** (2026-03-27): "Generate All Audio" skips articles with 50+ total comments (including replies) and shows summary of skipped articles. User can still generate those manually.
+- [x] **Fix removing audio not clearing read-along** (2026-03-27): Removing audio now also clears content_alignment, transcript, transcript_words, tts_chunks, and generation status so the read-along view goes away too.
+- [x] **Icons for karma/comments in fullscreen player header** (2026-03-27): Replaced text-only "N upvotes • N comments" with ArrowUp and MessageCircle icons matching the library tab style.
+- [x] **Move "Generate All Audio" to user dropdown menu** (2026-03-27): Moved from library header (too crowded on mobile) to the user dropdown menu alongside Settings and Switch Account.
+- [x] **Unnarrated comments still shown in read-along** (2026-03-27): When comment narration is disabled, comments still appear in read-along view (with startTime: -1) but don't participate in audio sync, seeking, or highlighting.
+- [x] **Add bulk generate audio button** (2026-03-27): "Generate All Audio" in user dropdown menu triggers bulk audio generation for all unread articles without audio.
+- [x] **Show upvotes/comment count on library tab cards** (2026-03-27): Library cards display karma and comment count with ArrowUp and MessageCircle icons.
+- [x] **Add comment narration settings (EA Forum, Substack)** (2026-03-27): Two toggles in SettingsPage — EA Forum/LessWrong and Substack. When disabled, comments still display in read-along but without audio sync.
 - [x] **LLM Content Block support for LessWrong/EA Forum** (2026-03-24): AI-generated sections (`div.llm-content-block` with `data-model-name`) are now detected, narrated with model attribution ("The following was written by Claude Opus 4.6:"), displayed in serif font with purple left border and model name badge in read-along view.
 - [x] **Removed marker-pdf and PDF upload** (2026-03-24): marker-pdf models (1.8GB+) re-download on every Railway deploy and SIGKILL on model load. Upload tab now HTML-only.
 - [x] **Unified HTML download menus + raw original download** (2026-03-24): Library dropdown now has same 3 download options as fullscreen player (cleaned HTML, read-along HTML, original). "Download original" now fetches raw HTML from source URL with zero cleaning (new `GET /:id/original-html` endpoint), instead of re-running the article extraction pipeline which gave identical cleaned output.

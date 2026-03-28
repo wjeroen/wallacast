@@ -343,9 +343,11 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                       agree_votes = $6,
                       disagree_votes = $7,
                       comments = $8,
+                      comment_source = $9,
+                      comment_count_total = $10,
                       content_source = 'wallacast',
                       updated_at = NOW()
-                    WHERE id = $9`,
+                    WHERE id = $11`,
                     [
                       articleData.cleaned_html,
                       articleData.content,
@@ -355,6 +357,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                       articleData.agree_votes,
                       articleData.disagree_votes,
                       commentsJson,
+                      articleData.comment_source || null,
+                      articleData.comment_count_total || 0,
                       newId
                     ]
                   );

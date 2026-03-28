@@ -41,6 +41,8 @@ const VALID_SETTING_KEYS = [
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
+  'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
+  'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
 ];
 
 // Secret keys that should be masked in responses
