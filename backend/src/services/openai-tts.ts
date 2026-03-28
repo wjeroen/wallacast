@@ -879,10 +879,6 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
               if (shouldNarrate) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
-                // Use a longer, more natural announcement so Whisper doesn't skip it.
-                // "Comments section:" (2 words) was consistently dropped by Whisper.
-                // A full sentence (~15 words) is much harder for Whisper to miss.
-                // Use totalCount (includes replies) so listeners know the full scope.
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
               } else {
                 console.log(`[TTS] Skipping comment narration (${totalCount} comments) — disabled by user setting`);
