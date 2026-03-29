@@ -70,13 +70,31 @@ export const useContentStore = create<ContentStore>((set, get) => ({
     set({ loading: true, error: null });
 
     try {
-      // Always fetch everything (non-archived + archived) in one call, filter client-side
-      const response = await contentAPI.getAll();
-      const allItems = response.data;
+      // Step 1: Fetch non-archived items first (fast — typically ~20 items)
+      const activeResponse = await contentAPI.getAll({ archived: false });
+      const activeItems = activeResponse.data;
       const currentFilter = get().filter;
-      const filtered = allItems.filter(i => itemMatchesFilter(i, currentFilter));
-      const allCount = allItems.filter(i => !i.is_archived).length;
-      set({ allItems, items: filtered, loading: false, allCount });
+
+      // Show active items immediately (loading done)
+      set({
+        allItems: activeItems,
+        items: activeItems.filter(i => itemMatchesFilter(i, currentFilter)),
+        loading: false,
+        allCount: activeItems.length,
+      });
+
+      // Step 2: Fetch archived items in the background (could be hundreds)
+      // so filters like "Archived" and "Favorites" work instantly when clicked
+      const archivedResponse = await contentAPI.getAll({ archived: true });
+      const archivedItems = archivedResponse.data;
+      const allItems = [...activeItems, ...archivedItems];
+
+      // Merge into master list; re-derive filtered view with current filter
+      const latestFilter = get().filter;
+      set({
+        allItems,
+        items: allItems.filter(i => itemMatchesFilter(i, latestFilter)),
+      });
     } catch (error) {
       console.error('Failed to fetch content:', error);
       set({ error: 'Failed to fetch content', loading: false });
