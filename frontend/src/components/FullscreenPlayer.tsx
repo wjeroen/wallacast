@@ -120,17 +120,19 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * Build metadata string for a comment (e.g., "5 upvotes · 3 agreement")
+ * Build metadata string for a comment (e.g., "5 upvotes · 3 agreement" or "5 likes" for Substack)
  */
 function buildCommentMetadata(
   meta: LLMAlignmentElement['commentMeta'],
-  isLessWrong: boolean
+  isLessWrong: boolean,
+  isSubstack: boolean = false
 ): string {
   if (!meta) return '';
   const parts: string[] = [];
 
   if (meta.karma !== undefined && meta.karma !== null) {
-    parts.push(`${meta.karma} upvote${meta.karma !== 1 ? 's' : ''}`);
+    const label = isSubstack ? (meta.karma !== 1 ? 'likes' : 'like') : (meta.karma !== 1 ? 'upvotes' : 'upvote');
+    parts.push(`${meta.karma} ${label}`);
   }
 
   if (meta.extendedScore) {
@@ -386,8 +388,10 @@ export function FullscreenPlayer({
   // Recursive component to render comments with replies (for Comments tab)
   const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
     const metadataParts: string[] = [];
+    const isSS = content.url ? content.url.includes('substack.com') : false;
     if (comment.karma !== undefined && comment.karma !== null) {
-      metadataParts.push(`${comment.karma} upvote${comment.karma !== 1 ? 's' : ''}`);
+      const karmaLabel = isSS ? (comment.karma !== 1 ? 'likes' : 'like') : (comment.karma !== 1 ? 'upvotes' : 'upvote');
+      metadataParts.push(`${comment.karma} ${karmaLabel}`);
     }
     if (comment.extendedScore) {
       const isLW = content.url ? content.url.includes('lesswrong.com') : false;
@@ -468,11 +472,13 @@ export function FullscreenPlayer({
       .filter(e => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block', 'title', 'meta'].includes(e.type))
       .map(e => e.html)
       .join('\n');
+    const isSubstackDl = content.url ? content.url.includes('substack.com') : false;
     const commentHtml = elements
       .filter(e => e.type === 'comment')
       .map(e => {
         const meta = e.commentMeta;
-        const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
+        const klabel = isSubstackDl ? 'likes' : 'upvotes';
+        const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} ${klabel})` : ''}</p>` : '';
         return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
       })
       .join('\n');
@@ -510,6 +516,7 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
 
     const elements = parsedAlignment.elements as LLMAlignmentElement[];
     const isLW = content.url ? content.url.includes('lesswrong.com') : false;
+    const isSub = content.url ? content.url.includes('substack.com') : false;
 
     // Split elements into categories
     const titleEl = elements.find(e => e.type === 'title');
@@ -672,7 +679,7 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                   const isNarrated = el.startTime >= 0;
                   const isActive = isNarrated && globalIndex === activeElementIndex;
                   const meta = el.commentMeta;
-                  const metaStr = buildCommentMetadata(meta, isLW);
+                  const metaStr = buildCommentMetadata(meta, isLW, isSub);
                   return (
                     <div className="comment" key={`comment-${globalIndex}`}>
                       <div

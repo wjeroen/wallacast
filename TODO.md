@@ -167,6 +167,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Optimize library filter switching — instant client-side filtering** (2026-03-29): Filter buttons (Articles, Texts, Podcasts, etc.) no longer make an API call per click. All items are fetched once on mount, stored in a master list (`allItems`), and filtered client-side. Switching filters is now instant.
+- [x] **Substack comments: "upvotes" → "likes"** (2026-03-29): Substack uses "likes" not "upvotes". Updated narration (openai-tts.ts), LLM alignment (llm-alignment.ts), and frontend display (FullscreenPlayer.tsx, LibraryTab.tsx) to show "N likes" for Substack content and "N upvotes" for EA Forum/LessWrong.
 - [x] **Fix cancel generation not stopping** (2026-03-27): Chunk generation loop now checks DB for cancellation status before each chunk, so cancelling actually stops generating (was previously fire-and-forget).
 - [x] **Reliable Substack detection via comment_source column** (2026-03-27): Added `comment_source` and `comment_count_total` DB columns. Article-fetcher tags comments with their source ('ea_forum', 'lesswrong', 'substack'). TTS and alignment use this instead of fragile URL/HTML detection. Comment count now includes nested replies.
 - [x] **Bulk generate skips 50+ comment articles** (2026-03-27): "Generate All Audio" skips articles with 50+ total comments (including replies) and shows summary of skipped articles. User can still generate those manually.

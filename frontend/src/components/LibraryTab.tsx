@@ -295,7 +295,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         .filter((e: any) => e.type === 'comment')
         .map((e: any) => {
           const meta = e.commentMeta;
-          const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
+          const isSub = item.url ? item.url.includes('substack.com') : false;
+          const karmaLabel = isSub ? 'likes' : 'upvotes';
+          const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} ${karmaLabel})` : ''}</p>` : '';
           return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
         })
         .join('\n');
