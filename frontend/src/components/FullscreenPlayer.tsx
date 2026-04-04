@@ -10,13 +10,17 @@ import {
   Minimize2,
   SquareArrowOutUpRight,
   RefreshCw,
-  ArrowDownToLine,
   MoreVertical,
   ArrowUp,
   MessageCircle,
+  Star,
+  Archive,
+  ArchiveRestore,
+  Trash2,
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { contentAPI } from '../api';
+import { useContentStore } from '../store/contentStore';
 import type { ContentItem, Comment } from '../types';
 
 interface TranscriptWord {
@@ -185,6 +189,8 @@ export function FullscreenPlayer({
   const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
   // Dropdown menu state
   const [showDropdown, setShowDropdown] = useState(false);
+  // Content store for star/archive/delete actions
+  const { toggleStarred, toggleArchived, deleteItem } = useContentStore();
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -1050,6 +1056,32 @@ export function FullscreenPlayer({
             </button>
             {showDropdown && (
               <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
+                {/* Star / Archive / Delete at the top */}
+                <button
+                  onClick={() => { setShowDropdown(false); toggleStarred(content.id); }}
+                  style={content.is_starred ? { color: '#fbbf24' } : undefined}
+                >
+                  <Star size={14} fill={content.is_starred ? 'currentColor' : 'none'} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  {content.is_starred ? 'Unstar' : 'Star'}
+                </button>
+                <button
+                  onClick={() => { setShowDropdown(false); toggleArchived(content.id); }}
+                  style={content.is_archived ? { color: '#3b82f6' } : undefined}
+                >
+                  {content.is_archived
+                    ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  }
+                  {content.is_archived ? 'Unarchive' : 'Archive'}
+                </button>
+                <button
+                  onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
+                  style={{ color: '#ef4444' }}
+                >
+                  <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Delete
+                </button>
+                {/* Audio / transcript / refetch options */}
                 {(content.type === 'article' || content.type === 'text') && (
                   <>
                     {!content.audio_url && onGenerateAudio && (
@@ -1085,7 +1117,6 @@ export function FullscreenPlayer({
                   </button>
                 )}
                 <button onClick={handleDownloadDataZip}>
-                  <ArrowDownToLine size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
                 </button>
               </div>
