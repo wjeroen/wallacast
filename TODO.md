@@ -22,7 +22,7 @@
 - [ ] **[P3]** Allow texts (not articles) to be edited with markdown support, doesn't automatically regenerate audio
 - [ ] **[P7]** Add button to summarize content (low priority) - if it's an EA forum article, check whether there's already a summary written by the summarybot in the comments and use that instead
 - [ ] **[P4]** Keep version history of all previous content/comment fetches in case articles get deleted or regeneration went poorly (don't do this with audio, would take up too much space)
-- [ ] **[P4]** Implement import/export functionality including data that doesn't sync with wallabag, make audio files optional
+- [ ] **[P4]** Implement import functionality (export done via "Download data (zip)" button — import still needed)
 
 ### Bug Fixes
 - [x] **[P2]** Fix embedded tweets showing giant profile pictures instead of readable content — CSS-only fix (see PLAN-html-readalong-fixes.md, Issue 1)
@@ -167,6 +167,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix broken images and markdown artifacts in HTML uploads** (2026-04-04): Uploaded HTML from Obsidian/saved web pages had broken images (relative paths to local cache) and ugly `[` `](url)` text from broken markdown rendering. Backend now detects this pattern during upload, extracts real https URLs, and fixes `<img src>` attributes. Frontend also hides broken images via onerror handler as safety net.
+- [x] **Replace download HTML buttons with single "Download data (zip)"** (2026-04-04): Replaced 3 separate download HTML buttons (cleaned, read-along, original) in both library and fullscreen player dropdowns with a single "Download data (zip)" button that exports all database fields (except audio_data) as a zip file with metadata.json, content.html, comments.json, alignment.json, transcript.txt, etc. Works for all content types. New backend endpoint: `GET /content/:id/export`.
 - [x] **Fix cancel generation not stopping** (2026-03-27): Chunk generation loop now checks DB for cancellation status before each chunk, so cancelling actually stops generating (was previously fire-and-forget).
 - [x] **Reliable Substack detection via comment_source column** (2026-03-27): Added `comment_source` and `comment_count_total` DB columns. Article-fetcher tags comments with their source ('ea_forum', 'lesswrong', 'substack'). TTS and alignment use this instead of fragile URL/HTML detection. Comment count now includes nested replies.
 - [x] **Bulk generate skips 50+ comment articles** (2026-03-27): "Generate All Audio" skips articles with 50+ total comments (including replies) and shows summary of skipped articles. User can still generate those manually.

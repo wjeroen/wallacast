@@ -170,7 +170,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`routes/content.ts`**: CRUD for content items (requires JWT auth). **All queries filter by `user_id`** for data isolation. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
   - `GET /` - List all content (excludes audio_data, html_content, comments, transcript for performance)
   - `GET /:id` - Get single item (includes comments and transcript for display)
-  - `POST /` - Create content, auto-extracts article HTML if URL provided. **Text items**: content is stored in both `content` and `html_content` columns so read-along/alignment works identically to articles
+  - `POST /` - Create content, auto-extracts article HTML if URL provided. **Text items**: content is stored in both `content` and `html_content` columns so read-along/alignment works identically to articles. **HTML upload cleanup**: strips scripts/styles, fixes broken Obsidian markdown image artifacts (local `<img>` paths replaced with real URLs from `](url)` text), removes images with relative paths that can't load on the server.
   - `PATCH /:id` - Update playback position, archive status, etc. Special operations:
     - Archiving deletes audio, alignment data, and transcript to save space (unless item is favorited)
     - Un-archiving regenerates audio, transcript, and alignment if missing
@@ -179,6 +179,7 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
+  - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as JSON. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
   - `DELETE /:id` - Delete content and clean up audio files
 

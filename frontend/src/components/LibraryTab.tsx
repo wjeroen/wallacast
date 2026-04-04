@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, ArrowDownToLine } from 'lucide-react';
+import JSZip from 'jszip';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem } from '../types';
@@ -251,82 +252,74 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const downloadFile = (filename: string, data: string, mime = 'text/html') => {
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadCleanedHtml = async (item: ContentItem) => {
+  const handleDownloadDataZip = async (item: ContentItem) => {
     try {
       setOpenDropdown(null);
-      const response = await contentAPI.getById(item.id);
-      const html = response.data.html_content || response.data.content || '';
-      if (!html) { alert('No content available to download'); return; }
-      const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      downloadFile(`${safeName}.html`, html);
-    } catch (error) {
-      console.error('Failed to download HTML:', error);
-      alert('Failed to download content');
-    }
-  };
+      const response = await contentAPI.exportData(item.id);
+      const data = response.data;
+      const zip = new JSZip();
 
-  const handleDownloadReadAlongHtml = async (item: ContentItem) => {
-    try {
-      setOpenDropdown(null);
-      const response = await contentAPI.getById(item.id);
-      const fullItem = response.data;
-      const alignment = fullItem.content_alignment;
-      if (!alignment) { alert('No read-along alignment available for this item'); return; }
-      const parsed = typeof alignment === 'string' ? JSON.parse(alignment) : alignment;
-      if (!parsed.format || parsed.format !== 'llm') { alert('No LLM read-along alignment available'); return; }
-      const elements = parsed.elements || [];
-      const bodyHtml = elements
-        .filter((e: any) => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'title', 'meta'].includes(e.type))
-        .map((e: any) => e.html)
-        .join('\n');
-      const commentHtml = elements
-        .filter((e: any) => e.type === 'comment')
-        .map((e: any) => {
-          const meta = e.commentMeta;
-          const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
-          return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
-        })
-        .join('\n');
-      const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      const fullHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${fullItem.title || 'Read-Along'}</title>
-<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}</style>
-</head><body>
-<h1>${fullItem.title || ''}</h1>
-${bodyHtml}
-${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
-</body></html>`;
-      downloadFile(`${safeName} (read-along).html`, fullHtml);
-    } catch (error) {
-      console.error('Failed to download read-along HTML:', error);
-      alert('Failed to download read-along content');
-    }
-  };
+      // Separate large text fields into their own files
+      const htmlContent = data.html_content || '';
+      const textContent = data.content || '';
+      const transcript = data.transcript || '';
+      const comments = data.comments;
+      const contentAlignment = data.content_alignment;
+      const transcriptWords = data.transcript_words;
+      const ttsChunks = data.tts_chunks;
+      const imageAltTextData = data.image_alt_text_data;
 
-  const handleDownloadOriginalHtml = async (item: ContentItem) => {
-    try {
-      setOpenDropdown(null);
-      if (!item.url) { alert('No source URL available — cannot fetch original HTML'); return; }
-      const response = await contentAPI.getOriginalHtml(item.id);
-      const html = typeof response.data === 'string' ? response.data : String(response.data);
-      if (!html) { alert('No content returned from source'); return; }
+      // Build metadata object with everything except the large fields
+      const metadata = { ...data };
+      delete metadata.html_content;
+      delete metadata.content;
+      delete metadata.transcript;
+      delete metadata.comments;
+      delete metadata.content_alignment;
+      delete metadata.transcript_words;
+      delete metadata.tts_chunks;
+      delete metadata.image_alt_text_data;
+
+      zip.file('metadata.json', JSON.stringify(metadata, null, 2));
+
+      if (htmlContent) zip.file('content.html', htmlContent);
+      if (textContent) zip.file('content_plain.txt', textContent);
+      if (transcript) zip.file('transcript.txt', transcript);
+
+      if (comments) {
+        const parsed = typeof comments === 'string' ? comments : JSON.stringify(comments, null, 2);
+        zip.file('comments.json', parsed);
+      }
+      if (contentAlignment) {
+        const parsed = typeof contentAlignment === 'string' ? contentAlignment : JSON.stringify(contentAlignment, null, 2);
+        zip.file('alignment.json', parsed);
+      }
+      if (transcriptWords) {
+        const parsed = typeof transcriptWords === 'string' ? transcriptWords : JSON.stringify(transcriptWords, null, 2);
+        zip.file('transcript_words.json', parsed);
+      }
+      if (ttsChunks) {
+        const parsed = typeof ttsChunks === 'string' ? ttsChunks : JSON.stringify(ttsChunks, null, 2);
+        zip.file('tts_chunks.json', parsed);
+      }
+      if (imageAltTextData) {
+        const parsed = typeof imageAltTextData === 'string' ? imageAltTextData : JSON.stringify(imageAltTextData, null, 2);
+        zip.file('image_alt_text.json', parsed);
+      }
+
       const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      downloadFile(`${safeName} (original).html`, html);
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Failed to download original HTML:', error);
-      alert('Failed to fetch original HTML');
+      console.error('Failed to export data:', error);
+      alert('Failed to download data');
     }
   };
 
@@ -691,21 +684,10 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                             )}
                           </>
                         )}
-                        {(item.type === 'article' || item.type === 'text') && (
-                          <>
-                            <button onClick={() => handleDownloadCleanedHtml(item)}>
-                              Download cleaned HTML
-                            </button>
-                            <button onClick={() => handleDownloadReadAlongHtml(item)}>
-                              Download read-along HTML
-                            </button>
-                            {item.url && (
-                              <button onClick={() => handleDownloadOriginalHtml(item)}>
-                                Download original (refetch)
-                              </button>
-                            )}
-                          </>
-                        )}
+                        <button onClick={() => handleDownloadDataZip(item)}>
+                          <ArrowDownToLine size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                          Download data (zip)
+                        </button>
                       </div>
                     )}
                   </div>
