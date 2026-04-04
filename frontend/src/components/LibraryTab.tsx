@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, ArrowDownToLine } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import JSZip from 'jszip';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
@@ -685,7 +685,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                           </>
                         )}
                         <button onClick={() => handleDownloadDataZip(item)}>
-                          <ArrowDownToLine size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Download data (zip)
                         </button>
                       </div>
