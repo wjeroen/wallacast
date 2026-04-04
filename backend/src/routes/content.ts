@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
+import archiver from 'archiver';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
@@ -828,9 +829,24 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Download original (raw) HTML from source URL — no cleaning, for debugging
-// Export all fields for a content item (except audio_data which is too large)
+// Export all fields for a content item as a zip file (except audio_data which is too large)
+// Accepts JWT token via query param (?token=...) for direct browser download via window.open()
 router.get('/:id/export', async (req, res) => {
   try {
+    // Support token via query param (for window.open downloads where headers can't be set)
+    if (!req.user && req.query.token) {
+      const { verifyAccessToken } = await import('../services/auth.js');
+      const payload = verifyAccessToken(req.query.token as string);
+      if (payload) {
+        req.user = payload;
+      } else {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+    }
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
     const { id } = req.params;
 
     const result = await query(
@@ -853,10 +869,54 @@ router.get('/:id/export', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    res.json(result.rows[0]);
+    const data = result.rows[0];
+    const safeName = (data.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 100);
+
+    // Separate large text fields into their own files
+    const htmlContent = data.html_content || '';
+    const textContent = data.content || '';
+    const transcript = data.transcript || '';
+    const comments = data.comments;
+    const contentAlignment = data.content_alignment;
+    const transcriptWords = data.transcript_words;
+    const ttsChunks = data.tts_chunks;
+    const imageAltTextData = data.image_alt_text_data;
+
+    // Build metadata object without the large fields
+    const metadata = { ...data };
+    delete metadata.html_content;
+    delete metadata.content;
+    delete metadata.transcript;
+    delete metadata.comments;
+    delete metadata.content_alignment;
+    delete metadata.transcript_words;
+    delete metadata.tts_chunks;
+    delete metadata.image_alt_text_data;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    archive.append(JSON.stringify(metadata, null, 2), { name: 'metadata.json' });
+    if (htmlContent) archive.append(htmlContent, { name: 'content.html' });
+    if (textContent) archive.append(textContent, { name: 'content_plain.txt' });
+    if (transcript) archive.append(transcript, { name: 'transcript.txt' });
+
+    const jsonField = (val: any) => typeof val === 'string' ? val : JSON.stringify(val, null, 2);
+    if (comments) archive.append(jsonField(comments), { name: 'comments.json' });
+    if (contentAlignment) archive.append(jsonField(contentAlignment), { name: 'alignment.json' });
+    if (transcriptWords) archive.append(jsonField(transcriptWords), { name: 'transcript_words.json' });
+    if (ttsChunks) archive.append(jsonField(ttsChunks), { name: 'tts_chunks.json' });
+    if (imageAltTextData) archive.append(jsonField(imageAltTextData), { name: 'image_alt_text.json' });
+
+    await archive.finalize();
   } catch (error) {
     console.error('Error exporting content item:', error);
-    res.status(500).json({ error: 'Failed to export content item' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to export content item' });
+    }
   }
 });
 

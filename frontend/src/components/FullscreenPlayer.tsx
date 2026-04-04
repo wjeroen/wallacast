@@ -19,8 +19,6 @@ import {
   ArchiveRestore,
   Trash2,
 } from 'lucide-react';
-import JSZip from 'jszip';
-import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem, Comment } from '../types';
 
@@ -452,78 +450,16 @@ export function FullscreenPlayer({
   };
 
   // --------------------------------------------------------------------------
-  // Download data as zip
+  // Download data as zip (served directly from backend)
   // --------------------------------------------------------------------------
-  const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-
-  const handleDownloadDataZip = async () => {
+  const handleDownloadDataZip = () => {
     setShowDropdown(false);
-    try {
-      const response = await contentAPI.exportData(content.id);
-      const data = response.data;
-      const zip = new JSZip();
-
-      // Separate large text fields into their own files
-      const htmlContent = data.html_content || '';
-      const textContent = data.content || '';
-      const transcript = data.transcript || '';
-      const comments = data.comments;
-      const contentAlignment = data.content_alignment;
-      const transcriptWords = data.transcript_words;
-      const ttsChunks = data.tts_chunks;
-      const imageAltTextData = data.image_alt_text_data;
-
-      // Build metadata object with everything except the large fields
-      const metadata = { ...data };
-      delete metadata.html_content;
-      delete metadata.content;
-      delete metadata.transcript;
-      delete metadata.comments;
-      delete metadata.content_alignment;
-      delete metadata.transcript_words;
-      delete metadata.tts_chunks;
-      delete metadata.image_alt_text_data;
-
-      zip.file('metadata.json', JSON.stringify(metadata, null, 2));
-
-      if (htmlContent) zip.file('content.html', htmlContent);
-      if (textContent) zip.file('content_plain.txt', textContent);
-      if (transcript) zip.file('transcript.txt', transcript);
-
-      if (comments) {
-        const parsed = typeof comments === 'string' ? comments : JSON.stringify(comments, null, 2);
-        zip.file('comments.json', typeof comments === 'string' ? comments : parsed);
-      }
-      if (contentAlignment) {
-        const parsed = typeof contentAlignment === 'string' ? contentAlignment : JSON.stringify(contentAlignment, null, 2);
-        zip.file('alignment.json', parsed);
-      }
-      if (transcriptWords) {
-        const parsed = typeof transcriptWords === 'string' ? transcriptWords : JSON.stringify(transcriptWords, null, 2);
-        zip.file('transcript_words.json', parsed);
-      }
-      if (ttsChunks) {
-        const parsed = typeof ttsChunks === 'string' ? ttsChunks : JSON.stringify(ttsChunks, null, 2);
-        zip.file('tts_chunks.json', parsed);
-      }
-      if (imageAltTextData) {
-        const parsed = typeof imageAltTextData === 'string' ? imageAltTextData : JSON.stringify(imageAltTextData, null, 2);
-        zip.file('image_alt_text.json', parsed);
-      }
-
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${safeName}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to export data:', error);
-      alert('Failed to download data');
-    }
+    // Open the backend export URL directly — the backend generates the zip and
+    // sends it with Content-Disposition: attachment, triggering a browser download.
+    // This works on mobile because it's a synchronous user-gesture navigation.
+    const token = localStorage.getItem('accessToken');
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+    window.open(`${baseUrl}/content/${content.id}/export?token=${encodeURIComponent(token || '')}`, '_blank');
   };
 
   // --------------------------------------------------------------------------
@@ -1061,7 +997,6 @@ export function FullscreenPlayer({
                 {/* Star / Archive / Delete at the top */}
                 <button
                   onClick={() => {
-                    setShowDropdown(false);
                     toggleStarred(content.id);
                     onContentUpdated?.({ ...content, is_starred: !content.is_starred });
                   }}
@@ -1072,7 +1007,6 @@ export function FullscreenPlayer({
                 </button>
                 <button
                   onClick={() => {
-                    setShowDropdown(false);
                     toggleArchived(content.id);
                     onContentUpdated?.({ ...content, is_archived: !content.is_archived });
                   }}
