@@ -15,6 +15,7 @@ import {
   ArrowUp,
   MessageCircle,
 } from 'lucide-react';
+import JSZip from 'jszip';
 import { contentAPI } from '../api';
 import type { ContentItem, Comment } from '../types';
 
@@ -207,6 +208,18 @@ export function FullscreenPlayer({
   useEffect(() => {
     localStorage.setItem('readAlongAutoScroll', String(autoScroll));
   }, [autoScroll]);
+
+  // Hide broken images (e.g. from uploaded HTML files with relative paths to local files)
+  useEffect(() => {
+    const container = document.querySelector('.fullscreen-player');
+    if (!container) return;
+    const imgs = container.querySelectorAll('.article-content img');
+    imgs.forEach(img => {
+      (img as HTMLImageElement).onerror = () => {
+        (img as HTMLElement).style.display = 'none';
+      };
+    });
+  }, [content.id, content.html_content, activeTab]);
 
   // Parse comments from JSON string if available
   const parsedComments: Comment[] = useMemo(() => {
@@ -431,74 +444,78 @@ export function FullscreenPlayer({
   };
 
   // --------------------------------------------------------------------------
-  // Download helpers
+  // Download data as zip
   // --------------------------------------------------------------------------
-  const downloadFile = (filename: string, data: string, mime = 'text/html') => {
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
 
-  const handleDownloadCleanedHtml = async () => {
+  const handleDownloadDataZip = async () => {
     setShowDropdown(false);
     try {
-      const response = await contentAPI.getById(content.id);
-      const html = response.data.html_content || response.data.content || '';
-      if (!html) { alert('No content available'); return; }
-      downloadFile(`${safeName}.html`, html);
-    } catch { alert('Failed to download'); }
-  };
+      const response = await contentAPI.exportData(content.id);
+      const data = response.data;
+      const zip = new JSZip();
 
-  const handleDownloadReadAlongHtml = () => {
-    setShowDropdown(false);
-    if (!parsedAlignment || !isLLMAlignment) {
-      alert('No read-along alignment available for this item');
-      return;
-    }
-    const elements = (parsedAlignment.elements as LLMAlignmentElement[]);
-    const bodyHtml = elements
-      .filter(e => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block', 'title', 'meta'].includes(e.type))
-      .map(e => e.html)
-      .join('\n');
-    const commentHtml = elements
-      .filter(e => e.type === 'comment')
-      .map(e => {
-        const meta = e.commentMeta;
-        const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
-        return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
-      })
-      .join('\n');
-    const fullHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${content.title || 'Read-Along'}</title>
-<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}.llm-content-block{font-family:Georgia,'Times New Roman',serif;border-left:4px solid #8b5cf6;padding-left:1em;margin:1em 0;position:relative}.llm-content-block[data-model-name]::before{content:attr(data-model-name);display:block;font-family:system-ui,sans-serif;font-size:.7rem;color:#a78bfa;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:4px;padding:.15em .5em;margin-bottom:.5em;width:fit-content}</style>
-</head><body>
-<h1>${content.title || ''}</h1>
-${bodyHtml}
-${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
-</body></html>`;
-    downloadFile(`${safeName} (read-along).html`, fullHtml);
-  };
+      // Separate large text fields into their own files
+      const htmlContent = data.html_content || '';
+      const textContent = data.content || '';
+      const transcript = data.transcript || '';
+      const comments = data.comments;
+      const contentAlignment = data.content_alignment;
+      const transcriptWords = data.transcript_words;
+      const ttsChunks = data.tts_chunks;
+      const imageAltTextData = data.image_alt_text_data;
 
-  const handleDownloadOriginalHtml = async () => {
-    setShowDropdown(false);
-    if (!content.url) {
-      alert('No source URL available — cannot fetch original HTML');
-      return;
+      // Build metadata object with everything except the large fields
+      const metadata = { ...data };
+      delete metadata.html_content;
+      delete metadata.content;
+      delete metadata.transcript;
+      delete metadata.comments;
+      delete metadata.content_alignment;
+      delete metadata.transcript_words;
+      delete metadata.tts_chunks;
+      delete metadata.image_alt_text_data;
+
+      zip.file('metadata.json', JSON.stringify(metadata, null, 2));
+
+      if (htmlContent) zip.file('content.html', htmlContent);
+      if (textContent) zip.file('content_plain.txt', textContent);
+      if (transcript) zip.file('transcript.txt', transcript);
+
+      if (comments) {
+        const parsed = typeof comments === 'string' ? comments : JSON.stringify(comments, null, 2);
+        zip.file('comments.json', typeof comments === 'string' ? comments : parsed);
+      }
+      if (contentAlignment) {
+        const parsed = typeof contentAlignment === 'string' ? contentAlignment : JSON.stringify(contentAlignment, null, 2);
+        zip.file('alignment.json', parsed);
+      }
+      if (transcriptWords) {
+        const parsed = typeof transcriptWords === 'string' ? transcriptWords : JSON.stringify(transcriptWords, null, 2);
+        zip.file('transcript_words.json', parsed);
+      }
+      if (ttsChunks) {
+        const parsed = typeof ttsChunks === 'string' ? ttsChunks : JSON.stringify(ttsChunks, null, 2);
+        zip.file('tts_chunks.json', parsed);
+      }
+      if (imageAltTextData) {
+        const parsed = typeof imageAltTextData === 'string' ? imageAltTextData : JSON.stringify(imageAltTextData, null, 2);
+        zip.file('image_alt_text.json', parsed);
+      }
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export data:', error);
+      alert('Failed to download data');
     }
-    try {
-      const response = await contentAPI.getOriginalHtml(content.id);
-      const html = typeof response.data === 'string' ? response.data : String(response.data);
-      if (!html) { alert('No content returned from source'); return; }
-      downloadFile(`${safeName} (original).html`, html);
-    } catch { alert('Failed to fetch original HTML'); }
   };
 
   // --------------------------------------------------------------------------
@@ -1067,23 +1084,10 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                     Refetch from web
                   </button>
                 )}
-                {(content.type === 'article' || content.type === 'text') && (
-                  <>
-                    <button onClick={handleDownloadCleanedHtml}>
-                      Download cleaned HTML
-                    </button>
-                    {parsedAlignment && isLLMAlignment && (
-                      <button onClick={handleDownloadReadAlongHtml}>
-                        Download read-along HTML
-                      </button>
-                    )}
-                    {content.url && (
-                      <button onClick={handleDownloadOriginalHtml}>
-                        Download original (refetch)
-                      </button>
-                    )}
-                  </>
-                )}
+                <button onClick={handleDownloadDataZip}>
+                  <ArrowDownToLine size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Download data (zip)
+                </button>
               </div>
             )}
           </div>
