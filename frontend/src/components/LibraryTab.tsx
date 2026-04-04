@@ -251,11 +251,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const handleDownloadDataZip = (item: ContentItem) => {
+  const handleDownloadDataZip = async (item: ContentItem) => {
     setOpenDropdown(null);
-    const token = localStorage.getItem('accessToken');
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
-    window.open(`${baseUrl}/content/${item.id}/export?token=${encodeURIComponent(token || '')}`, '_blank');
+    try {
+      const response = await contentAPI.exportZip(item.id);
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export data:', error);
+      alert('Failed to download data');
+    }
   };
 
   const getGenerationStatusDisplay = (item: ContentItem) => {

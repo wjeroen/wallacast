@@ -830,23 +830,8 @@ router.delete('/:id', async (req, res) => {
 
 // Download original (raw) HTML from source URL — no cleaning, for debugging
 // Export all fields for a content item as a zip file (except audio_data which is too large)
-// Accepts JWT token via query param (?token=...) for direct browser download via window.open()
 router.get('/:id/export', async (req, res) => {
   try {
-    // Support token via query param (for window.open downloads where headers can't be set)
-    if (!req.user && req.query.token) {
-      const { verifyAccessToken } = await import('../services/auth.js');
-      const payload = verifyAccessToken(req.query.token as string);
-      if (payload) {
-        req.user = payload;
-      } else {
-        return res.status(401).json({ error: 'Invalid or expired token' });
-      }
-    }
-    if (!req.user) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
     const { id } = req.params;
 
     const result = await query(
