@@ -178,6 +178,7 @@ export function FullscreenPlayer({
   onGenerateAudio,
   onRemoveAudio,
   onRegenerateTranscript,
+  onContentUpdated,
 }: FullscreenPlayerProps) {
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
@@ -1059,14 +1060,22 @@ export function FullscreenPlayer({
               <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
                 {/* Star / Archive / Delete at the top */}
                 <button
-                  onClick={() => { setShowDropdown(false); toggleStarred(content.id); }}
+                  onClick={() => {
+                    setShowDropdown(false);
+                    toggleStarred(content.id);
+                    onContentUpdated?.({ ...content, is_starred: !content.is_starred });
+                  }}
                   style={content.is_starred ? { color: '#fbbf24' } : undefined}
                 >
                   <Star size={14} fill={content.is_starred ? 'currentColor' : 'none'} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   {content.is_starred ? 'Unstar' : 'Star'}
                 </button>
                 <button
-                  onClick={() => { setShowDropdown(false); toggleArchived(content.id); }}
+                  onClick={() => {
+                    setShowDropdown(false);
+                    toggleArchived(content.id);
+                    onContentUpdated?.({ ...content, is_archived: !content.is_archived });
+                  }}
                   style={content.is_archived ? { color: '#3b82f6' } : undefined}
                 >
                   {content.is_archived

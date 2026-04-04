@@ -713,24 +713,32 @@ router.patch('/:id', async (req, res) => {
         const { audio_url, type, html_content } = contentResult.rows[0];
 
         if (!audio_url && (type === 'article' || type === 'text') && html_content) {
-          console.log(`Un-archiving article ${id}: triggering audio regeneration`);
+          // Only auto-generate if user has the setting enabled
+          const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
+          const shouldAutoGenerate = autoGenerateAudio === 'true';
 
-          generateAudioForContent(parseInt(id))
-            .then(() => {
-              console.log(`Audio generation pipeline started for ${id}`);
-              // Note: Final status will be set by transcription/alignment handler
-            })
-            .catch(async (error) => {
-              console.error('Auto audio generation error on un-archive:', error);
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                ['failed', error.message || 'Failed to regenerate audio', 0, id]
-              );
-            });
+          if (shouldAutoGenerate) {
+            console.log(`Un-archiving article ${id}: triggering audio regeneration`);
 
-          updates.generation_status = 'starting';
-          updates.generation_progress = 0;
-          allowedFields.push('generation_status', 'generation_progress');
+            generateAudioForContent(parseInt(id))
+              .then(() => {
+                console.log(`Audio generation pipeline started for ${id}`);
+                // Note: Final status will be set by transcription/alignment handler
+              })
+              .catch(async (error) => {
+                console.error('Auto audio generation error on un-archive:', error);
+                await query(
+                  'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                  ['failed', error.message || 'Failed to regenerate audio', 0, id]
+                );
+              });
+
+            updates.generation_status = 'starting';
+            updates.generation_progress = 0;
+            allowedFields.push('generation_status', 'generation_progress');
+          } else {
+            console.log(`Un-archiving article ${id}: skipping audio regeneration (auto_generate_audio_for_articles is off)`);
+          }
         }
       }
     }
