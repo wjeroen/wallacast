@@ -97,9 +97,6 @@ export const contentAPI = {
   getOriginalHtml: (id: number) =>
     api.get<string>(`/content/${id}/original-html`, { responseType: 'text' as any }),
 
-  exportData: (id: number) =>
-    api.get<Record<string, any>>(`/content/${id}/export`),
-
   logAudioError: (data: {
     contentId?: number;
     contentType?: string;
