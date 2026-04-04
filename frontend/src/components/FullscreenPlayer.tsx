@@ -19,6 +19,7 @@ import {
   ArchiveRestore,
   Trash2,
 } from 'lucide-react';
+import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem, Comment } from '../types';
 
@@ -450,16 +451,27 @@ export function FullscreenPlayer({
   };
 
   // --------------------------------------------------------------------------
-  // Download data as zip (served directly from backend)
+  // Download data as zip (backend generates zip, frontend triggers download)
   // --------------------------------------------------------------------------
-  const handleDownloadDataZip = () => {
+  const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
+
+  const handleDownloadDataZip = async () => {
     setShowDropdown(false);
-    // Open the backend export URL directly — the backend generates the zip and
-    // sends it with Content-Disposition: attachment, triggering a browser download.
-    // This works on mobile because it's a synchronous user-gesture navigation.
-    const token = localStorage.getItem('accessToken');
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
-    window.open(`${baseUrl}/content/${content.id}/export?token=${encodeURIComponent(token || '')}`, '_blank');
+    try {
+      const response = await contentAPI.exportZip(content.id);
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export data:', error);
+      alert('Failed to download data');
+    }
   };
 
   // --------------------------------------------------------------------------
