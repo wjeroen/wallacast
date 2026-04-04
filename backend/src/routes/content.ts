@@ -235,10 +235,93 @@ router.post('/', async (req, res) => {
 
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
+    // Also clean up broken Obsidian/saved-webpage artifacts (broken markdown image syntax, relative image paths)
     if (type === 'text' && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
+
+      // Clean up broken Obsidian markdown image artifacts:
+      // When Obsidian exports to HTML, markdown image links like ![](url) can get split into:
+      //   <p>[</p>  <p><img src="local_cache.jpg"></p>  <p>](https://real-url.com/image.png)</p>
+      // Fix: replace relative-path images with the real URL from the ](url) text that follows,
+      // and remove the stray [ and ](url) text elements.
+      const allElements = Array.from(doc.querySelectorAll('p, div'));
+      for (let i = 0; i < allElements.length; i++) {
+        const el = allElements[i];
+        const text = el.textContent?.trim() || '';
+
+        // Detect ](https://...) pattern — the trailing part of a broken markdown image link
+        const mdLinkMatch = text.match(/^\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)$/);
+        if (mdLinkMatch) {
+          const realUrl = mdLinkMatch[1];
+
+          // Look backward for an <img> element (possibly with a [ before it)
+          // The pattern is: <p>[</p> <p><img ...></p> <p>](url)</p>
+          // or sometimes: <p><img ...></p> <p>](url)</p>
+          let imgEl: Element | null = null;
+          let bracketEl: Element | null = null;
+
+          // Check previous sibling for <img>
+          const prev = allElements[i - 1];
+          if (prev) {
+            const prevImg = prev.querySelector('img') || (prev.tagName === 'IMG' ? prev : null);
+            if (prevImg) {
+              imgEl = prevImg;
+              // Check if element before that is just "["
+              const prevPrev = allElements[i - 2];
+              if (prevPrev && prevPrev.textContent?.trim() === '[') {
+                bracketEl = prevPrev;
+              }
+            } else if (prev.textContent?.trim() === '[') {
+              // Maybe img is inside prev's parent or we need to look further
+              bracketEl = prev;
+            }
+          }
+
+          if (imgEl) {
+            // Check if the image has a non-http src (local/relative path)
+            const src = imgEl.getAttribute('src') || '';
+            if (!src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:')) {
+              // Replace with the real URL from the markdown link
+              imgEl.setAttribute('src', realUrl);
+            }
+            // Remove the ](url) text element
+            el.parentNode?.removeChild(el);
+            // Remove the stray [ element if found
+            if (bracketEl) {
+              bracketEl.parentNode?.removeChild(bracketEl);
+            }
+          } else {
+            // No img found before — just remove the broken markdown text
+            el.parentNode?.removeChild(el);
+          }
+          continue;
+        }
+
+        // Remove standalone "[" or "]" text that's part of broken markdown image syntax
+        // Only if it's a very short element (just brackets, maybe whitespace)
+        if (text === '[' || text === ']') {
+          // Check if there's an img nearby (next or previous element)
+          const next = allElements[i + 1];
+          const prev2 = allElements[i - 1];
+          const hasNearbyImg = (next && next.querySelector?.('img')) || (prev2 && prev2.querySelector?.('img'));
+          if (hasNearbyImg) {
+            el.parentNode?.removeChild(el);
+          }
+        }
+      }
+
+      // Fix remaining images with relative/local paths — replace src with empty to trigger onerror,
+      // or remove them if they can't possibly load
+      doc.querySelectorAll('img').forEach(img => {
+        const src = img.getAttribute('src') || '';
+        if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:')) {
+          // Relative path — won't work on server, remove the image
+          img.parentNode?.removeChild(img);
+        }
+      });
+
       htmlContent = doc.body.innerHTML;
     }
 
@@ -737,6 +820,38 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Download original (raw) HTML from source URL — no cleaning, for debugging
+// Export all fields for a content item (except audio_data which is too large)
+router.get('/:id/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture,
+              audio_url, transcript, duration, file_size, podcast_id, podcast_show_name,
+              episode_number, published_at, is_starred, is_archived, tags,
+              wallabag_id, wallabag_updated_at, playback_position, playback_speed, last_played_at,
+              generation_status, generation_progress, generation_error, current_operation,
+              tts_chunks, transcript_words, content_alignment,
+              karma, agree_votes, disagree_votes, comments, comment_source,
+              COALESCE(comment_count_total, 0) AS comment_count,
+              content_source, content_fetched_at, audio_generated_at,
+              images_processed, image_alt_text_data,
+              created_at, updated_at, user_id
+       FROM content_items WHERE id = $1 AND user_id = $2`,
+      [id, req.user!.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error exporting content item:', error);
+    res.status(500).json({ error: 'Failed to export content item' });
+  }
+});
+
 router.get('/:id/original-html', async (req, res) => {
   try {
     const { id } = req.params;
