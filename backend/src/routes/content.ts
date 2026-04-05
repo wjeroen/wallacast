@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
+import archiver from 'archiver';
 import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
@@ -235,10 +236,93 @@ router.post('/', async (req, res) => {
 
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
+    // Also clean up broken Obsidian/saved-webpage artifacts (broken markdown image syntax, relative image paths)
     if (type === 'text' && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
+
+      // Clean up broken Obsidian markdown image artifacts:
+      // When Obsidian exports to HTML, markdown image links like ![](url) can get split into:
+      //   <p>[</p>  <p><img src="local_cache.jpg"></p>  <p>](https://real-url.com/image.png)</p>
+      // Fix: replace relative-path images with the real URL from the ](url) text that follows,
+      // and remove the stray [ and ](url) text elements.
+      const allElements = Array.from(doc.querySelectorAll('p, div'));
+      for (let i = 0; i < allElements.length; i++) {
+        const el = allElements[i];
+        const text = el.textContent?.trim() || '';
+
+        // Detect ](https://...) pattern — the trailing part of a broken markdown image link
+        const mdLinkMatch = text.match(/^\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)$/);
+        if (mdLinkMatch) {
+          const realUrl = mdLinkMatch[1];
+
+          // Look backward for an <img> element (possibly with a [ before it)
+          // The pattern is: <p>[</p> <p><img ...></p> <p>](url)</p>
+          // or sometimes: <p><img ...></p> <p>](url)</p>
+          let imgEl: Element | null = null;
+          let bracketEl: Element | null = null;
+
+          // Check previous sibling for <img>
+          const prev = allElements[i - 1];
+          if (prev) {
+            const prevImg = prev.querySelector('img') || (prev.tagName === 'IMG' ? prev : null);
+            if (prevImg) {
+              imgEl = prevImg;
+              // Check if element before that is just "["
+              const prevPrev = allElements[i - 2];
+              if (prevPrev && prevPrev.textContent?.trim() === '[') {
+                bracketEl = prevPrev;
+              }
+            } else if (prev.textContent?.trim() === '[') {
+              // Maybe img is inside prev's parent or we need to look further
+              bracketEl = prev;
+            }
+          }
+
+          if (imgEl) {
+            // Check if the image has a non-http src (local/relative path)
+            const src = imgEl.getAttribute('src') || '';
+            if (!src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:')) {
+              // Replace with the real URL from the markdown link
+              imgEl.setAttribute('src', realUrl);
+            }
+            // Remove the ](url) text element
+            el.parentNode?.removeChild(el);
+            // Remove the stray [ element if found
+            if (bracketEl) {
+              bracketEl.parentNode?.removeChild(bracketEl);
+            }
+          } else {
+            // No img found before — just remove the broken markdown text
+            el.parentNode?.removeChild(el);
+          }
+          continue;
+        }
+
+        // Remove standalone "[" or "]" text that's part of broken markdown image syntax
+        // Only if it's a very short element (just brackets, maybe whitespace)
+        if (text === '[' || text === ']') {
+          // Check if there's an img nearby (next or previous element)
+          const next = allElements[i + 1];
+          const prev2 = allElements[i - 1];
+          const hasNearbyImg = (next && next.querySelector?.('img')) || (prev2 && prev2.querySelector?.('img'));
+          if (hasNearbyImg) {
+            el.parentNode?.removeChild(el);
+          }
+        }
+      }
+
+      // Fix remaining images with relative/local paths — replace src with empty to trigger onerror,
+      // or remove them if they can't possibly load
+      doc.querySelectorAll('img').forEach(img => {
+        const src = img.getAttribute('src') || '';
+        if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:')) {
+          // Relative path — won't work on server, remove the image
+          img.parentNode?.removeChild(img);
+        }
+      });
+
       htmlContent = doc.body.innerHTML;
     }
 
@@ -630,24 +714,32 @@ router.patch('/:id', async (req, res) => {
         const { audio_url, type, html_content } = contentResult.rows[0];
 
         if (!audio_url && (type === 'article' || type === 'text') && html_content) {
-          console.log(`Un-archiving article ${id}: triggering audio regeneration`);
+          // Only auto-generate if user has the setting enabled
+          const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
+          const shouldAutoGenerate = autoGenerateAudio === 'true';
 
-          generateAudioForContent(parseInt(id))
-            .then(() => {
-              console.log(`Audio generation pipeline started for ${id}`);
-              // Note: Final status will be set by transcription/alignment handler
-            })
-            .catch(async (error) => {
-              console.error('Auto audio generation error on un-archive:', error);
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                ['failed', error.message || 'Failed to regenerate audio', 0, id]
-              );
-            });
+          if (shouldAutoGenerate) {
+            console.log(`Un-archiving article ${id}: triggering audio regeneration`);
 
-          updates.generation_status = 'starting';
-          updates.generation_progress = 0;
-          allowedFields.push('generation_status', 'generation_progress');
+            generateAudioForContent(parseInt(id))
+              .then(() => {
+                console.log(`Audio generation pipeline started for ${id}`);
+                // Note: Final status will be set by transcription/alignment handler
+              })
+              .catch(async (error) => {
+                console.error('Auto audio generation error on un-archive:', error);
+                await query(
+                  'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                  ['failed', error.message || 'Failed to regenerate audio', 0, id]
+                );
+              });
+
+            updates.generation_status = 'starting';
+            updates.generation_progress = 0;
+            allowedFields.push('generation_status', 'generation_progress');
+          } else {
+            console.log(`Un-archiving article ${id}: skipping audio regeneration (auto_generate_audio_for_articles is off)`);
+          }
         }
       }
     }
@@ -737,6 +829,82 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Download original (raw) HTML from source URL — no cleaning, for debugging
+// Export all fields for a content item as a zip file (except audio_data which is too large)
+router.get('/:id/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture,
+              audio_url, transcript, duration, file_size, podcast_id, podcast_show_name,
+              episode_number, published_at, is_starred, is_archived, tags,
+              wallabag_id, wallabag_updated_at, playback_position, playback_speed, last_played_at,
+              generation_status, generation_progress, generation_error, current_operation,
+              tts_chunks, transcript_words, content_alignment,
+              karma, agree_votes, disagree_votes, comments, comment_source,
+              COALESCE(comment_count_total, 0) AS comment_count,
+              content_source, content_fetched_at, audio_generated_at,
+              images_processed, image_alt_text_data,
+              created_at, updated_at, user_id
+       FROM content_items WHERE id = $1 AND user_id = $2`,
+      [id, req.user!.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const data = result.rows[0];
+    const safeName = (data.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 100);
+
+    // Separate large text fields into their own files
+    const htmlContent = data.html_content || '';
+    const textContent = data.content || '';
+    const transcript = data.transcript || '';
+    const comments = data.comments;
+    const contentAlignment = data.content_alignment;
+    const transcriptWords = data.transcript_words;
+    const ttsChunks = data.tts_chunks;
+    const imageAltTextData = data.image_alt_text_data;
+
+    // Build metadata object without the large fields
+    const metadata = { ...data };
+    delete metadata.html_content;
+    delete metadata.content;
+    delete metadata.transcript;
+    delete metadata.comments;
+    delete metadata.content_alignment;
+    delete metadata.transcript_words;
+    delete metadata.tts_chunks;
+    delete metadata.image_alt_text_data;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    archive.append(JSON.stringify(metadata, null, 2), { name: 'metadata.json' });
+    if (htmlContent) archive.append(htmlContent, { name: 'content.html' });
+    if (textContent) archive.append(textContent, { name: 'content_plain.txt' });
+    if (transcript) archive.append(transcript, { name: 'transcript.txt' });
+
+    const jsonField = (val: any) => typeof val === 'string' ? val : JSON.stringify(val, null, 2);
+    if (comments) archive.append(jsonField(comments), { name: 'comments.json' });
+    if (contentAlignment) archive.append(jsonField(contentAlignment), { name: 'alignment.json' });
+    if (transcriptWords) archive.append(jsonField(transcriptWords), { name: 'transcript_words.json' });
+    if (ttsChunks) archive.append(jsonField(ttsChunks), { name: 'tts_chunks.json' });
+    if (imageAltTextData) archive.append(jsonField(imageAltTextData), { name: 'image_alt_text.json' });
+
+    await archive.finalize();
+  } catch (error) {
+    console.error('Error exporting content item:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to export content item' });
+    }
+  }
+});
+
 router.get('/:id/original-html', async (req, res) => {
   try {
     const { id } = req.params;
