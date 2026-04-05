@@ -251,82 +251,22 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const downloadFile = (filename: string, data: string, mime = 'text/html') => {
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadCleanedHtml = async (item: ContentItem) => {
+  const handleDownloadDataZip = async (item: ContentItem) => {
+    setOpenDropdown(null);
     try {
-      setOpenDropdown(null);
-      const response = await contentAPI.getById(item.id);
-      const html = response.data.html_content || response.data.content || '';
-      if (!html) { alert('No content available to download'); return; }
-      const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      downloadFile(`${safeName}.html`, html);
+      const response = await contentAPI.exportZip(item.id);
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Failed to download HTML:', error);
-      alert('Failed to download content');
-    }
-  };
-
-  const handleDownloadReadAlongHtml = async (item: ContentItem) => {
-    try {
-      setOpenDropdown(null);
-      const response = await contentAPI.getById(item.id);
-      const fullItem = response.data;
-      const alignment = fullItem.content_alignment;
-      if (!alignment) { alert('No read-along alignment available for this item'); return; }
-      const parsed = typeof alignment === 'string' ? JSON.parse(alignment) : alignment;
-      if (!parsed.format || parsed.format !== 'llm') { alert('No LLM read-along alignment available'); return; }
-      const elements = parsed.elements || [];
-      const bodyHtml = elements
-        .filter((e: any) => ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'title', 'meta'].includes(e.type))
-        .map((e: any) => e.html)
-        .join('\n');
-      const commentHtml = elements
-        .filter((e: any) => e.type === 'comment')
-        .map((e: any) => {
-          const meta = e.commentMeta;
-          const header = meta ? `<p><strong>${meta.username}</strong>${meta.karma !== undefined ? ` (${meta.karma} upvotes)` : ''}</p>` : '';
-          return `<div style="margin-left:${(meta?.depth || 0) * 20}px; border-left: 2px solid #555; padding-left: 8px; margin-bottom: 12px;">${header}${e.html}</div>`;
-        })
-        .join('\n');
-      const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      const fullHtml = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${fullItem.title || 'Read-Along'}</title>
-<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e2e8f0;background:#0f172a}img{max-width:100%;height:auto;border-radius:0.5rem}blockquote{border-left:3px solid #60a5fa;padding-left:1rem;margin-left:0;color:#94a3b8}h1,h2,h3{color:#f1f5f9}a{color:#60a5fa}</style>
-</head><body>
-<h1>${fullItem.title || ''}</h1>
-${bodyHtml}
-${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
-</body></html>`;
-      downloadFile(`${safeName} (read-along).html`, fullHtml);
-    } catch (error) {
-      console.error('Failed to download read-along HTML:', error);
-      alert('Failed to download read-along content');
-    }
-  };
-
-  const handleDownloadOriginalHtml = async (item: ContentItem) => {
-    try {
-      setOpenDropdown(null);
-      if (!item.url) { alert('No source URL available — cannot fetch original HTML'); return; }
-      const response = await contentAPI.getOriginalHtml(item.id);
-      const html = typeof response.data === 'string' ? response.data : String(response.data);
-      if (!html) { alert('No content returned from source'); return; }
-      const safeName = (item.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
-      downloadFile(`${safeName} (original).html`, html);
-    } catch (error) {
-      console.error('Failed to download original HTML:', error);
-      alert('Failed to fetch original HTML');
+      console.error('Failed to export data:', error);
+      alert('Failed to download data');
     }
   };
 
@@ -691,21 +631,9 @@ ${commentHtml ? '<hr><h2>Comments</h2>' + commentHtml : ''}
                             )}
                           </>
                         )}
-                        {(item.type === 'article' || item.type === 'text') && (
-                          <>
-                            <button onClick={() => handleDownloadCleanedHtml(item)}>
-                              Download cleaned HTML
-                            </button>
-                            <button onClick={() => handleDownloadReadAlongHtml(item)}>
-                              Download read-along HTML
-                            </button>
-                            {item.url && (
-                              <button onClick={() => handleDownloadOriginalHtml(item)}>
-                                Download original (refetch)
-                              </button>
-                            )}
-                          </>
-                        )}
+                        <button onClick={() => handleDownloadDataZip(item)}>
+                          Download data (zip)
+                        </button>
                       </div>
                     )}
                   </div>
