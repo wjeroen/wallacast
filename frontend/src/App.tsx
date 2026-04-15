@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2 } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -21,6 +21,18 @@ function App() {
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Dark/light mode
+  const [isDark, setIsDark] = useState(() => {
+    try { return localStorage.getItem('wallacast-theme') !== 'light'; }
+    catch { return true; }
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    try { localStorage.setItem('wallacast-theme', isDark ? 'dark' : 'light'); }
+    catch {}
+  }, [isDark]);
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
@@ -303,6 +315,11 @@ function App() {
               <button className="user-dropdown-item" onClick={handleOpenSettings}>
                 <Settings size={18} />
                 <span>Settings</span>
+              </button>
+
+              <button className="user-dropdown-item" onClick={() => { setIsDark(d => !d); }}>
+                {isDark ? <Sun size={18} /> : <Moon size={18} />}
+                <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
