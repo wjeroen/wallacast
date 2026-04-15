@@ -318,9 +318,9 @@ Wallacast supports multiple users with complete data isolation:
 
 #### State Management
 - **`store/contentStore.ts`**: Zustand store for centralized content state management
-  - Holds content items array and current filter state
-  - Provides optimistic updates for instant UI feedback (star, archive, delete)
-  - Filter-aware: items automatically show/hide based on current filter
+  - Fetches all items once on mount, stores in `allItems` master list; `items` is the filtered view
+  - **Client-side filtering**: switching filters (Articles, Texts, Podcasts, etc.) is instant — no API call, just an array `.filter()` on the master list
+  - Provides optimistic updates for instant UI feedback (star, archive, delete) — all mutations update both `allItems` and `items`
   - Handles Wallabag bidirectional sync state
 
 - **`store/authStore.ts`**: Zustand store for authentication state
@@ -457,7 +457,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `podcast_id`: FK to podcasts table
 - `podcast_show_name`: Denormalized podcast title (for direct display without querying podcasts table)
 - `published_at`, `karma`, `agree_votes`, `disagree_votes`
-- `comments`: Structured comments JSON (for EA Forum)
+- `comments`: Structured comments JSON (for EA Forum/LessWrong/Substack)
+- `comment_source`: 'ea_forum' | 'lesswrong' | 'substack' | NULL — reliable comment detection for TTS/alignment
+- `comment_count_total`: Total comments including nested replies (computed by article-fetcher)
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
@@ -588,7 +590,7 @@ The app implements several performance optimizations:
 **Frontend:**
 - Zustand store for centralized state management
 - Optimistic UI updates: star/archive/delete happen instantly, then sync with server
-- Filter state preserved in store - no lost filter when updating items
+- Client-side filtering: all items fetched once, filter switching is instant (no API call per filter click)
 - Polling for generation status with targeted item updates
 - Large data only fetched when viewing individual items
 

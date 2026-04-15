@@ -407,6 +407,14 @@ router.post('/', async (req, res) => {
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
       if (shouldAutoGenerate) {
+        // Check max comment limit — skip auto-generation if article has too many comments
+        const maxCommentsStr = await getUserSetting(req.user!.userId, 'max_narrated_comments');
+        const maxComments = maxCommentsStr ? parseInt(maxCommentsStr, 10) || 50 : 50;
+        const articleCommentCount = createdItem.comment_count_total || 0;
+
+        if (articleCommentCount > maxComments) {
+          console.log(`Skipping auto-generation for ${createdItem.id}: ${articleCommentCount} comments exceeds max ${maxComments}`);
+        } else {
         console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
         await query(
@@ -426,6 +434,7 @@ router.post('/', async (req, res) => {
               ['failed', error.message || 'Failed to generate audio', 0, createdItem.id]
             );
           });
+        }
       }
     }
 
@@ -1025,7 +1034,7 @@ router.post('/:id/generate-audio', async (req, res) => {
 
     // OPTIMIZED: Select only necessary columns, excluding audio_data
     const contentResult = await query(
-      'SELECT id, type, generation_status, generation_progress, audio_url FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, generation_status, generation_progress, audio_url, comment_count_total FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
