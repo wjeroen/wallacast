@@ -27,6 +27,13 @@
     <link rel="apple-touch-icon" href="/icon-192.png" />
 
     <title>wallacast</title>
+    <!-- Apply saved theme before first paint to prevent flash -->
+    <script>
+      try {
+        var t = localStorage.getItem('wallacast-theme');
+        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      } catch(e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

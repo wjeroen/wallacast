@@ -504,7 +504,7 @@ export function FullscreenPlayer({
               className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
               onClick={() => onSeek(titleEl.startTime)}
             >
-              <h2 style={{ margin: '0 0 0.5rem 0', color: '#f1f5f9', fontSize: '1.5rem' }}>{content.title}</h2>
+              <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem' }}>{content.title}</h2>
             </div>
           )}
 
