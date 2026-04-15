@@ -5,25 +5,6 @@ import type { ContentItem } from '../types';
 // Filter types matching LibraryTab
 export type FilterType = 'all' | 'articles' | 'texts' | 'podcasts' | 'favorites' | 'archived';
 
-// Convert filter to API params
-function filterToParams(filter: FilterType): { type?: string; archived?: boolean; starred?: boolean } {
-  switch (filter) {
-    case 'articles':
-      return { type: 'article' };
-    case 'texts':
-      return { type: 'text' };
-    case 'podcasts':
-      return { type: 'podcast_episode' };
-    case 'favorites':
-      return { starred: true };
-    case 'archived':
-      return { archived: true };
-    case 'all':
-    default:
-      return { archived: false }; // Exclude archived by default
-  }
-}
-
 // Check if an item should be visible given the current filter
 function itemMatchesFilter(item: ContentItem, filter: FilterType): boolean {
   switch (filter) {
@@ -45,7 +26,8 @@ function itemMatchesFilter(item: ContentItem, filter: FilterType): boolean {
 
 interface ContentStore {
   // State
-  items: ContentItem[];
+  items: ContentItem[];       // filtered view (what the UI renders)
+  allItems: ContentItem[];    // master list (all items, fetched once)
   filter: FilterType;
   loading: boolean;
   error: string | null;
@@ -53,7 +35,7 @@ interface ContentStore {
 
   // Actions
   setFilter: (filter: FilterType) => void;
-  fetchContent: (filter?: FilterType) => Promise<void>;
+  fetchContent: () => Promise<void>;
 
   // Optimistic updates - update UI immediately, then sync with server
   toggleStarred: (id: number) => Promise<void>;
@@ -72,30 +54,47 @@ interface ContentStore {
 
 export const useContentStore = create<ContentStore>((set, get) => ({
   items: [],
+  allItems: [],
   filter: 'all',
   loading: false,
   error: null,
   allCount: 0,
 
   setFilter: (filter) => {
-    set({ filter });
-    // Fetch content with new filter
-    get().fetchContent(filter);
+    // Client-side filtering — no API call needed, instant switch
+    const filtered = get().allItems.filter(i => itemMatchesFilter(i, filter));
+    set({ filter, items: filtered });
   },
 
-  fetchContent: async (filter?: FilterType) => {
-    const currentFilter = filter ?? get().filter;
+  fetchContent: async () => {
     set({ loading: true, error: null });
 
     try {
-      const params = filterToParams(currentFilter);
-      const response = await contentAPI.getAll(params);
-      // Keep allCount current whenever we have a fresh 'all' result
-      if (currentFilter === 'all') {
-        set({ items: response.data, loading: false, allCount: response.data.length });
-      } else {
-        set({ items: response.data, loading: false });
-      }
+      // Step 1: Fetch non-archived items first (fast — typically ~20 items)
+      const activeResponse = await contentAPI.getAll({ archived: false });
+      const activeItems = activeResponse.data;
+      const currentFilter = get().filter;
+
+      // Show active items immediately (loading done)
+      set({
+        allItems: activeItems,
+        items: activeItems.filter(i => itemMatchesFilter(i, currentFilter)),
+        loading: false,
+        allCount: activeItems.length,
+      });
+
+      // Step 2: Fetch archived items in the background (could be hundreds)
+      // so filters like "Archived" and "Favorites" work instantly when clicked
+      const archivedResponse = await contentAPI.getAll({ archived: true });
+      const archivedItems = archivedResponse.data;
+      const allItems = [...activeItems, ...archivedItems];
+
+      // Merge into master list; re-derive filtered view with current filter
+      const latestFilter = get().filter;
+      set({
+        allItems,
+        items: allItems.filter(i => itemMatchesFilter(i, latestFilter)),
+      });
     } catch (error) {
       console.error('Failed to fetch content:', error);
       set({ error: 'Failed to fetch content', loading: false });
@@ -103,65 +102,65 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   },
 
   toggleStarred: async (id) => {
-    const { items, filter } = get();
-    const item = items.find(i => i.id === id);
+    const { allItems, filter } = get();
+    const item = allItems.find(i => i.id === id);
     if (!item) return;
 
     const newStarredState = !item.is_starred;
 
-    // Optimistic update: update item immediately
+    // Optimistic update on master list, then derive filtered view
+    const newAllItems = allItems.map(i =>
+      i.id === id ? { ...i, is_starred: newStarredState } : i
+    );
     set({
-      items: items.map(i =>
-        i.id === id ? { ...i, is_starred: newStarredState } : i
-      ).filter(i => itemMatchesFilter(i, filter)) // Remove if no longer matches filter
+      allItems: newAllItems,
+      items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
     });
 
     try {
-      // Sync with server
       await contentAPI.update(id, { is_starred: newStarredState });
     } catch (error) {
       console.error('Failed to toggle starred:', error);
       // Revert on error
+      const reverted = get().allItems.map(i =>
+        i.id === id ? { ...i, is_starred: !newStarredState } : i
+      );
       set({
-        items: get().items.map(i =>
-          i.id === id ? { ...i, is_starred: !newStarredState } : i
-        )
+        allItems: reverted,
+        items: reverted.filter(i => itemMatchesFilter(i, filter)),
       });
     }
   },
 
   toggleArchived: async (id) => {
-    const { items, filter, allCount } = get();
-    const item = items.find(i => i.id === id);
+    const { allItems, filter } = get();
+    const item = allItems.find(i => i.id === id);
     if (!item) return;
 
     const newArchivedState = !item.is_archived;
 
-    // Keep allCount in sync: archiving removes from "all", unarchiving adds back
-    const newAllCount = !item.is_archived && newArchivedState
-      ? Math.max(0, allCount - 1)   // archiving
-      : item.is_archived && !newArchivedState
-        ? allCount + 1              // unarchiving
-        : allCount;
-
-    // Optimistic update: remove from current view (archived items leave 'all', unarchived leave 'archived')
+    // Optimistic update on master list
+    const newAllItems = allItems.map(i =>
+      i.id === id ? { ...i, is_archived: newArchivedState } : i
+    );
+    const newAllCount = newAllItems.filter(i => !i.is_archived).length;
     set({
+      allItems: newAllItems,
+      items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
       allCount: newAllCount,
-      items: items.map(i =>
-        i.id === id ? { ...i, is_archived: newArchivedState } : i
-      ).filter(i => itemMatchesFilter(i, filter))
     });
 
     try {
-      // Sync with server (this may also affect audio_url for articles)
+      // Sync with server (may also affect audio_url for articles)
       const response = await contentAPI.update(id, { is_archived: newArchivedState });
-
-      // Update with server response (may have audio changes)
       const updatedItem = response.data;
+
+      const updatedAllItems = get().allItems.map(i =>
+        i.id === id ? updatedItem : i
+      );
       set({
-        items: get().items.map(i =>
-          i.id === id ? updatedItem : i
-        ).filter(i => itemMatchesFilter(i, filter))
+        allItems: updatedAllItems,
+        items: updatedAllItems.filter(i => itemMatchesFilter(i, filter)),
       });
     } catch (error) {
       console.error('Failed to toggle archived:', error);
@@ -171,15 +170,16 @@ export const useContentStore = create<ContentStore>((set, get) => ({
   },
 
   deleteItem: async (id) => {
-    const { items, allCount } = get();
-    const item = items.find(i => i.id === id);
+    const { allItems, filter } = get();
+    const item = allItems.find(i => i.id === id);
     if (!item) return;
 
-    // Optimistic update: remove immediately
+    // Optimistic update: remove from master list
+    const newAllItems = allItems.filter(i => i.id !== id);
     set({
-      items: items.filter(i => i.id !== id),
-      // Only decrement if it was a non-archived item (archived items aren't in the allCount)
-      allCount: !item.is_archived ? Math.max(0, allCount - 1) : allCount,
+      allItems: newAllItems,
+      items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
+      allCount: newAllItems.filter(i => !i.is_archived).length,
     });
 
     try {
@@ -187,28 +187,35 @@ export const useContentStore = create<ContentStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to delete item:', error);
       // Revert on error - add item back
-      set({ items: [...get().items, item].sort((a, b) =>
+      const reverted = [...get().allItems, item].sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )});
+      );
+      set({
+        allItems: reverted,
+        items: reverted.filter(i => itemMatchesFilter(i, filter)),
+        allCount: reverted.filter(i => !i.is_archived).length,
+      });
     }
   },
 
   updateItem: (id, updates) => {
+    const { filter } = get();
+    const newAllItems = get().allItems.map(i =>
+      i.id === id ? { ...i, ...updates } : i
+    );
     set({
-      items: get().items.map(i =>
-        i.id === id ? { ...i, ...updates } : i
-      )
+      allItems: newAllItems,
+      items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
     });
   },
 
   addItem: (item) => {
-    const { items, filter, allCount } = get();
-    // Add at the beginning (most recent)
-    const newItems = [item, ...items];
-    // Only show if it matches current filter
+    const { allItems, filter } = get();
+    const newAllItems = [item, ...allItems];
     set({
-      items: newItems.filter(i => itemMatchesFilter(i, filter)),
-      allCount: allCount + 1, // new items are never archived
+      allItems: newAllItems,
+      items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
+      allCount: newAllItems.filter(i => !i.is_archived).length,
     });
   },
 
@@ -216,10 +223,12 @@ export const useContentStore = create<ContentStore>((set, get) => ({
     try {
       const response = await contentAPI.getById(id);
       const { filter } = get();
+      const newAllItems = get().allItems.map(i =>
+        i.id === id ? response.data : i
+      );
       set({
-        items: get().items.map(i =>
-          i.id === id ? response.data : i
-        ).filter(i => itemMatchesFilter(i, filter))
+        allItems: newAllItems,
+        items: newAllItems.filter(i => itemMatchesFilter(i, filter)),
       });
     } catch (error) {
       console.error('Failed to refresh item:', error);

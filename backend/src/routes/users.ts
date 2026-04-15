@@ -43,6 +43,7 @@ const VALID_SETTING_KEYS = [
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
+  'max_narrated_comments',      // Max total comments (incl. replies) to narrate (default: 50)
 ];
 
 // Secret keys that should be masked in responses
