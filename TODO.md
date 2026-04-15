@@ -17,7 +17,7 @@
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
 - [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
 - [x] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase) (2026-02-12)
-- [ ] **[P3]** Add dark/bright mode switcher to the left of "Hi, [user]" button
+- [x] **[P3]** Add dark/light mode toggle in user dropdown menu — CSS variables for full theme support, persisted in localStorage (2026-04-15)
 - [ ] **[P4]** Bulk podcast subscription import (OPML format)
 - [ ] **[P3]** Allow texts (not articles) to be edited with markdown support, doesn't automatically regenerate audio
 - [ ] **[P7]** Add button to summarize content (low priority) - if it's an EA forum article, check whether there's already a summary written by the summarybot in the comments and use that instead
