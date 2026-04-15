@@ -343,13 +343,14 @@ function formatDateForLLM(dateString: string): string {
 }
 
 /**
- * Format karma/reactions into narration text: "8 upvotes, 3 agreement"
+ * Format karma/reactions into narration text: "8 upvotes, 3 agreement" (or "8 likes" for Substack)
  * Must match openai-tts.ts formatReactionsForNarration() exactly.
  */
-function formatReactionsForLLM(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false): string {
+function formatReactionsForLLM(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false, isSubstack: boolean = false): string {
   const parts: string[] = [];
   if (karma !== undefined && karma !== null) {
-    parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
+    const label = isSubstack ? (karma === 1 ? 'like' : 'likes') : (karma === 1 ? 'upvote' : 'upvotes');
+    parts.push(`${karma} ${label}`);
   }
   if (extendedScore) {
     if (isLessWrong) {
@@ -373,7 +374,7 @@ function formatReactionsForLLM(karma?: number, extendedScore?: Record<string, nu
  * can find the comment HEADER ("Username on Date with N upvotes:") in the transcript,
  * not just the comment body text.
  */
-function extractCommentElements(comments: any[], depth: number = 0, parentUsername?: string, isLessWrong: boolean = false): ContentElement[] {
+function extractCommentElements(comments: any[], depth: number = 0, parentUsername?: string, isLessWrong: boolean = false, isSubstack: boolean = false): ContentElement[] {
   const elements: ContentElement[] = [];
 
   for (const comment of comments) {
@@ -394,7 +395,7 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
     }
     const date = comment.date ? formatDateForLLM(comment.date) : '';
     if (date) intro += ` on ${date}`;
-    const reactions = formatReactionsForLLM(comment.karma, comment.extendedScore, isLessWrong);
+    const reactions = formatReactionsForLLM(comment.karma, comment.extendedScore, isLessWrong, isSubstack);
     if (reactions) intro += ` with ${reactions}`;
 
     const llmText = `${intro}: ${plainText}`;
@@ -413,7 +414,7 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
     });
 
     if (comment.replies && comment.replies.length > 0) {
-      elements.push(...extractCommentElements(comment.replies, depth + 1, username, isLessWrong));
+      elements.push(...extractCommentElements(comment.replies, depth + 1, username, isLessWrong, isSubstack));
     }
   }
 
@@ -539,7 +540,7 @@ export async function generateLLMAlignment(
         : content.comments;
 
       if (comments && Array.isArray(comments) && comments.length > 0) {
-        commentElements = extractCommentElements(comments, 0, undefined, isLessWrong);
+        commentElements = extractCommentElements(comments, 0, undefined, isLessWrong, isSubstack);
       }
     } catch (e) {
       console.error('[LLM-Align] Failed to parse comments:', e);
