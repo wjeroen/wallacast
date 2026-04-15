@@ -130,12 +130,13 @@ function formatDateForNarration(dateString: string): string {
   }
 }
 
-function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false): string {
+function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false, isSubstack: boolean = false): string {
   const parts: string[] = [];
 
-  // Always show karma as "upvotes"
+  // Substack uses "likes", EA Forum/LessWrong use "upvotes"
   if (karma !== undefined && karma !== null) {
-    parts.push(`${karma} ${karma === 1 ? 'upvote' : 'upvotes'}`);
+    const label = isSubstack ? (karma === 1 ? 'like' : 'likes') : (karma === 1 ? 'upvote' : 'upvotes');
+    parts.push(`${karma} ${label}`);
   }
 
   // Handle extended scores (reactions) - same logic as FullscreenPlayer.tsx
@@ -347,11 +348,11 @@ function injectImageNarrations(html: string, imageDescriptions: { [url: string]:
   }
 }
 
-function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string, isLessWrong: boolean = false): string {
+function formatCommentsForNarration(comments: Comment[], isReply: boolean = false, replyTo?: string, isLessWrong: boolean = false, isSubstack: boolean = false): string {
   let narration = '';
 
   for (const comment of comments) {
-    const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore, isLessWrong);
+    const reactions = formatReactionsForNarration(comment.karma, comment.extendedScore, isLessWrong, isSubstack);
     const date = comment.date ? formatDateForNarration(comment.date) : '';
 
     let commentIntro = '';
@@ -382,7 +383,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
     }
 
     if (comment.replies && comment.replies.length > 0) {
-      narration += formatCommentsForNarration(comment.replies, true, username, isLessWrong);
+      narration += formatCommentsForNarration(comment.replies, true, username, isLessWrong, isSubstack);
     }
   }
 
@@ -879,11 +880,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
               if (shouldNarrate) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
-                // Use a longer, more natural announcement so Whisper doesn't skip it.
-                // "Comments section:" (2 words) was consistently dropped by Whisper.
-                // A full sentence (~15 words) is much harder for Whisper to miss.
-                // Use totalCount (includes replies) so listeners know the full scope.
-                fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong);
+                fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
               } else {
                 console.log(`[TTS] Skipping comment narration (${totalCount} comments) — disabled by user setting`);
               }
