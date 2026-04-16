@@ -293,7 +293,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo-1e293b.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
 
