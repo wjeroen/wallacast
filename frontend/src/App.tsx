@@ -378,6 +378,8 @@ function App() {
             onRemoveAudio={handleRemoveAudio}
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
+            isDark={isDark}
+            onToggleTheme={() => setIsDark(d => !d)}
           />
         )}
 
