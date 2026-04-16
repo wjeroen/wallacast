@@ -43,7 +43,7 @@ function App() {
 
   // Queue state (subscribed so hasNext/hasPrev stay reactive across queue edits,
   // library-context changes, shuffle/autoplay toggles, and the setting toggle)
-  const manualQueue = useQueueStore(s => s.manualItems);
+  useQueueStore(s => s.manualItems);
   useQueueStore(s => s.autoplay);
   useQueueStore(s => s.manualAlwaysAutoplay);
   useQueueStore(s => s.libraryContext);
