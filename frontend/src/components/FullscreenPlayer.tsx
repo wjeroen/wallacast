@@ -560,7 +560,7 @@ export function FullscreenPlayer({
               className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
               onClick={() => onSeek(titleEl.startTime)}
             >
-              <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem' }}>{content.title}</h2>
+              <h2 style={{ margin: '0 0 0.5rem 0' }}>{content.title}</h2>
             </div>
           )}
 
@@ -578,7 +578,7 @@ export function FullscreenPlayer({
 
           {/* Content provenance: two lines for content version and audio/read-along version */}
           {(content.type === 'article' || content.type === 'text') && (
-            <div className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
+            <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
               {/* Line 1: Content version */}
               <div>
                 {content.type === 'article'
@@ -787,7 +787,7 @@ export function FullscreenPlayer({
                 )}
                 {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
-                  <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
                     {content.audio_generated_at && content.audio_url && (
                       <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
@@ -952,7 +952,7 @@ export function FullscreenPlayer({
                     </p>
                   )}
                   {content.type === 'article' && content.content_source && (
-                    <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                       Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
                       {content.audio_generated_at && content.audio_url && (
                         <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
