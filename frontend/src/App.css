@@ -1446,7 +1446,7 @@
 .comment-content {
   color: var(--t1);
   line-height: 1.5;
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--reader-font-scale, 1));
 }
 
 /* Constrain images in comments to prevent horizontal scroll */
@@ -2577,7 +2577,7 @@
 .article-content {
   color: var(--t1);
   line-height: 1.7;
-  font-size: 1rem;
+  font-size: calc(1rem * var(--reader-font-scale, 1));
 }
 
 .article-content h1,
@@ -2592,15 +2592,15 @@
 }
 
 .article-content h1 {
-  font-size: 1.75rem;
+  font-size: 1.75em;
 }
 
 .article-content h2 {
-  font-size: 1.5rem;
+  font-size: 1.5em;
 }
 
 .article-content h3 {
-  font-size: 1.25rem;
+  font-size: 1.25em;
 }
 
 .article-content p {
@@ -2836,7 +2836,71 @@
 .read-along-text {
   color: var(--t1);
   line-height: 1.8;
+  font-size: calc(1.125rem * var(--reader-font-scale, 1));
+}
+
+/* Display panel (font size, future display options) */
+
+.display-panel {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+  min-width: 160px;
+  z-index: 100;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+.display-panel-label {
+  color: var(--t3);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.font-scale-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.font-scale-btn {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  background: var(--bg-raised);
+  color: var(--t1);
+  cursor: pointer;
   font-size: 1.125rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.font-scale-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.font-scale-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.font-scale-value {
+  color: var(--t1);
+  font-size: 0.875rem;
+  min-width: 3rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .no-content {
@@ -2995,6 +3059,7 @@
   display: flex;
   justify-content: center;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .option-toggle {
@@ -3040,11 +3105,11 @@
   }
 
   .article-content {
-    font-size: 0.9375rem;
+    font-size: calc(0.9375rem * var(--reader-font-scale, 1));
   }
 
   .read-along-text {
-    font-size: 1rem;
+    font-size: calc(1rem * var(--reader-font-scale, 1));
   }
 
   .read-along-element {

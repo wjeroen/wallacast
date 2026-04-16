@@ -6,6 +6,7 @@ import {
   RotateCw,
   Gauge,
   Clock,
+  Type,
   X,
   Minimize2,
   SquareArrowOutUpRight,
@@ -19,7 +20,7 @@ import {
   ArchiveRestore,
   Trash2,
 } from 'lucide-react';
-import { contentAPI } from '../api';
+import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import type { ContentItem, Comment } from '../types';
 
@@ -69,6 +70,17 @@ interface FullscreenPlayerProps {
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
+
+const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
+
+function getStoredFontScale(): number {
+  const stored = localStorage.getItem('readerFontScale');
+  if (stored) {
+    const parsed = parseFloat(stored);
+    if (FONT_SCALES.includes(parsed)) return parsed;
+  }
+  return 1;
+}
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -192,6 +204,10 @@ export function FullscreenPlayer({
   const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
   // Dropdown menu state
   const [showDropdown, setShowDropdown] = useState(false);
+  // Display panel state (font size)
+  const [fontScale, setFontScale] = useState<number>(getStoredFontScale);
+  const [showDisplayPanel, setShowDisplayPanel] = useState(false);
+  const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem } = useContentStore();
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -207,6 +223,29 @@ export function FullscreenPlayer({
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showDropdown]);
+
+  // Close display panel when clicking outside
+  useEffect(() => {
+    if (!showDisplayPanel) return;
+    function handleClick(e: MouseEvent) {
+      if (displayPanelRef.current && !displayPanelRef.current.contains(e.target as Node)) {
+        setShowDisplayPanel(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDisplayPanel]);
+
+  // Sync font scale from backend on mount (cross-device persistence)
+  useEffect(() => {
+    userSettingsAPI.get('reader_font_scale').then(res => {
+      const val = res.data.value ? parseFloat(res.data.value) : null;
+      if (val && FONT_SCALES.includes(val)) {
+        localStorage.setItem('readerFontScale', String(val));
+        setFontScale(val);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Reset unsynced toggle when content changes
   useEffect(() => {
@@ -403,6 +442,12 @@ export function FullscreenPlayer({
     } else {
       setActiveTab(tab);
     }
+  };
+
+  const handleFontScaleChange = (newScale: number) => {
+    setFontScale(newScale);
+    localStorage.setItem('readerFontScale', String(newScale));
+    userSettingsAPI.set('reader_font_scale', String(newScale)).catch(() => {});
   };
 
   // Recursive component to render comments with replies (for Comments tab)
@@ -955,7 +1000,7 @@ export function FullscreenPlayer({
   };
 
   return (
-    <div className="fullscreen-player">
+    <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {content.preview_picture && (
@@ -1184,6 +1229,43 @@ export function FullscreenPlayer({
             <Clock size={20} />
             <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
           </button>
+
+          <div ref={displayPanelRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowDisplayPanel(p => !p)}
+              className="option-toggle"
+              title="Display settings"
+            >
+              <Type size={20} />
+              <span>{Math.round(fontScale * 100)}%</span>
+            </button>
+            {showDisplayPanel && (
+              <div className="display-panel">
+                <div className="display-panel-label">Text size</div>
+                <div className="font-scale-control">
+                  <button
+                    className="font-scale-btn"
+                    onClick={() => {
+                      const idx = FONT_SCALES.indexOf(fontScale);
+                      if (idx > 0) handleFontScaleChange(FONT_SCALES[idx - 1]);
+                    }}
+                    disabled={FONT_SCALES.indexOf(fontScale) === 0}
+                    aria-label="Decrease font size"
+                  >−</button>
+                  <span className="font-scale-value">{Math.round(fontScale * 100)}%</span>
+                  <button
+                    className="font-scale-btn"
+                    onClick={() => {
+                      const idx = FONT_SCALES.indexOf(fontScale);
+                      if (idx < FONT_SCALES.length - 1) handleFontScaleChange(FONT_SCALES[idx + 1]);
+                    }}
+                    disabled={FONT_SCALES.indexOf(fontScale) === FONT_SCALES.length - 1}
+                    aria-label="Increase font size"
+                  >+</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

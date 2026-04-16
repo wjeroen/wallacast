@@ -44,6 +44,7 @@ const VALID_SETTING_KEYS = [
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
   'max_narrated_comments',      // Max total comments (incl. replies) to narrate (default: 50)
+  'reader_font_scale',          // Font scale for read-along/description/transcript content (default: 1)
 ];
 
 // Secret keys that should be masked in responses
