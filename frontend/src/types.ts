@@ -69,11 +69,15 @@ export interface Podcast {
   updated_at: string;
 }
 
-export interface QueueItem {
-  id: number;
-  content_item_id: number;
-  position: number;
-  added_at: string;
+/**
+ * Manual queue item returned from GET /queue. The backend joins queue_items
+ * with content_items and aliases the queue columns (queue_id / queue_position /
+ * queue_added_at) so they don't collide with the ContentItem fields spread in.
+ */
+export interface QueueItem extends ContentItem {
+  queue_id: number;
+  queue_position: number;
+  queue_added_at: string;
 }
 
 export interface Settings {

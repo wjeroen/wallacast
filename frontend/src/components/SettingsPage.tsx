@@ -64,6 +64,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
+    manual_queue_always_autoplay: 'true',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -120,6 +121,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
+        manual_queue_always_autoplay: loaded.manual_queue_always_autoplay !== undefined && loaded.manual_queue_always_autoplay !== null ? loaded.manual_queue_always_autoplay : 'true',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -152,7 +154,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                  key === 'wallabag_sync_enabled' ||
                                  key === 'image_alt_text_enabled' ||
                                  key === 'narrate_ea_forum_comments' ||
-                                 key === 'narrate_substack_comments';
+                                 key === 'narrate_substack_comments' ||
+                                 key === 'manual_queue_always_autoplay';
 
         if (isBooleanSetting) {
           toSave[key] = value;
@@ -500,6 +503,26 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Requires Gemini API key.
                 </small>
              </div>
+        </section>
+
+        {/* Playback / Queue Settings */}
+        <section className="settings-section">
+          <h3>Playback</h3>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.manual_queue_always_autoplay === 'true'}
+                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
+              />
+              Manually queued items always autoplay
+            </label>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+              When on (default), items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
+              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+            </small>
+          </div>
         </section>
 
         {/* Wallabag Settings (Restored) */}

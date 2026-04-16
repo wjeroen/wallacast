@@ -25,9 +25,28 @@ interface AudioPlayerProps {
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
   onToggleTheme: () => void;
+  // Queue integration — parent owns the queue store, player just calls up
+  onTrackEnded?: () => void;
+  onSkipNextTrack?: () => void;
+  onSkipPrevTrack?: () => void;
+  hasNextTrack?: boolean;
+  hasPrevTrack?: boolean;
+  /**
+   * Parent increments this whenever it swaps `content` because of an auto-
+   * advance or explicit next/prev. AudioPlayer watches it and auto-plays
+   * the new track once metadata loads. Manual content clicks from the
+   * library leave the counter alone, so the first track doesn't auto-play.
+   */
+  autoPlayToken?: number;
+  onPlayQueueItem?: (item: ContentItem) => void;
 }
 
-export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript, onContentUpdated, isDark, onToggleTheme }: AudioPlayerProps) {
+export function AudioPlayer({
+  content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript,
+  onContentUpdated, isDark, onToggleTheme,
+  onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
+  autoPlayToken = 0, onPlayQueueItem,
+}: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -52,6 +71,9 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
   // Mirrors the current content prop so permanent event handlers (with [] deps)
   // always see the up-to-date item without needing to be re-registered.
   const contentRef = useRef(content);
+  // Latest onTrackEnded callback — read by the audio 'ended' handler which is
+  // registered once with empty deps. Kept in a ref so prop changes are picked up.
+  const onTrackEndedRef = useRef(onTrackEnded);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -61,10 +83,114 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
     contentRef.current = content;
   }, [content]);
 
+  useEffect(() => {
+    onTrackEndedRef.current = onTrackEnded;
+  }, [onTrackEnded]);
+
+  // Auto-play the new track when the parent explicitly asks for it
+  // (auto-advance from queue / next-prev button clicks). First library click
+  // leaves autoPlayToken at 0, so we never play unprompted.
+  useEffect(() => {
+    if (autoPlayToken === 0) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onReady = () => {
+      userPausedRef.current = false;
+      appPlayRef.current = true;
+      audio.play().catch(() => { appPlayRef.current = false; });
+      audio.removeEventListener('loadedmetadata', onReady);
+    };
+    // If metadata already loaded for the new src, play immediately; else wait.
+    if (audio.readyState >= 1) {
+      onReady();
+    } else {
+      audio.addEventListener('loadedmetadata', onReady);
+    }
+    return () => audio.removeEventListener('loadedmetadata', onReady);
+  }, [autoPlayToken]);
+
   // Reset user-pause intent when switching to a new item
   useEffect(() => {
     userPausedRef.current = false;
   }, [content?.id]);
+
+  // Hook up the OS MediaSession API so headset / lock-screen / bluetooth
+  // controls can drive the player. Deliberately map *next/previous* to
+  // seek ±15s (podcast-style) rather than true track-nav — the user
+  // preferred that for long-form audio. The dedicated seekbackward /
+  // seekforward actions do the same thing so both UIs are covered.
+  useEffect(() => {
+    if (!content) return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+
+    ms.metadata = new window.MediaMetadata({
+      title: content.title || 'wallacast',
+      artist: content.podcast_show_name || content.author || 'wallacast',
+      album: content.type === 'podcast_episode' ? (content.podcast_show_name || 'Podcast') : 'Library',
+      artwork: content.preview_picture
+        ? [{ src: content.preview_picture, sizes: '512x512', type: 'image/png' }]
+        : [],
+    });
+
+    const seekBy = (delta: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const next = Math.min(
+        Math.max(0, audio.currentTime + delta),
+        audio.duration && isFinite(audio.duration) ? audio.duration : audio.currentTime + delta,
+      );
+      audio.currentTime = next;
+      setCurrentTime(next);
+    };
+
+    const play = () => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      userPausedRef.current = false;
+      appPlayRef.current = true;
+      audio.play().catch(() => { appPlayRef.current = false; });
+    };
+    const pause = () => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      userPausedRef.current = true;
+      audio.pause();
+    };
+
+    try { ms.setActionHandler('play', play); } catch {}
+    try { ms.setActionHandler('pause', pause); } catch {}
+    // Podcast-style: previoustrack / nexttrack jump ±15s instead of track-nav
+    try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch {}
+    try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch {}
+    try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch {}
+    try { ms.setActionHandler('seekforward', (d: any) => seekBy(d?.seekOffset || 15)); } catch {}
+    try {
+      ms.setActionHandler('seekto', (d: any) => {
+        if (typeof d?.seekTime !== 'number') return;
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.currentTime = d.seekTime;
+        setCurrentTime(d.seekTime);
+      });
+    } catch {}
+
+    return () => {
+      try { ms.setActionHandler('play', null); } catch {}
+      try { ms.setActionHandler('pause', null); } catch {}
+      try { ms.setActionHandler('previoustrack', null); } catch {}
+      try { ms.setActionHandler('nexttrack', null); } catch {}
+      try { ms.setActionHandler('seekbackward', null); } catch {}
+      try { ms.setActionHandler('seekforward', null); } catch {}
+      try { ms.setActionHandler('seekto', null); } catch {}
+    };
+  }, [content?.id, content?.title, content?.podcast_show_name, content?.preview_picture, content?.author, content?.type]);
+
+  // Reflect playback state so OS UIs show the right play/pause state
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
 
   // Sync speed from backend on mount (for cross-device persistence)
   useEffect(() => {
@@ -181,6 +307,8 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
       setIsPlaying(false);
       userPausedRef.current = false; // natural end — reset intent
       savePlaybackPosition(0);
+      // Defer the queue check so the state update lands before parent reloads content
+      setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
     // Sync React state with actual DOM audio state.
     // Three guards run in order to decide whether to accept an incoming play:
@@ -501,6 +629,11 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
           onContentUpdated={onContentUpdated}
           isDark={isDark}
           onToggleTheme={onToggleTheme}
+          onSkipNextTrack={onSkipNextTrack}
+          onSkipPrevTrack={onSkipPrevTrack}
+          hasNextTrack={hasNextTrack}
+          hasPrevTrack={hasPrevTrack}
+          onPlayQueueItem={onPlayQueueItem}
         />
       ) : (
         <MiniPlayer

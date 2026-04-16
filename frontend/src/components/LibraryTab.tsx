@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { contentAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
+import { useQueueStore } from '../store/queueStore';
 import type { ContentItem } from '../types';
 
 function getDomainFromUrl(url: string): string {
@@ -631,6 +632,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                             )}
                           </>
                         )}
+                        <button
+                          onClick={() => {
+                            setOpenDropdown(null);
+                            useQueueStore.getState().addToQueue(item);
+                          }}
+                        >
+                          Add to queue
+                        </button>
                         <button onClick={() => handleDownloadDataZip(item)}>
                           Download data (zip)
                         </button>

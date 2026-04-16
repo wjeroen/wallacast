@@ -21,9 +21,14 @@ import {
   Archive,
   ArchiveRestore,
   Trash2,
+  SkipBack,
+  SkipForward,
+  Repeat,
+  Shuffle,
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
+import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, Comment } from '../types';
 
 interface TranscriptWord {
@@ -71,6 +76,12 @@ interface FullscreenPlayerProps {
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
   onToggleTheme: () => void;
+  // Queue integration
+  onSkipNextTrack?: () => void;
+  onSkipPrevTrack?: () => void;
+  hasNextTrack?: boolean;
+  hasPrevTrack?: boolean;
+  onPlayQueueItem?: (item: ContentItem) => void;
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
@@ -173,6 +184,45 @@ function buildCommentMetadata(
   return parts.join(' \u00B7 ');
 }
 
+interface QueueRowProps {
+  item: ContentItem;
+  isCurrent: boolean;
+  onPlay: () => void;
+  onRemove?: () => void;
+}
+function QueueRow({ item, isCurrent, onPlay, onRemove }: QueueRowProps) {
+  return (
+    <div className={`queue-row ${isCurrent ? 'current' : ''}`}>
+      <div className="queue-row-main" onClick={onPlay}>
+        {item.preview_picture && (
+          <img src={item.preview_picture} alt={item.title} className="queue-row-thumb" />
+        )}
+        <div className="queue-row-info">
+          <div className="queue-row-title">
+            {isCurrent && <span className="queue-now-playing">▶ </span>}
+            {item.title}
+          </div>
+          <div className="queue-row-meta">
+            {item.type === 'podcast_episode' && item.podcast_show_name
+              ? item.podcast_show_name
+              : (item.author || '')}
+            {!item.audio_url && <span className="queue-row-noaudio"> · no audio</span>}
+          </div>
+        </div>
+      </div>
+      {onRemove && (
+        <button
+          className="queue-row-remove"
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          title="Remove from queue"
+        >
+          <X size={16} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FullscreenPlayer({
   content,
   isPlaying,
@@ -198,7 +248,27 @@ export function FullscreenPlayer({
   onContentUpdated,
   isDark,
   onToggleTheme,
+  onSkipNextTrack,
+  onSkipPrevTrack,
+  hasNextTrack = false,
+  hasPrevTrack = false,
+  onPlayQueueItem,
 }: FullscreenPlayerProps) {
+  // Queue state for the Queue tab + autoplay toggle
+  const manualItems = useQueueStore(s => s.manualItems);
+  const libraryContext = useQueueStore(s => s.libraryContext);
+  const autoplay = useQueueStore(s => s.autoplay);
+  const shuffleNonManual = useQueueStore(s => s.shuffleNonManual);
+  const setAutoplay = useQueueStore(s => s.setAutoplay);
+  const setShuffleNonManual = useQueueStore(s => s.setShuffleNonManual);
+  const removeFromQueue = useQueueStore(s => s.removeFromQueue);
+  const clearQueue = useQueueStore(s => s.clearQueue);
+  const getNonManualItems = useQueueStore(s => s.getNonManualItems);
+  // Re-derive non-manual items when queue/context/shuffle changes OR current item changes
+  const nonManualItems = useMemo(
+    () => getNonManualItems(content.id),
+    [getNonManualItems, content.id, manualItems, libraryContext, shuffleNonManual]
+  );
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
     content.type === 'podcast_episode' ? 'description' : 'read-along'
@@ -990,16 +1060,104 @@ export function FullscreenPlayer({
           </div>
         );
       }
-      case 'queue':
+      case 'queue': {
+        const nonManualLabel = libraryContext ? (() => {
+          switch (libraryContext.filter) {
+            case 'articles': return 'Up next from Articles';
+            case 'texts': return 'Up next from Texts';
+            case 'podcasts': return 'Up next from Podcasts';
+            case 'favorites': return 'Up next from Favorites';
+            case 'archived': return 'Up next from Archived';
+            case 'all':
+            default: return 'Up next from Library';
+          }
+        })() : 'Up next';
+
+        const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
+
         return (
           <div className="tab-queue-display">
-            <h3>Queue</h3>
-            <p className="work-in-progress">Work in progress</p>
-            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
-              Queue functionality will be implemented soon. Stay tuned!
-            </p>
+            {isEmpty ? (
+              <p className="no-content">
+                Your queue is empty. Add items from the library's "Add to queue" menu,
+                or play a library item to populate "Up next" automatically.
+              </p>
+            ) : (
+              <>
+                {manualItems.length > 0 && (
+                  <div className="queue-section">
+                    <div className="queue-section-header">
+                      <h3>In queue ({manualItems.length})</h3>
+                      <button
+                        className="queue-clear-btn"
+                        onClick={() => {
+                          if (confirm('Clear all items from the queue?')) clearQueue();
+                        }}
+                        title="Clear queue"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="queue-list">
+                      {manualItems.map(item => (
+                        <QueueRow
+                          key={`m-${item.queue_id}`}
+                          item={item}
+                          isCurrent={item.id === content.id}
+                          onPlay={() => onPlayQueueItem?.(item)}
+                          onRemove={() => removeFromQueue(item.queue_id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {manualItems.length > 0 && nonManualItems.length > 0 && (
+                  <div className="queue-divider" />
+                )}
+
+                {nonManualItems.length > 0 && (
+                  <div className="queue-section">
+                    <div className="queue-section-header">
+                      <h3>
+                        {nonManualLabel} ({nonManualItems.length})
+                      </h3>
+                      <button
+                        className={`queue-shuffle-btn ${shuffleNonManual ? 'active' : ''}`}
+                        onClick={() => setShuffleNonManual(!shuffleNonManual)}
+                        title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
+                      >
+                        <Shuffle size={14} />
+                      </button>
+                    </div>
+                    {!autoplay && (
+                      <p className="queue-hint">
+                        Autoplay is off — these items won't play automatically when the queue ends.
+                        Toggle autoplay (loop icon) in the player controls to enable.
+                      </p>
+                    )}
+                    <div className="queue-list">
+                      {nonManualItems.slice(0, 50).map(item => (
+                        <QueueRow
+                          key={`n-${item.id}`}
+                          item={item}
+                          isCurrent={false}
+                          onPlay={() => onPlayQueueItem?.(item)}
+                        />
+                      ))}
+                      {nonManualItems.length > 50 && (
+                        <p className="queue-hint" style={{ textAlign: 'center' }}>
+                          …and {nonManualItems.length - 50} more
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         );
+      }
       default:
         return null;
     }
@@ -1210,6 +1368,15 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-playback-controls">
+          <button
+            onClick={() => onSkipPrevTrack?.()}
+            title="Previous track"
+            className="track-skip-btn"
+            disabled={!hasPrevTrack}
+          >
+            <SkipBack size={22} />
+          </button>
+
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
             <RotateCcw className="seek-icon" />
             <span className="seek-label">15</span>
@@ -1223,6 +1390,15 @@ export function FullscreenPlayer({
             <RotateCw className="seek-icon" />
             <span className="seek-label">15</span>
           </button>
+
+          <button
+            onClick={() => onSkipNextTrack?.()}
+            title="Next track"
+            className="track-skip-btn"
+            disabled={!hasNextTrack}
+          >
+            <SkipForward size={22} />
+          </button>
         </div>
 
         <div className="fullscreen-player-options">
@@ -1234,6 +1410,15 @@ export function FullscreenPlayer({
           <button onClick={onToggleSleepTimer} className="option-toggle">
             <Clock size={20} />
             <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+          </button>
+
+          <button
+            onClick={() => setAutoplay(!autoplay)}
+            className={`option-toggle ${autoplay ? 'active' : ''}`}
+            title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
+          >
+            <Repeat size={20} />
+            <span>{autoplay ? 'On' : 'Off'}</span>
           </button>
 
           <div ref={displayPanelRef} style={{ position: 'relative' }}>

@@ -8,6 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
+import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
@@ -40,6 +41,20 @@ function App() {
   // Get addItem and fetchContent from store
   const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
 
+  // Queue state (subscribed so hasNext/hasPrev stay reactive across queue edits,
+  // library-context changes, shuffle/autoplay toggles, and the setting toggle)
+  const manualQueue = useQueueStore(s => s.manualItems);
+  useQueueStore(s => s.autoplay);
+  useQueueStore(s => s.manualAlwaysAutoplay);
+  useQueueStore(s => s.libraryContext);
+  useQueueStore(s => s.shuffleNonManual);
+
+  // Bump this counter whenever we swap `currentContent` because of an auto-
+  // advance or explicit next/prev click. AudioPlayer watches it and auto-plays
+  // the new track once metadata loads. First-click from the library leaves it
+  // at 0 so playback stays user-initiated.
+  const [autoPlayToken, setAutoPlayToken] = useState(0);
+
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
 
@@ -53,6 +68,38 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Hydrate queue + autoplay preference once authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    useQueueStore.getState().fetchQueue();
+    useQueueStore.getState().hydrateSettings();
+  }, [isAuthenticated]);
+
+  // Poll any items whose audio we started generating from the queue flow.
+  // When they finish, re-insert at the front of the manual queue.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const interval = setInterval(async () => {
+      const qs = useQueueStore.getState();
+      if (qs.pendingRequeue.size === 0) return;
+      for (const id of Array.from(qs.pendingRequeue)) {
+        try {
+          const res = await contentAPI.getById(id);
+          if (res.data.generation_status === 'completed' && res.data.audio_url) {
+            await qs.addToFront(id);
+            qs.clearPendingRequeue(id);
+            refreshItem(id);
+          } else if (res.data.generation_status === 'failed') {
+            qs.clearPendingRequeue(id);
+          }
+        } catch (err) {
+          console.error('Pending requeue poll failed:', err);
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, refreshItem]);
 
   // Load feed staleness (days since last refresh)
   useEffect(() => {
@@ -119,9 +166,111 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Called from LibraryTab when the user clicks a library item. Captures the
+  // current filter as a "play context" (Spotify-style) so the non-manual
+  // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
+  // click should load the track, not play it automatically.
   const handlePlayContent = (content: ContentItem) => {
+    const filter = useContentStore.getState().filter;
+    useQueueStore.getState().setLibraryContext(filter, content.id);
     setCurrentContent(content);
   };
+
+  // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
+  // either a manual QueueItem or a derived non-manual ContentItem. Items
+  // without audio trigger the generate-or-skip prompt (only manuals can be
+  // in this state — non-manual stream filters audio-less items out).
+  const handlePlayQueueItem = async (item: ContentItem) => {
+    if (item.audio_url) {
+      setCurrentContent(item);
+      setAutoPlayToken(t => t + 1);
+      return;
+    }
+    const qs = useQueueStore.getState();
+    const queueRow = qs.manualItems.find(m => m.id === item.id);
+    if (!queueRow) return; // defensive — should not happen
+    const proceed = confirm(
+      `"${item.title}" has no audio yet. Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
+    );
+    if (!proceed) return;
+    qs.markPendingRequeue(item.id);
+    await qs.removeFromQueue(queueRow.queue_id);
+    try {
+      await contentAPI.generateAudio(item.id, false);
+      refreshItem(item.id);
+    } catch (err: any) {
+      console.error('Failed to start audio generation:', err);
+      qs.clearPendingRequeue(item.id);
+      alert(err?.response?.data?.error || 'Failed to start audio generation');
+      return;
+    }
+    advanceToNextTrack();
+  };
+
+  // Advance to the next track in the queue (manual first, then non-manual if
+  // autoplay is on). When we hit a manual item with no audio, prompt the user
+  // to generate-or-skip, then continue looking for a playable next item.
+  const advanceToNextTrack = () => {
+    const currentId = currentContent?.id ?? null;
+    while (true) {
+      const qs = useQueueStore.getState();
+      const nextItem = qs.getNextItem(currentId);
+      if (!nextItem) {
+        return; // queue empty / autoplay off — stop
+      }
+      if (nextItem.audio_url) {
+        setCurrentContent(nextItem);
+        setAutoPlayToken(t => t + 1);
+        return;
+      }
+      // Manual item without audio — prompt user
+      const queueRow = qs.manualItems.find(m => m.id === nextItem.id);
+      if (!queueRow) {
+        // Defensive: non-manual stream already filters out audio-less items.
+        return;
+      }
+      const shouldGenerate = confirm(
+        `"${nextItem.title}" has no audio yet. Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
+      );
+      if (shouldGenerate) {
+        qs.markPendingRequeue(nextItem.id);
+        qs.removeFromQueue(queueRow.queue_id);
+        contentAPI.generateAudio(nextItem.id, false)
+          .then(() => refreshItem(nextItem.id))
+          .catch((err) => {
+            console.error('Failed to start audio generation:', err);
+            qs.clearPendingRequeue(nextItem.id);
+          });
+      } else {
+        qs.removeFromQueue(queueRow.queue_id);
+      }
+      // Loop — try the new "next" after mutation
+    }
+  };
+
+  const handleTrackEnded = () => {
+    advanceToNextTrack();
+  };
+
+  const handleSkipNext = () => {
+    advanceToNextTrack();
+  };
+
+  const handleSkipPrev = () => {
+    const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
+    if (!prev) return;
+    setCurrentContent(prev);
+    setAutoPlayToken(t => t + 1);
+  };
+
+  // Derived: is there a next/prev track from where we are right now?
+  const hasPrevTrack = (() => {
+    if (!currentContent) return false;
+    const idx = manualQueue.findIndex(m => m.id === currentContent.id);
+    return idx > 0;
+  })();
+
+  const hasNextTrack = !!useQueueStore.getState().getNextItem(currentContent?.id ?? null);
 
   const handleRefetchContent = async () => {
     if (!currentContent) return;
@@ -380,6 +529,13 @@ function App() {
             onContentUpdated={(updated) => setCurrentContent(updated)}
             isDark={isDark}
             onToggleTheme={() => setIsDark(d => !d)}
+            onTrackEnded={handleTrackEnded}
+            onSkipNextTrack={handleSkipNext}
+            onSkipPrevTrack={handleSkipPrev}
+            hasNextTrack={hasNextTrack}
+            hasPrevTrack={hasPrevTrack}
+            autoPlayToken={autoPlayToken}
+            onPlayQueueItem={handlePlayQueueItem}
           />
         )}
 

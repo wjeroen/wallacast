@@ -146,7 +146,10 @@ export const queueAPI = {
   getAll: () => api.get<QueueItem[]>('/queue'),
 
   add: (contentItemId: number) =>
-    api.post<QueueItem>('/queue', { content_item_id: contentItemId }),
+    api.post<{ id: number; position: number; added_at: string }>('/queue', { content_item_id: contentItemId }),
+
+  addToFront: (contentItemId: number) =>
+    api.post<{ id: number; position: number; added_at: string }>('/queue/front', { content_item_id: contentItemId }),
 
   remove: (id: number) => api.delete(`/queue/${id}`),
 
