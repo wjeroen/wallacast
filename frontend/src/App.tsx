@@ -204,17 +204,34 @@ function App() {
       alert(err?.response?.data?.error || 'Failed to start audio generation');
       return;
     }
-    advanceToNextTrack();
+    advanceToNextTrack('skip');
   };
 
   // Advance to the next track in the queue (manual first, then non-manual if
   // autoplay is on). When we hit a manual item with no audio, prompt the user
   // to generate-or-skip, then continue looking for a playable next item.
-  const advanceToNextTrack = () => {
+  //
+  // `mode` = 'auto'  — track ended naturally or user hit skip-next. We always
+  //                    clear the current manual item (it's been played/skipped).
+  // `mode` = 'ended' — respects autoplay gating via getNextItem.
+  // `mode` = 'skip'  — ignores autoplay gating via peekNextItem.
+  const advanceToNextTrack = (mode: 'ended' | 'skip') => {
     const currentId = currentContent?.id ?? null;
+
+    // Remove the current item from the manual queue if it's there — the
+    // user has finished (or chosen to skip past) it, so it shouldn't
+    // stick around above the divider.
+    if (currentId !== null) {
+      const qs0 = useQueueStore.getState();
+      const currentRow = qs0.manualItems.find(m => m.id === currentId);
+      if (currentRow) qs0.removeFromQueue(currentRow.queue_id);
+    }
+
     while (true) {
       const qs = useQueueStore.getState();
-      const nextItem = qs.getNextItem(currentId);
+      const nextItem = mode === 'skip'
+        ? qs.peekNextItem(currentId)
+        : qs.getNextItem(currentId);
       if (!nextItem) {
         return; // queue empty / autoplay off — stop
       }
@@ -249,11 +266,11 @@ function App() {
   };
 
   const handleTrackEnded = () => {
-    advanceToNextTrack();
+    advanceToNextTrack('ended');
   };
 
   const handleSkipNext = () => {
-    advanceToNextTrack();
+    advanceToNextTrack('skip');
   };
 
   const handleSkipPrev = () => {
@@ -264,13 +281,10 @@ function App() {
   };
 
   // Derived: is there a next/prev track from where we are right now?
-  const hasPrevTrack = (() => {
-    if (!currentContent) return false;
-    const idx = manualQueue.findIndex(m => m.id === currentContent.id);
-    return idx > 0;
-  })();
-
-  const hasNextTrack = !!useQueueStore.getState().getNextItem(currentContent?.id ?? null);
+  // Both use the "peek" variants — the UI buttons always enable as long
+  // as there's somewhere to go, regardless of autoplay gating.
+  const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
+  const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
   const handleRefetchContent = async () => {
     if (!currentContent) return;
