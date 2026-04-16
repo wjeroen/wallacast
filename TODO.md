@@ -158,17 +158,18 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P3]** Make read-along tab the default content tab — done! Renamed to "Content", old Content/Comments tabs hidden but kept in code (2026-02-18)
 
 #### Queue Tab Implementation (Do Later)
-- [ ] **[P6]** Connect existing queue table/routes to UI - add queue state to App.tsx or Zustand store
-- [ ] **[P6]** Queue works like Spotify (library is essentially a playlist), but doesn't autoplay items that aren't manually added to queue (manually added items and non-manually items are clearly differentiated by a horizontal bar in the queue UI, similar to spotify)
-- [ ] **[P6]** Add "queue autoplay" toggle to enable autoplay, it replaces volume slider (since I never use it)
-- [ ] **[P6]** Add shuffle button that applies to non-manually added items (they always come after manually added items), autoplay toggle 
-- [ ] **[P6]** Add player buttons to go to previous and next items, and shuffle button (applies to non-manually added items only, manually added items in queue still play in set order)
-- [ ] **[P6]** LibraryTab should have "Add to queue" action in dropdown menu
-- [ ] **[P6]** If manually added item in queue doesn't have audio file: pop-up asks whether to generate audio or skip. With generate audio, continue to next item on queue but add the item back to queue (as next item to play) once audio generation finishes
-- [ ] **[P6]** If item is not manually added but from list, just skip items without audio
+- [x] **[P6]** Connect existing queue table/routes to UI - add queue state to App.tsx or Zustand store (2026-04-16)
+- [x] **[P6]** Queue works like Spotify (library is essentially a playlist), but doesn't autoplay items that aren't manually added to queue (manually added items and non-manually items are clearly differentiated by a horizontal bar in the queue UI, similar to spotify) (2026-04-16)
+- [x] **[P6]** Add "queue autoplay" toggle to enable autoplay, it replaces volume slider (since I never use it) — placed next to speed/sleep/display in fullscreen player options row (2026-04-16)
+- [x] **[P6]** Add shuffle button that applies to non-manually added items (they always come after manually added items), autoplay toggle (2026-04-16)
+- [x] **[P6]** Add player buttons to go to previous and next items, and shuffle button (applies to non-manually added items only, manually added items in queue still play in set order) (2026-04-16)
+- [x] **[P6]** LibraryTab should have "Add to queue" action in dropdown menu (2026-04-16)
+- [x] **[P6]** If manually added item in queue doesn't have audio file: pop-up asks whether to generate audio or skip. With generate audio, continue to next item on queue but add the item back to queue (as next item to play) once audio generation finishes (2026-04-16)
+- [x] **[P6]** If item is not manually added but from list, just skip items without audio (2026-04-16)
 
 ## Completed Recently ✅
 
+- [x] **Queue Tab Implementation (Spotify-style)** (2026-04-16): Fullscreen player Queue tab now shows manual queue + "Up next from [library filter]" split by a horizontal divider. Manual items always autoplay; non-manual items require the autoplay toggle (Repeat icon in the options row) to continue after the manual queue ends. Library filter at click-time is captured as the "play context". LibraryTab dropdown gets an "Add to queue" action. Prev/Next track buttons (SkipBack/SkipForward) in the playback controls. Shuffle toggle for non-manual items. Queue items without audio show a generate-or-skip prompt; on "generate", the item moves to the top of the queue when audio finishes (pending-requeue poller). New Zustand store `queueStore.ts`; backend GET /queue aliases queue columns + POST /queue/front inserts at position 0. Autoplay preference persists via user setting `queue_autoplay`.
 - [x] **Fix broken images and markdown artifacts in HTML uploads** (2026-04-04): Uploaded HTML from Obsidian/saved web pages had broken images (relative paths to local cache) and ugly `[` `](url)` text from broken markdown rendering. Backend now detects this pattern during upload, extracts real https URLs, and fixes `<img src>` attributes. Frontend also hides broken images via onerror handler as safety net.
 - [x] **Replace download HTML buttons with single "Download data (zip)"** (2026-04-04): Replaced 3 separate download HTML buttons (cleaned, read-along, original) in both library and fullscreen player dropdowns with a single "Download data (zip)" button that exports all database fields (except audio_data) as a zip file with metadata.json, content.html, comments.json, alignment.json, transcript.txt, etc. Works for all content types. Zip generated server-side for mobile compatibility. New backend endpoint: `GET /content/:id/export`.
 - [x] **Add star/archive/delete to fullscreen player dropdown** (2026-04-04): Star (yellow), archive (blue), delete (red) at top of dropdown. Star and archive keep dropdown open for immediate feedback. Delete closes fullscreen player.
