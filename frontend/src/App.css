@@ -2903,6 +2903,30 @@
   font-variant-numeric: tabular-nums;
 }
 
+.display-panel-section {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--bg-raised);
+}
+
+.display-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--t1);
+  cursor: pointer;
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.display-panel-toggle:hover {
+  color: var(--t0);
+}
+
 .no-content {
   color: var(--t3);
   text-align: center;

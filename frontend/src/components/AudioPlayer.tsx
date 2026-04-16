@@ -23,9 +23,11 @@ interface AudioPlayerProps {
   onRemoveAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
+  isDark: boolean;
+  onToggleTheme: () => void;
 }
 
-export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript, onContentUpdated }: AudioPlayerProps) {
+export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript, onContentUpdated, isDark, onToggleTheme }: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -497,6 +499,8 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
           onRemoveAudio={onRemoveAudio}
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
+          isDark={isDark}
+          onToggleTheme={onToggleTheme}
         />
       ) : (
         <MiniPlayer

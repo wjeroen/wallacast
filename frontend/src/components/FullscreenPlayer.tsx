@@ -7,6 +7,8 @@ import {
   Gauge,
   Clock,
   Type,
+  Sun,
+  Moon,
   X,
   Minimize2,
   SquareArrowOutUpRight,
@@ -67,6 +69,8 @@ interface FullscreenPlayerProps {
   onRemoveAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
+  isDark: boolean;
+  onToggleTheme: () => void;
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
@@ -192,6 +196,8 @@ export function FullscreenPlayer({
   onRemoveAudio,
   onRegenerateTranscript,
   onContentUpdated,
+  isDark,
+  onToggleTheme,
 }: FullscreenPlayerProps) {
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
@@ -1262,6 +1268,13 @@ export function FullscreenPlayer({
                     disabled={FONT_SCALES.indexOf(fontScale) === FONT_SCALES.length - 1}
                     aria-label="Increase font size"
                   >+</button>
+                </div>
+                <div className="display-panel-section">
+                  <div className="display-panel-label">Appearance</div>
+                  <button className="display-panel-toggle" onClick={onToggleTheme}>
+                    {isDark ? <Sun size={16} /> : <Moon size={16} />}
+                    <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
+                  </button>
                 </div>
               </div>
             )}
