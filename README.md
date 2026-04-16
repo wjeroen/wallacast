@@ -194,8 +194,13 @@ Wallacast supports multiple users with complete data isolation:
     - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
     - `GET /last-refresh` - Get timestamp of last feed refresh
 
-- **`routes/queue.ts`**: Queue management (partially implemented)
-  - Standard CRUD for queue items with position management
+- **`routes/queue.ts`**: Manual play queue (per-user)
+  - `GET /` - List queue items joined with content (aliases queue_id/queue_position/queue_added_at)
+  - `POST /` - Append item to end of queue
+  - `POST /front` - Insert at position 0 (used when deferred audio generation finishes)
+  - `DELETE /:id` - Remove from queue and renumber positions
+  - `PUT /reorder` - Update positions in bulk
+  - `DELETE /` - Clear entire queue
 
 - **`routes/transcription.ts`**: Dedicated transcription endpoint
   - `POST /content/:id` - Trigger transcription for podcast episode
@@ -370,7 +375,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
   - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
   - **Description tab** (podcasts only): Podcast episode description with HTML formatting
-  - **Queue tab**: Placeholder (work in progress)
+  - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
@@ -492,11 +497,13 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - **Unique constraint**: `(feed_id, guid)` - Prevents duplicate items in the same feed
 - **Performance**: Loading 70 feeds with 100 items each = instant database query instead of 70 network requests
 
-### queue_items (not fully implemented in UI)
+### queue_items (manual play queue)
 - `id`: Primary key
 - `user_id`: FK to users table (queues are per-user)
 - `content_item_id`: FK to content_items table
-- `position`, `added_at`
+- `position`: integer ordering (0 = head). Renumbered on delete / bumped on insert-at-front
+- `added_at`: timestamp for display
+- **Note**: Only the *manual* queue is persisted here. The Spotify-style "Up next from library" stream is computed client-side from the captured library filter + `contentStore.allItems`, so no migration was needed when the Queue tab landed.
 
 ## Deployment (Railway)
 

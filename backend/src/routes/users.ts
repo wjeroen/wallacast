@@ -45,6 +45,8 @@ const VALID_SETTING_KEYS = [
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
   'max_narrated_comments',      // Max total comments (incl. replies) to narrate (default: 50)
   'reader_font_scale',          // Font scale for read-along/description/transcript content (default: 1)
+  'queue_autoplay',             // Auto-continue into non-manual (library) items when queue empties (default: false)
+  'manual_queue_always_autoplay', // When 'false', manual queue items only auto-advance if queue_autoplay is on. Default: 'true' (manual items always autoplay).
 ];
 
 // Secret keys that should be masked in responses
