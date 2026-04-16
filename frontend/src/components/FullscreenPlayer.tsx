@@ -1180,6 +1180,13 @@ export function FullscreenPlayer({
                         {nonManualLabel} ({nonManualItems.length})
                       </h3>
                       <button
+                        className={`queue-shuffle-btn ${autoplay ? 'active' : ''}`}
+                        onClick={() => setAutoplay(!autoplay)}
+                        title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
+                      >
+                        <Repeat size={14} />
+                      </button>
+                      <button
                         className={`queue-shuffle-btn ${shuffleNonManual ? 'active' : ''}`}
                         onClick={() => setShuffleNonManual(!shuffleNonManual)}
                         title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
@@ -1190,7 +1197,7 @@ export function FullscreenPlayer({
                     {!autoplay && (
                       <p className="queue-hint">
                         Autoplay is off — these items won't play automatically when the queue ends.
-                        Toggle autoplay (loop icon) in the player controls to enable.
+                        Tap the loop icon above to turn it on.
                       </p>
                     )}
                     <div className="queue-list">
@@ -1512,15 +1519,6 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
-
-          <button
-            onClick={() => setAutoplay(!autoplay)}
-            className={`option-toggle ${autoplay ? 'active' : ''}`}
-            title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
-          >
-            <Repeat size={20} />
-            <span>{autoplay ? 'On' : 'Off'}</span>
-          </button>
         </div>
       </div>
     </div>

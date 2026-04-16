@@ -82,6 +82,12 @@ export function AudioPlayer({
   // leave the new track paused forever.
   const autoPlayPendingRef = useRef(false);
   const lastAutoPlayTokenRef = useRef(0);
+  // Tracks the last audio URL we actually set on the <audio> element. Content
+  // objects get replaced (new reference, same item) every time the parent
+  // refreshes metadata, expands comments, regenerates audio, etc. Without this
+  // guard every refresh resets audio.src, interrupts playback, and leaves the
+  // user unable to resume without closing and re-opening the player.
+  const lastAudioSrcRef = useRef<string>('');
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -270,8 +276,17 @@ export function AudioPlayer({
       } else {
         audioSrc = '';
       }
+
+      // Guard against redundant src resets. The parent replaces `content` with
+      // a new object reference on many non-audio events (comment fetches,
+      // metadata refreshes, star/archive toggles, etc.). Without this, every
+      // one of those resets audio.src and interrupts playback.
+      if (audioSrc === lastAudioSrcRef.current) {
+        return;
+      }
+      lastAudioSrcRef.current = audioSrc;
       audio.src = audioSrc;
-      
+
       // Use global speed from localStorage (instant, no API call needed)
       const storedSpeed = getStoredSpeed();
       audio.playbackRate = storedSpeed;
