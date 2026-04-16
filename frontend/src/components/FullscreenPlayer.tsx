@@ -1469,15 +1469,6 @@ export function FullscreenPlayer({
             <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
           </button>
 
-          <button
-            onClick={() => setAutoplay(!autoplay)}
-            className={`option-toggle ${autoplay ? 'active' : ''}`}
-            title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
-          >
-            <Repeat size={20} />
-            <span>{autoplay ? 'On' : 'Off'}</span>
-          </button>
-
           <div ref={displayPanelRef} style={{ position: 'relative' }}>
             <button
               onClick={() => setShowDisplayPanel(p => !p)}
@@ -1521,6 +1512,15 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
+
+          <button
+            onClick={() => setAutoplay(!autoplay)}
+            className={`option-toggle ${autoplay ? 'active' : ''}`}
+            title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
+          >
+            <Repeat size={20} />
+            <span>{autoplay ? 'On' : 'Off'}</span>
+          </button>
         </div>
       </div>
     </div>
