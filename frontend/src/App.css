@@ -68,7 +68,6 @@
   object-fit: contain;
 }
 
-[data-theme="light"] .app-logo,
 [data-theme="light"] .loading-logo {
   border-radius: 0.5rem;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
