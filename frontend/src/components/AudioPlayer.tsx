@@ -74,6 +74,14 @@ export function AudioPlayer({
   // Latest onTrackEnded callback — read by the audio 'ended' handler which is
   // registered once with empty deps. Kept in a ref so prop changes are picked up.
   const onTrackEndedRef = useRef(onTrackEnded);
+  // When the parent bumps autoPlayToken we set this ref. The content-setup
+  // effect's loadedmetadata handler reads it and kicks off playback for the
+  // NEW src. Bumping a pending flag (instead of calling play() directly in a
+  // separate effect) avoids a race where the old effect fires before audio.src
+  // has been swapped — which would call play() on the outgoing track and
+  // leave the new track paused forever.
+  const autoPlayPendingRef = useRef(false);
+  const lastAutoPlayTokenRef = useRef(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -87,26 +95,15 @@ export function AudioPlayer({
     onTrackEndedRef.current = onTrackEnded;
   }, [onTrackEnded]);
 
-  // Auto-play the new track when the parent explicitly asks for it
-  // (auto-advance from queue / next-prev button clicks). First library click
-  // leaves autoPlayToken at 0, so we never play unprompted.
+  // Auto-play the new track when the parent bumps autoPlayToken. We only set
+  // a pending flag here — the actual play() call happens inside the content
+  // setup effect's loadedmetadata handler, so we're guaranteed to play AFTER
+  // the new audio.src has loaded.
   useEffect(() => {
     if (autoPlayToken === 0) return;
-    const audio = audioRef.current;
-    if (!audio) return;
-    const onReady = () => {
-      userPausedRef.current = false;
-      appPlayRef.current = true;
-      audio.play().catch(() => { appPlayRef.current = false; });
-      audio.removeEventListener('loadedmetadata', onReady);
-    };
-    // If metadata already loaded for the new src, play immediately; else wait.
-    if (audio.readyState >= 1) {
-      onReady();
-    } else {
-      audio.addEventListener('loadedmetadata', onReady);
-    }
-    return () => audio.removeEventListener('loadedmetadata', onReady);
+    if (autoPlayToken === lastAutoPlayTokenRef.current) return;
+    lastAutoPlayTokenRef.current = autoPlayToken;
+    autoPlayPendingRef.current = true;
   }, [autoPlayToken]);
 
   // Reset user-pause intent when switching to a new item
@@ -289,6 +286,15 @@ export function AudioPlayer({
         if ((!content.duration || content.duration === 0) && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
           const durationInSeconds = Math.floor(audio.duration);
           contentAPI.update(content.id, { duration: durationInSeconds } as any).catch(() => {});
+        }
+        // Consume any pending autoplay request from the parent (skip/advance).
+        // Doing it here guarantees we play AFTER the new src has loaded,
+        // instead of racing against the content effect.
+        if (autoPlayPendingRef.current) {
+          autoPlayPendingRef.current = false;
+          userPausedRef.current = false;
+          appPlayRef.current = true;
+          audio.play().catch(() => { appPlayRef.current = false; });
         }
         audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
