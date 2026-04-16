@@ -18,9 +18,9 @@
 }
 
 [data-theme="light"] {
-  /* Backgrounds: lightest → slightly-less-light */
-  --bg-app:     #f8fafc;
-  --bg-surface: #ffffff;
+  /* Backgrounds: page slightly darker than cards for contrast */
+  --bg-app:     #f1f5f9;  /* page background */
+  --bg-surface: #ffffff;  /* cards/headers/panels */
   --bg-raised:  #e2e8f0;  /* visible as border + subtle hover on white */
   --bg-hover:   #cbd5e1;  /* deeper hover, active borders */
 
@@ -1057,10 +1057,22 @@
   border: 1px solid #3b82f6;
 }
 
+[data-theme="light"] .generation-status.generating {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+
 .generation-status.error {
   background: #991b1b;
   color: #fecaca;
   border: 1px solid #ef4444;
+}
+
+[data-theme="light"] .generation-status.error {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
 }
 
 .generation-status .error-detail {
@@ -1119,9 +1131,19 @@
   color: #d1fae5;
 }
 
+[data-theme="light"] .metadata .badge {
+  background: #d1fae5;
+  color: #065f46;
+}
+
 .metadata .badge.transcript {
   background: #1e3a5f;
   color: #bfdbfe;
+}
+
+[data-theme="light"] .metadata .badge.transcript {
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 /* Audio Player */
@@ -1256,6 +1278,7 @@
 
 .play-pause-btn {
   background: #3b82f6 !important;
+  color: #ffffff;
   width: 56px;
   height: 56px;
   display: flex;
@@ -1264,6 +1287,10 @@
   border-radius: 50%;
   border: none;
   padding: 0;
+}
+
+.play-pause-btn svg {
+  stroke: #ffffff;
 }
 
 .play-pause-btn:hover {
@@ -1425,10 +1452,11 @@
 .comment-username {
   font-weight: 600;
   color: #60a5fa;
+  font-size: calc(1rem * var(--reader-font-scale, 1));
 }
 
 .comment-date {
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--reader-font-scale, 1));
   color: var(--t3);
 }
 
@@ -1436,7 +1464,7 @@
   display: flex;
   gap: 1rem;
   margin-bottom: 0.5rem;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--reader-font-scale, 1));
 }
 
 .comment-votes {
@@ -2548,13 +2576,17 @@
 .content-header h2 {
   color: var(--t0);
   margin: 0 0 0.5rem 0;
-  font-size: 1.5rem;
+  font-size: calc(1.5rem * var(--reader-font-scale, 1));
 }
 
 .content-author {
   color: var(--t3);
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--reader-font-scale, 1));
   margin: 0.25rem 0;
+}
+
+.content-provenance {
+  font-size: calc(0.75rem * var(--reader-font-scale, 1));
 }
 
 .content-source {
@@ -2776,7 +2808,7 @@
 .comments-header h3 {
   color: var(--t0);
   margin: 0;
-  font-size: 1.25rem;
+  font-size: calc(1.25rem * var(--reader-font-scale, 1));
 }
 
 .refetch-button {
