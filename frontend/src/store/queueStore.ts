@@ -34,12 +34,19 @@ interface QueueStore {
   // When one completes we re-insert it at position 0 of the manual queue.
   pendingRequeue: Set<number>;
 
+  // Stable shuffle order (content IDs) captured when the user turns shuffle
+  // on. We don't reshuffle on every render — otherwise the "next" item would
+  // change every time the player re-renders.
+  shuffleOrder: number[];
+
   // --- Actions ---
   fetchQueue: () => Promise<void>;
   hydrateSettings: () => Promise<void>;
   addToQueue: (item: ContentItem) => Promise<void>;
   addToFront: (contentItemId: number) => Promise<void>;
   removeFromQueue: (queueId: number) => Promise<void>;
+  moveUp: (queueId: number) => Promise<void>;
+  moveDown: (queueId: number) => Promise<void>;
   clearQueue: () => Promise<void>;
   setLibraryContext: (filter: FilterType, capturedFromId: number) => void;
   setAutoplay: (v: boolean) => Promise<void>;
@@ -50,16 +57,18 @@ interface QueueStore {
 
   // --- Derived helpers (called by player/App) ---
   /**
-   * Returns the next item to play after `currentId`, or null.
-   * - If the manual queue has an item whose audio is ready, that wins.
-   * - Otherwise, if autoplay is on, returns the next non-manual (library) item.
-   * - Items without audio_url are skipped in the non-manual stream (per spec task 8).
-   *   Manual items without audio are still returned — caller handles the confirm() flow.
+   * Auto-advance next — respects the autoplay and manualAlwaysAutoplay
+   * settings. Returns null if the user has gated auto-advance off.
    */
   getNextItem: (currentId: number | null) => ContentItem | null;
   /**
-   * Previous item: walks backwards through manual queue first, then non-manual
-   * in the reverse of what getNext would have produced. Returns null if nothing.
+   * Manual-skip next — ignores autoplay gating. Used by the skip button
+   * so the user can always move forward regardless of settings.
+   */
+  peekNextItem: (currentId: number | null) => ContentItem | null;
+  /**
+   * Previous item: walks backwards through manual queue first, then
+   * steps back one position in the non-manual library stream.
    */
   getPrevItem: (currentId: number | null) => ContentItem | null;
   /** Items to render as "Up next from library" in the queue tab. */
@@ -84,6 +93,7 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
   shuffleNonManual: false,
   manualAlwaysAutoplay: true,
   pendingRequeue: new Set<number>(),
+  shuffleOrder: [],
 
   fetchQueue: async () => {
     set({ loading: true });
@@ -166,6 +176,48 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     }
   },
 
+  moveUp: async (queueId) => {
+    const { manualItems } = get();
+    const idx = manualItems.findIndex(q => q.queue_id === queueId);
+    if (idx <= 0) return;
+    const reordered = manualItems.slice();
+    const a = reordered[idx - 1];
+    const b = reordered[idx];
+    reordered[idx - 1] = { ...b, queue_position: a.queue_position };
+    reordered[idx] = { ...a, queue_position: b.queue_position };
+    set({ manualItems: reordered });
+    try {
+      await queueAPI.reorder([
+        { id: a.queue_id, position: b.queue_position },
+        { id: b.queue_id, position: a.queue_position },
+      ]);
+    } catch (err) {
+      console.error('Failed to move queue item up:', err);
+      get().fetchQueue();
+    }
+  },
+
+  moveDown: async (queueId) => {
+    const { manualItems } = get();
+    const idx = manualItems.findIndex(q => q.queue_id === queueId);
+    if (idx < 0 || idx >= manualItems.length - 1) return;
+    const reordered = manualItems.slice();
+    const a = reordered[idx];
+    const b = reordered[idx + 1];
+    reordered[idx] = { ...b, queue_position: a.queue_position };
+    reordered[idx + 1] = { ...a, queue_position: b.queue_position };
+    set({ manualItems: reordered });
+    try {
+      await queueAPI.reorder([
+        { id: a.queue_id, position: b.queue_position },
+        { id: b.queue_id, position: a.queue_position },
+      ]);
+    } catch (err) {
+      console.error('Failed to move queue item down:', err);
+      get().fetchQueue();
+    }
+  },
+
   clearQueue: async () => {
     set({ manualItems: [] });
     try {
@@ -189,7 +241,17 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     }
   },
 
-  setShuffleNonManual: (v) => set({ shuffleNonManual: v }),
+  setShuffleNonManual: (v) => {
+    if (v) {
+      // Snapshot a stable random order over the full library. We shuffle
+      // the entire library (not just the current filter) so toggling
+      // between filters doesn't invalidate the order unnecessarily.
+      const ids = useContentStore.getState().allItems.map(i => i.id);
+      set({ shuffleNonManual: true, shuffleOrder: shuffled(ids) });
+    } else {
+      set({ shuffleNonManual: false, shuffleOrder: [] });
+    }
+  },
 
   setManualAlwaysAutoplay: async (v) => {
     set({ manualAlwaysAutoplay: v });
@@ -213,18 +275,15 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
   },
 
   getNonManualItems: (currentId) => {
-    const { libraryContext, manualItems, shuffleNonManual } = get();
+    const { libraryContext, manualItems, shuffleNonManual, shuffleOrder } = get();
     if (!libraryContext) return [];
 
     const allItems = useContentStore.getState().allItems;
     const manualIds = new Set(manualItems.map(m => m.id));
 
-    // Filter items by captured library filter, excluding currently-playing
-    // and items already in the manual queue. Non-manual stream skips items
-    // without audio (spec task 8).
-    const matches = allItems.filter(item => {
-      if (item.id === currentId) return false;
-      if (manualIds.has(item.id)) return false;
+    // Items that match the captured library filter AND have audio.
+    // Don't pre-exclude currentId here — we need it to find the pivot.
+    const matchesFilter = (item: ContentItem) => {
       if (!item.audio_url) return false;
       switch (libraryContext.filter) {
         case 'articles': return item.type === 'article' && !item.is_archived;
@@ -235,11 +294,38 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
         case 'all':
         default: return !item.is_archived;
       }
-    });
+    };
+    const filtered = allItems.filter(matchesFilter);
 
-    // Default ordering is the same as contentStore's allItems order
-    // (newest first via created_at desc from the backend).
-    return shuffleNonManual ? shuffled(matches) : matches;
+    // Apply stable shuffle order if shuffle is on, else use library order.
+    let ordered: ContentItem[];
+    if (shuffleNonManual && shuffleOrder.length > 0) {
+      const byId = new Map(filtered.map(i => [i.id, i]));
+      ordered = [];
+      for (const id of shuffleOrder) {
+        const item = byId.get(id);
+        if (item) {
+          ordered.push(item);
+          byId.delete(id);
+        }
+      }
+      // Any items added to the library after shuffle started — tack them on
+      for (const item of byId.values()) ordered.push(item);
+    } else {
+      ordered = filtered;
+    }
+
+    // Find pivot: the currently playing item OR (if it's a manual item not
+    // in the filtered list) the item the user originally clicked from the
+    // library. Items AFTER the pivot are what's "up next".
+    let pivot = ordered.findIndex(i => i.id === currentId);
+    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
+
+    const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
+
+    // Hide items that are already in the manual queue (they're shown above
+    // the divider) and the currently playing one (defensive).
+    return after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
   },
 
   getNextItem: (currentId) => {
@@ -266,12 +352,59 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     return nonManual.length > 0 ? nonManual[0] : null;
   },
 
-  getPrevItem: (currentId) => {
+  peekNextItem: (currentId) => {
+    // Same ordering rules as getNextItem, but ignores autoplay /
+    // manualAlwaysAutoplay gating. Used by the manual Skip Next button
+    // so the user can always advance even when autoplay is off.
     const { manualItems } = get();
     const manualIdx = manualItems.findIndex(m => m.id === currentId);
+    if (manualIdx >= 0 && manualIdx + 1 < manualItems.length) {
+      return manualItems[manualIdx + 1];
+    }
+    if (manualIdx < 0 && manualItems.length > 0) {
+      return manualItems[0];
+    }
+    const nonManual = get().getNonManualItems(currentId);
+    return nonManual.length > 0 ? nonManual[0] : null;
+  },
+
+  getPrevItem: (currentId) => {
+    const { manualItems, libraryContext } = get();
+    const manualIdx = manualItems.findIndex(m => m.id === currentId);
     if (manualIdx > 0) return manualItems[manualIdx - 1];
-    // No prev in manual — we don't walk backwards into non-manual context
-    // (that would be surprising: "prev" from a library item into queue history).
+
+    // Step back one position in the non-manual stream.
+    if (!libraryContext) return null;
+    const allItems = useContentStore.getState().allItems;
+    const { shuffleNonManual, shuffleOrder } = get();
+    const matchesFilter = (item: ContentItem) => {
+      if (!item.audio_url) return false;
+      switch (libraryContext.filter) {
+        case 'articles': return item.type === 'article' && !item.is_archived;
+        case 'texts': return item.type === 'text' && !item.is_archived;
+        case 'podcasts': return item.type === 'podcast_episode' && !item.is_archived;
+        case 'favorites': return item.is_starred;
+        case 'archived': return item.is_archived;
+        case 'all':
+        default: return !item.is_archived;
+      }
+    };
+    const filtered = allItems.filter(matchesFilter);
+    let ordered: ContentItem[];
+    if (shuffleNonManual && shuffleOrder.length > 0) {
+      const byId = new Map(filtered.map(i => [i.id, i]));
+      ordered = [];
+      for (const id of shuffleOrder) {
+        const item = byId.get(id);
+        if (item) { ordered.push(item); byId.delete(id); }
+      }
+      for (const item of byId.values()) ordered.push(item);
+    } else {
+      ordered = filtered;
+    }
+    let pivot = ordered.findIndex(i => i.id === currentId);
+    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
+    if (pivot > 0) return ordered[pivot - 1];
     return null;
   },
 }));

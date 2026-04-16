@@ -3177,7 +3177,7 @@
   color: #f59e0b;
 }
 
-.queue-row-remove {
+.queue-row-move {
   background: transparent;
   border: none;
   color: var(--t3);
@@ -3187,9 +3187,45 @@
   display: flex;
   align-items: center;
 }
+.queue-row-move:hover:not(:disabled) {
+  color: var(--t1);
+  background: var(--bg-app);
+}
+.queue-row-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.queue-row-remove {
+  background: transparent;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+  padding: 0.35rem;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  min-width: 1.9rem;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
 .queue-row-remove:hover {
   color: #ef4444;
   background: var(--bg-app);
+}
+.queue-row-remove.confirm {
+  color: #fff;
+  background: #dc2626;
+  padding: 0.3rem 0.5rem;
+}
+.queue-row-remove.confirm:hover {
+  background: #b91c1c;
+}
+.queue-row-remove-confirm {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* Prev/next track buttons in playback controls */

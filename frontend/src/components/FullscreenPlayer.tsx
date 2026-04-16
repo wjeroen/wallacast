@@ -25,6 +25,8 @@ import {
   SkipForward,
   Repeat,
   Shuffle,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
@@ -189,8 +191,37 @@ interface QueueRowProps {
   isCurrent: boolean;
   onPlay: () => void;
   onRemove?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
 }
-function QueueRow({ item, isCurrent, onPlay, onRemove }: QueueRowProps) {
+function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: QueueRowProps) {
+  // Two-tap remove: first tap arms the button with a visible warning state,
+  // a second tap within the timeout actually removes. Guards against stray
+  // mis-taps next to the move buttons.
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
+
+  const handleRemoveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onRemove) return;
+    if (confirmRemove) {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      setConfirmRemove(false);
+      onRemove();
+      return;
+    }
+    setConfirmRemove(true);
+    confirmTimerRef.current = setTimeout(() => setConfirmRemove(false), 3000);
+  };
+
   return (
     <div className={`queue-row ${isCurrent ? 'current' : ''}`}>
       <div className="queue-row-main" onClick={onPlay}>
@@ -210,13 +241,33 @@ function QueueRow({ item, isCurrent, onPlay, onRemove }: QueueRowProps) {
           </div>
         </div>
       </div>
+      {onMoveUp && (
+        <button
+          className="queue-row-move"
+          onClick={(e) => { e.stopPropagation(); if (canMoveUp) onMoveUp(); }}
+          disabled={!canMoveUp}
+          title="Move up"
+        >
+          <ChevronUp size={16} />
+        </button>
+      )}
+      {onMoveDown && (
+        <button
+          className="queue-row-move"
+          onClick={(e) => { e.stopPropagation(); if (canMoveDown) onMoveDown(); }}
+          disabled={!canMoveDown}
+          title="Move down"
+        >
+          <ChevronDown size={16} />
+        </button>
+      )}
       {onRemove && (
         <button
-          className="queue-row-remove"
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          title="Remove from queue"
+          className={`queue-row-remove ${confirmRemove ? 'confirm' : ''}`}
+          onClick={handleRemoveClick}
+          title={confirmRemove ? 'Tap again to confirm' : 'Remove from queue'}
         >
-          <X size={16} />
+          {confirmRemove ? <span className="queue-row-remove-confirm">Remove?</span> : <X size={16} />}
         </button>
       )}
     </div>
@@ -262,6 +313,8 @@ export function FullscreenPlayer({
   const setAutoplay = useQueueStore(s => s.setAutoplay);
   const setShuffleNonManual = useQueueStore(s => s.setShuffleNonManual);
   const removeFromQueue = useQueueStore(s => s.removeFromQueue);
+  const moveUp = useQueueStore(s => s.moveUp);
+  const moveDown = useQueueStore(s => s.moveDown);
   const clearQueue = useQueueStore(s => s.clearQueue);
   const getNonManualItems = useQueueStore(s => s.getNonManualItems);
   // Re-derive non-manual items when queue/context/shuffle changes OR current item changes
@@ -1099,13 +1152,17 @@ export function FullscreenPlayer({
                       </button>
                     </div>
                     <div className="queue-list">
-                      {manualItems.map(item => (
+                      {manualItems.map((item, idx) => (
                         <QueueRow
                           key={`m-${item.queue_id}`}
                           item={item}
                           isCurrent={item.id === content.id}
                           onPlay={() => onPlayQueueItem?.(item)}
                           onRemove={() => removeFromQueue(item.queue_id)}
+                          onMoveUp={() => moveUp(item.queue_id)}
+                          onMoveDown={() => moveDown(item.queue_id)}
+                          canMoveUp={idx > 0}
+                          canMoveDown={idx < manualItems.length - 1}
                         />
                       ))}
                     </div>
