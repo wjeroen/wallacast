@@ -327,6 +327,11 @@ export function FullscreenPlayer({
   const [activeTab, setActiveTab] = useState<TabType>(
     content.type === 'podcast_episode' ? 'description' : 'read-along'
   );
+
+  // Reset to the correct default tab when switching tracks
+  useEffect(() => {
+    setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+  }, [content.id]);
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
