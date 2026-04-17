@@ -328,9 +328,18 @@ export function FullscreenPlayer({
     content.type === 'podcast_episode' ? 'description' : 'read-along'
   );
 
-  // Reset to the correct default tab when switching tracks
+  // When switching tracks, reset to the appropriate default tab — but only
+  // if the current tab isn't available for the new content type. This lets
+  // the queue tab stay open across advances.
   useEffect(() => {
-    setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+    setActiveTab(prev => {
+      const defaultTab: TabType = content.type === 'podcast_episode' ? 'description' : 'read-along';
+      // 'read-along' and 'queue' are always available
+      if (prev === 'read-along' || prev === 'queue') return prev;
+      // 'description' is only available for podcasts
+      if (prev === 'description' && content.type === 'podcast_episode') return prev;
+      return defaultTab;
+    });
   }, [content.id]);
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
@@ -489,12 +498,12 @@ export function FullscreenPlayer({
     return tabs;
   }, [content.type, content.url, parsedComments.length]);
 
-  // Auto-select first available tab
-  useState(() => {
+  // Auto-select first available tab if current one disappeared
+  useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
       setActiveTab(availableTabs[0]);
     }
-  });
+  }, [availableTabs, activeTab]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
