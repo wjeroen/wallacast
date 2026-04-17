@@ -439,20 +439,30 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Write ALL numbers, currencies, symbols, and units as fully spoken words. The TTS engine cannot interpret symbols — it will say gibberish. Examples:
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL — the TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
+   - "$25.30" -> "twenty-five dollars and thirty cents"
    - "$1,200" -> "twelve hundred dollars"
    - "€100.000" -> "one hundred thousand euros"
    - "£50m" -> "fifty million pounds"
    - "3.5%" -> "three point five percent"
    - "10x" -> "ten times"
    - "§4.2" -> "section four point two"
+   - "1955" (as a year) -> "nineteen fifty-five"
    - "2024" (as a year) -> "twenty twenty-four"
    - "1990s" -> "nineteen nineties"
+   - "80,000" -> "eighty thousand"
+   - "3,456,789" -> "three million, four hundred fifty-six thousand, seven hundred eighty-nine"
    - "#5" -> "number five"
    - "100k" -> "one hundred thousand"
    - "~50" -> "approximately fifty"
    - "<10" -> "less than ten"
+   - ">90%" -> "more than ninety percent"
    - "2+2=4" -> "two plus two equals four"
+   - "1/3" -> "one third"
+   - "3:1 ratio" -> "three to one ratio"
+   - "24/7" -> "twenty-four seven"
+   - "5'11"" -> "five foot eleven"
+   - "20°C" -> "twenty degrees Celsius"
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."

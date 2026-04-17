@@ -77,7 +77,6 @@ interface FullscreenPlayerProps {
   onRemoveAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
-  isDark: boolean;
   themeMode: 'dark' | 'light' | 'system';
   onCycleTheme: () => void;
   // Queue integration
@@ -299,7 +298,6 @@ export function FullscreenPlayer({
   onRemoveAudio,
   onRegenerateTranscript,
   onContentUpdated,
-  isDark,
   themeMode,
   onCycleTheme,
   onSkipNextTrack,
