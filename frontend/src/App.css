@@ -3052,9 +3052,12 @@
 .queue-section-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.4rem;
   margin-bottom: 0.5rem;
   padding: 0 0.25rem;
+}
+.queue-section-header h3 {
+  margin-right: auto;
 }
 
 .queue-section-header h3 {
