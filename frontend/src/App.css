@@ -3057,7 +3057,7 @@
   padding: 0 0.25rem;
 }
 .queue-section-header h3 {
-  margin-right: auto;
+  flex: 1;
 }
 
 .queue-section-header h3 {
