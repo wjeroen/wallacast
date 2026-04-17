@@ -24,7 +24,8 @@ interface AudioPlayerProps {
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
-  onToggleTheme: () => void;
+  themeMode?: 'dark' | 'light' | 'system';
+  onCycleTheme?: () => void;
   // Queue integration — parent owns the queue store, player just calls up
   onTrackEnded?: () => void;
   onSkipNextTrack?: () => void;
@@ -43,7 +44,7 @@ interface AudioPlayerProps {
 
 export function AudioPlayer({
   content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript,
-  onContentUpdated, isDark, onToggleTheme,
+  onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
   autoPlayToken = 0, onPlayQueueItem,
 }: AudioPlayerProps) {
@@ -649,7 +650,8 @@ export function AudioPlayer({
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
           isDark={isDark}
-          onToggleTheme={onToggleTheme}
+          themeMode={themeMode || (isDark ? 'dark' : 'light')}
+          onCycleTheme={onCycleTheme || (() => {})}
           onSkipNextTrack={onSkipNextTrack}
           onSkipPrevTrack={onSkipPrevTrack}
           hasNextTrack={hasNextTrack}
