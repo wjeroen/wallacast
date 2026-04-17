@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon, Monitor } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -23,17 +23,30 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  // Dark/light mode
-  const [isDark, setIsDark] = useState(() => {
-    try { return localStorage.getItem('wallacast-theme') !== 'light'; }
-    catch { return true; }
+  // Theme: dark | light | system
+  type ThemeMode = 'dark' | 'light' | 'system';
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const stored = localStorage.getItem('wallacast-theme');
+      if (stored === 'light' || stored === 'system') return stored;
+      return 'dark';
+    } catch { return 'dark'; }
   });
-
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  const isDark = themeMode === 'dark' || (themeMode === 'system' && systemPrefersDark);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    try { localStorage.setItem('wallacast-theme', isDark ? 'dark' : 'light'); }
-    catch {}
-  }, [isDark]);
+    try { localStorage.setItem('wallacast-theme', themeMode); } catch {}
+  }, [isDark, themeMode]);
+  const cycleTheme = () => setThemeMode(m => m === 'dark' ? 'light' : m === 'light' ? 'system' : 'dark');
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
@@ -503,9 +516,9 @@ function App() {
                 <span>Settings</span>
               </button>
 
-              <button className="user-dropdown-item" onClick={() => { setIsDark(d => !d); }}>
-                {isDark ? <Sun size={18} /> : <Moon size={18} />}
-                <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
+              <button className="user-dropdown-item" onClick={cycleTheme}>
+                {themeMode === 'dark' ? <Moon size={18} /> : themeMode === 'light' ? <Sun size={18} /> : <Monitor size={18} />}
+                <span>{themeMode === 'dark' ? 'Dark' : themeMode === 'light' ? 'Light' : 'System'}</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
@@ -542,7 +555,8 @@ function App() {
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
             isDark={isDark}
-            onToggleTheme={() => setIsDark(d => !d)}
+            themeMode={themeMode}
+            onCycleTheme={cycleTheme}
             onTrackEnded={handleTrackEnded}
             onSkipNextTrack={handleSkipNext}
             onSkipPrevTrack={handleSkipPrev}
