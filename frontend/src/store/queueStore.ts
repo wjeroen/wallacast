@@ -315,17 +315,20 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
       ordered = filtered;
     }
 
-    // Find pivot: the currently playing item OR (if it's a manual item not
-    // in the filtered list) the item the user originally clicked from the
-    // library. Items AFTER the pivot are what's "up next".
-    let pivot = ordered.findIndex(i => i.id === currentId);
-    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
-
-    const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
-
-    // Hide items that are already in the manual queue (they're shown above
-    // the divider) and the currently playing one (defensive).
-    return after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
+    // When shuffled, return ALL remaining items (excluding current + manual)
+    // in the stable random order — pivoting would randomly cut off a chunk.
+    // When not shuffled, pivot on the current position so "Up next" starts
+    // from the item after the one playing, not from the top of the library.
+    let result: ContentItem[];
+    if (shuffleNonManual) {
+      result = ordered.filter(i => !manualIds.has(i.id) && i.id !== currentId);
+    } else {
+      let pivot = ordered.findIndex(i => i.id === currentId);
+      if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
+      const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
+      result = after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
+    }
+    return result;
   },
 
   getNextItem: (currentId) => {
