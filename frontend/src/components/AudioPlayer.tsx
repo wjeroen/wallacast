@@ -649,7 +649,6 @@ export function AudioPlayer({
           onRemoveAudio={onRemoveAudio}
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
-          isDark={isDark}
           themeMode={themeMode || (isDark ? 'dark' : 'light')}
           onCycleTheme={onCycleTheme || (() => {})}
           onSkipNextTrack={onSkipNextTrack}
