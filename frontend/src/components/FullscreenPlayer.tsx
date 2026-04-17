@@ -9,6 +9,7 @@ import {
   Type,
   Sun,
   Moon,
+  Monitor,
   X,
   Minimize2,
   SquareArrowOutUpRight,
@@ -77,7 +78,8 @@ interface FullscreenPlayerProps {
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
-  onToggleTheme: () => void;
+  themeMode: 'dark' | 'light' | 'system';
+  onCycleTheme: () => void;
   // Queue integration
   onSkipNextTrack?: () => void;
   onSkipPrevTrack?: () => void;
@@ -298,7 +300,8 @@ export function FullscreenPlayer({
   onRegenerateTranscript,
   onContentUpdated,
   isDark,
-  onToggleTheme,
+  themeMode,
+  onCycleTheme,
   onSkipNextTrack,
   onSkipPrevTrack,
   hasNextTrack = false,
@@ -1511,9 +1514,9 @@ export function FullscreenPlayer({
                 </div>
                 <div className="display-panel-section">
                   <div className="display-panel-label">Appearance</div>
-                  <button className="display-panel-toggle" onClick={onToggleTheme}>
-                    {isDark ? <Sun size={16} /> : <Moon size={16} />}
-                    <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
+                  <button className="display-panel-toggle" onClick={onCycleTheme}>
+                    {themeMode === 'dark' ? <Moon size={16} /> : themeMode === 'light' ? <Sun size={16} /> : <Monitor size={16} />}
+                    <span>{themeMode === 'dark' ? 'Dark' : themeMode === 'light' ? 'Light' : 'System'}</span>
                   </button>
                 </div>
               </div>
