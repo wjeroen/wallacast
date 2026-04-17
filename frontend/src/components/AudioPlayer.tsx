@@ -332,7 +332,6 @@ export function AudioPlayer({
     };
     const handlePause = () => {
       lastPauseTimeRef.current = Date.now();
-      userPausedRef.current = true;
       setIsPlaying(false);
     };
     // Audio load/playback error — reset icon and report to backend for Railway logging.
