@@ -148,23 +148,12 @@ export function AudioPlayer({
       setCurrentTime(next);
     };
 
-    const play = () => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      userPausedRef.current = false;
-      appPlayRef.current = true;
-      audio.play().catch(() => { appPlayRef.current = false; });
-    };
-    const pause = () => {
-      const audio = audioRef.current;
-      if (!audio) return;
-      userPausedRef.current = true;
-      audio.pause();
-    };
-
-    try { ms.setActionHandler('play', play); } catch {}
-    try { ms.setActionHandler('pause', pause); } catch {}
-    // Podcast-style: previoustrack / nexttrack jump ±15s instead of track-nav
+    // Do NOT register custom play/pause handlers. The browser's <audio>
+    // element already handles play/pause from lock screen / headphones
+    // natively via DOM events, which flow through our handlePlay/handlePause
+    // with all the wear-sensor debounce and userPausedRef guards. A custom
+    // MediaSession play handler bypasses those guards and causes headphone
+    // disconnect to resume paused audio (the bug we fixed before).
     try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch {}
     try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch {}
     try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch {}
@@ -180,8 +169,6 @@ export function AudioPlayer({
     } catch {}
 
     return () => {
-      try { ms.setActionHandler('play', null); } catch {}
-      try { ms.setActionHandler('pause', null); } catch {}
       try { ms.setActionHandler('previoustrack', null); } catch {}
       try { ms.setActionHandler('nexttrack', null); } catch {}
       try { ms.setActionHandler('seekbackward', null); } catch {}
