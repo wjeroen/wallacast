@@ -195,7 +195,12 @@ function App() {
   // in this state — non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
     if (item.audio_url) {
-      setCurrentContent(item);
+      try {
+        const res = await contentAPI.getById(item.id);
+        setCurrentContent(res.data);
+      } catch {
+        setCurrentContent(item);
+      }
       setAutoPlayToken(t => t + 1);
       return;
     }
@@ -228,12 +233,9 @@ function App() {
   //                    clear the current manual item (it's been played/skipped).
   // `mode` = 'ended' — respects autoplay gating via getNextItem.
   // `mode` = 'skip'  — ignores autoplay gating via peekNextItem.
-  const advanceToNextTrack = (mode: 'ended' | 'skip') => {
+  const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
     const currentId = currentContent?.id ?? null;
 
-    // Remove the current item from the manual queue if it's there — the
-    // user has finished (or chosen to skip past) it, so it shouldn't
-    // stick around above the divider.
     if (currentId !== null) {
       const qs0 = useQueueStore.getState();
       const currentRow = qs0.manualItems.find(m => m.id === currentId);
@@ -246,10 +248,15 @@ function App() {
         ? qs.peekNextItem(currentId)
         : qs.getNextItem(currentId);
       if (!nextItem) {
-        return; // queue empty / autoplay off — stop
+        return;
       }
       if (nextItem.audio_url) {
-        setCurrentContent(nextItem);
+        try {
+          const res = await contentAPI.getById(nextItem.id);
+          setCurrentContent(res.data);
+        } catch {
+          setCurrentContent(nextItem);
+        }
         setAutoPlayToken(t => t + 1);
         return;
       }
@@ -286,10 +293,15 @@ function App() {
     advanceToNextTrack('skip');
   };
 
-  const handleSkipPrev = () => {
+  const handleSkipPrev = async () => {
     const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
     if (!prev) return;
-    setCurrentContent(prev);
+    try {
+      const res = await contentAPI.getById(prev.id);
+      setCurrentContent(res.data);
+    } catch {
+      setCurrentContent(prev);
+    }
     setAutoPlayToken(t => t + 1);
   };
 
