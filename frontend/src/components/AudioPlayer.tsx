@@ -442,6 +442,7 @@ export function AudioPlayer({
     if (!audioRef.current) return;
     audioRef.current.currentTime = time;
     setCurrentTime(time);
+    savePlaybackPosition(time);
   };
 
   const handleSkipBackward = () => handleSeek(Math.max(0, currentTime - 15));
