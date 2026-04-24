@@ -406,7 +406,7 @@ Wallacast is a fully-functional Progressive Web App that can be installed on mob
 
 **Implementation Files:**
 - **`public/manifest.json`**: Web app manifest defining app name, icons, display mode, theme colors
-- **`public/service-worker.js`**: Service worker implementing caching strategies (cache-first for static assets, network-first for API calls)
+- **`public/service-worker.js`**: Service worker implementing caching strategies (cache-first for static assets, network-first for API calls, audio streams bypass SW for native byte-range seeking)
 - **`main.tsx`**: Service worker registration on app load
 - **`index.html`**: PWA meta tags, manifest link, favicons, iOS-specific meta tags
 - **`public/AppIcons/`**: Icon assets organized by platform (android, ios, windows11)

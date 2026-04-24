@@ -235,7 +235,7 @@ export function AudioPlayer({
       const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
       audioSrc = `${apiBase}/content/${content.id}/audio`;
     } else if (content.audio_url) {
-      const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
+      const cacheBuster = `${content.file_size || 0}`;
       const separator = content.audio_url.includes('?') ? '&' : '?';
       audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
     } else {
@@ -270,9 +270,11 @@ export function AudioPlayer({
         audio.currentTime = startPosition;
         setCurrentTime(startPosition);
       }
-      if ((!content.duration || content.duration === 0) && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
-        const durationInSeconds = Math.floor(audio.duration);
-        contentAPI.update(content.id, { duration: durationInSeconds } as any).catch(() => {});
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        const realDuration = Math.floor(audio.duration);
+        if (!content.duration || content.duration === 0 || Math.abs(content.duration - realDuration) > 2) {
+          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+        }
       }
       if (shouldAutoPlay) {
         userPausedRef.current = false;
