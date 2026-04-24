@@ -51,6 +51,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Audio streams: let the browser handle them natively — do NOT call
+  // event.respondWith(). Service-worker-mediated fetch can break byte-range
+  // (HTTP 206) seeking on some browsers, causing the audio element to reset
+  // to the beginning instead of seeking to the requested position.
+  if (url.pathname.match(/\/api\/content\/\d+\/audio/)) {
+    return;
+  }
+
   // API calls: pass straight through to the network, never cache.
   // Caching API responses risks serving stale auth data or stale content.
   if (url.pathname.startsWith('/api/')) {
