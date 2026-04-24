@@ -169,6 +169,10 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Fix timeline seeking resetting to beginning for some articles** (2026-04-24):
+  - **Service worker intercepting audio**: SW's `fetch()` broke byte-range (HTTP 206) seeking on some browsers. Audio URLs (`/api/content/*/audio`) now bypass the service worker entirely, letting the browser handle Range requests natively.
+  - **Cache-buster including duration**: Cache-buster was `${file_size}-${duration}`, so any duration correction changed the audio URL and reset playback. Now uses only `${file_size}` (which only changes when audio is actually regenerated).
+  - **Duration mismatch auto-correction**: `handleLoadedMetadata` now corrects the DB duration whenever the browser-reported duration differs by >2s from what's stored (not just when duration was 0). This fixes the timeline showing wrong total length.
 - [x] **Fix four compounding playback bugs** (2026-04-17):
   - **Read-along broken on queue advance**: List endpoint omits `html_content`, `content_alignment`, `content_fetched_at`, `content_source`. Queue advance/skip/prev now fetch full content via `contentAPI.getById()` before setting it as current.
   - **Auto-play leak**: `autoPlayPendingRef` could be set by one queue advance but consumed by a later library click, causing unexpected auto-play. Replaced detached ref with direct `autoPlayToken` check inside the content setup effect — auto-play only fires when token and content change together (same React render batch).
