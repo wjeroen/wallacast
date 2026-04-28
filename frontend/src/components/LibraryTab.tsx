@@ -220,14 +220,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setOpenDropdown(null);
     const item = content.find(c => c.id === id);
     if (item && item.comment_count && item.comment_count > 0) {
+      let maxComments = 50;
       try {
         const res = await userSettingsAPI.get('max_narrated_comments');
-        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
-        if (item.comment_count > maxComments) {
-          setCommentWarning({ id, regenerate, commentCount: item.comment_count, maxComments });
-          return;
-        }
-      } catch { /* use default — no warning if setting fetch fails */ }
+        if (res.data.value) maxComments = parseInt(res.data.value, 10) || 50;
+      } catch { /* use default */ }
+      if (item.comment_count > maxComments) {
+        setCommentWarning({ id, regenerate, commentCount: item.comment_count, maxComments });
+        return;
+      }
     }
     doGenerateAudio(id, regenerate, false);
   };
