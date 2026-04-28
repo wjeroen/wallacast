@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
-import { contentAPI } from '../api';
+import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem } from '../types';
@@ -60,6 +60,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
+  const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
 
   // Fetch content on mount
   useEffect(() => {
@@ -203,17 +204,32 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
+  const doGenerateAudio = async (id: number, regenerate: boolean, excludeComments: boolean) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.generateAudio(id, regenerate);
-      // Generation started in background, polling will update status
+      await contentAPI.generateAudio(id, regenerate, excludeComments);
       refreshItem(id);
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
       alert(errorMsg);
     }
+  };
+
+  const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
+    setOpenDropdown(null);
+    const item = content.find(c => c.id === id);
+    if (item && item.comment_count && item.comment_count > 0) {
+      try {
+        const res = await userSettingsAPI.get('max_narrated_comments');
+        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
+        if (item.comment_count > maxComments) {
+          setCommentWarning({ id, regenerate, commentCount: item.comment_count, maxComments });
+          return;
+        }
+      } catch { /* use default — no warning if setting fetch fails */ }
+    }
+    doGenerateAudio(id, regenerate, false);
   };
 
   const handleRemoveAudio = async (id: number) => {
@@ -650,6 +666,42 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {commentWarning && (
+        <div className="comment-warning-overlay" onClick={() => setCommentWarning(null)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>This article has <strong>{commentWarning.commentCount} comments</strong> (your auto-generate limit is {commentWarning.maxComments}). Generating audio with this many comments may take a long time.</p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn exclude"
+                onClick={() => {
+                  const { id, regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(id, regenerate, true);
+                }}
+              >
+                Exclude comments
+              </button>
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  const { id, regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(id, regenerate, false);
+                }}
+              >
+                Include comments
+              </button>
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setCommentWarning(null)}
+              >
+                Don't generate audio
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
