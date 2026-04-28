@@ -330,6 +330,11 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
 
       if (!title) continue;
 
+      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+        extractXMLTag(itemXml, 'itunes:author') ||
+        extractXMLTag(itemXml, 'author');
+      const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
+
       // Check if enclosure is actually audio (not an image)
       const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
 
@@ -345,6 +350,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
           duration: parseDuration(duration),
           item_type: 'podcast_episode',
           preview_picture,
+          author: cleanAuthor,
         });
       } else if (link) {
         // Newsletter article
@@ -355,6 +361,7 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
           published_at: pubDate ? new Date(pubDate) : new Date(),
           item_type: 'article',
           preview_picture,
+          author: cleanAuthor,
         });
       }
     }
@@ -498,6 +505,11 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
       const guid = extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || enclosureUrl;
 
+      // Extract per-item author (dc:creator for EA Forum/LessWrong, author/itunes:author as fallbacks)
+      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+        extractXMLTag(itemXml, 'itunes:author') ||
+        extractXMLTag(itemXml, 'author');
+
       // Extract thumbnail
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
@@ -515,13 +527,14 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       // Truncate description to 2000 chars to prevent abuse
       const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
 
-      // Insert into feed_items (ON CONFLICT DO NOTHING for deduplication)
+      // Insert into feed_items (ON CONFLICT update author for existing items that lack it)
       try {
+        const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(
           `INSERT INTO feed_items
-           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (feed_id, guid) DO NOTHING
+           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (feed_id, guid) DO UPDATE SET author = COALESCE(feed_items.author, EXCLUDED.author)
            RETURNING id`,
           [
             feedId,
@@ -534,6 +547,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             parseDuration(duration),
             preview_picture,
             guid,
+            cleanAuthor,
           ]
         );
 
