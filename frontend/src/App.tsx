@@ -22,6 +22,7 @@ function App() {
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
 
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
@@ -326,26 +327,10 @@ function App() {
     }
   };
 
-  const handleGenerateAudio = async (regenerate: boolean) => {
+  const doGenerateAudio = async (regenerate: boolean, excludeComments: boolean) => {
     if (!currentContent) return;
-
-    // Warn if article has many comments (but don't block — user can still proceed)
-    if (currentContent.comment_count && currentContent.comment_count > 0) {
-      try {
-        const res = await userSettingsAPI.get('max_narrated_comments');
-        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
-        if (currentContent.comment_count > maxComments) {
-          const proceed = confirm(
-            `This article has ${currentContent.comment_count} comments (your auto-generate limit is ${maxComments}). ` +
-            `Generating audio with this many comments may take a long time. Continue?`
-          );
-          if (!proceed) return;
-        }
-      } catch { /* use default — no warning if setting fetch fails */ }
-    }
-
     try {
-      await contentAPI.generateAudio(currentContent.id, regenerate);
+      await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
       setTimeout(async () => {
         const response = await contentAPI.getById(currentContent.id);
         setCurrentContent(response.data);
@@ -354,6 +339,23 @@ function App() {
       console.error('Failed to generate audio:', error);
       alert(error?.response?.data?.error || 'Failed to generate audio');
     }
+  };
+
+  const handleGenerateAudio = async (regenerate: boolean) => {
+    if (!currentContent) return;
+
+    if (currentContent.comment_count && currentContent.comment_count > 0) {
+      try {
+        const res = await userSettingsAPI.get('max_narrated_comments');
+        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
+        if (currentContent.comment_count > maxComments) {
+          setCommentWarning({ regenerate, commentCount: currentContent.comment_count, maxComments });
+          return;
+        }
+      } catch { /* use default — no warning if setting fetch fails */ }
+    }
+
+    doGenerateAudio(regenerate, false);
   };
 
   const handleRemoveAudio = async () => {
@@ -602,6 +604,42 @@ function App() {
           </button>
         </nav>
       </div>
+
+      {commentWarning && (
+        <div className="comment-warning-overlay" onClick={() => setCommentWarning(null)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>This article has <strong>{commentWarning.commentCount} comments</strong> (your auto-generate limit is {commentWarning.maxComments}). Generating audio with this many comments may take a long time.</p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn exclude"
+                onClick={() => {
+                  const { regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(regenerate, true);
+                }}
+              >
+                Exclude comments
+              </button>
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  const { regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(regenerate, false);
+                }}
+              >
+                Include comments
+              </button>
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setCommentWarning(null)}
+              >
+                Don't generate audio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

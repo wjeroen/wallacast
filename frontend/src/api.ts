@@ -85,8 +85,8 @@ export const contentAPI = {
 
   delete: (id: number) => api.delete(`/content/${id}`),
 
-  generateAudio: (id: number, regenerate: boolean = false) =>
-    api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate }),
+  generateAudio: (id: number, regenerate: boolean = false, excludeComments: boolean = false) =>
+    api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate, exclude_comments: excludeComments }),
 
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),

@@ -753,7 +753,7 @@ export async function generateArticleAudio(
 // Guard against concurrent generation for the same content
 const activeGenerations = new Set<number>();
 
-export async function generateAudioForContent(contentId: number, regenerate: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
+export async function generateAudioForContent(contentId: number, regenerate: boolean = false, excludeComments: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
   if (activeGenerations.has(contentId)) {
     console.log(`[TTS] Generation already in progress for content ${contentId}, skipping duplicate`);
     return { audioUrl: '', warning: 'Generation already in progress' };
@@ -869,7 +869,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     fullScript += articleBodyScript;
 
-    if (content.comments) {
+    if (excludeComments) {
+      console.log(`[TTS] Skipping comment narration — excluded by user request`);
+    } else if (content.comments) {
        try {
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
