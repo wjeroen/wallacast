@@ -169,6 +169,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Show per-item author in Feed tab** (2026-04-28): RSS feeds include per-item author info (`dc:creator` for EA Forum/LessWrong, `itunes:author`/`author` for others). Added `author` column to `feed_items` table, extract author during RSS parsing, and display as "Author • Feed Name • Date" in all Feed tab views. Existing feed items get backfilled on next refresh.
 - [x] **Fix timeline seeking resetting to beginning for some articles** (2026-04-24):
   - **Service worker intercepting audio**: SW's `fetch()` broke byte-range (HTTP 206) seeking on some browsers. Audio URLs (`/api/content/*/audio`) now bypass the service worker entirely, letting the browser handle Range requests natively.
   - **Cache-buster including duration**: Cache-buster was `${file_size}-${duration}`, so any duration correction changed the audio URL and reset playback. Now uses only `${file_size}` (which only changes when audio is actually regenerated).
