@@ -1043,6 +1043,7 @@ router.post('/:id/generate-audio', async (req, res) => {
     }
 
     const contentItem = contentResult.rows[0];
+    console.log(`[generate-audio] id=${id} comment_count_total=${contentItem.comment_count_total} exclude_comments=${exclude_comments} regenerate=${regenerate}`);
 
     if (contentItem.type !== 'article' && contentItem.type !== 'text') {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
