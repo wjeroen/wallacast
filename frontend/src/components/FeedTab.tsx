@@ -425,6 +425,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                 <div className="content-info">
                   <h3>{episode.title}</h3>
                   <p className="author">
+                    {episode.author && <>{episode.author} • </>}
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
@@ -518,6 +519,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                 <div className="content-info">
                   <h3>{episode.title}</h3>
                   <p className="author">
+                    {episode.author && <>{episode.author} • </>}
                     {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
                     {episode.duration && <> • {formatDuration(episode.duration)}</>}
                   </p>
@@ -643,6 +645,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                 <div className="content-info">
                   <h3>{episode.title}</h3>
                   <p className="author">
+                    {episode.author && <>{episode.author} • </>}
                     {episode.podcast_title}
                     {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString('en-GB')}</>}
                   </p>
