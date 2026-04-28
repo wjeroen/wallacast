@@ -1633,7 +1633,7 @@
 
 .comment-warning-modal p {
   font-size: 0.95rem;
-  color: var(--t2);
+  color: var(--t1);
   line-height: 1.5;
   margin: 0 0 1.25rem 0;
 }
@@ -1651,24 +1651,9 @@
   border: 1px solid var(--bg-raised);
   font-size: 0.95rem;
   cursor: pointer;
-  transition: background 0.15s;
-}
-
-.comment-warning-btn.exclude {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
-
-.comment-warning-btn.include {
   background: var(--bg-raised);
   color: var(--t1);
-}
-
-.comment-warning-btn.cancel {
-  background: transparent;
-  color: var(--t3);
-  border-color: var(--bg-raised);
+  transition: background 0.15s;
 }
 
 .comment-warning-btn:active {
