@@ -169,6 +169,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Comment warning modal for manual audio generation** (2026-04-28): When manually generating audio for an article with more comments than the `max_narrated_comments` setting, shows a custom modal with three vertically stacked buttons: "Exclude comments" (generates without comments), "Include comments" (generates with all comments), "Don't generate audio" (cancels). Replaces the old browser `confirm()` dialog. Backend accepts `exclude_comments` parameter. Applied to both App.tsx (fullscreen player) and LibraryTab.tsx (library dropdown).
 - [x] **Show per-item author in Feed tab** (2026-04-28): RSS feeds include per-item author info (`dc:creator` for EA Forum/LessWrong, `itunes:author`/`author` for others). Added `author` column to `feed_items` table, extract author during RSS parsing, and display as "Author • Feed Name • Date" in all Feed tab views. Existing feed items get backfilled on next refresh.
 - [x] **Fix timeline seeking resetting to beginning for some articles** (2026-04-24):
   - **Service worker intercepting audio**: SW's `fetch()` broke byte-range (HTTP 206) seeking on some browsers. Audio URLs (`/api/content/*/audio`) now bypass the service worker entirely, letting the browser handle Range requests natively.

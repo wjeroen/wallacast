@@ -1608,6 +1608,73 @@
   line-height: 1.5;
 }
 
+/* Comment Warning Modal */
+.comment-warning-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.comment-warning-modal {
+  background: var(--bg-surface);
+  border-radius: 0.75rem;
+  border: 1px solid var(--bg-raised);
+  width: 90%;
+  max-width: 380px;
+  padding: 1.5rem;
+}
+
+.comment-warning-modal p {
+  font-size: 0.95rem;
+  color: var(--t2);
+  line-height: 1.5;
+  margin: 0 0 1.25rem 0;
+}
+
+.comment-warning-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.comment-warning-btn {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--bg-raised);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.comment-warning-btn.exclude {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.comment-warning-btn.include {
+  background: var(--bg-raised);
+  color: var(--t1);
+}
+
+.comment-warning-btn.cancel {
+  background: transparent;
+  color: var(--t3);
+  border-color: var(--bg-raised);
+}
+
+.comment-warning-btn:active {
+  opacity: 0.8;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .feed-tab,

@@ -1030,7 +1030,7 @@ router.post('/:id/refetch', async (req, res) => {
 router.post('/:id/generate-audio', async (req, res) => {
   try {
     const { id } = req.params;
-    const { regenerate } = req.body;
+    const { regenerate, exclude_comments } = req.body;
 
     // OPTIMIZED: Select only necessary columns, excluding audio_data
     const contentResult = await query(
@@ -1066,7 +1066,7 @@ router.post('/:id/generate-audio', async (req, res) => {
       ['generating_audio', 0, 'audio', id]
     );
 
-    generateAudioForContent(parseInt(id), !!regenerate)
+    generateAudioForContent(parseInt(id), !!regenerate, !!exclude_comments)
       .then((result) => {
         console.log(`Audio generation pipeline started for ${id}`);
         // Note: Final status will be set by transcription/alignment handler
