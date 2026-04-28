@@ -401,12 +401,12 @@ function App() {
     } catch { /* use default */ }
 
     const allEligible = allContent.filter(
-      item => item.type === 'article' && !item.is_archived && !item.audio_url &&
+      item => (item.type === 'article' || item.type === 'text') && !item.is_archived && !item.audio_url &&
               (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
     );
 
     if (allEligible.length === 0) {
-      alert('No articles need audio generation.');
+      alert('No items need audio generation.');
       return;
     }
 
@@ -414,13 +414,13 @@ function App() {
     const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
     const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
 
-    let message = `Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}?`;
+    let message = `Generate audio for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`;
     if (skippedItems.length > 0) {
-      message += `\n\nSkipping ${skippedItems.length} article${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+      message += `\n\nSkipping ${skippedItems.length} item${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
     }
 
     if (eligibleItems.length === 0) {
-      alert(`All ${allEligible.length} article${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
+      alert(`All ${allEligible.length} item${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
       return;
     }
 
