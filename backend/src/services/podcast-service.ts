@@ -534,7 +534,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
           `INSERT INTO feed_items
            (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (feed_id, guid) DO UPDATE SET author = COALESCE(feed_items.author, EXCLUDED.author)
+           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author
            RETURNING id`,
           [
             feedId,

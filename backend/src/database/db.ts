@@ -212,6 +212,11 @@ export async function initializeDatabase() {
     const commentSourceMigration = await fs.readFile(commentSourceMigrationPath, 'utf-8');
     await client.query(commentSourceMigration);
 
+    // Run migration to add author column to feed_items
+    const feedItemAuthorMigrationPath = path.join(__dirname, 'migrations', '018_add_feed_item_author.sql');
+    const feedItemAuthorMigration = await fs.readFile(feedItemAuthorMigrationPath, 'utf-8');
+    await client.query(feedItemAuthorMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     const resetResult = await client.query(`
       UPDATE content_items
