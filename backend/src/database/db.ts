@@ -225,13 +225,7 @@ export async function initializeDatabase() {
           generation_error = CASE
             WHEN current_operation IN ('transcribing', 'aligning_content')
               THEN 'Server restarted during transcript generation. Audio may be intact — try regenerating the transcript.'
-            WHEN current_operation IN ('synthesizing_audio', 'concatenating_audio', 'finalizing_audio')
-              THEN 'Server restarted during audio generation'
-            WHEN current_operation LIKE 'processing_image%'
-              THEN 'Server restarted during image description generation'
-            WHEN current_operation = 'scripting_content'
-              THEN 'Server restarted during narration script preparation'
-            ELSE 'Server restarted during generation'
+            ELSE 'Server restarted during audio generation'
           END,
           generation_progress = 0,
           current_operation = NULL
