@@ -218,10 +218,21 @@ export async function initializeDatabase() {
     await client.query(feedItemAuthorMigration);
 
     // Reset any stuck generation statuses (server restart during generation)
+    // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
       UPDATE content_items
       SET generation_status = 'failed',
-          generation_error = 'Server restarted during generation',
+          generation_error = CASE
+            WHEN current_operation IN ('transcribing', 'aligning_content')
+              THEN 'Server restarted during transcript generation. Audio may be intact — try regenerating the transcript.'
+            WHEN current_operation IN ('synthesizing_audio', 'concatenating_audio', 'finalizing_audio')
+              THEN 'Server restarted during audio generation'
+            WHEN current_operation LIKE 'processing_image%'
+              THEN 'Server restarted during image description generation'
+            WHEN current_operation = 'scripting_content'
+              THEN 'Server restarted during narration script preparation'
+            ELSE 'Server restarted during generation'
+          END,
           generation_progress = 0,
           current_operation = NULL
       WHERE generation_status NOT IN ('idle', 'completed', 'failed')
