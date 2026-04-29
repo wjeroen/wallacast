@@ -469,6 +469,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
+ * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
 
  Output ONLY the clean narration text.
 
