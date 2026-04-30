@@ -470,6 +470,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
  * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
+ * Convert ALL-CAPS words and phrases to normal capitalization (e.g., "HEADS UP" -> "Heads up", "DO NOT ENTER" -> "Do not enter"). This does not apply to proper acronyms like NASA or FBI. TTS engines often spell out or distort all-caps text.
 
  Output ONLY the clean narration text.
 
