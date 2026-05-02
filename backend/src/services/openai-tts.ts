@@ -979,10 +979,33 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           }
 
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
-          await query(
-            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
-            [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
-          );
+
+          // Detect trailing silence/junk: if Whisper's last word ends well
+          // before the file's reported duration, the audio likely has unplayable
+          // padding at the end. The mp3 header reports the wrong length but
+          // the browser trusts it, so seeking past real content fails (timeline
+          // jumps to 0). Cap stored duration to last_word.end + 2s buffer.
+          let durationOverride: number | null = null;
+          if (transcriptResult.words.length > 0 && audioDuration > 0) {
+            const lastWordEnd = transcriptResult.words[transcriptResult.words.length - 1].end;
+            const gap = audioDuration - lastWordEnd;
+            if (gap > 30) {
+              durationOverride = Math.ceil(lastWordEnd) + 2;
+              console.warn(`[TTS] Trimming stored duration: file says ${audioDuration}s but last transcribed word ends at ${lastWordEnd.toFixed(1)}s. Using ${durationOverride}s.`);
+            }
+          }
+
+          if (durationOverride !== null) {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5 WHERE id = $6',
+              [transcriptResult.text, JSON.stringify(transcriptResult.words), durationOverride, 97, 'aligning_content', contentId]
+            );
+          } else {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
+              [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
+            );
+          }
 
           // Run LLM alignment for articles and text items
           if (content.html_content || content.type === 'text') {

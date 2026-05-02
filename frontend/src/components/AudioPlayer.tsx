@@ -272,7 +272,15 @@ export function AudioPlayer({
       }
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
-        if (!content.duration || content.duration === 0 || Math.abs(content.duration - realDuration) > 2) {
+        // Only auto-correct upwards if the DB has no duration. Don't override
+        // an existing duration based on the browser reading — the backend now
+        // trims trailing silence post-Whisper, and the browser would happily
+        // report the bogus pre-trim value, undoing that fix.
+        if (!content.duration || content.duration === 0) {
+          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+        } else if (realDuration < content.duration - 2) {
+          // Browser says the file is SHORTER than DB — trust the browser
+          // (file probably truncated). Update DB so the timeline isn't too long.
           contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
         }
       }

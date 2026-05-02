@@ -806,6 +806,42 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         cleanSubstackContent(contentEl);
       }
 
+      // Resolve relative URLs in img/a/srcset to absolute, using the article URL
+      // as base. Sites like jefftk.com use root-relative paths ("/foo.jpg") that
+      // would otherwise resolve against wallacast.com and 404. Done before dedup
+      // so the seenImageSrcs Set sees the resolved URLs.
+      const resolveUrl = (raw: string): string | null => {
+        const trimmed = raw.trim();
+        if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('#')) return null;
+        try { return new URL(trimmed, url).toString(); } catch { return null; }
+      };
+      contentEl.querySelectorAll('img').forEach(img => {
+        const src = img.getAttribute('src');
+        if (src) {
+          const resolved = resolveUrl(src);
+          if (resolved) img.setAttribute('src', resolved);
+        }
+        const srcset = img.getAttribute('srcset');
+        if (srcset) {
+          // srcset format: "url1 1x, url2 2x" or "url1 100w, url2 200w"
+          const fixed = srcset.split(',').map(part => {
+            const trimmed = part.trim();
+            const match = trimmed.match(/^(\S+)(\s+.+)?$/);
+            if (!match) return trimmed;
+            const resolved = resolveUrl(match[1]);
+            return resolved ? `${resolved}${match[2] || ''}` : trimmed;
+          }).join(', ');
+          img.setAttribute('srcset', fixed);
+        }
+      });
+      contentEl.querySelectorAll('a').forEach(a => {
+        const href = a.getAttribute('href');
+        if (href) {
+          const resolved = resolveUrl(href);
+          if (resolved) a.setAttribute('href', resolved);
+        }
+      });
+
       // Deduplicate images with the same src URL (e.g., Vox uses two <img> for responsive - mobile + desktop)
       const seenImageSrcs = new Set<string>();
       contentEl.querySelectorAll('img').forEach(img => {
