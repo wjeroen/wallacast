@@ -328,17 +328,14 @@ export function FullscreenPlayer({
     content.type === 'podcast_episode' ? 'description' : 'read-along'
   );
 
-  // When switching tracks, reset to the appropriate default tab — but only
-  // if the current tab isn't available for the new content type. This lets
-  // the queue tab stay open across advances.
+  // When switching tracks, reset to the appropriate default tab.
+  // Only the queue tab is preserved across advances; content tabs
+  // reset to the default for the new content type (description for
+  // podcasts, read-along for articles/texts).
   useEffect(() => {
     setActiveTab(prev => {
-      const defaultTab: TabType = content.type === 'podcast_episode' ? 'description' : 'read-along';
-      // 'read-along' and 'queue' are always available
-      if (prev === 'read-along' || prev === 'queue') return prev;
-      // 'description' is only available for podcasts
-      if (prev === 'description' && content.type === 'podcast_episode') return prev;
-      return defaultTab;
+      if (prev === 'queue') return prev;
+      return content.type === 'podcast_episode' ? 'description' : 'read-along';
     });
   }, [content.id]);
   const [autoScroll, setAutoScroll] = useState(() => {
