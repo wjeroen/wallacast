@@ -50,7 +50,7 @@ interface QueueStore {
   clearQueue: () => Promise<void>;
   setLibraryContext: (filter: FilterType, capturedFromId: number) => void;
   setAutoplay: (v: boolean) => Promise<void>;
-  setShuffleNonManual: (v: boolean) => void;
+  setShuffleNonManual: (v: boolean, currentId?: number | null) => void;
   setManualAlwaysAutoplay: (v: boolean) => Promise<void>;
   markPendingRequeue: (contentId: number) => void;
   clearPendingRequeue: (contentId: number) => void;
@@ -241,13 +241,26 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     }
   },
 
-  setShuffleNonManual: (v) => {
+  setShuffleNonManual: (v, currentId) => {
     if (v) {
       // Snapshot a stable random order over the full library. We shuffle
       // the entire library (not just the current filter) so toggling
       // between filters doesn't invalidate the order unnecessarily.
       const ids = useContentStore.getState().allItems.map(i => i.id);
-      set({ shuffleNonManual: true, shuffleOrder: shuffled(ids) });
+      const order = shuffled(ids);
+      // Rotate so the currently-playing item sits at position 0. This way
+      // pivoting in getNonManualItems doesn't drop items that landed before
+      // current in the random order — they get rotated to the end and stay
+      // playable. If currentId isn't in the library, no rotation needed.
+      if (currentId != null) {
+        const idx = order.indexOf(currentId);
+        if (idx > 0) {
+          const rotated = [...order.slice(idx), ...order.slice(0, idx)];
+          set({ shuffleNonManual: true, shuffleOrder: rotated });
+          return;
+        }
+      }
+      set({ shuffleNonManual: true, shuffleOrder: order });
     } else {
       set({ shuffleNonManual: false, shuffleOrder: [] });
     }
@@ -315,19 +328,16 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
       ordered = filtered;
     }
 
-    // When shuffled, return ALL remaining items (excluding current + manual)
-    // in the stable random order — pivoting would randomly cut off a chunk.
-    // When not shuffled, pivot on the current position so "Up next" starts
-    // from the item after the one playing, not from the top of the library.
-    let result: ContentItem[];
-    if (shuffleNonManual) {
-      result = ordered.filter(i => !manualIds.has(i.id) && i.id !== currentId);
-    } else {
-      let pivot = ordered.findIndex(i => i.id === currentId);
-      if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
-      const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
-      result = after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
-    }
+    // Pivot on the current item's position in `ordered` so "Up next" starts
+    // from the item AFTER the one playing. In shuffle mode this prevents
+    // already-played items (which sit before current in the rotated shuffle
+    // order) from re-appearing at the top. If current isn't in `ordered`
+    // (rare — e.g. archived item), fall back to capturedFromId, then the
+    // whole list — never want to silently drop everything.
+    let pivot = ordered.findIndex(i => i.id === currentId);
+    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
+    const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
+    const result = after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
     return result;
   },
 

@@ -1203,7 +1203,7 @@ export function FullscreenPlayer({
                       </button>
                       <button
                         className={`queue-shuffle-btn ${shuffleNonManual ? 'active' : ''}`}
-                        onClick={() => setShuffleNonManual(!shuffleNonManual)}
+                        onClick={() => setShuffleNonManual(!shuffleNonManual, content.id)}
                         title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
                       >
                         <Shuffle size={14} />
