@@ -116,6 +116,15 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
       // Only override the default (true) when the user explicitly stored 'false'
       if (res.data.value === 'false') set({ manualAlwaysAutoplay: false });
     } catch { /* default true */ }
+    try {
+      const res = await userSettingsAPI.get('queue_shuffle');
+      if (res.data.value === 'true') {
+        const ids = useContentStore.getState().allItems.map(i => i.id);
+        if (ids.length > 0) {
+          set({ shuffleNonManual: true, shuffleOrder: shuffled(ids) });
+        }
+      }
+    } catch { /* default false */ }
   },
 
   addToQueue: async (item) => {
@@ -241,22 +250,16 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     }
   },
 
-  setShuffleNonManual: (v, currentId) => {
+  setShuffleNonManual: async (v, currentId) => {
     if (v) {
-      // Snapshot a stable random order over the full library. We shuffle
-      // the entire library (not just the current filter) so toggling
-      // between filters doesn't invalidate the order unnecessarily.
       const ids = useContentStore.getState().allItems.map(i => i.id);
       const order = shuffled(ids);
-      // Rotate so the currently-playing item sits at position 0. This way
-      // pivoting in getNonManualItems doesn't drop items that landed before
-      // current in the random order — they get rotated to the end and stay
-      // playable. If currentId isn't in the library, no rotation needed.
       if (currentId != null) {
         const idx = order.indexOf(currentId);
         if (idx > 0) {
           const rotated = [...order.slice(idx), ...order.slice(0, idx)];
           set({ shuffleNonManual: true, shuffleOrder: rotated });
+          userSettingsAPI.set('queue_shuffle', 'true').catch(() => {});
           return;
         }
       }
@@ -264,6 +267,7 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     } else {
       set({ shuffleNonManual: false, shuffleOrder: [] });
     }
+    userSettingsAPI.set('queue_shuffle', String(v)).catch(() => {});
   },
 
   setManualAlwaysAutoplay: async (v) => {
