@@ -327,17 +327,22 @@ export function FullscreenPlayer({
   const [activeTab, setActiveTab] = useState<TabType>(
     content.type === 'podcast_episode' ? 'description' : 'read-along'
   );
+  // Per-tab scroll position memory: save when leaving a tab, restore when entering
+  const tabScrollPositions = useRef<Record<string, number>>({});
+  const tabContentRef = useRef<HTMLDivElement>(null);
 
   // When switching tracks, reset to the appropriate default tab.
   // Only the queue tab is preserved across advances; content tabs
   // reset to the default for the new content type (description for
   // podcasts, read-along for articles/texts).
   useEffect(() => {
+    tabScrollPositions.current = {};
     setActiveTab(prev => {
       if (prev === 'queue') return prev;
       return content.type === 'podcast_episode' ? 'description' : 'read-along';
     });
   }, [content.id]);
+
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
@@ -580,9 +585,19 @@ export function FullscreenPlayer({
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
       scrollToActive();
-    } else {
-      setActiveTab(tab);
+      return;
     }
+    // Save current tab's scroll position before switching
+    if (tabContentRef.current) {
+      tabScrollPositions.current[activeTab] = tabContentRef.current.scrollTop;
+    }
+    setActiveTab(tab);
+    // Restore saved scroll position for the target tab (0 if never visited)
+    requestAnimationFrame(() => {
+      if (tabContentRef.current) {
+        tabContentRef.current.scrollTop = tabScrollPositions.current[tab] || 0;
+      }
+    });
   };
 
   const handleFontScaleChange = (newScale: number) => {
@@ -1405,7 +1420,7 @@ export function FullscreenPlayer({
       </div>
 
       {/* Tab Content Area */}
-      <div className="fullscreen-tab-content">
+      <div className="fullscreen-tab-content" ref={tabContentRef}>
         {renderTabContent()}
       </div>
 
