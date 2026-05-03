@@ -297,12 +297,21 @@ function App() {
   const handleSkipPrev = async () => {
     const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
     if (!prev) return;
+    let item: ContentItem;
     try {
       const res = await contentAPI.getById(prev.id);
-      setCurrentContent(res.data);
+      item = res.data;
     } catch {
-      setCurrentContent(prev);
+      item = prev;
     }
+    // If the track was nearly or fully finished, restart from the beginning.
+    // 10 seconds is the industry-standard threshold (Apple Podcasts, Pocket Casts).
+    const pos = item.playback_position || 0;
+    const dur = item.duration || 0;
+    if (dur > 0 && pos > 0 && (dur - pos) < 10) {
+      item = { ...item, playback_position: 0 };
+    }
+    setCurrentContent(item);
     setAutoPlayToken(t => t + 1);
   };
 
