@@ -450,9 +450,20 @@ export function AudioPlayer({
 
   const handleSeek = (time: number) => {
     if (!audioRef.current) return;
-    audioRef.current.currentTime = time;
+    const audio = audioRef.current;
+    audio.currentTime = time;
     setCurrentTime(time);
     savePlaybackPosition(time);
+    // Some MP3 files lack proper seeking headers, causing the browser to
+    // silently ignore the currentTime assignment. Detect this and snap the
+    // displayed time back to where the audio actually is.
+    const checkSeek = () => {
+      if (Math.abs(audio.currentTime - time) > 2) {
+        setCurrentTime(audio.currentTime);
+      }
+    };
+    audio.addEventListener('seeked', checkSeek, { once: true });
+    setTimeout(() => audio.removeEventListener('seeked', checkSeek), 1000);
   };
 
   const handleSkipBackward = () => handleSeek(Math.max(0, currentTime - 15));

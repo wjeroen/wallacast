@@ -599,6 +599,7 @@ export async function generateArticleAudio(
 
       while (retries > 0) {
         const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
+        const normalizedFile = path.join(tempDir, `normalized_${Date.now()}.mp3`);
         try {
           const response = await openai.audio.speech.create({
             model: targetModel,
@@ -606,19 +607,35 @@ export async function generateArticleAudio(
             input: textChunks[0],
             response_format: 'mp3',
           });
-          
+
           const buffer = Buffer.from(await response.arrayBuffer());
-          
+
           // UPDATED: Validate buffer size (min 1KB) to catch empty responses
           if (buffer.length < 1024) throw new Error('Response buffer too small');
 
           await fs.writeFile(tempFile, buffer);
-          finalDuration = await getAudioDuration(tempFile);
-          finalBuffer = buffer;
+
+          // Re-encode through ffmpeg to produce proper MP3 headers (Xing/LAME).
+          // Raw OpenAI TTS MP3s lack seeking headers, so browsers can't map
+          // time-to-byte positions and audio.currentTime silently fails.
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg(tempFile)
+              .audioFrequency(24000)
+              .audioBitrate('96k')
+              .format('mp3')
+              .on('end', () => resolve())
+              .on('error', (err) => reject(err))
+              .save(normalizedFile);
+          });
+          finalBuffer = await fs.readFile(normalizedFile);
+          finalDuration = await getAudioDuration(normalizedFile);
+
           await fs.unlink(tempFile).catch(() => {});
+          await fs.unlink(normalizedFile).catch(() => {});
           break;
         } catch (error: any) {
           await fs.unlink(tempFile).catch(() => {});
+          await fs.unlink(normalizedFile).catch(() => {});
           console.warn(`Single chunk attempt failed: ${error.message}`);
           if (retries > 1) {
             await new Promise(resolve => setTimeout(resolve, delay));
