@@ -186,12 +186,11 @@ Wallacast supports multiple users with complete data isolation:
 - **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
   - `GET /search?q=` - Smart search: iTunes directory for text queries, RSS feed fetch for URLs (auto-detects)
   - `POST /subscribe` - Subscribe to podcast or RSS feed URL (auto-detects type: podcast/newsletter/blog)
-  - `POST /:id/refresh` - Fetch new episodes from feed
-  - `GET /:id/preview-episodes` - Get episodes without saving to library (for subscribed feeds)
-  - `GET /preview-by-url?url=` - Preview episodes/articles from any RSS feed URL without subscribing
-  - `GET /search-feed?url=&q=` - Search full RSS feed for episodes matching query (fetches entire feed, filters server-side)
+  - `GET /:id/preview-episodes?limit&offset` - Get episodes without saving to library (for subscribed feeds), server-side paginated
+  - `GET /preview-by-url?url=&limit&offset` - Preview episodes/articles from any RSS feed URL without subscribing, server-side paginated
+  - `GET /search-feed?url=&q=` - Search full RSS feed for episodes matching query (searches cached XML server-side)
   - **Feed Caching (Performance Optimization)**:
-    - `GET /feed-items?feedId&limit` - Get cached feed items from database (instant, no network requests)
+    - `GET /feed-items?feedId&limit&offset` - Get cached feed items from database with pagination (instant, no network requests)
     - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
     - `GET /last-refresh` - Get timestamp of last feed refresh
 
@@ -292,8 +291,10 @@ Wallacast supports multiple users with complete data isolation:
   - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter) based on MIME types
   - `detectFeedType()`: Analyzes feed items - checks if enclosures are `audio/*` (podcast) or `image/*` (newsletter)
   - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
-  - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio podcast episodes and text newsletter articles)
+  - `getPreviewEpisodes()`: Gets episodes/articles without saving, with server-side pagination via offset/limit (iterative regex parsing, stops early)
+  - `searchFeedEpisodes()`: Searches full cached XML feed for episodes matching a query string
   - `extractNestedXMLTag()`: Handles nested XML structures like Substack's `<image><url>...</url></image>`
+  - **XML Cache**: In-memory cache for downloaded RSS XML (5-min TTL, max 20 feeds). Avoids re-downloading on each Load More or search request. Used by `getPreviewEpisodes()` and `searchFeedEpisodes()`.
   - **Feed Caching (Performance Optimization)**:
     - `refreshFeedFromNetwork()`: Fetches RSS feed, parses items, saves to `feed_items` table, cleans up old items (keeps 100 most recent)
     - `refreshAllFeedsFromNetwork()`: Refreshes all subscribed feeds for a user sequentially
@@ -349,8 +350,10 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
   - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" button clears preview and returns to search results
+  - **Episode Search**: Search within any podcast/RSS feed for specific episodes (searches full feed server-side via XML cache)
   - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons and unsubscribe option
-  - **Recent Updates**: Shows 100 most recent episodes/articles across all subscribed feeds (loaded from database cache, instant)
+  - **Recent Updates**: Server-side paginated feed items from database cache. Load More fetches next 50 items via offset.
+  - **Podcast/Search Detail**: Server-side paginated via XML cache. Load More fetches next 50 episodes from cached RSS XML without re-downloading.
   - **Refresh Button**: Next to "Recent Updates" heading - refreshes all feeds from network, shows last refresh time ("5 mins ago")
   - **Performance**: Database caching eliminates 70+ network requests per page load (instant instead of 30+ seconds for 70 subscriptions)
   - **Feed Detail View**: Click a feed to see expanded card with full description + that feed's content. "Show All Subscriptions" button to return to full list

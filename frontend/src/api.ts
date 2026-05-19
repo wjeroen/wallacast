@@ -127,11 +127,12 @@ export const podcastAPI = {
 
   getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
 
-  getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
+  getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
+    api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
 
-  getPreviewByUrl: (feedUrl: string, limit?: number, signal?: AbortSignal) =>
-    api.get<any[]>('/podcasts/preview-by-url', {
-      params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}) },
+  getPreviewByUrl: (feedUrl: string, limit?: number, offset?: number, signal?: AbortSignal) =>
+    api.get<{ episodes: any[]; hasMore: boolean }>('/podcasts/preview-by-url', {
+      params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}), ...(offset ? { offset } : {}) },
       signal,
     }),
 
