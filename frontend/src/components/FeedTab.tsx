@@ -223,6 +223,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
 
+    setSelectedSearchResult(null);
+    setEpisodeSearchOpen(false);
+    setEpisodeSearchQuery('');
+    setEpisodeSearchResults(null);
     setLoading(true);
     setSearchError(null);
     try {
@@ -628,7 +632,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             ))}
             {hasMoreEpisodes && (
               (fullFeedLoading && allEpisodes.length <= visibleEpisodeCount) ? (
-                <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more episodes...</p>
+                <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more...</p>
               ) : (
                 <button className="load-more-btn" onClick={handleLoadMore}>Load More</button>
               )
@@ -730,7 +734,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             ))}
             {hasMoreEpisodes && (
               (fullFeedLoading && allEpisodes.length <= visibleEpisodeCount) ? (
-                <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more episodes...</p>
+                <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more...</p>
               ) : (
                 <button className="load-more-btn" onClick={handleLoadMore}>Load More</button>
               )
