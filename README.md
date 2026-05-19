@@ -189,6 +189,7 @@ Wallacast supports multiple users with complete data isolation:
   - `POST /:id/refresh` - Fetch new episodes from feed
   - `GET /:id/preview-episodes` - Get episodes without saving to library (for subscribed feeds)
   - `GET /preview-by-url?url=` - Preview episodes/articles from any RSS feed URL without subscribing
+  - `GET /search-feed?url=&q=` - Search full RSS feed for episodes matching query (fetches entire feed, filters server-side)
   - **Feed Caching (Performance Optimization)**:
     - `GET /feed-items?feedId&limit` - Get cached feed items from database (instant, no network requests)
     - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
