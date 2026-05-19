@@ -143,18 +143,14 @@ router.get('/:id/preview-episodes', async (req, res) => {
 // Get preview episodes from feed URL (without subscription)
 router.get('/preview-by-url', async (req, res) => {
   try {
-    const { url } = req.query;
-    console.log('=== Preview by URL endpoint called ===');
-    console.log('URL param:', url);
+    const { url, limit } = req.query;
 
     if (!url || typeof url !== 'string') {
-      console.error('Invalid URL parameter');
       return res.status(400).json({ error: 'Feed URL required' });
     }
 
-    console.log('Fetching episodes from:', url);
-    const episodes = await getPreviewEpisodes(url);
-    console.log('Episodes fetched:', episodes.length);
+    const parsedLimit = limit !== undefined ? parseInt(limit as string) : 20;
+    const episodes = await getPreviewEpisodes(url, parsedLimit);
 
     res.json(episodes);
   } catch (error: any) {
