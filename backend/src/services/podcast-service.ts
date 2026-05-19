@@ -288,7 +288,7 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
   }
 }
 
-export async function getPreviewEpisodes(feedUrl: string, limit: number = 20): Promise<any[]> {
+export async function getPreviewEpisodes(feedUrl: string, limit: number = 50): Promise<any[]> {
   try {
     const response = await fetch(feedUrl, {
       headers: {
@@ -610,12 +610,11 @@ export async function refreshAllFeedsFromNetwork(userId: number): Promise<{ tota
  * @param feedId - Optional: filter by specific feed
  * @param limit - Maximum number of items to return (default: 100)
  */
-export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 100): Promise<any[]> {
+export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0): Promise<any[]> {
   let queryText: string;
   let queryParams: any[];
 
   if (feedId) {
-    // Get items for a specific feed
     queryText = `
       SELECT
         fi.*,
@@ -625,11 +624,10 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND fi.feed_id = $2
       ORDER BY fi.published_at DESC
-      LIMIT $3
+      LIMIT $3 OFFSET $4
     `;
-    queryParams = [userId, feedId, limit];
+    queryParams = [userId, feedId, limit, offset];
   } else {
-    // Get recent items from ALL subscribed feeds
     queryText = `
       SELECT
         fi.*,
@@ -639,9 +637,9 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND p.is_subscribed = TRUE
       ORDER BY fi.published_at DESC
-      LIMIT $2
+      LIMIT $2 OFFSET $3
     `;
-    queryParams = [userId, limit];
+    queryParams = [userId, limit, offset];
   }
 
   const result = await query(queryText, queryParams);
