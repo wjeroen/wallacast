@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, getCachedFeedItems, refreshAllFeedsFromNetwork, getLastRefreshTime } from '../services/podcast-service.js';
+import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, refreshAllFeedsFromNetwork, getLastRefreshTime } from '../services/podcast-service.js';
 
 const router = express.Router();
 
@@ -162,6 +162,20 @@ router.get('/preview-by-url', async (req, res) => {
     const errorMessage = error?.message || 'Failed to fetch preview';
     console.error('Error message:', errorMessage);
     res.status(500).json({ error: errorMessage });
+  }
+});
+
+router.get('/search-feed', async (req, res) => {
+  try {
+    const { url, q } = req.query;
+    if (!url || typeof url !== 'string' || !q || typeof q !== 'string') {
+      return res.status(400).json({ error: 'Feed URL and search query required' });
+    }
+    const results = await searchFeedEpisodes(url, q);
+    res.json(results);
+  } catch (error: any) {
+    console.error('Error searching feed:', error);
+    res.status(500).json({ error: error?.message || 'Failed to search feed' });
   }
 });
 
