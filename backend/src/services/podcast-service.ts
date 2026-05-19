@@ -288,9 +288,8 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
   }
 }
 
-export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
+export async function getPreviewEpisodes(feedUrl: string, limit: number = 20): Promise<any[]> {
   try {
-    // FIX: Added User-Agent
     const response = await fetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -298,34 +297,27 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
     });
     const xml = await response.text();
 
-    // FIX: Extract items using updated regex for Atom/RSS
     const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
     const episodes = [];
 
-    for (const itemXml of itemMatches.slice(0, 20)) {
-      // Limit to 20 most recent
+    const items = limit > 0 ? itemMatches.slice(0, limit) : itemMatches;
+    for (const itemXml of items) {
       const title = extractXMLTag(itemXml, 'title');
-      
-      // FIX: Prioritize summary/description to avoid full articles. 
-      // RSS uses 'description', Atom uses 'summary'. 
-      // We purposefully avoid 'content:encoded' or 'content' to keep it brief.
+
       const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
-      
+
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
       const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
-      
-      // RSS uses <link>URL</link>, Atom uses <link href="URL" />
-      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href'); 
 
-      // Extract item-level thumbnail
+      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
+
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
         extractXMLAttribute(itemXml, 'media:content', 'url') ||
         extractNestedXMLTag(itemXml, 'image', 'url') ||
-        // If enclosure is an image, use it as thumbnail (Substack)
         (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
       if (!title) continue;
@@ -335,13 +327,9 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
         extractXMLTag(itemXml, 'author');
       const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
 
-      // Check if enclosure is actually audio (not an image)
       const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
 
-      // For podcasts: require audio enclosure with audio/* mime type
-      // For newsletters: require link (article URL)
       if (isAudioEnclosure) {
-        // Podcast episode
         episodes.push({
           title: cleanHtmlEntities(title),
           description: cleanDescription(description),
@@ -353,7 +341,6 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
           author: cleanAuthor,
         });
       } else if (link) {
-        // Newsletter article
         episodes.push({
           title: cleanHtmlEntities(title),
           description: cleanDescription(description),
@@ -371,6 +358,16 @@ export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
     console.error('Error fetching preview episodes:', error);
     throw error;
   }
+}
+
+export async function searchFeedEpisodes(feedUrl: string, query: string): Promise<any[]> {
+  const allEpisodes = await getPreviewEpisodes(feedUrl, 0);
+  const q = query.toLowerCase();
+  return allEpisodes.filter(ep =>
+    (ep.title && ep.title.toLowerCase().includes(q)) ||
+    (ep.description && ep.description.toLowerCase().includes(q)) ||
+    (ep.author && ep.author.toLowerCase().includes(q))
+  );
 }
 
 // --- Helper Functions ---
