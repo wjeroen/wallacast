@@ -84,6 +84,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   const [episodeSearchQuery, setEpisodeSearchQuery] = useState('');
   const [episodeSearchResults, setEpisodeSearchResults] = useState<any[] | null>(null);
   const [episodeSearchLoading, setEpisodeSearchLoading] = useState(false);
+  const [fullFeedLoaded, setFullFeedLoaded] = useState(false);
+  const [fullFeedLoading, setFullFeedLoading] = useState(false);
 
   useEffect(() => {
     loadCachedData();
@@ -92,10 +94,11 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
   const currentFeedUrl = selectedPodcast?.feed_url || selectedSearchResult?.feed_url;
 
+  // Debounced server-side search (only needed before full feed is loaded)
   useEffect(() => {
     setEpisodeSearchResults(null);
 
-    if (!episodeSearchQuery.trim() || !currentFeedUrl) {
+    if (!episodeSearchQuery.trim() || !currentFeedUrl || fullFeedLoaded) {
       setEpisodeSearchLoading(false);
       return;
     }
@@ -124,7 +127,43 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [episodeSearchQuery, currentFeedUrl]);
+  }, [episodeSearchQuery, currentFeedUrl, fullFeedLoaded]);
+
+  // Background prefetch: load full feed after initial 20 are displayed
+  useEffect(() => {
+    if (!currentFeedUrl || (!selectedPodcast && !selectedSearchResult)) {
+      setFullFeedLoaded(false);
+      setFullFeedLoading(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    setFullFeedLoaded(false);
+    setFullFeedLoading(true);
+
+    const loadFullFeed = async () => {
+      try {
+        const response = await podcastAPI.getPreviewByUrl(currentFeedUrl, 0, abortController.signal);
+        const episodes = response.data.map((ep: any) => ({
+          ...ep,
+          podcast_id: selectedPodcast?.id || null,
+          podcast_title: selectedPodcast?.title || selectedSearchResult?.title,
+        }));
+        setAllEpisodes(episodes);
+        setFullFeedLoaded(true);
+      } catch (error: any) {
+        if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
+          console.error('Failed to load full feed:', error);
+        }
+      } finally {
+        if (!abortController.signal.aborted) setFullFeedLoading(false);
+      }
+    };
+
+    loadFullFeed();
+
+    return () => abortController.abort();
+  }, [selectedPodcast?.id, selectedSearchResult?.feed_url]);
 
   const loadCachedData = async () => {
     setLoading(true);
@@ -566,6 +605,9 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                 Load More
               </button>
             )}
+            {fullFeedLoading && !episodeSearchQuery.trim() && (
+              <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more episodes...</p>
+            )}
           </div>
         </div>
       )}
@@ -665,6 +707,9 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               <button className="load-more-btn" onClick={handleLoadMore}>
                 Load More
               </button>
+            )}
+            {fullFeedLoading && !episodeSearchQuery.trim() && (
+              <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more episodes...</p>
             )}
           </div>
         </div>

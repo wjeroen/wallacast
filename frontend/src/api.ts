@@ -129,7 +129,11 @@ export const podcastAPI = {
 
   getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
 
-  getPreviewByUrl: (feedUrl: string) => api.get<any[]>('/podcasts/preview-by-url', { params: { url: feedUrl } }),
+  getPreviewByUrl: (feedUrl: string, limit?: number, signal?: AbortSignal) =>
+    api.get<any[]>('/podcasts/preview-by-url', {
+      params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}) },
+      signal,
+    }),
 
   searchFeed: (feedUrl: string, query: string) =>
     api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
