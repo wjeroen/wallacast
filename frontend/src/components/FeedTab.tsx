@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import type { Podcast as PodcastType } from '../types';
@@ -80,11 +80,51 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   const [podcastsExpanded, setPodcastsExpanded] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [episodeSearchOpen, setEpisodeSearchOpen] = useState(false);
+  const [episodeSearchQuery, setEpisodeSearchQuery] = useState('');
+  const [episodeSearchResults, setEpisodeSearchResults] = useState<any[] | null>(null);
+  const [episodeSearchLoading, setEpisodeSearchLoading] = useState(false);
 
   useEffect(() => {
     loadCachedData();
     loadLastRefreshTime();
   }, []);
+
+  const currentFeedUrl = selectedPodcast?.feed_url || selectedSearchResult?.feed_url;
+
+  useEffect(() => {
+    setEpisodeSearchResults(null);
+
+    if (!episodeSearchQuery.trim() || !currentFeedUrl) {
+      setEpisodeSearchLoading(false);
+      return;
+    }
+
+    setEpisodeSearchLoading(true);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const response = await podcastAPI.searchFeed(currentFeedUrl, episodeSearchQuery.trim());
+        if (!cancelled) {
+          const results = response.data.map((ep: any) => ({
+            ...ep,
+            podcast_id: selectedPodcast?.id || null,
+            podcast_title: selectedPodcast?.title || selectedSearchResult?.title,
+          }));
+          setEpisodeSearchResults(results);
+        }
+      } catch (error) {
+        console.error('Episode search failed:', error);
+      } finally {
+        if (!cancelled) setEpisodeSearchLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [episodeSearchQuery, currentFeedUrl]);
 
   const loadCachedData = async () => {
     setLoading(true);
@@ -200,13 +240,15 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
   const loadPodcastEpisodes = async (podcast: PodcastType) => {
     try {
+      setEpisodeSearchOpen(false);
+      setEpisodeSearchQuery('');
+      setEpisodeSearchResults(null);
       const response = await podcastAPI.getPreviewEpisodes(podcast.id);
       const episodesWithPodcast = response.data.map((ep: any) => ({
         ...ep,
         podcast_id: podcast.id,
         podcast_title: podcast.title,
       }));
-      // We set the main view to just this podcast's episodes
       setAllEpisodes(episodesWithPodcast);
       setVisibleEpisodeCount(EPISODES_PER_PAGE);
       setSelectedPodcast(podcast);
@@ -217,13 +259,18 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
   const handleShowAllPodcasts = async () => {
     setSelectedPodcast(null);
-    // Reload all cached feed items from database
+    setEpisodeSearchOpen(false);
+    setEpisodeSearchQuery('');
+    setEpisodeSearchResults(null);
     await loadCachedData();
     setVisibleEpisodeCount(EPISODES_PER_PAGE);
   };
 
   const handleShowAllSearchResults = () => {
     setSelectedSearchResult(null);
+    setEpisodeSearchOpen(false);
+    setEpisodeSearchQuery('');
+    setEpisodeSearchResults(null);
     setAllEpisodes([]);
   };
 
@@ -296,11 +343,60 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     }
   };
 
-  const visibleEpisodes = allEpisodes.slice(0, visibleEpisodeCount);
-  const hasMoreEpisodes = allEpisodes.length > visibleEpisodeCount;
+  const clientFilteredEpisodes = episodeSearchQuery.trim()
+    ? allEpisodes.filter(ep => {
+        const q = episodeSearchQuery.toLowerCase();
+        return (ep.title && ep.title.toLowerCase().includes(q))
+          || (ep.description && cleanHtml(ep.description).toLowerCase().includes(q))
+          || (ep.author && ep.author.toLowerCase().includes(q));
+      })
+    : allEpisodes;
+  const displayEpisodes = episodeSearchResults !== null ? episodeSearchResults : clientFilteredEpisodes;
+  const visibleEpisodes = episodeSearchQuery.trim()
+    ? displayEpisodes
+    : displayEpisodes.slice(0, visibleEpisodeCount);
+  const hasMoreEpisodes = !episodeSearchQuery.trim() && allEpisodes.length > visibleEpisodeCount;
 
   const isUrl = looksLikeUrl(searchQuery);
   const buttonText = loading ? 'Loading...' : 'Search';
+
+  const episodeSearchInputRef = React.useRef<HTMLInputElement>(null);
+
+  const renderEpisodeSectionHeader = (label: string) => (
+    <div className="episode-section-header">
+      {episodeSearchOpen ? (
+        <div className="episode-search-field">
+          <Search size={16} />
+          <input
+            ref={episodeSearchInputRef}
+            type="text"
+            placeholder={`Search ${label.toLowerCase()}…`}
+            value={episodeSearchQuery}
+            onChange={(e) => setEpisodeSearchQuery(e.target.value)}
+            autoFocus
+          />
+          <button
+            className="episode-search-close"
+            onClick={() => { setEpisodeSearchOpen(false); setEpisodeSearchQuery(''); setEpisodeSearchResults(null); }}
+            title="Close search"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      ) : (
+        <>
+          <h3>{label}</h3>
+          <button
+            className="episode-search-btn"
+            onClick={() => setEpisodeSearchOpen(true)}
+            title={`Search ${label.toLowerCase()}`}
+          >
+            <Search size={16} />
+          </button>
+        </>
+      )}
+    </div>
+  );
 
   return (
     <div className="feed-tab">
@@ -416,7 +512,13 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
           {/* Episodes/Articles preview */}
           <div className="episodes-section">
-            <h3>Preview</h3>
+            {renderEpisodeSectionHeader('Preview')}
+            {episodeSearchQuery.trim() && episodeSearchLoading && (
+              <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Searching full feed...</p>
+            )}
+            {episodeSearchQuery.trim() && !episodeSearchLoading && visibleEpisodes.length === 0 && (
+              <p className="no-content">No matches found.</p>
+            )}
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
                 {episode.preview_picture && (
@@ -510,7 +612,13 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
           {/* Episodes for selected podcast */}
           <div className="episodes-section">
-            <h3>{selectedPodcast.type === 'podcast' ? 'Episodes' : 'Articles'}</h3>
+            {renderEpisodeSectionHeader(selectedPodcast.type === 'podcast' ? 'Episodes' : 'Articles')}
+            {episodeSearchQuery.trim() && episodeSearchLoading && (
+              <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Searching full feed...</p>
+            )}
+            {episodeSearchQuery.trim() && !episodeSearchLoading && visibleEpisodes.length === 0 && (
+              <p className="no-content">No matches found.</p>
+            )}
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
                 {episode.preview_picture && (

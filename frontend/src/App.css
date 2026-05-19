@@ -399,6 +399,76 @@
   color: var(--t2);
 }
 
+.episode-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.episode-section-header h3 {
+  margin: 0;
+}
+
+.episode-search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem;
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  cursor: pointer;
+  border-radius: 0.25rem;
+  transition: color 0.15s;
+}
+
+.episode-search-btn:hover {
+  color: var(--t1);
+}
+
+.episode-search-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  color: var(--t3);
+}
+
+.episode-search-field input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--t1);
+  font-size: 0.9rem;
+  outline: none;
+  min-width: 0;
+}
+
+.episode-search-field input::placeholder {
+  color: var(--t3);
+}
+
+.episode-search-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  cursor: pointer;
+  border-radius: 0.25rem;
+}
+
+.episode-search-close:hover {
+  color: var(--t1);
+}
+
 .episodes-section .load-more-btn {
   align-self: center;
   padding: 0.5rem 1.5rem;

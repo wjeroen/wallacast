@@ -131,6 +131,9 @@ export const podcastAPI = {
 
   getPreviewByUrl: (feedUrl: string) => api.get<any[]>('/podcasts/preview-by-url', { params: { url: feedUrl } }),
 
+  searchFeed: (feedUrl: string, query: string) =>
+    api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
+
   // Feed caching endpoints
   getFeedItems: (feedId?: number, limit?: number) =>
     api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit } }),
