@@ -131,9 +131,11 @@ router.get('/:id/preview-episodes', async (req, res) => {
     }
 
     const podcast = podcastResult.rows[0];
-    const episodes = await getPreviewEpisodes(podcast.feed_url);
+    const limit = req.query.limit !== undefined ? parseInt(req.query.limit as string) : 50;
+    const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+    const result = await getPreviewEpisodes(podcast.feed_url, limit, offset);
 
-    res.json(episodes);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching preview episodes:', error);
     res.status(500).json({ error: 'Failed to fetch preview episodes' });
@@ -143,16 +145,17 @@ router.get('/:id/preview-episodes', async (req, res) => {
 // Get preview episodes from feed URL (without subscription)
 router.get('/preview-by-url', async (req, res) => {
   try {
-    const { url, limit } = req.query;
+    const { url, limit, offset } = req.query;
 
     if (!url || typeof url !== 'string') {
       return res.status(400).json({ error: 'Feed URL required' });
     }
 
     const parsedLimit = limit !== undefined ? parseInt(limit as string) : 50;
-    const episodes = await getPreviewEpisodes(url, parsedLimit);
+    const parsedOffset = offset ? parseInt(offset as string) : 0;
+    const result = await getPreviewEpisodes(url, parsedLimit, parsedOffset);
 
-    res.json(episodes);
+    res.json(result);
   } catch (error: any) {
     console.error('Error fetching preview by URL:', error);
     const errorMessage = error?.message || 'Failed to fetch preview';
