@@ -69,7 +69,6 @@ function looksLikeUrl(query: string): boolean {
 export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void }) {
   const [podcasts, setPodcasts] = useState<PodcastType[]>([]);
   const [allEpisodes, setAllEpisodes] = useState<any[]>([]);
-  const [visibleEpisodeCount, setVisibleEpisodeCount] = useState(PAGE_SIZE);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PodcastType[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -84,9 +83,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   const [episodeSearchQuery, setEpisodeSearchQuery] = useState('');
   const [episodeSearchResults, setEpisodeSearchResults] = useState<any[] | null>(null);
   const [episodeSearchLoading, setEpisodeSearchLoading] = useState(false);
-  const [fullFeedLoaded, setFullFeedLoaded] = useState(false);
-  const [fullFeedLoading, setFullFeedLoading] = useState(false);
-  const [hasMoreFromServer, setHasMoreFromServer] = useState(true);
+  const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
@@ -96,11 +93,11 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
   const currentFeedUrl = selectedPodcast?.feed_url || selectedSearchResult?.feed_url;
 
-  // Debounced server-side search (only needed before full feed is loaded)
+  // Debounced server-side search (scans cached RSS XML on server)
   useEffect(() => {
     setEpisodeSearchResults(null);
 
-    if (!episodeSearchQuery.trim() || !currentFeedUrl || fullFeedLoaded) {
+    if (!episodeSearchQuery.trim() || !currentFeedUrl) {
       setEpisodeSearchLoading(false);
       return;
     }
@@ -129,43 +126,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [episodeSearchQuery, currentFeedUrl, fullFeedLoaded]);
-
-  // Background prefetch: load full feed after initial 20 are displayed
-  useEffect(() => {
-    if (!currentFeedUrl || (!selectedPodcast && !selectedSearchResult)) {
-      setFullFeedLoaded(false);
-      setFullFeedLoading(false);
-      return;
-    }
-
-    const abortController = new AbortController();
-    setFullFeedLoaded(false);
-    setFullFeedLoading(true);
-
-    const loadFullFeed = async () => {
-      try {
-        const response = await podcastAPI.getPreviewByUrl(currentFeedUrl, 0, abortController.signal);
-        const episodes = response.data.map((ep: any) => ({
-          ...ep,
-          podcast_id: selectedPodcast?.id || null,
-          podcast_title: selectedPodcast?.title || selectedSearchResult?.title,
-        }));
-        setAllEpisodes(episodes);
-        setFullFeedLoaded(true);
-      } catch (error: any) {
-        if (error?.name !== 'CanceledError' && error?.code !== 'ERR_CANCELED') {
-          console.error('Failed to load full feed:', error);
-        }
-      } finally {
-        if (!abortController.signal.aborted) setFullFeedLoading(false);
-      }
-    };
-
-    loadFullFeed();
-
-    return () => abortController.abort();
-  }, [selectedPodcast?.id, selectedSearchResult?.feed_url]);
+  }, [episodeSearchQuery, currentFeedUrl]);
 
   const loadCachedData = async () => {
     setLoading(true);
@@ -183,7 +144,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       }));
 
       setAllEpisodes(episodes);
-      setHasMoreFromServer(items.length >= PAGE_SIZE);
+      setHasMore(items.length >= PAGE_SIZE);
     } catch (error) {
       console.error('Failed to load cached feed data:', error);
     } finally {
@@ -243,7 +204,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
         podcast_title: item.podcast_show_name,
       }));
       setAllEpisodes(episodes);
-      setHasMoreFromServer(feedItemsResponse.data.length >= PAGE_SIZE);
+      setHasMore(feedItemsResponse.data.length >= PAGE_SIZE);
     } catch (error: any) {
       console.error('Search failed:', error);
       const errorMsg = error?.response?.data?.error || error?.message || 'Failed to search';
@@ -286,7 +247,6 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
         setSelectedPodcast(null);
         // If we were viewing the podcast we just unsubscribed from, go back to main feed
         setAllEpisodes(newEpisodes);
-        setVisibleEpisodeCount(PAGE_SIZE);
       }
     } catch (error) {
       console.error('Failed to unsubscribe:', error);
@@ -299,13 +259,14 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       setEpisodeSearchQuery('');
       setEpisodeSearchResults(null);
       const response = await podcastAPI.getPreviewEpisodes(podcast.id);
-      const episodesWithPodcast = response.data.map((ep: any) => ({
+      const { episodes, hasMore: more } = response.data;
+      const episodesWithPodcast = episodes.map((ep: any) => ({
         ...ep,
         podcast_id: podcast.id,
         podcast_title: podcast.title,
       }));
       setAllEpisodes(episodesWithPodcast);
-      setVisibleEpisodeCount(PAGE_SIZE);
+      setHasMore(more);
       setSelectedPodcast(podcast);
     } catch (error) {
       console.error('Failed to load podcast episodes:', error);
@@ -318,7 +279,6 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     setEpisodeSearchQuery('');
     setEpisodeSearchResults(null);
     await loadCachedData();
-    setVisibleEpisodeCount(PAGE_SIZE);
   };
 
   const handleShowAllSearchResults = () => {
@@ -330,27 +290,19 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   };
 
   const loadSearchResultEpisodes = async (feed: PodcastType) => {
-    console.log('=== Loading search result episodes ===');
-    console.log('Feed URL:', feed.feed_url);
-    console.log('Feed type:', feed.type);
-
     try {
       const response = await podcastAPI.getPreviewByUrl(feed.feed_url);
-      console.log('Episodes returned:', response.data.length, response.data);
+      const { episodes, hasMore: more } = response.data;
 
-      const episodesWithPodcast = response.data.map((ep: any) => ({
+      const episodesWithPodcast = episodes.map((ep: any) => ({
         ...ep,
         podcast_id: null,
         podcast_title: feed.title,
       }));
 
-      console.log('Setting episodes:', episodesWithPodcast.length);
       setAllEpisodes(episodesWithPodcast);
-      setVisibleEpisodeCount(PAGE_SIZE);
-
-      console.log('Setting selected search result:', feed.title);
+      setHasMore(more);
       setSelectedSearchResult(feed);
-      console.log('=== Done ===');
     } catch (error: any) {
       console.error('Failed to load feed preview:', error);
       const errorMsg = error?.response?.data?.error || error?.message || 'Failed to load preview';
@@ -359,10 +311,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   };
 
   const handleLoadMore = async () => {
-    if (!selectedPodcast && !selectedSearchResult) {
-      setLoadingMore(true);
-      try {
-        const offset = allEpisodes.length;
+    setLoadingMore(true);
+    try {
+      const offset = allEpisodes.length;
+      if (!selectedPodcast && !selectedSearchResult) {
         const response = await podcastAPI.getFeedItems(undefined, PAGE_SIZE, offset);
         const newItems = response.data.map((item: any) => ({
           ...item,
@@ -370,14 +322,22 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           podcast_title: item.podcast_show_name,
         }));
         setAllEpisodes(prev => [...prev, ...newItems]);
-        if (response.data.length < PAGE_SIZE) setHasMoreFromServer(false);
-      } catch (error) {
-        console.error('Failed to load more:', error);
-      } finally {
-        setLoadingMore(false);
+        setHasMore(response.data.length >= PAGE_SIZE);
+      } else if (currentFeedUrl) {
+        const response = await podcastAPI.getPreviewByUrl(currentFeedUrl, PAGE_SIZE, offset);
+        const { episodes, hasMore: more } = response.data;
+        const newItems = episodes.map((ep: any) => ({
+          ...ep,
+          podcast_id: selectedPodcast?.id || null,
+          podcast_title: selectedPodcast?.title || selectedSearchResult?.title,
+        }));
+        setAllEpisodes(prev => [...prev, ...newItems]);
+        setHasMore(more);
       }
-    } else {
-      setVisibleEpisodeCount(prev => prev + PAGE_SIZE);
+    } catch (error) {
+      console.error('Failed to load more:', error);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -425,18 +385,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           || (ep.author && ep.author.toLowerCase().includes(q));
       })
     : allEpisodes;
-  const displayEpisodes = episodeSearchResults !== null ? episodeSearchResults : clientFilteredEpisodes;
-  const isDetailView = !!(selectedPodcast || selectedSearchResult);
-  const visibleEpisodes = episodeSearchQuery.trim()
-    ? displayEpisodes
-    : isDetailView
-      ? displayEpisodes.slice(0, visibleEpisodeCount)
-      : displayEpisodes;
-  const hasMoreEpisodes = !episodeSearchQuery.trim() && (
-    isDetailView
-      ? (allEpisodes.length > visibleEpisodeCount || fullFeedLoading)
-      : hasMoreFromServer
-  );
+  const visibleEpisodes = episodeSearchResults !== null ? episodeSearchResults : clientFilteredEpisodes;
+  const hasMoreEpisodes = !episodeSearchQuery.trim() && hasMore;
 
   const isUrl = looksLikeUrl(searchQuery);
   const buttonText = loading ? 'Loading...' : 'Search';
@@ -643,7 +593,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               </div>
             ))}
             {hasMoreEpisodes && (
-              (fullFeedLoading && allEpisodes.length <= visibleEpisodeCount) ? (
+              loadingMore ? (
                 <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more...</p>
               ) : (
                 <button className="load-more-btn" onClick={handleLoadMore}>Load More</button>
@@ -745,7 +695,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               </div>
             ))}
             {hasMoreEpisodes && (
-              (fullFeedLoading && allEpisodes.length <= visibleEpisodeCount) ? (
+              loadingMore ? (
                 <p className="no-content"><RefreshCw size={14} className="spinning" style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />Loading more...</p>
               ) : (
                 <button className="load-more-btn" onClick={handleLoadMore}>Load More</button>

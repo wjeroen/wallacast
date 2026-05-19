@@ -288,86 +288,125 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
   }
 }
 
-export async function getPreviewEpisodes(feedUrl: string, limit: number = 50): Promise<any[]> {
+// In-memory RSS XML cache (avoids re-fetching on every Load More / search)
+const xmlCache = new Map<string, { xml: string; timestamp: number }>();
+const XML_CACHE_TTL = 5 * 60 * 1000;
+const XML_CACHE_MAX = 20;
+
+async function fetchFeedXml(feedUrl: string): Promise<string> {
+  const cached = xmlCache.get(feedUrl);
+  if (cached && Date.now() - cached.timestamp < XML_CACHE_TTL) {
+    return cached.xml;
+  }
+
+  const response = await fetch(feedUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+  });
+  const xml = await response.text();
+
+  if (xmlCache.size >= XML_CACHE_MAX) {
+    const oldestKey = xmlCache.keys().next().value;
+    if (oldestKey) xmlCache.delete(oldestKey);
+  }
+  xmlCache.set(feedUrl, { xml, timestamp: Date.now() });
+  return xml;
+}
+
+function parseOneItem(itemXml: string): any | null {
+  const title = extractXMLTag(itemXml, 'title');
+  if (!title) return null;
+
+  const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+  const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
+  const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
+  const duration = extractXMLTag(itemXml, 'itunes:duration');
+  const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
+
+  const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
+    extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
+    extractXMLAttribute(itemXml, 'media:content', 'url') ||
+    extractNestedXMLTag(itemXml, 'image', 'url') ||
+    (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
+
+  const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+    extractXMLTag(itemXml, 'itunes:author') ||
+    extractXMLTag(itemXml, 'author');
+  const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
+
+  const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
+
+  if (isAudioEnclosure) {
+    return {
+      title: cleanHtmlEntities(title),
+      description: cleanDescription(description),
+      audio_url: enclosureUrl,
+      published_at: pubDate ? new Date(pubDate) : new Date(),
+      duration: parseDuration(duration),
+      item_type: 'podcast_episode',
+      preview_picture,
+      author: cleanAuthor,
+    };
+  } else if (link) {
+    return {
+      title: cleanHtmlEntities(title),
+      description: cleanDescription(description),
+      url: link,
+      published_at: pubDate ? new Date(pubDate) : new Date(),
+      item_type: 'article',
+      preview_picture,
+      author: cleanAuthor,
+    };
+  }
+  return null;
+}
+
+export async function getPreviewEpisodes(feedUrl: string, limit: number = 50, offset: number = 0): Promise<{ episodes: any[]; hasMore: boolean }> {
   try {
-    const response = await fetch(feedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    const xml = await fetchFeedXml(feedUrl);
+    const itemRegex = /<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi;
+    let match;
+    let index = 0;
+    const episodes: any[] = [];
+
+    while ((match = itemRegex.exec(xml)) !== null) {
+      if (index < offset) { index++; continue; }
+      if (limit > 0 && episodes.length >= limit) {
+        return { episodes, hasMore: true };
       }
-    });
-    const xml = await response.text();
-
-    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
-
-    const episodes = [];
-
-    const items = limit > 0 ? itemMatches.slice(0, limit) : itemMatches.slice(0, 500);
-    for (const itemXml of items) {
-      const title = extractXMLTag(itemXml, 'title');
-
-      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
-
-      const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
-      const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
-      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
-      const duration = extractXMLTag(itemXml, 'itunes:duration');
-
-      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
-
-      const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
-        extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
-        extractXMLAttribute(itemXml, 'media:content', 'url') ||
-        extractNestedXMLTag(itemXml, 'image', 'url') ||
-        (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
-
-      if (!title) continue;
-
-      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
-        extractXMLTag(itemXml, 'itunes:author') ||
-        extractXMLTag(itemXml, 'author');
-      const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
-
-      const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
-
-      if (isAudioEnclosure) {
-        episodes.push({
-          title: cleanHtmlEntities(title),
-          description: cleanDescription(description),
-          audio_url: enclosureUrl,
-          published_at: pubDate ? new Date(pubDate) : new Date(),
-          duration: parseDuration(duration),
-          item_type: 'podcast_episode',
-          preview_picture,
-          author: cleanAuthor,
-        });
-      } else if (link) {
-        episodes.push({
-          title: cleanHtmlEntities(title),
-          description: cleanDescription(description),
-          url: link,
-          published_at: pubDate ? new Date(pubDate) : new Date(),
-          item_type: 'article',
-          preview_picture,
-          author: cleanAuthor,
-        });
-      }
+      const ep = parseOneItem(match[0]);
+      if (ep) episodes.push(ep);
+      index++;
     }
 
-    return episodes;
+    return { episodes, hasMore: false };
   } catch (error) {
     console.error('Error fetching preview episodes:', error);
     throw error;
   }
 }
 
-export async function searchFeedEpisodes(feedUrl: string, query: string): Promise<any[]> {
-  const allEpisodes = await getPreviewEpisodes(feedUrl, 0);
-  const q = query.toLowerCase();
-  return allEpisodes.filter(ep =>
-    (ep.title && ep.title.toLowerCase().includes(q)) ||
-    (ep.description && ep.description.toLowerCase().includes(q)) ||
-    (ep.author && ep.author.toLowerCase().includes(q))
-  );
+export async function searchFeedEpisodes(feedUrl: string, searchQuery: string): Promise<any[]> {
+  const xml = await fetchFeedXml(feedUrl);
+  const itemRegex = /<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi;
+  let match;
+  const q = searchQuery.toLowerCase();
+  const results: any[] = [];
+
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const ep = parseOneItem(match[0]);
+    if (!ep) continue;
+    if (
+      (ep.title && ep.title.toLowerCase().includes(q)) ||
+      (ep.description && ep.description.toLowerCase().includes(q)) ||
+      (ep.author && ep.author.toLowerCase().includes(q))
+    ) {
+      results.push(ep);
+    }
+  }
+  return results;
 }
 
 // --- Helper Functions ---
