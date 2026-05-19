@@ -149,7 +149,7 @@ router.get('/preview-by-url', async (req, res) => {
       return res.status(400).json({ error: 'Feed URL required' });
     }
 
-    const parsedLimit = limit !== undefined ? parseInt(limit as string) : 20;
+    const parsedLimit = limit !== undefined ? parseInt(limit as string) : 50;
     const episodes = await getPreviewEpisodes(url, parsedLimit);
 
     res.json(episodes);
@@ -194,11 +194,12 @@ router.get('/:id/episodes', async (req, res) => {
 // Get cached feed items from database (instant, no network requests)
 router.get('/feed-items', async (req, res) => {
   try {
-    const { feedId, limit } = req.query;
+    const { feedId, limit, offset } = req.query;
     const parsedFeedId = feedId ? parseInt(feedId as string) : undefined;
-    const parsedLimit = limit ? parseInt(limit as string) : 100;
+    const parsedLimit = limit ? parseInt(limit as string) : 50;
+    const parsedOffset = offset ? parseInt(offset as string) : 0;
 
-    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit);
+    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset);
     res.json(items);
   } catch (error) {
     console.error('Error fetching cached feed items:', error);

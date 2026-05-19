@@ -139,8 +139,8 @@ export const podcastAPI = {
     api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
 
   // Feed caching endpoints
-  getFeedItems: (feedId?: number, limit?: number) =>
-    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit } }),
+  getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
+    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
   refreshFeeds: () =>
     api.post<{ totalFeeds: number; totalItemsAdded: number }>('/podcasts/refresh-feeds'),
