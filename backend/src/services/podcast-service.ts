@@ -301,7 +301,7 @@ export async function getPreviewEpisodes(feedUrl: string, limit: number = 50): P
 
     const episodes = [];
 
-    const items = limit > 0 ? itemMatches.slice(0, limit) : itemMatches;
+    const items = limit > 0 ? itemMatches.slice(0, limit) : itemMatches.slice(0, 500);
     for (const itemXml of items) {
       const title = extractXMLTag(itemXml, 'title');
 

@@ -224,14 +224,26 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     if (!searchQuery.trim()) return;
 
     setSelectedSearchResult(null);
+    setSelectedPodcast(null);
     setEpisodeSearchOpen(false);
     setEpisodeSearchQuery('');
     setEpisodeSearchResults(null);
+    setAllEpisodes([]);
     setLoading(true);
     setSearchError(null);
     try {
-      const response = await podcastAPI.search(searchQuery);
-      setSearchResults(response.data);
+      const [searchResponse, feedItemsResponse] = await Promise.all([
+        podcastAPI.search(searchQuery),
+        podcastAPI.getFeedItems(undefined, PAGE_SIZE),
+      ]);
+      setSearchResults(searchResponse.data);
+      const episodes = feedItemsResponse.data.map((item: any) => ({
+        ...item,
+        podcast_id: item.feed_id,
+        podcast_title: item.podcast_show_name,
+      }));
+      setAllEpisodes(episodes);
+      setHasMoreFromServer(feedItemsResponse.data.length >= PAGE_SIZE);
     } catch (error: any) {
       console.error('Search failed:', error);
       const errorMsg = error?.response?.data?.error || error?.message || 'Failed to search';
@@ -500,7 +512,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             <h3>Search Results</h3>
             <button
               className="search-results-close"
-              onClick={() => { setSearchResults([]); setSearchQuery(''); }}
+              onClick={() => { setSearchResults([]); setSearchQuery(''); loadCachedData(); }}
               title="Close search results"
             >
               <X size={20} />
