@@ -7,6 +7,14 @@
 > **Priority Key:** 1 = Highest priority (do first, saves money!), 2 = High priority, 3 = Medium priority, 4+ = Lower priority (do later)
 
 ### Features to Implement
+- [ ] **[P1]** Offline support + local caching for snappier experience — Use IndexedDB to cache content locally on-device. Makes the app faster even when online (no server round-trip to open an item) and fully usable offline.
+  - **Non-audio content (auto-cached by default):** Article HTML, metadata, alignment/transcript data, comments — all tiny (~50-100KB per item). Automatically saved to IndexedDB whenever a library item is fetched. When opening an item, load from IndexedDB instantly, then background-sync with server to check for updates.
+  - **Audio (opt-in via setting):** "Auto-download audio for offline" setting with options: Off (default), Articles & texts only, Everything (including podcasts). Audio files are large (~2-5MB articles, ~30-100MB podcasts), so auto-download for podcasts should be explicitly opted into.
+  - **Explicit download button:** Per-item "Download for offline" button in library/fullscreen player for manually downloading audio regardless of auto-download setting.
+  - **Storage management UI in Settings:** Show "Offline storage: X MB used (N items)" with a "Clear all offline data" button. Consider per-item "Remove offline copy" option.
+  - **Request persistent storage** (`navigator.storage.persist()`) so Android doesn't evict PWA data when phone is low on space. Show warning that "Clear all site data" or uninstalling the PWA will delete offline data.
+  - **How it works technically:** IndexedDB is per-device, per-browser — each device only sees what it has stored locally. "Downloaded" status lives in IndexedDB, not the backend DB, so it can't show false positives across devices. Frontend checks IndexedDB first → found: use local copy (instant) → not found: fetch from server. Service worker stays out of audio requests (keeps the byte-range fix). App updates (new JS/CSS via service worker) do NOT wipe IndexedDB data.
+  - **Online benefit:** Even with a good connection, skipping the server fetch for article content, comments, and alignment data makes opening items near-instant. Server is only hit for background sync and fresh data.
 - [ ] **[P1]** Display LessWrong article content properly — LessWrong HTML uses custom CSS classes for headings, blockquotes, images, and other elements that don't render correctly with Wallacast's generic article styling. Investigate what LessWrong-specific CSS or HTML transformations are needed so articles look right in the Content tab.
 - [x] **[P2]** Replace broken PDF tab with HTML file upload in AddTab — reads file with FileReader, sends HTML as text content (2026-03-06)
 - [x] **[P1]** GraphQL and got-scraper for better LessWrong and EA forum fetching (2026-01-27)
