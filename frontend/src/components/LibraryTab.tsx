@@ -599,7 +599,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                                   className="read-more-link"
                                   onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
                                 >
-                                  Read more.
+                                  [...]
                                 </span>
                               </>
                             )}
