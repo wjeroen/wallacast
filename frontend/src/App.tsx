@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -8,6 +8,7 @@ import { LoginPage } from './components/LoginPage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
+import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import type { ContentItem } from './types';
 import './App.css';
@@ -21,24 +22,52 @@ function App() {
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
 
-  // Dark/light mode
-  const [isDark, setIsDark] = useState(() => {
-    try { return localStorage.getItem('wallacast-theme') !== 'light'; }
-    catch { return true; }
+  // Theme: dark | light | system
+  type ThemeMode = 'dark' | 'light' | 'system';
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const stored = localStorage.getItem('wallacast-theme');
+      if (stored === 'light' || stored === 'system') return stored;
+      return 'dark';
+    } catch { return 'dark'; }
   });
-
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  const isDark = themeMode === 'dark' || (themeMode === 'system' && systemPrefersDark);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    try { localStorage.setItem('wallacast-theme', isDark ? 'dark' : 'light'); }
-    catch {}
-  }, [isDark]);
+    try { localStorage.setItem('wallacast-theme', themeMode); } catch {}
+  }, [isDark, themeMode]);
+  const cycleTheme = () => setThemeMode(m => m === 'dark' ? 'light' : m === 'light' ? 'system' : 'dark');
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
 
   // Get addItem and fetchContent from store
   const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
+
+  // Queue state (subscribed so hasNext/hasPrev stay reactive across queue edits,
+  // library-context changes, shuffle/autoplay toggles, and the setting toggle)
+  useQueueStore(s => s.manualItems);
+  useQueueStore(s => s.autoplay);
+  useQueueStore(s => s.manualAlwaysAutoplay);
+  useQueueStore(s => s.libraryContext);
+  useQueueStore(s => s.shuffleNonManual);
+
+  // Bump this counter whenever we swap `currentContent` because of an auto-
+  // advance or explicit next/prev click. AudioPlayer watches it and auto-plays
+  // the new track once metadata loads. First-click from the library leaves it
+  // at 0 so playback stays user-initiated.
+  const [autoPlayToken, setAutoPlayToken] = useState(0);
 
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
@@ -53,6 +82,38 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Hydrate queue + autoplay preference once authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    useQueueStore.getState().fetchQueue();
+    useQueueStore.getState().hydrateSettings();
+  }, [isAuthenticated]);
+
+  // Poll any items whose audio we started generating from the queue flow.
+  // When they finish, re-insert at the front of the manual queue.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const interval = setInterval(async () => {
+      const qs = useQueueStore.getState();
+      if (qs.pendingRequeue.size === 0) return;
+      for (const id of Array.from(qs.pendingRequeue)) {
+        try {
+          const res = await contentAPI.getById(id);
+          if (res.data.generation_status === 'completed' && res.data.audio_url) {
+            await qs.addToFront(id);
+            qs.clearPendingRequeue(id);
+            refreshItem(id);
+          } else if (res.data.generation_status === 'failed') {
+            qs.clearPendingRequeue(id);
+          }
+        } catch (err) {
+          console.error('Pending requeue poll failed:', err);
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, refreshItem]);
 
   // Load feed staleness (days since last refresh)
   useEffect(() => {
@@ -119,9 +180,146 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Called from LibraryTab when the user clicks a library item. Captures the
+  // current filter as a "play context" (Spotify-style) so the non-manual
+  // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
+  // click should load the track, not play it automatically.
   const handlePlayContent = (content: ContentItem) => {
+    const filter = useContentStore.getState().filter;
+    useQueueStore.getState().setLibraryContext(filter, content.id);
     setCurrentContent(content);
   };
+
+  // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
+  // either a manual QueueItem or a derived non-manual ContentItem. Items
+  // without audio trigger the generate-or-skip prompt (only manuals can be
+  // in this state — non-manual stream filters audio-less items out).
+  const handlePlayQueueItem = async (item: ContentItem) => {
+    if (item.audio_url) {
+      try {
+        const res = await contentAPI.getById(item.id);
+        setCurrentContent(res.data);
+      } catch {
+        setCurrentContent(item);
+      }
+      setAutoPlayToken(t => t + 1);
+      return;
+    }
+    const qs = useQueueStore.getState();
+    const queueRow = qs.manualItems.find(m => m.id === item.id);
+    if (!queueRow) return; // defensive — should not happen
+    const proceed = confirm(
+      `"${item.title}" has no audio yet. Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
+    );
+    if (!proceed) return;
+    qs.markPendingRequeue(item.id);
+    await qs.removeFromQueue(queueRow.queue_id);
+    try {
+      await contentAPI.generateAudio(item.id, false);
+      refreshItem(item.id);
+    } catch (err: any) {
+      console.error('Failed to start audio generation:', err);
+      qs.clearPendingRequeue(item.id);
+      alert(err?.response?.data?.error || 'Failed to start audio generation');
+      return;
+    }
+    advanceToNextTrack('skip');
+  };
+
+  // Advance to the next track in the queue (manual first, then non-manual if
+  // autoplay is on). When we hit a manual item with no audio, prompt the user
+  // to generate-or-skip, then continue looking for a playable next item.
+  //
+  // `mode` = 'auto'  — track ended naturally or user hit skip-next. We always
+  //                    clear the current manual item (it's been played/skipped).
+  // `mode` = 'ended' — respects autoplay gating via getNextItem.
+  // `mode` = 'skip'  — ignores autoplay gating via peekNextItem.
+  const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
+    const currentId = currentContent?.id ?? null;
+
+    if (currentId !== null) {
+      const qs0 = useQueueStore.getState();
+      const currentRow = qs0.manualItems.find(m => m.id === currentId);
+      if (currentRow) qs0.removeFromQueue(currentRow.queue_id);
+    }
+
+    while (true) {
+      const qs = useQueueStore.getState();
+      const nextItem = mode === 'skip'
+        ? qs.peekNextItem(currentId)
+        : qs.getNextItem(currentId);
+      if (!nextItem) {
+        return;
+      }
+      if (nextItem.audio_url) {
+        try {
+          const res = await contentAPI.getById(nextItem.id);
+          setCurrentContent(res.data);
+        } catch {
+          setCurrentContent(nextItem);
+        }
+        setAutoPlayToken(t => t + 1);
+        return;
+      }
+      // Manual item without audio — prompt user
+      const queueRow = qs.manualItems.find(m => m.id === nextItem.id);
+      if (!queueRow) {
+        // Defensive: non-manual stream already filters out audio-less items.
+        return;
+      }
+      const shouldGenerate = confirm(
+        `"${nextItem.title}" has no audio yet. Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
+      );
+      if (shouldGenerate) {
+        qs.markPendingRequeue(nextItem.id);
+        qs.removeFromQueue(queueRow.queue_id);
+        contentAPI.generateAudio(nextItem.id, false)
+          .then(() => refreshItem(nextItem.id))
+          .catch((err) => {
+            console.error('Failed to start audio generation:', err);
+            qs.clearPendingRequeue(nextItem.id);
+          });
+      } else {
+        qs.removeFromQueue(queueRow.queue_id);
+      }
+      // Loop — try the new "next" after mutation
+    }
+  };
+
+  const handleTrackEnded = () => {
+    advanceToNextTrack('ended');
+  };
+
+  const handleSkipNext = () => {
+    advanceToNextTrack('skip');
+  };
+
+  const handleSkipPrev = async () => {
+    const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
+    if (!prev) return;
+    let item: ContentItem;
+    try {
+      const res = await contentAPI.getById(prev.id);
+      item = res.data;
+    } catch {
+      item = prev;
+    }
+    // If the track was nearly or fully finished, restart from the beginning.
+    // 10 seconds is the industry-standard threshold (Apple Podcasts, Pocket Casts).
+    const pos = item.playback_position || 0;
+    const dur = item.duration || 0;
+    if (dur > 0 && pos > 0 && (dur - pos) < 10) {
+      item = { ...item, playback_position: 0 };
+    }
+    setCurrentContent(item);
+    setAutoPlayToken(t => t + 1);
+  };
+
+  // Derived: is there a next/prev track from where we are right now?
+  // Both use the "peek" variants — the UI buttons always enable as long
+  // as there's somewhere to go, regardless of autoplay gating.
+  const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
+  const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
   const handleRefetchContent = async () => {
     if (!currentContent) return;
@@ -138,26 +336,10 @@ function App() {
     }
   };
 
-  const handleGenerateAudio = async (regenerate: boolean) => {
+  const doGenerateAudio = async (regenerate: boolean, excludeComments: boolean) => {
     if (!currentContent) return;
-
-    // Warn if article has many comments (but don't block — user can still proceed)
-    if (currentContent.comment_count && currentContent.comment_count > 0) {
-      try {
-        const res = await userSettingsAPI.get('max_narrated_comments');
-        const maxComments = res.data.value ? parseInt(res.data.value, 10) || 50 : 50;
-        if (currentContent.comment_count > maxComments) {
-          const proceed = confirm(
-            `This article has ${currentContent.comment_count} comments (your auto-generate limit is ${maxComments}). ` +
-            `Generating audio with this many comments may take a long time. Continue?`
-          );
-          if (!proceed) return;
-        }
-      } catch { /* use default — no warning if setting fetch fails */ }
-    }
-
     try {
-      await contentAPI.generateAudio(currentContent.id, regenerate);
+      await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
       setTimeout(async () => {
         const response = await contentAPI.getById(currentContent.id);
         setCurrentContent(response.data);
@@ -166,6 +348,24 @@ function App() {
       console.error('Failed to generate audio:', error);
       alert(error?.response?.data?.error || 'Failed to generate audio');
     }
+  };
+
+  const handleGenerateAudio = async (regenerate: boolean) => {
+    if (!currentContent) return;
+
+    if (currentContent.comment_count && currentContent.comment_count > 0) {
+      let maxComments = 50;
+      try {
+        const res = await userSettingsAPI.get('max_narrated_comments');
+        if (res.data.value) maxComments = parseInt(res.data.value, 10) || 50;
+      } catch { /* use default */ }
+      if (currentContent.comment_count > maxComments) {
+        setCommentWarning({ regenerate, commentCount: currentContent.comment_count, maxComments });
+        return;
+      }
+    }
+
+    doGenerateAudio(regenerate, false);
   };
 
   const handleRemoveAudio = async () => {
@@ -210,12 +410,12 @@ function App() {
     } catch { /* use default */ }
 
     const allEligible = allContent.filter(
-      item => item.type === 'article' && !item.is_archived && !item.audio_url &&
+      item => (item.type === 'article' || item.type === 'text') && !item.is_archived && !item.audio_url &&
               (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
     );
 
     if (allEligible.length === 0) {
-      alert('No articles need audio generation.');
+      alert('No items need audio generation.');
       return;
     }
 
@@ -223,13 +423,13 @@ function App() {
     const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
     const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
 
-    let message = `Generate audio for ${eligibleItems.length} article${eligibleItems.length !== 1 ? 's' : ''}?`;
+    let message = `Generate audio for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`;
     if (skippedItems.length > 0) {
-      message += `\n\nSkipping ${skippedItems.length} article${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+      message += `\n\nSkipping ${skippedItems.length} item${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
     }
 
     if (eligibleItems.length === 0) {
-      alert(`All ${allEligible.length} article${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
+      alert(`All ${allEligible.length} item${allEligible.length !== 1 ? 's' : ''} have ${COMMENT_THRESHOLD}+ comments. Generate audio manually for these.`);
       return;
     }
 
@@ -293,7 +493,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo-1e293b.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
 
@@ -340,9 +540,9 @@ function App() {
                 <span>Settings</span>
               </button>
 
-              <button className="user-dropdown-item" onClick={() => { setIsDark(d => !d); }}>
-                {isDark ? <Sun size={18} /> : <Moon size={18} />}
-                <span>{isDark ? 'Light mode' : 'Dark mode'}</span>
+              <button className="user-dropdown-item" onClick={cycleTheme}>
+                {themeMode === 'dark' ? <Moon size={18} /> : themeMode === 'light' ? <Sun size={18} /> : <SunMoon size={18} />}
+                <span>{themeMode === 'dark' ? 'Dark' : themeMode === 'light' ? 'Light' : 'System'}</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
@@ -378,6 +578,16 @@ function App() {
             onRemoveAudio={handleRemoveAudio}
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
+            isDark={isDark}
+            themeMode={themeMode}
+            onCycleTheme={cycleTheme}
+            onTrackEnded={handleTrackEnded}
+            onSkipNextTrack={handleSkipNext}
+            onSkipPrevTrack={handleSkipPrev}
+            hasNextTrack={hasNextTrack}
+            hasPrevTrack={hasPrevTrack}
+            autoPlayToken={autoPlayToken}
+            onPlayQueueItem={handlePlayQueueItem}
           />
         )}
 
@@ -404,6 +614,42 @@ function App() {
           </button>
         </nav>
       </div>
+
+      {commentWarning && (
+        <div className="comment-warning-overlay" onClick={() => setCommentWarning(null)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>This article has <strong>{commentWarning.commentCount} comments</strong> (your auto-generate limit is {commentWarning.maxComments}). Generating audio with this many comments may take a long time.</p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn exclude"
+                onClick={() => {
+                  const { regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(regenerate, true);
+                }}
+              >
+                Exclude comments
+              </button>
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  const { regenerate } = commentWarning;
+                  setCommentWarning(null);
+                  doGenerateAudio(regenerate, false);
+                }}
+              >
+                Include comments
+              </button>
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setCommentWarning(null)}
+              >
+                Don't generate audio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

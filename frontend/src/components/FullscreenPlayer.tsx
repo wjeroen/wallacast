@@ -6,6 +6,10 @@ import {
   RotateCw,
   Gauge,
   Clock,
+  Type,
+  Sun,
+  Moon,
+  SunMoon,
   X,
   Minimize2,
   SquareArrowOutUpRight,
@@ -18,9 +22,16 @@ import {
   Archive,
   ArchiveRestore,
   Trash2,
+  SkipBack,
+  SkipForward,
+  Repeat,
+  Shuffle,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
-import { contentAPI } from '../api';
+import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore } from '../store/contentStore';
+import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, Comment } from '../types';
 
 interface TranscriptWord {
@@ -66,9 +77,28 @@ interface FullscreenPlayerProps {
   onRemoveAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
+  themeMode: 'dark' | 'light' | 'system';
+  onCycleTheme: () => void;
+  // Queue integration
+  onSkipNextTrack?: () => void;
+  onSkipPrevTrack?: () => void;
+  hasNextTrack?: boolean;
+  hasPrevTrack?: boolean;
+  onPlayQueueItem?: (item: ContentItem) => void;
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
+
+const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
+
+function getStoredFontScale(): number {
+  const stored = localStorage.getItem('readerFontScale');
+  if (stored) {
+    const parsed = parseFloat(stored);
+    if (FONT_SCALES.includes(parsed)) return parsed;
+  }
+  return 1;
+}
 
 function cleanHtml(text: string): string {
   if (!text) return '';
@@ -157,6 +187,94 @@ function buildCommentMetadata(
   return parts.join(' \u00B7 ');
 }
 
+interface QueueRowProps {
+  item: ContentItem;
+  isCurrent: boolean;
+  onPlay: () => void;
+  onRemove?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
+}
+function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: QueueRowProps) {
+  // Two-tap remove: first tap arms the button with a visible warning state,
+  // a second tap within the timeout actually removes. Guards against stray
+  // mis-taps next to the move buttons.
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
+
+  const handleRemoveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onRemove) return;
+    if (confirmRemove) {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      setConfirmRemove(false);
+      onRemove();
+      return;
+    }
+    setConfirmRemove(true);
+    confirmTimerRef.current = setTimeout(() => setConfirmRemove(false), 3000);
+  };
+
+  return (
+    <div className={`queue-row ${isCurrent ? 'current' : ''}`}>
+      <div className="queue-row-main" onClick={onPlay}>
+        {item.preview_picture && (
+          <img src={item.preview_picture} alt={item.title} className="queue-row-thumb" />
+        )}
+        <div className="queue-row-info">
+          <div className="queue-row-title">
+            {isCurrent && <span className="queue-now-playing">▶ </span>}
+            {item.title}
+          </div>
+          <div className="queue-row-meta">
+            {item.type === 'podcast_episode' && item.podcast_show_name
+              ? item.podcast_show_name
+              : (item.author || '')}
+            {!item.audio_url && <span className="queue-row-noaudio"> · no audio</span>}
+          </div>
+        </div>
+      </div>
+      {onMoveUp && (
+        <button
+          className="queue-row-move"
+          onClick={(e) => { e.stopPropagation(); if (canMoveUp) onMoveUp(); }}
+          disabled={!canMoveUp}
+          title="Move up"
+        >
+          <ChevronUp size={16} />
+        </button>
+      )}
+      {onMoveDown && (
+        <button
+          className="queue-row-move"
+          onClick={(e) => { e.stopPropagation(); if (canMoveDown) onMoveDown(); }}
+          disabled={!canMoveDown}
+          title="Move down"
+        >
+          <ChevronDown size={16} />
+        </button>
+      )}
+      {onRemove && (
+        <button
+          className={`queue-row-remove ${confirmRemove ? 'confirm' : ''}`}
+          onClick={handleRemoveClick}
+          title={confirmRemove ? 'Tap again to confirm' : 'Remove from queue'}
+        >
+          {confirmRemove ? <span className="queue-row-remove-confirm">Remove?</span> : <X size={16} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FullscreenPlayer({
   content,
   isPlaying,
@@ -180,11 +298,51 @@ export function FullscreenPlayer({
   onRemoveAudio,
   onRegenerateTranscript,
   onContentUpdated,
+  themeMode,
+  onCycleTheme,
+  onSkipNextTrack,
+  onSkipPrevTrack,
+  hasNextTrack = false,
+  hasPrevTrack = false,
+  onPlayQueueItem,
 }: FullscreenPlayerProps) {
+  // Queue state for the Queue tab + autoplay toggle
+  const manualItems = useQueueStore(s => s.manualItems);
+  const libraryContext = useQueueStore(s => s.libraryContext);
+  const autoplay = useQueueStore(s => s.autoplay);
+  const shuffleNonManual = useQueueStore(s => s.shuffleNonManual);
+  const setAutoplay = useQueueStore(s => s.setAutoplay);
+  const setShuffleNonManual = useQueueStore(s => s.setShuffleNonManual);
+  const removeFromQueue = useQueueStore(s => s.removeFromQueue);
+  const moveUp = useQueueStore(s => s.moveUp);
+  const moveDown = useQueueStore(s => s.moveDown);
+  const clearQueue = useQueueStore(s => s.clearQueue);
+  const getNonManualItems = useQueueStore(s => s.getNonManualItems);
+  // Re-derive non-manual items when queue/context/shuffle changes OR current item changes
+  const nonManualItems = useMemo(
+    () => getNonManualItems(content.id),
+    [getNonManualItems, content.id, manualItems, libraryContext, shuffleNonManual]
+  );
   // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
   const [activeTab, setActiveTab] = useState<TabType>(
     content.type === 'podcast_episode' ? 'description' : 'read-along'
   );
+  // Per-tab scroll position memory: save when leaving a tab, restore when entering
+  const tabScrollPositions = useRef<Record<string, number>>({});
+  const tabContentRef = useRef<HTMLDivElement>(null);
+
+  // When switching tracks, reset to the appropriate default tab.
+  // Only the queue tab is preserved across advances; content tabs
+  // reset to the default for the new content type (description for
+  // podcasts, read-along for articles/texts).
+  useEffect(() => {
+    tabScrollPositions.current = {};
+    setActiveTab(prev => {
+      if (prev === 'queue') return prev;
+      return content.type === 'podcast_episode' ? 'description' : 'read-along';
+    });
+  }, [content.id]);
+
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
@@ -192,6 +350,10 @@ export function FullscreenPlayer({
   const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
   // Dropdown menu state
   const [showDropdown, setShowDropdown] = useState(false);
+  // Display panel state (font size)
+  const [fontScale, setFontScale] = useState<number>(getStoredFontScale);
+  const [showDisplayPanel, setShowDisplayPanel] = useState(false);
+  const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem } = useContentStore();
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -207,6 +369,29 @@ export function FullscreenPlayer({
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showDropdown]);
+
+  // Close display panel when clicking outside
+  useEffect(() => {
+    if (!showDisplayPanel) return;
+    function handleClick(e: MouseEvent) {
+      if (displayPanelRef.current && !displayPanelRef.current.contains(e.target as Node)) {
+        setShowDisplayPanel(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDisplayPanel]);
+
+  // Sync font scale from backend on mount (cross-device persistence)
+  useEffect(() => {
+    userSettingsAPI.get('reader_font_scale').then(res => {
+      const val = res.data.value ? parseFloat(res.data.value) : null;
+      if (val && FONT_SCALES.includes(val)) {
+        localStorage.setItem('readerFontScale', String(val));
+        setFontScale(val);
+      }
+    }).catch(() => {});
+  }, []);
 
   // Reset unsynced toggle when content changes
   useEffect(() => {
@@ -315,12 +500,12 @@ export function FullscreenPlayer({
     return tabs;
   }, [content.type, content.url, parsedComments.length]);
 
-  // Auto-select first available tab
-  useState(() => {
+  // Auto-select first available tab if current one disappeared
+  useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
       setActiveTab(availableTabs[0]);
     }
-  });
+  }, [availableTabs, activeTab]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -400,9 +585,25 @@ export function FullscreenPlayer({
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
       scrollToActive();
-    } else {
-      setActiveTab(tab);
+      return;
     }
+    // Save current tab's scroll position before switching
+    if (tabContentRef.current) {
+      tabScrollPositions.current[activeTab] = tabContentRef.current.scrollTop;
+    }
+    setActiveTab(tab);
+    // Restore saved scroll position for the target tab (0 if never visited)
+    requestAnimationFrame(() => {
+      if (tabContentRef.current) {
+        tabContentRef.current.scrollTop = tabScrollPositions.current[tab] || 0;
+      }
+    });
+  };
+
+  const handleFontScaleChange = (newScale: number) => {
+    setFontScale(newScale);
+    localStorage.setItem('readerFontScale', String(newScale));
+    userSettingsAPI.set('reader_font_scale', String(newScale)).catch(() => {});
   };
 
   // Recursive component to render comments with replies (for Comments tab)
@@ -509,7 +710,7 @@ export function FullscreenPlayer({
               className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
               onClick={() => onSeek(titleEl.startTime)}
             >
-              <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem' }}>{content.title}</h2>
+              <h2 style={{ margin: '0 0 0.5rem 0' }}>{content.title}</h2>
             </div>
           )}
 
@@ -527,7 +728,7 @@ export function FullscreenPlayer({
 
           {/* Content provenance: two lines for content version and audio/read-along version */}
           {(content.type === 'article' || content.type === 'text') && (
-            <div className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
+            <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
               {/* Line 1: Content version */}
               <div>
                 {content.type === 'article'
@@ -736,7 +937,7 @@ export function FullscreenPlayer({
                 )}
                 {/* URL removed — already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
-                  <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
                     {content.audio_generated_at && content.audio_url && (
                       <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
@@ -901,7 +1102,7 @@ export function FullscreenPlayer({
                     </p>
                   )}
                   {content.type === 'article' && content.content_source && (
-                    <p className="content-provenance" style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                       Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
                       {content.audio_generated_at && content.audio_url && (
                         <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
@@ -939,23 +1140,122 @@ export function FullscreenPlayer({
           </div>
         );
       }
-      case 'queue':
+      case 'queue': {
+        const nonManualLabel = libraryContext ? (() => {
+          switch (libraryContext.filter) {
+            case 'articles': return 'Up next from Articles';
+            case 'texts': return 'Up next from Texts';
+            case 'podcasts': return 'Up next from Podcasts';
+            case 'favorites': return 'Up next from Favorites';
+            case 'archived': return 'Up next from Archived';
+            case 'all':
+            default: return 'Up next from Library';
+          }
+        })() : 'Up next';
+
+        const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
+
         return (
           <div className="tab-queue-display">
-            <h3>Queue</h3>
-            <p className="work-in-progress">Work in progress</p>
-            <p style={{ fontSize: '0.875rem', color: '#9ca3af' }}>
-              Queue functionality will be implemented soon. Stay tuned!
-            </p>
+            {isEmpty ? (
+              <p className="no-content">
+                Your queue is empty. Add items from the library's "Add to queue" menu,
+                or play a library item to populate "Up next" automatically.
+              </p>
+            ) : (
+              <>
+                {manualItems.length > 0 && (
+                  <div className="queue-section">
+                    <div className="queue-section-header">
+                      <h3>In queue ({manualItems.length})</h3>
+                      <button
+                        className="queue-clear-btn"
+                        onClick={() => {
+                          if (confirm('Clear all items from the queue?')) clearQueue();
+                        }}
+                        title="Clear queue"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="queue-list">
+                      {manualItems.map((item, idx) => (
+                        <QueueRow
+                          key={`m-${item.queue_id}`}
+                          item={item}
+                          isCurrent={item.id === content.id}
+                          onPlay={() => onPlayQueueItem?.(item)}
+                          onRemove={() => removeFromQueue(item.queue_id)}
+                          onMoveUp={() => moveUp(item.queue_id)}
+                          onMoveDown={() => moveDown(item.queue_id)}
+                          canMoveUp={idx > 0}
+                          canMoveDown={idx < manualItems.length - 1}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {manualItems.length > 0 && nonManualItems.length > 0 && (
+                  <div className="queue-divider" />
+                )}
+
+                {nonManualItems.length > 0 && (
+                  <div className="queue-section">
+                    <div className="queue-section-header">
+                      <h3>
+                        {nonManualLabel} ({nonManualItems.length})
+                      </h3>
+                      <button
+                        className={`queue-shuffle-btn ${autoplay ? 'active' : ''}`}
+                        onClick={() => setAutoplay(!autoplay)}
+                        title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
+                      >
+                        <Repeat size={14} />
+                      </button>
+                      <button
+                        className={`queue-shuffle-btn ${shuffleNonManual ? 'active' : ''}`}
+                        onClick={() => setShuffleNonManual(!shuffleNonManual, content.id)}
+                        title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
+                      >
+                        <Shuffle size={14} />
+                      </button>
+                    </div>
+                    {!autoplay && (
+                      <p className="queue-hint">
+                        Autoplay is off — these items won't play automatically when the queue ends.
+                        Tap the loop icon above to turn it on.
+                      </p>
+                    )}
+                    <div className="queue-list">
+                      {nonManualItems.slice(0, 50).map(item => (
+                        <QueueRow
+                          key={`n-${item.id}`}
+                          item={item}
+                          isCurrent={false}
+                          onPlay={() => onPlayQueueItem?.(item)}
+                        />
+                      ))}
+                      {nonManualItems.length > 50 && (
+                        <p className="queue-hint" style={{ textAlign: 'center' }}>
+                          …and {nonManualItems.length - 50} more
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         );
+      }
       default:
         return null;
     }
   };
 
   return (
-    <div className="fullscreen-player">
+    <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {content.preview_picture && (
@@ -1120,7 +1420,7 @@ export function FullscreenPlayer({
       </div>
 
       {/* Tab Content Area */}
-      <div className="fullscreen-tab-content">
+      <div className="fullscreen-tab-content" ref={tabContentRef}>
         {renderTabContent()}
       </div>
 
@@ -1159,6 +1459,15 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-playback-controls">
+          <button
+            onClick={() => onSkipPrevTrack?.()}
+            title="Previous track"
+            className="track-skip-btn"
+            disabled={!hasPrevTrack}
+          >
+            <SkipBack size={22} />
+          </button>
+
           <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
             <RotateCcw className="seek-icon" />
             <span className="seek-label">15</span>
@@ -1172,6 +1481,15 @@ export function FullscreenPlayer({
             <RotateCw className="seek-icon" />
             <span className="seek-label">15</span>
           </button>
+
+          <button
+            onClick={() => onSkipNextTrack?.()}
+            title="Next track"
+            className="track-skip-btn"
+            disabled={!hasNextTrack}
+          >
+            <SkipForward size={22} />
+          </button>
         </div>
 
         <div className="fullscreen-player-options">
@@ -1184,6 +1502,50 @@ export function FullscreenPlayer({
             <Clock size={20} />
             <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
           </button>
+
+          <div ref={displayPanelRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowDisplayPanel(p => !p)}
+              className="option-toggle"
+              title="Display settings"
+            >
+              <Type size={20} />
+              <span>{Math.round(fontScale * 100)}%</span>
+            </button>
+            {showDisplayPanel && (
+              <div className="display-panel">
+                <div className="display-panel-label">Text size</div>
+                <div className="font-scale-control">
+                  <button
+                    className="font-scale-btn"
+                    onClick={() => {
+                      const idx = FONT_SCALES.indexOf(fontScale);
+                      if (idx > 0) handleFontScaleChange(FONT_SCALES[idx - 1]);
+                    }}
+                    disabled={FONT_SCALES.indexOf(fontScale) === 0}
+                    aria-label="Decrease font size"
+                  >−</button>
+                  <span className="font-scale-value">{Math.round(fontScale * 100)}%</span>
+                  <button
+                    className="font-scale-btn"
+                    onClick={() => {
+                      const idx = FONT_SCALES.indexOf(fontScale);
+                      if (idx < FONT_SCALES.length - 1) handleFontScaleChange(FONT_SCALES[idx + 1]);
+                    }}
+                    disabled={FONT_SCALES.indexOf(fontScale) === FONT_SCALES.length - 1}
+                    aria-label="Increase font size"
+                  >+</button>
+                </div>
+                <div className="display-panel-section">
+                  <div className="display-panel-label">Appearance</div>
+                  <button className="display-panel-toggle" onClick={onCycleTheme}>
+                    {themeMode === 'dark' ? <Moon size={16} /> : themeMode === 'light' ? <Sun size={16} /> : <SunMoon size={16} />}
+                    <span>{themeMode === 'dark' ? 'Dark' : themeMode === 'light' ? 'Light' : 'System'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

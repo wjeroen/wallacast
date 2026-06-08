@@ -288,82 +288,125 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
   }
 }
 
-export async function getPreviewEpisodes(feedUrl: string): Promise<any[]> {
+// In-memory RSS XML cache (avoids re-fetching on every Load More / search)
+const xmlCache = new Map<string, { xml: string; timestamp: number }>();
+const XML_CACHE_TTL = 5 * 60 * 1000;
+const XML_CACHE_MAX = 20;
+
+async function fetchFeedXml(feedUrl: string): Promise<string> {
+  const cached = xmlCache.get(feedUrl);
+  if (cached && Date.now() - cached.timestamp < XML_CACHE_TTL) {
+    return cached.xml;
+  }
+
+  const response = await fetch(feedUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+  });
+  const xml = await response.text();
+
+  if (xmlCache.size >= XML_CACHE_MAX) {
+    const oldestKey = xmlCache.keys().next().value;
+    if (oldestKey) xmlCache.delete(oldestKey);
+  }
+  xmlCache.set(feedUrl, { xml, timestamp: Date.now() });
+  return xml;
+}
+
+function parseOneItem(itemXml: string): any | null {
+  const title = extractXMLTag(itemXml, 'title');
+  if (!title) return null;
+
+  const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
+  const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
+  const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
+  const duration = extractXMLTag(itemXml, 'itunes:duration');
+  const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
+
+  const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
+    extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
+    extractXMLAttribute(itemXml, 'media:content', 'url') ||
+    extractNestedXMLTag(itemXml, 'image', 'url') ||
+    (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
+
+  const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+    extractXMLTag(itemXml, 'itunes:author') ||
+    extractXMLTag(itemXml, 'author');
+  const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
+
+  const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
+
+  if (isAudioEnclosure) {
+    return {
+      title: cleanHtmlEntities(title),
+      description: cleanDescription(description),
+      audio_url: enclosureUrl,
+      published_at: pubDate ? new Date(pubDate) : new Date(),
+      duration: parseDuration(duration),
+      item_type: 'podcast_episode',
+      preview_picture,
+      author: cleanAuthor,
+    };
+  } else if (link) {
+    return {
+      title: cleanHtmlEntities(title),
+      description: cleanDescription(description),
+      url: link,
+      published_at: pubDate ? new Date(pubDate) : new Date(),
+      item_type: 'article',
+      preview_picture,
+      author: cleanAuthor,
+    };
+  }
+  return null;
+}
+
+export async function getPreviewEpisodes(feedUrl: string, limit: number = 50, offset: number = 0): Promise<{ episodes: any[]; hasMore: boolean }> {
   try {
-    // FIX: Added User-Agent
-    const response = await fetch(feedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    const xml = await fetchFeedXml(feedUrl);
+    const itemRegex = /<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi;
+    let match;
+    let index = 0;
+    const episodes: any[] = [];
+
+    while ((match = itemRegex.exec(xml)) !== null) {
+      if (index < offset) { index++; continue; }
+      if (limit > 0 && episodes.length >= limit) {
+        return { episodes, hasMore: true };
       }
-    });
-    const xml = await response.text();
-
-    // FIX: Extract items using updated regex for Atom/RSS
-    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
-
-    const episodes = [];
-
-    for (const itemXml of itemMatches.slice(0, 20)) {
-      // Limit to 20 most recent
-      const title = extractXMLTag(itemXml, 'title');
-      
-      // FIX: Prioritize summary/description to avoid full articles. 
-      // RSS uses 'description', Atom uses 'summary'. 
-      // We purposefully avoid 'content:encoded' or 'content' to keep it brief.
-      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
-      
-      const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
-      const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
-      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
-      const duration = extractXMLTag(itemXml, 'itunes:duration');
-      
-      // RSS uses <link>URL</link>, Atom uses <link href="URL" />
-      const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href'); 
-
-      // Extract item-level thumbnail
-      const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
-        extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
-        extractXMLAttribute(itemXml, 'media:content', 'url') ||
-        extractNestedXMLTag(itemXml, 'image', 'url') ||
-        // If enclosure is an image, use it as thumbnail (Substack)
-        (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
-
-      if (!title) continue;
-
-      // Check if enclosure is actually audio (not an image)
-      const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
-
-      // For podcasts: require audio enclosure with audio/* mime type
-      // For newsletters: require link (article URL)
-      if (isAudioEnclosure) {
-        // Podcast episode
-        episodes.push({
-          title: cleanHtmlEntities(title),
-          description: cleanDescription(description),
-          audio_url: enclosureUrl,
-          published_at: pubDate ? new Date(pubDate) : new Date(),
-          duration: parseDuration(duration),
-          item_type: 'podcast_episode',
-          preview_picture,
-        });
-      } else if (link) {
-        // Newsletter article
-        episodes.push({
-          title: cleanHtmlEntities(title),
-          description: cleanDescription(description),
-          url: link,
-          published_at: pubDate ? new Date(pubDate) : new Date(),
-          item_type: 'article',
-          preview_picture,
-        });
-      }
+      const ep = parseOneItem(match[0]);
+      if (ep) episodes.push(ep);
+      index++;
     }
 
-    return episodes;
+    return { episodes, hasMore: false };
   } catch (error) {
     console.error('Error fetching preview episodes:', error);
     throw error;
   }
+}
+
+export async function searchFeedEpisodes(feedUrl: string, searchQuery: string): Promise<any[]> {
+  const xml = await fetchFeedXml(feedUrl);
+  const itemRegex = /<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi;
+  let match;
+  const q = searchQuery.toLowerCase();
+  const results: any[] = [];
+
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const ep = parseOneItem(match[0]);
+    if (!ep) continue;
+    if (
+      (ep.title && ep.title.toLowerCase().includes(q)) ||
+      (ep.description && ep.description.toLowerCase().includes(q)) ||
+      (ep.author && ep.author.toLowerCase().includes(q))
+    ) {
+      results.push(ep);
+    }
+  }
+  return results;
 }
 
 // --- Helper Functions ---
@@ -498,6 +541,11 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
       const guid = extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || enclosureUrl;
 
+      // Extract per-item author (dc:creator for EA Forum/LessWrong, author/itunes:author as fallbacks)
+      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+        extractXMLTag(itemXml, 'itunes:author') ||
+        extractXMLTag(itemXml, 'author');
+
       // Extract thumbnail
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
         extractXMLAttribute(itemXml, 'media:thumbnail', 'url') ||
@@ -515,13 +563,14 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       // Truncate description to 2000 chars to prevent abuse
       const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
 
-      // Insert into feed_items (ON CONFLICT DO NOTHING for deduplication)
+      // Insert into feed_items (ON CONFLICT update author for existing items that lack it)
       try {
+        const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(
           `INSERT INTO feed_items
-           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (feed_id, guid) DO NOTHING
+           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author
            RETURNING id`,
           [
             feedId,
@@ -534,6 +583,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             parseDuration(duration),
             preview_picture,
             guid,
+            cleanAuthor,
           ]
         );
 
@@ -599,12 +649,11 @@ export async function refreshAllFeedsFromNetwork(userId: number): Promise<{ tota
  * @param feedId - Optional: filter by specific feed
  * @param limit - Maximum number of items to return (default: 100)
  */
-export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 100): Promise<any[]> {
+export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0): Promise<any[]> {
   let queryText: string;
   let queryParams: any[];
 
   if (feedId) {
-    // Get items for a specific feed
     queryText = `
       SELECT
         fi.*,
@@ -614,11 +663,10 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND fi.feed_id = $2
       ORDER BY fi.published_at DESC
-      LIMIT $3
+      LIMIT $3 OFFSET $4
     `;
-    queryParams = [userId, feedId, limit];
+    queryParams = [userId, feedId, limit, offset];
   } else {
-    // Get recent items from ALL subscribed feeds
     queryText = `
       SELECT
         fi.*,
@@ -628,9 +676,9 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND p.is_subscribed = TRUE
       ORDER BY fi.published_at DESC
-      LIMIT $2
+      LIMIT $2 OFFSET $3
     `;
-    queryParams = [userId, limit];
+    queryParams = [userId, limit, offset];
   }
 
   const result = await query(queryText, queryParams);
