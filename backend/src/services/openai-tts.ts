@@ -7,7 +7,7 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
@@ -573,8 +573,20 @@ export async function generateArticleAudio(
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
   try {
     const userSettings = await getTTSOptionsForUser(userId);
-    const targetModel = userSettings.model || 'gpt-4o-mini-tts';
-    const targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+    let targetModel = userSettings.model || 'gpt-4o-mini-tts';
+    let targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+
+    // Voice variety: if the user selected multiple voices, pick one at random for this
+    // generation (can span TTS models — the picked model also overrides the client routing).
+    // Skipped when an explicit voice was requested.
+    if (!options.voice) {
+      const picked = await pickRandomTTSVoice(userId);
+      if (picked) {
+        targetModel = picked.model;
+        targetVoice = picked.voice;
+        console.log(`[TTS] Voice variety: picked '${picked.voice}' (${picked.model})`);
+      }
+    }
 
     const openai = await getTTSClientForUser(userId, targetModel);
     
