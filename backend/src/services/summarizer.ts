@@ -109,33 +109,33 @@ function splitParagraphs(text: string | null): string[] {
   return parts;
 }
 
-// Log the real character length of each paragraph (spaces included) so we can see in the
-// Railway logs whether the model is keeping tweets under the limit.
+// Log the word count of each paragraph so we can see in the Railway logs whether the model
+// is keeping tweets under the word limit.
 function logTweetLengths(label: string, text: string | null, limit: number): void {
   const paras = splitParagraphs(text);
   if (paras.length === 0) return;
-  const lengths = paras.map(p => p.length);
-  const over = lengths.filter(l => l > limit).length;
-  console.log(`[Summary] ${label}: ${paras.length} paragraph(s), lengths=[${lengths.join(', ')}]${over ? ` — ${over} OVER ${limit}` : ''}`);
+  const counts = paras.map(p => p.split(/\s+/).filter(Boolean).length);
+  const over = counts.filter(c => c > limit).length;
+  console.log(`[Summary] ${label}: ${paras.length} paragraph(s), words=[${counts.join(', ')}]${over ? ` — ${over} OVER ${limit}` : ''}`);
 }
 
-// Default per-paragraph length target, used when the user hasn't set `summary_max_chars`.
-// We aim BELOW Twitter's real 280 limit because LLMs estimate length rather than count
-// exactly, so they tend to overshoot — 240 keeps the actual output comfortably under 280.
-const DEFAULT_MAX_TWEET_CHARS = 240;
+// Default per-paragraph length target, in WORDS, used when the user hasn't set
+// `summary_max_words`. Words are a more natural unit for the model to gauge than characters
+// (which it tends to overshoot), so we cap by word count instead.
+const DEFAULT_MAX_TWEET_WORDS = 40;
 
-// Read the user's per-paragraph character cap, falling back to the default. Clamped to a
-// sane range so a bad setting can't produce a nonsensical prompt.
-function parseMaxChars(raw: string | null): number {
+// Read the user's per-paragraph word cap, falling back to the default. Clamped to a sane
+// range so a bad setting can't produce a nonsensical prompt.
+function parseMaxWords(raw: string | null): number {
   const n = parseInt(raw || '', 10);
-  if (!Number.isFinite(n)) return DEFAULT_MAX_TWEET_CHARS;
-  return Math.min(2000, Math.max(50, n));
+  if (!Number.isFinite(n)) return DEFAULT_MAX_TWEET_WORDS;
+  return Math.min(500, Math.max(5, n));
 }
 
-const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => {
+const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
   if (maxTweets <= 1) {
     return `You write a one-paragraph, tweet-style summary of an article.
-- Write a single paragraph, at most ${maxChars} characters (counting spaces and punctuation), that captures the article's central thesis or main takeaway.
+- Write a single paragraph, at most ${maxWords} words, that captures the article's central thesis or main takeaway.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
@@ -146,7 +146,7 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
 - If the article is itself a roundup of several news stories, just highlight the most interesting ones rather than trying to cover them all.
 - Write at most ${maxTweets} paragraphs. Use fewer when the article is simple; do not pad to reach the limit.
-- Each paragraph is at most ${maxChars} characters (counting spaces and punctuation) and reads on its own, but together they must form one coherent line of reasoning.
+- Each paragraph is at most ${maxWords} words and reads on its own, but together they must form one coherent line of reasoning.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
@@ -154,10 +154,10 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 };
 
-const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => {
+const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
   if (maxTweets <= 1) {
     return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
-- Write a single paragraph, at most ${maxChars} characters (counting spaces and punctuation), capturing the overall gist of the discussion: its general tenor and the main point or two raised.
+- Write a single paragraph, at most ${maxWords} words, capturing the overall gist of the discussion: its general tenor and the main point or two raised.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
@@ -167,7 +167,7 @@ const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
 - The FIRST paragraph captures the overall vibe of the discussion: its general tenor and where the room lands (broad agreement, sharp disagreement, mixed, mostly minor quibbles, etc.).
 - The remaining paragraphs cover the main threads: key points, agreements, disagreements, questions, and notable additions. Group related points together rather than listing comments one by one.
 - Write at most ${maxTweets} paragraphs. Use fewer when the discussion is simple; do not pad to reach the limit.
-- Each paragraph is at most ${maxChars} characters (counting spaces and punctuation) and reads on its own, but together they form one coherent overview.
+- Each paragraph is at most ${maxWords} words and reads on its own, but together they form one coherent overview.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
@@ -204,28 +204,28 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     }
     const articleChars = articleText.length;
 
-    // 2. Tier lookup → maxTweets for the article; per-paragraph char cap from settings
+    // 2. Tier lookup → maxTweets for the article; per-paragraph word cap from settings
     const tiers = parseTiers(await getUserSetting(userId, 'summary_tiers'));
     const maxTweetsArticle = maxTweetsForChars(articleChars, tiers);
-    const maxChars = parseMaxChars(await getUserSetting(userId, 'summary_max_chars'));
+    const maxWords = parseMaxWords(await getUserSetting(userId, 'summary_max_words'));
 
     // 3. LLM client (same router the narration scriptwriter uses)
     const chat = await getChatClientForUser(userId);
     if (!chat) {
       throw new Error('No AI API key set. Configure OpenAI or DeepInfra in Settings.');
     }
-    console.log(`[Summary] articleChars=${articleChars} -> maxTweetsArticle=${maxTweetsArticle} maxChars=${maxChars} model=${chat.model}`);
+    console.log(`[Summary] articleChars=${articleChars} -> maxTweetsArticle=${maxTweetsArticle} maxWords=${maxWords} model=${chat.model}`);
 
     // 4. Article summary
     const articleResponse = await chat.client.chat.completions.create({
       model: chat.model,
       messages: [
-        { role: 'system', content: ARTICLE_SUMMARY_PROMPT(maxTweetsArticle, maxChars) },
+        { role: 'system', content: ARTICLE_SUMMARY_PROMPT(maxTweetsArticle, maxWords) },
         { role: 'user', content: articleText.slice(0, ARTICLE_INPUT_CAP) },
       ],
     });
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
-    logTweetLengths('article', summary, maxChars);
+    logTweetLengths('article', summary, maxWords);
 
     // 5. Comment summary (optional) — only if enabled AND the item has comments
     let commentSummary: string | null = null;
@@ -243,7 +243,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         const commentResponse = await chat.client.chat.completions.create({
           model: chat.model,
           messages: [
-            { role: 'system', content: COMMENT_SUMMARY_PROMPT(maxTweetsComments, maxChars) },
+            { role: 'system', content: COMMENT_SUMMARY_PROMPT(maxTweetsComments, maxWords) },
             {
               role: 'user',
               content:
@@ -253,7 +253,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
           ],
         });
         commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
-        logTweetLengths('comments', commentSummary, maxChars);
+        logTweetLengths('comments', commentSummary, maxWords);
       }
     } else {
       console.log(`[Summary] Skipping comment summary (enabled=${summarizeComments}, comments=${Array.isArray(comments) ? comments.length : 0})`);
