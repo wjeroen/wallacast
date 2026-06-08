@@ -45,6 +45,7 @@ const VALID_SETTING_KEYS = [
   'summarize_comments',         // Also generate a summary of the comment discussion (default: true)
   'summary_tiers',              // JSON: sorted list of { maxChars, maxTweets } tiers (Infinity stored as null)
   'summary_max_chars',          // Max characters per summary paragraph ("tweet"); default 240
+  'library_show_summary',       // Show the article summary (not the description) on library cards
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
