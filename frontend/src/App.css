@@ -3672,18 +3672,30 @@
 }
 .voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
 
-/* Library "Twitter feed" mode: article summary in place of the description */
+/* Library "Twitter feed" mode: article summary in place of the description.
+   One box per paragraph, using the same text style as the card description. */
 .library-summary {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   margin: 0.25rem 0;
 }
-.library-summary-tweet {
-  font-size: 0.875rem;
-  color: var(--t1);
-  line-height: 1.45;
+.library-summary-box {
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-surface);
+}
+.library-summary-box .description {
   margin: 0;
+}
+.read-more-link {
+  color: #3b82f6;
+  font-weight: 600;
+  cursor: pointer;
+}
+.read-more-link:hover {
+  text-decoration: underline;
 }
 .voice-grid {
   display: flex;
