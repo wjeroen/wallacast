@@ -3620,3 +3620,44 @@
 .summary-tier-add:hover {
   background: var(--bg-hover);
 }
+
+/* Collapsible subsection (e.g. summary length settings) */
+.settings-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--t1);
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.4rem 0;
+}
+.settings-collapse-body {
+  margin-top: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--bg-raised);
+}
+
+/* Destructive bulk-wipe buttons */
+.wipe-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #7f1d1d;
+  color: #fee2e2;
+  border: 1px solid #991b1b;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.wipe-button:hover:not(:disabled) { background: #991b1b; }
+.wipe-button:disabled { opacity: 0.6; cursor: default; }
+[data-theme="light"] .wipe-button {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+[data-theme="light"] .wipe-button:hover:not(:disabled) { background: #fecaca; }

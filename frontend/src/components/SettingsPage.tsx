@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2 } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, Volume2 } from 'lucide-react';
+import { userSettingsAPI, wallabagAPI, contentAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { useContentStore } from '../store/contentStore';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -76,6 +77,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   // Summary length tiers (editable, sorted list). Infinity tier is always last.
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
+  const [showLengthSettings, setShowLengthSettings] = useState(false);
+  const [wiping, setWiping] = useState<'audio' | 'summaries' | null>(null);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -112,6 +115,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // Summaries
     auto_generate_summary: 'false',
     summarize_comments: 'true',
+    summary_max_chars: '240',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -171,6 +175,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
+        summary_max_chars: loaded.summary_max_chars || '240',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -229,6 +234,37 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       return prev.filter((_, i) => i !== index);
     });
     setSaved(false);
+  };
+
+  // --- Wipe generated data ---
+  const handleWipeAudio = async () => {
+    if (!confirm('Delete ALL generated audio (and read-along timing) for every article and text? This cannot be undone — you can regenerate it later.')) return;
+    setWiping('audio');
+    try {
+      const res = await contentAPI.wipeAllAudio();
+      await useContentStore.getState().fetchContent();
+      alert(`Wiped audio from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
+    } catch (err) {
+      console.error('Failed to wipe audio:', err);
+      alert('Failed to wipe audio.');
+    } finally {
+      setWiping(null);
+    }
+  };
+
+  const handleWipeSummaries = async () => {
+    if (!confirm('Delete ALL generated summaries (article + comment) for every item? This cannot be undone — you can regenerate them later.')) return;
+    setWiping('summaries');
+    try {
+      const res = await contentAPI.wipeAllSummaries();
+      await useContentStore.getState().fetchContent();
+      alert(`Wiped summaries from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
+    } catch (err) {
+      console.error('Failed to wipe summaries:', err);
+      alert('Failed to wipe summaries.');
+    } finally {
+      setWiping(null);
+    }
   };
 
   const handleSave = async () => {
@@ -603,8 +639,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
           <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
-            Short "Twitter thread" summaries (each paragraph ≤ 280 characters), written by the same
-            narration LLM. Generated separately from audio — both can run at the same time.
+            Short "Twitter thread" summaries written by the same narration LLM. Generated separately
+            from audio — both can run at the same time.
           </p>
 
           <div className="form-group checkbox-group">
@@ -632,53 +668,112 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </small>
           </div>
 
-          <div className="form-group">
-            <label>Summary length tiers</label>
-            <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
-              Longer content gets more paragraphs. The character count is measured automatically; the matching
-              tier sets the maximum number of paragraphs ("tweets").
-            </small>
-            <div className="summary-tiers-editor">
-              <div className="summary-tier-row summary-tier-header">
-                <span>Up to (characters)</span>
-                <span>Max paragraphs</span>
-                <span></span>
+          <button
+            type="button"
+            className="settings-collapse-toggle"
+            onClick={() => setShowLengthSettings(v => !v)}
+            aria-expanded={showLengthSettings}
+          >
+            {showLengthSettings ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <span>Length settings</span>
+          </button>
+
+          {showLengthSettings && (
+            <div className="settings-collapse-body">
+              <div className="form-group">
+                <label>Characters per paragraph</label>
+                <input
+                  type="number"
+                  min="50"
+                  max="2000"
+                  value={formData.summary_max_chars}
+                  onChange={(e) => handleChange('summary_max_chars', e.target.value)}
+                  style={{ width: '7rem' }}
+                />
+                <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+                  Max length of each "tweet". Default 240 (Twitter's real limit is 280; we aim lower
+                  because the model estimates length and tends to overshoot).
+                </small>
               </div>
-              {summaryTiers.map((tier, index) => {
-                const isInfinity = !Number.isFinite(tier.maxChars);
-                return (
-                  <div className="summary-tier-row" key={index}>
-                    {isInfinity ? (
-                      <span className="summary-tier-infinity">Anything larger</span>
-                    ) : (
-                      <input
-                        type="number"
-                        min="1"
-                        value={tier.maxChars}
-                        onChange={(e) => updateTier(index, 'maxChars', e.target.value)}
-                      />
-                    )}
-                    <input
-                      type="number"
-                      min="1"
-                      value={tier.maxTweets}
-                      onChange={(e) => updateTier(index, 'maxTweets', e.target.value)}
-                    />
-                    {isInfinity ? (
-                      <span></span>
-                    ) : (
-                      <button type="button" className="summary-tier-remove" title="Remove tier" onClick={() => removeTier(index)}>
-                        <Trash2 size={16} />
-                      </button>
-                    )}
+
+              <div className="form-group">
+                <label>Summary length tiers</label>
+                <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
+                  Longer content gets more paragraphs. The character count is measured automatically; the matching
+                  tier sets the maximum number of paragraphs ("tweets").
+                </small>
+                <div className="summary-tiers-editor">
+                  <div className="summary-tier-row summary-tier-header">
+                    <span>Up to (characters)</span>
+                    <span>Max paragraphs</span>
+                    <span></span>
                   </div>
-                );
-              })}
+                  {summaryTiers.map((tier, index) => {
+                    const isInfinity = !Number.isFinite(tier.maxChars);
+                    return (
+                      <div className="summary-tier-row" key={index}>
+                        {isInfinity ? (
+                          <span className="summary-tier-infinity">Anything larger</span>
+                        ) : (
+                          <input
+                            type="number"
+                            min="1"
+                            value={tier.maxChars}
+                            onChange={(e) => updateTier(index, 'maxChars', e.target.value)}
+                          />
+                        )}
+                        <input
+                          type="number"
+                          min="1"
+                          value={tier.maxTweets}
+                          onChange={(e) => updateTier(index, 'maxTweets', e.target.value)}
+                        />
+                        {isInfinity ? (
+                          <span></span>
+                        ) : (
+                          <button type="button" className="summary-tier-remove" title="Remove tier" onClick={() => removeTier(index)}>
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <button type="button" className="summary-tier-add" onClick={addTier}>
+                  <Plus size={16} /> Add tier
+                </button>
+              </div>
             </div>
-            <button type="button" className="summary-tier-add" onClick={addTier}>
-              <Plus size={16} /> Add tier
+          )}
+        </section>
+
+        {/* Reset generated data */}
+        <section className="settings-section">
+          <h3><Trash2 size={20} /> Reset generated data</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+            Bulk-delete generated content. This can't be undone, but you can regenerate it later.
+          </p>
+          <div className="form-group" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeAudio}
+              disabled={wiping !== null}
+            >
+              <Volume2 size={16} /> {wiping === 'audio' ? 'Wiping…' : 'Wipe all audio'}
+            </button>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeSummaries}
+              disabled={wiping !== null}
+            >
+              <FileText size={16} /> {wiping === 'summaries' ? 'Wiping…' : 'Wipe all summaries'}
             </button>
           </div>
+          <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+            "Wipe all audio" also clears read-along timing (alignment + transcript) for articles and texts. Podcasts are not affected.
+          </small>
         </section>
 
         {/* Playback / Queue Settings */}

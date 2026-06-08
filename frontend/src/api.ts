@@ -91,6 +91,10 @@ export const contentAPI = {
   generateSummary: (id: number, regenerate: boolean = false) =>
     api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, { regenerate }),
 
+  wipeAllAudio: () => api.post<{ cleared: number }>(`/content/wipe-all-audio`),
+
+  wipeAllSummaries: () => api.post<{ cleared: number }>(`/content/wipe-all-summaries`),
+
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),
 
