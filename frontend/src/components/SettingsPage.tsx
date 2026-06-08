@@ -144,7 +144,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // Summaries
     auto_generate_summary: 'false',
     summarize_comments: 'true',
-    summary_max_chars: '240',
+    summary_max_words: '40',
     library_show_summary: 'false',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
@@ -201,7 +201,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
-        summary_max_chars: loaded.summary_max_chars || '240',
+        summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
@@ -743,18 +743,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           {showLengthSettings && (
             <div className="settings-collapse-body">
               <div className="form-group">
-                <label>Characters per paragraph</label>
+                <label>Words per paragraph</label>
                 <input
                   type="number"
-                  min="50"
-                  max="2000"
-                  value={formData.summary_max_chars}
-                  onChange={(e) => handleChange('summary_max_chars', e.target.value)}
+                  min="5"
+                  max="500"
+                  value={formData.summary_max_words}
+                  onChange={(e) => handleChange('summary_max_words', e.target.value)}
                   style={{ width: '7rem' }}
                 />
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                  Max length of each "tweet". Default 240 (Twitter's real limit is 280; we aim lower
-                  because the model estimates length and tends to overshoot).
+                  Max number of words in each "tweet" paragraph. Default 40.
                 </small>
               </div>
 
