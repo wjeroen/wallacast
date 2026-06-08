@@ -50,6 +50,11 @@ export interface ContentItem {
   updated_at: string;
   content_fetched_at?: string; // When the article was last fetched/refetched from the web
   audio_generated_at?: string; // When TTS narration was last generated
+  // Summaries (Twitter-thread style). Generated independently of audio.
+  summary?: string; // Article-body summary (paragraphs separated by blank lines)
+  comment_summary?: string; // Comment-discussion summary (optional)
+  summary_status?: 'idle' | 'generating' | 'completed' | 'failed';
+  summary_generated_at?: string; // When the summary was last generated
 }
 
 export interface Podcast {
