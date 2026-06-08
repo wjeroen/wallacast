@@ -16,7 +16,8 @@ const VALID_SETTING_KEYS = [
   'deepinfra_api_key',     // NEW: DeepInfra key for cheaper audio
   'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
   'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
-  'openai_tts_voice',      // 'alloy', 'af_heart', etc.
+  'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
+  'tts_voices',            // JSON array of { model, voice } — rotate randomly between these
   'anthropic_api_key',
   'anthropic_model',
   'google_api_key',

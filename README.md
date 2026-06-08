@@ -462,6 +462,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `setting_value`: Setting value (encrypted for secrets)
 - `is_secret`: Boolean flag for masking in API responses
 - Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity), `summary_max_chars` (max characters per paragraph/"tweet"; default 240)
+- `tts_voices`: JSON array of `{ model, voice }` — when non-empty, each audio generation picks one of these voices at random (can mix providers, e.g. OpenAI + Kokoro). Empty = always use the single `openai_tts_voice`. Implemented via `pickRandomTTSVoice()` in `ai-providers.ts`, applied in `generateArticleAudio()`.
 - `created_at`, `updated_at`
 - **Unique constraint**: (user_id, setting_key)
 
