@@ -99,9 +99,34 @@ function commentsToText(comments: CommentLike[], depth = 0): string {
   return out;
 }
 
+// Split a summary into paragraphs ("tweets"). Prefers blank-line separation (what we ask
+// the model for) but falls back to single newlines so we never mis-count.
+function splitParagraphs(text: string | null): string[] {
+  const t = (text || '').trim();
+  if (!t) return [];
+  let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
+  return parts;
+}
+
+// Log the real character length of each paragraph (spaces included) so we can see in the
+// Railway logs whether the model is keeping tweets under the limit.
+function logTweetLengths(label: string, text: string | null): void {
+  const paras = splitParagraphs(text);
+  if (paras.length === 0) return;
+  const lengths = paras.map(p => p.length);
+  const over = lengths.filter(l => l > 280).length;
+  console.log(`[Summary] ${label}: ${paras.length} paragraph(s), lengths=[${lengths.join(', ')}]${over ? ` — ${over} OVER 280` : ''}`);
+}
+
+// Per-paragraph length target. Stated to the model as a firm cap. We aim BELOW Twitter's
+// real 280 limit because LLMs estimate length rather than count exactly, so they tend to
+// overshoot — a 240 target keeps the actual output comfortably under 280 (spaces included).
+const MAX_TWEET_CHARS = 240;
+
 const ARTICLE_SUMMARY_PROMPT = (maxTweets: number) => `You write concise summaries of articles as a series of standalone paragraphs, each reading like a tweet.
 - Write at most ${maxTweets} paragraph${maxTweets === 1 ? '' : 's'}. Use fewer when the article is simple.
-- Each paragraph stands on its own and is at most 280 characters.
+- Each paragraph stands on its own and is at most ${MAX_TWEET_CHARS} characters, counting every character including spaces and punctuation. Keep them short.
 - Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
@@ -109,7 +134,7 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number) => `You write concise summari
 const COMMENT_SUMMARY_PROMPT = (maxTweets: number) => `You write concise summaries of the COMMENT DISCUSSION beneath an article, as a series of standalone paragraphs, each reading like a tweet. The article is provided only as context — do NOT summarize the article itself; summarize what the commenters say.
 - Write at most ${maxTweets} paragraph${maxTweets === 1 ? '' : 's'}. Use fewer when the discussion is simple.
 - Capture the main points, agreements, disagreements, questions, and additions raised by commenters.
-- Each paragraph stands on its own and is at most 280 characters.
+- Each paragraph stands on its own and is at most ${MAX_TWEET_CHARS} characters, counting every character including spaces and punctuation. Keep them short.
 - Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
@@ -163,6 +188,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
       ],
     });
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
+    logTweetLengths('article', summary);
 
     // 5. Comment summary (optional) — only if enabled AND the item has comments
     let commentSummary: string | null = null;
@@ -190,6 +216,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
           ],
         });
         commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
+        logTweetLengths('comments', commentSummary);
       }
     } else {
       console.log(`[Summary] Skipping comment summary (enabled=${summarizeComments}, comments=${Array.isArray(comments) ? comments.length : 0})`);
