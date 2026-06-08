@@ -65,6 +65,41 @@ interface AIProvider {
   comingSoon?: boolean;
 }
 
+// A selectable voice carries its model so the list can span TTS providers.
+interface TTSVoiceChoice { model: string; voice: string; }
+
+// Catalog of voices the user can rotate between, grouped by provider/model.
+const VOICE_CATALOG: { group: string; model: string; note: string; voices: { id: string; label: string }[] }[] = [
+  {
+    group: 'OpenAI', model: 'gpt-4o-mini-tts', note: 'Needs an OpenAI key',
+    voices: [
+      { id: 'alloy', label: 'Alloy' }, { id: 'echo', label: 'Echo' }, { id: 'fable', label: 'Fable' },
+      { id: 'onyx', label: 'Onyx' }, { id: 'nova', label: 'Nova' }, { id: 'shimmer', label: 'Shimmer' },
+      { id: 'coral', label: 'Coral' },
+    ],
+  },
+  {
+    group: 'Kokoro (DeepInfra)', model: 'hexgrad/Kokoro-82M', note: 'Needs a DeepInfra key',
+    voices: [
+      { id: 'af_heart', label: 'Heart (F)' }, { id: 'af_bella', label: 'Bella (F)' }, { id: 'af_nicole', label: 'Nicole (F)' },
+      { id: 'am_adam', label: 'Adam (M)' }, { id: 'am_michael', label: 'Michael (M)' }, { id: 'am_puck', label: 'Puck (M)' },
+    ],
+  },
+];
+
+function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((v: any) => v && typeof v.model === 'string' && typeof v.voice === 'string' && v.model && v.voice)
+      .map((v: any) => ({ model: v.model, voice: v.voice }));
+  } catch {
+    return [];
+  }
+}
+
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
   const [settings, setSettings] = useState<Record<string, string | null>>({});
@@ -79,6 +114,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
   const [showLengthSettings, setShowLengthSettings] = useState(false);
   const [wiping, setWiping] = useState<'audio' | 'summaries' | null>(null);
+
+  // Multiple voices to rotate between for audio generation (empty = use the single voice above).
+  const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -189,6 +227,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       }));
 
       setSummaryTiers(parseTiers(loaded.summary_tiers));
+      setTtsVoices(parseVoices(loaded.tts_voices));
     } catch (err) {
       setError('Failed to load settings');
       console.error(err);
@@ -233,6 +272,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       if (!Number.isFinite(prev[index]?.maxChars)) return prev;
       return prev.filter((_, i) => i !== index);
     });
+    setSaved(false);
+  };
+
+  // --- Voice rotation helpers ---
+  const isVoiceSelected = (model: string, voice: string) =>
+    ttsVoices.some(v => v.model === model && v.voice === voice);
+
+  const toggleVoice = (model: string, voice: string) => {
+    setTtsVoices(prev =>
+      prev.some(v => v.model === model && v.voice === voice)
+        ? prev.filter(v => !(v.model === model && v.voice === voice))
+        : [...prev, { model, voice }]
+    );
     setSaved(false);
   };
 
@@ -293,6 +345,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
       toSave.summary_tiers = serializeTiers(summaryTiers);
+      // Selected rotation voices (empty array = always use the single voice).
+      toSave.tts_voices = JSON.stringify(ttsVoices);
 
       console.log('Saving settings:', toSave);
       await userSettingsAPI.setBulk(toSave);
@@ -554,6 +608,34 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                         ))}
                     </select>
                 )}
+            </div>
+
+            <div className="form-group">
+                <label>Voice variety (optional)</label>
+                <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
+                  Tick multiple voices to rotate between — each new audio picks one at random (can mix
+                  providers). Leave all unticked to always use the single voice above.
+                  {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
+                </small>
+                {VOICE_CATALOG.map(group => (
+                  <div key={group.model} className="voice-group">
+                    <div className="voice-group-title">
+                      {group.group} <span className="voice-group-note">· {group.note}</span>
+                    </div>
+                    <div className="voice-grid">
+                      {group.voices.map(v => (
+                        <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={isVoiceSelected(group.model, v.id)}
+                            onChange={() => toggleVoice(group.model, v.id)}
+                          />
+                          {v.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
             </div>
 
              <div className="form-group checkbox-group">

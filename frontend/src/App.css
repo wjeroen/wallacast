@@ -3661,3 +3661,41 @@
   border-color: #fecaca;
 }
 [data-theme="light"] .wipe-button:hover:not(:disabled) { background: #fecaca; }
+
+/* Voice variety multi-select chips */
+.voice-group { margin-bottom: 0.6rem; }
+.voice-group-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--t2);
+  margin-bottom: 0.35rem;
+}
+.voice-group-note { font-weight: 400; color: var(--t4); }
+.voice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.voice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--t1);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.voice-chip input { margin: 0; }
+.voice-chip.selected {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+[data-theme="light"] .voice-chip.selected {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1e40af;
+}
