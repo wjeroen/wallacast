@@ -3673,26 +3673,21 @@
 .voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
 
 /* Library "Twitter feed" mode: article summary in place of the description.
-   One box per paragraph, using the same text style as the card description. */
+   Each paragraph IS a `.description` box (bg-raised, rounded, no border), so it matches the
+   podcast/description box exactly — no nested boxes. The flex gap controls the spacing. */
 .library-summary {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin: 0.25rem 0;
+  gap: 0.5rem;
+  margin-top: 1rem;
 }
-.library-summary-box {
-  border: 1px solid var(--bg-raised);
-  border-radius: 0.6rem;
-  padding: 0.5rem 0.7rem;
-  background: var(--bg-surface);
-}
-.library-summary-box .description {
-  margin: 0;
+.library-summary-tweet {
+  margin: 0; /* override .description's margin-top so the flex gap handles spacing */
 }
 .read-more-link {
   color: #3b82f6;
-  font-weight: 600;
   cursor: pointer;
+  vertical-align: baseline;
 }
 .read-more-link:hover {
   text-decoration: underline;
