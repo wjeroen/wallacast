@@ -439,26 +439,38 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Write ALL numbers, currencies, symbols, and units as fully spoken words. The TTS engine cannot interpret symbols — it will say gibberish. Examples:
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL — the TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
+   - "$25.30" -> "twenty-five dollars and thirty cents"
    - "$1,200" -> "twelve hundred dollars"
    - "€100.000" -> "one hundred thousand euros"
    - "£50m" -> "fifty million pounds"
    - "3.5%" -> "three point five percent"
    - "10x" -> "ten times"
    - "§4.2" -> "section four point two"
+   - "1955" (as a year) -> "nineteen fifty-five"
    - "2024" (as a year) -> "twenty twenty-four"
    - "1990s" -> "nineteen nineties"
+   - "80,000" -> "eighty thousand"
+   - "3,456,789" -> "three million, four hundred fifty-six thousand, seven hundred eighty-nine"
    - "#5" -> "number five"
    - "100k" -> "one hundred thousand"
    - "~50" -> "approximately fifty"
    - "<10" -> "less than ten"
+   - ">90%" -> "more than ninety percent"
    - "2+2=4" -> "two plus two equals four"
+   - "1/3" -> "one third"
+   - "3:1 ratio" -> "three to one ratio"
+   - "24/7" -> "twenty-four seven"
+   - "5'11"" -> "five foot eleven"
+   - "20°C" -> "twenty degrees Celsius"
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
  * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
+ * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
+ * Convert ALL-CAPS words and phrases to normal capitalization (e.g., "HEADS UP" -> "Heads up", "DO NOT ENTER" -> "Do not enter"). This does not apply to proper acronyms like NASA or FBI. TTS engines often spell out or distort all-caps text.
 
  Output ONLY the clean narration text.
 
@@ -587,6 +599,7 @@ export async function generateArticleAudio(
 
       while (retries > 0) {
         const tempFile = path.join(tempDir, `single_${Date.now()}.mp3`);
+        const normalizedFile = path.join(tempDir, `normalized_${Date.now()}.mp3`);
         try {
           const response = await openai.audio.speech.create({
             model: targetModel,
@@ -594,19 +607,35 @@ export async function generateArticleAudio(
             input: textChunks[0],
             response_format: 'mp3',
           });
-          
+
           const buffer = Buffer.from(await response.arrayBuffer());
-          
+
           // UPDATED: Validate buffer size (min 1KB) to catch empty responses
           if (buffer.length < 1024) throw new Error('Response buffer too small');
 
           await fs.writeFile(tempFile, buffer);
-          finalDuration = await getAudioDuration(tempFile);
-          finalBuffer = buffer;
+
+          // Re-encode through ffmpeg to produce proper MP3 headers (Xing/LAME).
+          // Raw OpenAI TTS MP3s lack seeking headers, so browsers can't map
+          // time-to-byte positions and audio.currentTime silently fails.
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg(tempFile)
+              .audioFrequency(24000)
+              .audioBitrate('96k')
+              .format('mp3')
+              .on('end', () => resolve())
+              .on('error', (err) => reject(err))
+              .save(normalizedFile);
+          });
+          finalBuffer = await fs.readFile(normalizedFile);
+          finalDuration = await getAudioDuration(normalizedFile);
+
           await fs.unlink(tempFile).catch(() => {});
+          await fs.unlink(normalizedFile).catch(() => {});
           break;
         } catch (error: any) {
           await fs.unlink(tempFile).catch(() => {});
+          await fs.unlink(normalizedFile).catch(() => {});
           console.warn(`Single chunk attempt failed: ${error.message}`);
           if (retries > 1) {
             await new Promise(resolve => setTimeout(resolve, delay));
@@ -743,7 +772,7 @@ export async function generateArticleAudio(
 // Guard against concurrent generation for the same content
 const activeGenerations = new Set<number>();
 
-export async function generateAudioForContent(contentId: number, regenerate: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
+export async function generateAudioForContent(contentId: number, regenerate: boolean = false, excludeComments: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
   if (activeGenerations.has(contentId)) {
     console.log(`[TTS] Generation already in progress for content ${contentId}, skipping duplicate`);
     return { audioUrl: '', warning: 'Generation already in progress' };
@@ -859,7 +888,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     fullScript += articleBodyScript;
 
-    if (content.comments) {
+    if (excludeComments) {
+      console.log(`[TTS] Skipping comment narration — excluded by user request`);
+    } else if (content.comments) {
        try {
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
@@ -965,10 +996,33 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           }
 
           console.log(`[TTS] Transcription complete (${transcriptResult.words.length} words). Saving...`);
-          await query(
-            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
-            [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
-          );
+
+          // Detect trailing silence/junk: if Whisper's last word ends well
+          // before the file's reported duration, the audio likely has unplayable
+          // padding at the end. The mp3 header reports the wrong length but
+          // the browser trusts it, so seeking past real content fails (timeline
+          // jumps to 0). Cap stored duration to last_word.end + 2s buffer.
+          let durationOverride: number | null = null;
+          if (transcriptResult.words.length > 0 && audioDuration > 0) {
+            const lastWordEnd = transcriptResult.words[transcriptResult.words.length - 1].end;
+            const gap = audioDuration - lastWordEnd;
+            if (gap > 30) {
+              durationOverride = Math.ceil(lastWordEnd) + 2;
+              console.warn(`[TTS] Trimming stored duration: file says ${audioDuration}s but last transcribed word ends at ${lastWordEnd.toFixed(1)}s. Using ${durationOverride}s.`);
+            }
+          }
+
+          if (durationOverride !== null) {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5 WHERE id = $6',
+              [transcriptResult.text, JSON.stringify(transcriptResult.words), durationOverride, 97, 'aligning_content', contentId]
+            );
+          } else {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
+              [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
+            );
+          }
 
           // Run LLM alignment for articles and text items
           if (content.html_content || content.type === 'text') {

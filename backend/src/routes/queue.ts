@@ -3,11 +3,12 @@ import { query } from '../database/db.js';
 
 const router = express.Router();
 
-// Get queue
+// Get queue (manual items only). Aliases queue_items columns so they don't
+// collide with content_items.id/position joined via c.*
 router.get('/', async (req, res) => {
   try {
     const result = await query(
-      `SELECT q.id, q.position, c.*
+      `SELECT q.id AS queue_id, q.position AS queue_position, q.added_at AS queue_added_at, c.*
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id
        WHERE q.user_id = $1
@@ -21,7 +22,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Add to queue
+// Add to queue (appends at end)
 router.post('/', async (req, res) => {
   try {
     const { content_item_id } = req.body;
@@ -33,7 +34,7 @@ router.post('/', async (req, res) => {
     const nextPosition = maxPositionResult.rows[0].max_position + 1;
 
     const result = await query(
-      'INSERT INTO queue_items (content_item_id, position, user_id) VALUES ($1, $2, $3) RETURNING *',
+      'INSERT INTO queue_items (content_item_id, position, user_id) VALUES ($1, $2, $3) RETURNING id, position, added_at',
       [content_item_id, nextPosition, req.user!.userId]
     );
 
@@ -41,6 +42,29 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error adding to queue:', error);
     res.status(500).json({ error: 'Failed to add to queue' });
+  }
+});
+
+// Add to front of queue (position 0, bumps all others). Used when a manual
+// item's audio finishes generating and should play next.
+router.post('/front', async (req, res) => {
+  try {
+    const { content_item_id } = req.body;
+
+    await query(
+      'UPDATE queue_items SET position = position + 1 WHERE user_id = $1',
+      [req.user!.userId]
+    );
+
+    const result = await query(
+      'INSERT INTO queue_items (content_item_id, position, user_id) VALUES ($1, 0, $2) RETURNING id, position, added_at',
+      [content_item_id, req.user!.userId]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding to front of queue:', error);
+    res.status(500).json({ error: 'Failed to add to front of queue' });
   }
 });
 

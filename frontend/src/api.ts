@@ -85,8 +85,8 @@ export const contentAPI = {
 
   delete: (id: number) => api.delete(`/content/${id}`),
 
-  generateAudio: (id: number, regenerate: boolean = false) =>
-    api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate }),
+  generateAudio: (id: number, regenerate: boolean = false, excludeComments: boolean = false) =>
+    api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate, exclude_comments: excludeComments }),
 
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),
@@ -127,13 +127,21 @@ export const podcastAPI = {
 
   getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
 
-  getPreviewEpisodes: (id: number) => api.get<any[]>(`/podcasts/${id}/preview-episodes`),
+  getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
+    api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
 
-  getPreviewByUrl: (feedUrl: string) => api.get<any[]>('/podcasts/preview-by-url', { params: { url: feedUrl } }),
+  getPreviewByUrl: (feedUrl: string, limit?: number, offset?: number, signal?: AbortSignal) =>
+    api.get<{ episodes: any[]; hasMore: boolean }>('/podcasts/preview-by-url', {
+      params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}), ...(offset ? { offset } : {}) },
+      signal,
+    }),
+
+  searchFeed: (feedUrl: string, query: string) =>
+    api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
 
   // Feed caching endpoints
-  getFeedItems: (feedId?: number, limit?: number) =>
-    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit } }),
+  getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
+    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
   refreshFeeds: () =>
     api.post<{ totalFeeds: number; totalItemsAdded: number }>('/podcasts/refresh-feeds'),
@@ -146,7 +154,10 @@ export const queueAPI = {
   getAll: () => api.get<QueueItem[]>('/queue'),
 
   add: (contentItemId: number) =>
-    api.post<QueueItem>('/queue', { content_item_id: contentItemId }),
+    api.post<{ id: number; position: number; added_at: string }>('/queue', { content_item_id: contentItemId }),
+
+  addToFront: (contentItemId: number) =>
+    api.post<{ id: number; position: number; added_at: string }>('/queue/front', { content_item_id: contentItemId }),
 
   remove: (id: number) => api.delete(`/queue/${id}`),
 
