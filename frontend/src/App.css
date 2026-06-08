@@ -3685,9 +3685,12 @@
   margin: 0; /* override .description's margin-top so the flex gap handles spacing */
 }
 .read-more-link {
-  color: #3b82f6;
+  display: block;          /* own line under the paragraph — removes the side-by-side illusion */
+  width: fit-content;      /* tight click target so clicks beside it still open the Content tab */
+  margin-top: 0.35rem;
+  color: #60a5fa;          /* same link blue as card links / active tab (less saturated, no shimmer) */
+  font-weight: 600;
   cursor: pointer;
-  vertical-align: baseline;
 }
 .read-more-link:hover {
   text-decoration: underline;
