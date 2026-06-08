@@ -1174,6 +1174,47 @@ router.post('/:id/generate-summary', async (req, res) => {
   }
 });
 
+// Bulk-wipe all generated TTS audio (and its timing: alignment, transcript, chunks) for the
+// user's articles/texts. Mirrors the per-item "remove audio" logic. Does NOT touch podcasts —
+// their audio is the external source, not something we generated.
+router.post('/wipe-all-audio', async (req, res) => {
+  try {
+    const result = await query(
+      `UPDATE content_items
+       SET audio_data = NULL, audio_url = NULL, duration = NULL,
+           content_alignment = NULL, transcript = NULL, transcript_words = NULL,
+           tts_chunks = NULL, generation_status = 'idle', generation_progress = 0,
+           generation_error = NULL, current_operation = NULL
+       WHERE user_id = $1 AND type IN ('article', 'text')
+         AND (audio_data IS NOT NULL OR audio_url IS NOT NULL OR transcript IS NOT NULL OR content_alignment IS NOT NULL)`,
+      [req.user!.userId]
+    );
+    console.log(`[wipe-all-audio] user=${req.user!.userId} cleared=${result.rowCount}`);
+    res.json({ cleared: result.rowCount || 0 });
+  } catch (error) {
+    console.error('Error wiping audio:', error);
+    res.status(500).json({ error: 'Failed to wipe audio' });
+  }
+});
+
+// Bulk-wipe all generated summaries (article + comment) for the user's items.
+router.post('/wipe-all-summaries', async (req, res) => {
+  try {
+    const result = await query(
+      `UPDATE content_items
+       SET summary = NULL, comment_summary = NULL, summary_status = 'idle', summary_generated_at = NULL
+       WHERE user_id = $1
+         AND (summary IS NOT NULL OR comment_summary IS NOT NULL OR summary_generated_at IS NOT NULL)`,
+      [req.user!.userId]
+    );
+    console.log(`[wipe-all-summaries] user=${req.user!.userId} cleared=${result.rowCount}`);
+    res.json({ cleared: result.rowCount || 0 });
+  } catch (error) {
+    console.error('Error wiping summaries:', error);
+    res.status(500).json({ error: 'Failed to wipe summaries' });
+  }
+});
+
 // Cancel ongoing audio generation
 router.post('/:id/cancel-generation', async (req, res) => {
   try {

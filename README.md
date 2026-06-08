@@ -182,6 +182,8 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation (article + comments). Body: `{ regenerate?: boolean }`. Uses the independent `summary_status` field, so it can run alongside audio generation.
+  - `POST /wipe-all-audio` - Bulk-delete generated TTS audio + read-along timing (alignment/transcript/chunks) for all of the user's articles/texts. Returns `{ cleared }`. Does not touch podcasts.
+  - `POST /wipe-all-summaries` - Bulk-delete generated summaries (article + comment) for all of the user's items. Returns `{ cleared }`.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
@@ -459,7 +461,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `setting_key`: Setting name (e.g., 'openai_api_key', 'openai_tts_voice')
 - `setting_value`: Setting value (encrypted for secrets)
 - `is_secret`: Boolean flag for masking in API responses
-- Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity)
+- Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity), `summary_max_chars` (max characters per paragraph/"tweet"; default 240)
 - `created_at`, `updated_at`
 - **Unique constraint**: (user_id, setting_key)
 
