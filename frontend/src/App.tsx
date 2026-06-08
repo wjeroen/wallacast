@@ -20,6 +20,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
+  // Which fullscreen-player tab to open on next play (e.g. "Read more" → Summary tab)
+  const [initialPlayerTab, setInitialPlayerTab] = useState<'summary' | undefined>(undefined);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
@@ -184,9 +186,10 @@ function App() {
   // current filter as a "play context" (Spotify-style) so the non-manual
   // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
   // click should load the track, not play it automatically.
-  const handlePlayContent = (content: ContentItem) => {
+  const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const filter = useContentStore.getState().filter;
     useQueueStore.getState().setLibraryContext(filter, content.id);
+    setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
   };
 
@@ -659,6 +662,7 @@ function App() {
             onRemoveSummary={handleRemoveSummary}
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
+            initialTab={initialPlayerTab}
             isDark={isDark}
             themeMode={themeMode}
             onCycleTheme={cycleTheme}

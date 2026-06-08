@@ -44,7 +44,7 @@ function toTweets(text: string): string[] {
 }
 
 interface LibraryTabProps {
-  onPlayContent: (content: ContentItem) => void;
+  onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
 
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
@@ -145,15 +145,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     return () => clearInterval(pollInterval);
   }, [content, updateItem, refreshItem]);
 
-  const handlePlayContent = async (item: ContentItem) => {
+  const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
       // Fetch latest content data to get current playback position
       const response = await contentAPI.getById(item.id);
-      onPlayContent(response.data);
+      onPlayContent(response.data, opts);
     } catch (error) {
       console.error('Failed to load content details:', error);
       // Fall back to using the list item if fetch fails
-      onPlayContent(item);
+      onPlayContent(item, opts);
     }
   };
 
@@ -581,13 +581,36 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     </a>
                   </p>
                 )}
-                {showSummaryInLibrary && item.summary ? (
-                  <div className="library-summary">
-                    {toTweets(item.summary).map((tweet, i) => (
-                      <p key={i} className="library-summary-tweet">{tweet}</p>
-                    ))}
-                  </div>
-                ) : item.description ? (
+                {showSummaryInLibrary && item.summary ? (() => {
+                  const tweets = toTweets(item.summary);
+                  const shown = tweets.slice(0, 3);
+                  const hasMore = tweets.length > 3;
+                  return (
+                    <div className="library-summary">
+                      {shown.map((tweet, i) => {
+                        const isLast = i === shown.length - 1;
+                        return (
+                          <div key={i} className="library-summary-box">
+                            <p className="description">
+                              {tweet}
+                              {hasMore && isLast && (
+                                <>
+                                  {' '}
+                                  <span
+                                    className="read-more-link"
+                                    onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
+                                  >
+                                    Read more.
+                                  </span>
+                                </>
+                              )}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })() : item.description ? (
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
                 ) : null}
                 <div className="metadata">
