@@ -124,20 +124,39 @@ function logTweetLengths(label: string, text: string | null): void {
 // overshoot — a 240 target keeps the actual output comfortably under 280 (spaces included).
 const MAX_TWEET_CHARS = 240;
 
-const ARTICLE_SUMMARY_PROMPT = (maxTweets: number) => `You write concise summaries of articles as a series of standalone paragraphs, each reading like a tweet.
-- Write at most ${maxTweets} paragraph${maxTweets === 1 ? '' : 's'}. Use fewer when the article is simple.
-- Each paragraph stands on its own and is at most ${MAX_TWEET_CHARS} characters, counting every character including spaces and punctuation. Keep them short.
-- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article.
+const ARTICLE_SUMMARY_PROMPT = (maxTweets: number): string => {
+  if (maxTweets <= 1) {
+    return `You write a one-paragraph, tweet-style summary of an article.
+- Write a single paragraph, at most ${MAX_TWEET_CHARS} characters (counting spaces and punctuation), that captures the article's central thesis or main takeaway.
+- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+  }
+  return `You write a concise summary of an article as a short thread of tweet-style paragraphs that together convey the article's main argument.
+- The FIRST paragraph states the article's central thesis or main takeaway.
+- The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
+- Write at most ${maxTweets} paragraphs. Use fewer when the article is simple; do not pad to reach the limit.
+- Each paragraph is at most ${MAX_TWEET_CHARS} characters (counting spaces and punctuation) and reads on its own, but together they must form one coherent line of reasoning.
+- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+};
 
-const COMMENT_SUMMARY_PROMPT = (maxTweets: number) => `You write concise summaries of the COMMENT DISCUSSION beneath an article, as a series of standalone paragraphs, each reading like a tweet. The article is provided only as context — do NOT summarize the article itself; summarize what the commenters say.
-- Write at most ${maxTweets} paragraph${maxTweets === 1 ? '' : 's'}. Use fewer when the discussion is simple.
-- Capture the main points, agreements, disagreements, questions, and additions raised by commenters.
-- Each paragraph stands on its own and is at most ${MAX_TWEET_CHARS} characters, counting every character including spaces and punctuation. Keep them short.
+const COMMENT_SUMMARY_PROMPT = (maxTweets: number): string => {
+  if (maxTweets <= 1) {
+    return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
+- Write a single paragraph, at most ${MAX_TWEET_CHARS} characters (counting spaces and punctuation), capturing the overall gist of the discussion — its general tenor and the main point or two raised.
+- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the comments.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+  }
+  return `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
+- The FIRST paragraph captures the overall vibe of the discussion: its general tenor and where the room lands (broad agreement, sharp disagreement, mixed, mostly minor quibbles, etc.).
+- The remaining paragraphs cover the main threads: key points, agreements, disagreements, questions, and notable additions. Group related points together rather than listing comments one by one.
+- Write at most ${maxTweets} paragraphs. Use fewer when the discussion is simple; do not pad to reach the limit.
+- Each paragraph is at most ${MAX_TWEET_CHARS} characters (counting spaces and punctuation) and reads on its own, but together they form one coherent overview.
 - Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+};
 
 const ARTICLE_INPUT_CAP = 200000;       // chars sent to the article summarizer
 const ARTICLE_CONTEXT_CAP = 50000;      // chars of article context for the comment summarizer
