@@ -236,11 +236,21 @@ export async function getSelectedTTSVoices(userId: number): Promise<TTSVoiceChoi
   }
 }
 
-// Pick a random voice from the user's selected list, or null if they haven't selected any.
-// Random (not alternating) so there's no cross-generation state to persist.
+// Pick a random voice from the user's selected list, or null if none are usable.
+// Random (not alternating) so there's no cross-generation state to persist. Voices whose
+// provider key isn't configured are skipped so we never pick something we can't synthesize.
 export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice | null> {
-  const voices = await getSelectedTTSVoices(userId);
+  let voices = await getSelectedTTSVoices(userId);
   if (voices.length === 0) return null;
+
+  const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
+  const hasOpenAI = !!(await getUserSetting(userId, 'openai_api_key'));
+  voices = voices.filter(v => {
+    const isKokoro = v.model.includes('Kokoro') || v.model.startsWith('hexgrad/');
+    return isKokoro ? hasDeepInfra : hasOpenAI;
+  });
+  if (voices.length === 0) return null;
+
   return voices[Math.floor(Math.random() * voices.length)];
 }
 

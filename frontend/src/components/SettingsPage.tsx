@@ -53,25 +53,14 @@ function parseTiers(raw: string | null | undefined): SummaryTier[] {
   }
 }
 
-interface AIProvider {
-  name: string;
-  models?: {
-    chat?: string[];
-    tts?: string[];
-  };
-  voices?: string[];
-  requiredSettings: string[];
-  description: string;
-  comingSoon?: boolean;
-}
-
 // A selectable voice carries its model so the list can span TTS providers.
 interface TTSVoiceChoice { model: string; voice: string; }
 
-// Catalog of voices the user can rotate between, grouped by provider/model.
-const VOICE_CATALOG: { group: string; model: string; note: string; voices: { id: string; label: string }[] }[] = [
+// Catalog of voices, grouped by provider/model. Only groups whose API key is configured
+// are shown. Each voice carries its model so the rotation can span providers.
+const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'deepinfra'; voices: { id: string; label: string }[] }[] = [
   {
-    group: 'OpenAI', model: 'gpt-4o-mini-tts', note: 'Needs an OpenAI key',
+    group: 'OpenAI', model: 'gpt-4o-mini-tts', requiresKey: 'openai',
     voices: [
       { id: 'alloy', label: 'Alloy' }, { id: 'echo', label: 'Echo' }, { id: 'fable', label: 'Fable' },
       { id: 'onyx', label: 'Onyx' }, { id: 'nova', label: 'Nova' }, { id: 'shimmer', label: 'Shimmer' },
@@ -79,7 +68,7 @@ const VOICE_CATALOG: { group: string; model: string; note: string; voices: { id:
     ],
   },
   {
-    group: 'Kokoro (DeepInfra)', model: 'hexgrad/Kokoro-82M', note: 'Needs a DeepInfra key',
+    group: 'Kokoro (DeepInfra)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
     voices: [
       { id: 'af_heart', label: 'Heart (F)' }, { id: 'af_bella', label: 'Bella (F)' }, { id: 'af_nicole', label: 'Nicole (F)' },
       { id: 'am_adam', label: 'Adam (M)' }, { id: 'am_michael', label: 'Michael (M)' }, { id: 'am_puck', label: 'Puck (M)' },
@@ -103,7 +92,6 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
   const [settings, setSettings] = useState<Record<string, string | null>>({});
-  const [providers, setProviders] = useState<Record<string, AIProvider>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -184,12 +172,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const [settingsRes, providersRes] = await Promise.all([
-        userSettingsAPI.getAll(),
-        userSettingsAPI.getAIProviders(),
-      ]);
+      const settingsRes = await userSettingsAPI.getAll();
       setSettings(settingsRes.data.settings);
-      setProviders(providersRes.data.providers);
 
       const loaded = settingsRes.data.settings;
       console.log('Loaded settings from server:', loaded);
@@ -442,8 +426,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     );
   }
 
-  const currentProvider = providers[formData.ai_provider];
-  const isDeepInfraTTS = formData.openai_tts_model?.includes('hexgrad') || formData.openai_tts_model?.includes('Kokoro');
+  const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
+  const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
+  const availableVoiceGroups = VOICE_CATALOG.filter(g =>
+    g.requiresKey === 'openai' ? hasOpenAIKey : hasDeepInfraKey
+  );
 
   return (
     <div className="settings-page">
@@ -579,63 +566,35 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </div>
 
             <div className="form-group">
-                <label>TTS Model</label>
-                <select value={formData.openai_tts_model} onChange={(e) => handleChange('openai_tts_model', e.target.value)}>
-                   {currentProvider?.models?.tts?.map(model => (
-                     <option key={model} value={model}>{model}</option>
-                   ))}
-                   {!currentProvider?.models?.tts?.includes('hexgrad/Kokoro-82M') && (
-                      <option value="hexgrad/Kokoro-82M">Kokoro 82M (DeepInfra) - 25x Cheaper</option>
-                   )}
-                </select>
-            </div>
-
-            <div className="form-group">
-                <label>TTS Voice</label>
-                {isDeepInfraTTS ? (
-                    <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        <option value="af_heart">Heart (Female)</option>
-                        <option value="af_bella">Bella (Female)</option>
-                        <option value="af_nicole">Nicole (Female)</option>
-                        <option value="am_adam">Adam (Male)</option>
-                        <option value="am_michael">Michael (Male)</option>
-                        <option value="am_puck">Puck (Male) - Recommended</option>
-                    </select>
-                ) : (
-                    <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        {currentProvider?.voices?.map(voice => (
-                             <option key={voice} value={voice}>{voice}</option>
-                        ))}
-                    </select>
-                )}
-            </div>
-
-            <div className="form-group">
-                <label>Voice variety (optional)</label>
+                <label>Voices</label>
                 <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
-                  Tick multiple voices to rotate between — each new audio picks one at random (can mix
-                  providers). Leave all unticked to always use the single voice above.
+                  Pick one voice for a consistent sound, or several to rotate between — each new audio
+                  uses a random one (can mix providers).
                   {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
                 </small>
-                {VOICE_CATALOG.map(group => (
-                  <div key={group.model} className="voice-group">
-                    <div className="voice-group-title">
-                      {group.group} <span className="voice-group-note">· {group.note}</span>
+                {availableVoiceGroups.length === 0 ? (
+                  <p className="no-content" style={{ fontSize: '0.9rem' }}>
+                    Add an OpenAI or DeepInfra API key above to choose voices.
+                  </p>
+                ) : (
+                  availableVoiceGroups.map(group => (
+                    <div key={group.model} className="voice-group">
+                      <div className="voice-group-title">{group.group}</div>
+                      <div className="voice-grid">
+                        {group.voices.map(v => (
+                          <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={isVoiceSelected(group.model, v.id)}
+                              onChange={() => toggleVoice(group.model, v.id)}
+                            />
+                            {v.label}
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                    <div className="voice-grid">
-                      {group.voices.map(v => (
-                        <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={isVoiceSelected(group.model, v.id)}
-                            onChange={() => toggleVoice(group.model, v.id)}
-                          />
-                          {v.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
             </div>
 
              <div className="form-group checkbox-group">
@@ -827,35 +786,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </div>
             </div>
           )}
-        </section>
-
-        {/* Reset generated data */}
-        <section className="settings-section">
-          <h3><Trash2 size={20} /> Reset generated data</h3>
-          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
-            Bulk-delete generated content. This can't be undone, but you can regenerate it later.
-          </p>
-          <div className="form-group" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="wipe-button"
-              onClick={handleWipeAudio}
-              disabled={wiping !== null}
-            >
-              <Volume2 size={16} /> {wiping === 'audio' ? 'Wiping…' : 'Wipe all audio'}
-            </button>
-            <button
-              type="button"
-              className="wipe-button"
-              onClick={handleWipeSummaries}
-              disabled={wiping !== null}
-            >
-              <FileText size={16} /> {wiping === 'summaries' ? 'Wiping…' : 'Wipe all summaries'}
-            </button>
-          </div>
-          <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-            "Wipe all audio" also clears read-along timing (alignment + transcript) for articles and texts. Podcasts are not affected.
-          </small>
         </section>
 
         {/* Playback / Queue Settings */}
@@ -1071,6 +1001,35 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               )}
             </>
           )}
+        </section>
+
+        {/* Reset generated data — kept last as a "danger zone" */}
+        <section className="settings-section">
+          <h3><Trash2 size={20} /> Reset generated data</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+            Bulk-delete generated content. This can't be undone, but you can regenerate it later.
+          </p>
+          <div className="form-group" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeAudio}
+              disabled={wiping !== null}
+            >
+              <Volume2 size={16} /> {wiping === 'audio' ? 'Wiping…' : 'Wipe all audio'}
+            </button>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeSummaries}
+              disabled={wiping !== null}
+            >
+              <FileText size={16} /> {wiping === 'summaries' ? 'Wiping…' : 'Wipe all summaries'}
+            </button>
+          </div>
+          <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+            "Wipe all audio" also clears read-along timing (alignment + transcript) for articles and texts. Podcasts are not affected.
+          </small>
         </section>
       </div>
     </div>
