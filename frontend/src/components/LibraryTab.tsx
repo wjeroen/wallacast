@@ -590,22 +590,20 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                       {shown.map((tweet, i) => {
                         const isLast = i === shown.length - 1;
                         return (
-                          <div key={i} className="library-summary-box">
-                            <p className="description">
-                              {tweet}
-                              {hasMore && isLast && (
-                                <>
-                                  {' '}
-                                  <span
-                                    className="read-more-link"
-                                    onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
-                                  >
-                                    Read more.
-                                  </span>
-                                </>
-                              )}
-                            </p>
-                          </div>
+                          <p key={i} className="description library-summary-tweet">
+                            {tweet}
+                            {hasMore && isLast && (
+                              <>
+                                {' '}
+                                <span
+                                  className="read-more-link"
+                                  onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
+                                >
+                                  Read more.
+                                </span>
+                              </>
+                            )}
+                          </p>
                         );
                       })}
                     </div>
