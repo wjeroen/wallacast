@@ -138,6 +138,7 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => 
 - Write a single paragraph, at most ${maxWords} words, that captures the article's central thesis or main takeaway.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- The title and author are given at the top of the input. Refer to the author by name; do not assume the author's gender, and use "they" if a pronoun is unavoidable and the gender is unclear.
 - Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
@@ -149,6 +150,7 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => 
 - Each paragraph is at most ${maxWords} words and reads on its own, but together they must form one coherent line of reasoning.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- The title and author are given at the top of the input. Refer to the author by name; do not assume the author's gender, and use "they" if a pronoun is unavoidable and the gender is unclear.
 - Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
@@ -160,6 +162,7 @@ const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => 
 - Write a single paragraph, at most ${maxWords} words, capturing the overall gist of the discussion: its general tenor and the main point or two raised.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- The article's title and author are given at the top, for context. Do not assume the gender of the author or any commenter; use names or "they" rather than guessing he or she.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
@@ -170,6 +173,7 @@ const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => 
 - Each paragraph is at most ${maxWords} words and reads on its own, but together they form one coherent overview.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- The article's title and author are given at the top, for context. Do not assume the gender of the author or any commenter; use names or "they" rather than guessing he or she.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
@@ -187,7 +191,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
   console.log(`[Summary] ===== Generating summary for content ${contentId} =====`);
   try {
     const result = await query(
-      'SELECT id, type, html_content, content, comments, user_id FROM content_items WHERE id = $1',
+      'SELECT id, type, title, author, html_content, content, comments, user_id FROM content_items WHERE id = $1',
       [contentId]
     );
     if (result.rows.length === 0) {
@@ -203,6 +207,9 @@ export async function generateSummaryForContent(contentId: number): Promise<void
       throw new Error('No article text available to summarize');
     }
     const articleChars = articleText.length;
+
+    // Title + author header so the model can name the author instead of guessing a gender.
+    const metaHeader = `TITLE: ${item.title || 'Untitled'}\n${item.author ? `AUTHOR: ${item.author}\n` : ''}\n`;
 
     // 2. Tier lookup → maxTweets for the article; per-paragraph word cap from settings
     const tiers = parseTiers(await getUserSetting(userId, 'summary_tiers'));
@@ -221,7 +228,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
       model: chat.model,
       messages: [
         { role: 'system', content: ARTICLE_SUMMARY_PROMPT(maxTweetsArticle, maxWords) },
-        { role: 'user', content: articleText.slice(0, ARTICLE_INPUT_CAP) },
+        { role: 'user', content: metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP) },
       ],
     });
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
@@ -247,6 +254,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
             {
               role: 'user',
               content:
+                metaHeader +
                 `ARTICLE (context only — do not summarize this):\n${articleText.slice(0, ARTICLE_CONTEXT_CAP)}\n\n` +
                 `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, COMMENTS_INPUT_CAP)}`,
             },
