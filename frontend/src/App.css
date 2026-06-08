@@ -3670,7 +3670,21 @@
   color: var(--t2);
   margin-bottom: 0.35rem;
 }
-.voice-group-note { font-weight: 400; color: var(--t4); }
+.voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
+
+/* Library "Twitter feed" mode: article summary in place of the description */
+.library-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.25rem 0;
+}
+.library-summary-tweet {
+  font-size: 0.875rem;
+  color: var(--t1);
+  line-height: 1.45;
+  margin: 0;
+}
 .voice-grid {
   display: flex;
   flex-wrap: wrap;
