@@ -1148,8 +1148,15 @@ export function FullscreenPlayer({
         );
       }
       case 'summary': {
-        const toParagraphs = (text?: string) =>
-          (text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+        // Prefer blank-line separation (what the summarizer is asked for), but fall back to
+        // single newlines so we still split into tweets if the model omits the blank line.
+        const toParagraphs = (text?: string) => {
+          const t = (text || '').trim();
+          if (!t) return [];
+          let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+          if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
+          return parts;
+        };
         const articleTweets = toParagraphs(content.summary);
         const commentTweets = toParagraphs(content.comment_summary);
         return (
