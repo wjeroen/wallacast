@@ -87,7 +87,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Poll for progress updates on items that are generating
   useEffect(() => {
     const generatingItems = content.filter(
-      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)
+      item =>
+        (item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)) ||
+        item.summary_status === 'generating'
     );
 
     if (generatingItems.length === 0) return;
@@ -241,6 +243,30 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     } catch (error) {
       console.error('Failed to remove audio:', error);
       alert('Failed to remove audio');
+    }
+  };
+
+  const handleGenerateSummary = async (id: number, regenerate: boolean = false) => {
+    try {
+      setOpenDropdown(null);
+      await contentAPI.generateSummary(id, regenerate);
+      // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
+      updateItem(id, { summary_status: 'generating' } as any);
+      refreshItem(id);
+    } catch (error: any) {
+      console.error('Failed to generate summary:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary');
+    }
+  };
+
+  const handleRemoveSummary = async (id: number) => {
+    try {
+      setOpenDropdown(null);
+      await contentAPI.update(id, { summary: null } as any);
+      refreshItem(id);
+    } catch (error) {
+      console.error('Failed to remove summary:', error);
+      alert('Failed to remove summary');
     }
   };
 
@@ -547,6 +573,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     {item.type === 'pdf' && <FileText size={16} />}
                   </span>
                   {item.audio_url && <span className="badge">Audio</span>}
+                  {item.summary_status === 'generating' && (
+                    <span className="badge summarizing">Summarizing…</span>
+                  )}
+                  {item.summary_status !== 'generating' && item.summary_generated_at && (
+                    <span className="badge summary">Summary</span>
+                  )}
                   {item.type === 'podcast_episode' && item.transcript_words && (
                     <span className="badge transcript">Transcript</span>
                   )}
@@ -612,6 +644,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                                 </button>
                                 <button onClick={() => handleRemoveAudio(item.id)}>
                                   Remove audio
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                        {(item.type === 'article' || item.type === 'text') && (
+                          <>
+                            {item.summary_status === 'generating' ? (
+                              <button disabled>Generating summary…</button>
+                            ) : !item.summary_generated_at ? (
+                              <button onClick={() => handleGenerateSummary(item.id, false)}>
+                                Generate summary
+                              </button>
+                            ) : (
+                              <>
+                                <button onClick={() => handleGenerateSummary(item.id, true)}>
+                                  Regenerate summary
+                                </button>
+                                <button onClick={() => handleRemoveSummary(item.id)}>
+                                  Remove summary
                                 </button>
                               </>
                             )}

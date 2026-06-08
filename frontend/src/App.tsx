@@ -380,6 +380,46 @@ function App() {
     }
   };
 
+  const handleGenerateSummary = async (regenerate: boolean) => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    try {
+      await contentAPI.generateSummary(id, regenerate);
+      // Reflect "generating" immediately, then poll until it finishes (independent of audio).
+      setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
+      let tries = 0;
+      const poll = async () => {
+        tries++;
+        try {
+          const response = await contentAPI.getById(id);
+          setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+          if (response.data.summary_status === 'generating' && tries < 30) {
+            setTimeout(poll, 3000);
+          }
+        } catch {
+          /* stop polling on error */
+        }
+      };
+      setTimeout(poll, 3000);
+    } catch (error: any) {
+      console.error('Failed to generate summary:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary');
+    }
+  };
+
+  const handleRemoveSummary = async () => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    try {
+      await contentAPI.update(id, { summary: null } as any);
+      const response = await contentAPI.getById(id);
+      setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+    } catch (error) {
+      console.error('Failed to remove summary:', error);
+      alert('Failed to remove summary');
+    }
+  };
+
   const handleRegenerateTranscript = async () => {
     if (!currentContent) return;
     try {
@@ -576,6 +616,8 @@ function App() {
             onRefetch={handleRefetchContent}
             onGenerateAudio={handleGenerateAudio}
             onRemoveAudio={handleRemoveAudio}
+            onGenerateSummary={handleGenerateSummary}
+            onRemoveSummary={handleRemoveSummary}
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
             isDark={isDark}

@@ -1,10 +1,55 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic } from 'lucide-react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2 } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
 
 interface SettingsPageProps {
   onBack: () => void;
+}
+
+// A tier maps article/comment length (in characters) to a maximum number of paragraphs ("tweets").
+// The last tier uses Infinity as a catch-all for anything larger than every finite threshold.
+interface SummaryTier {
+  maxChars: number; // may be Infinity
+  maxTweets: number;
+}
+
+const DEFAULT_SUMMARY_TIERS: SummaryTier[] = [
+  { maxChars: 1500, maxTweets: 1 },
+  { maxChars: 3500, maxTweets: 2 },
+  { maxChars: 7000, maxTweets: 3 },
+  { maxChars: 12000, maxTweets: 4 },
+  { maxChars: 18000, maxTweets: 5 },
+  { maxChars: 28000, maxTweets: 6 },
+  { maxChars: Infinity, maxTweets: 7 },
+];
+
+// Infinity is not valid JSON, so the unbounded tier is stored as { maxChars: null }.
+// Always serialize sorted (finite ascending, Infinity last) so the stored list stays sorted.
+function serializeTiers(tiers: SummaryTier[]): string {
+  const sorted = [...tiers].sort((a, b) => a.maxChars - b.maxChars);
+  return JSON.stringify(
+    sorted.map(t => ({ maxChars: Number.isFinite(t.maxChars) ? t.maxChars : null, maxTweets: t.maxTweets }))
+  );
+}
+
+function parseTiers(raw: string | null | undefined): SummaryTier[] {
+  if (!raw) return DEFAULT_SUMMARY_TIERS;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_SUMMARY_TIERS;
+    const tiers: SummaryTier[] = arr.map((t: any) => ({
+      maxChars: t.maxChars === null || t.maxChars === undefined ? Infinity : Number(t.maxChars),
+      maxTweets: Math.max(1, Math.round(Number(t.maxTweets) || 1)),
+    }));
+    // Guarantee exactly one unbounded catch-all tier at the end
+    if (!tiers.some(t => !Number.isFinite(t.maxChars))) {
+      tiers.push({ maxChars: Infinity, maxTweets: 7 });
+    }
+    return tiers;
+  } catch {
+    return DEFAULT_SUMMARY_TIERS;
+  }
 }
 
 interface AIProvider {
@@ -28,6 +73,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  // Summary length tiers (editable, sorted list). Infinity tier is always last.
+  const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -61,6 +109,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
+    // Summaries
+    auto_generate_summary: 'false',
+    summarize_comments: 'true',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -118,6 +169,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
+        auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
+        summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -129,6 +182,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         wallabag_password: loaded.wallabag_password === '••••••••' ? '' : (loaded.wallabag_password || ''),
         wallabag_sync_enabled: loaded.wallabag_sync_enabled !== undefined && loaded.wallabag_sync_enabled !== null ? loaded.wallabag_sync_enabled : 'false',
       }));
+
+      setSummaryTiers(parseTiers(loaded.summary_tiers));
     } catch (err) {
       setError('Failed to load settings');
       console.error(err);
@@ -142,6 +197,40 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setSaved(false);
   };
 
+  // --- Summary tier editor helpers ---
+  const updateTier = (index: number, field: 'maxChars' | 'maxTweets', raw: string) => {
+    const num = parseInt(raw, 10);
+    setSummaryTiers(prev => prev.map((t, i) => {
+      if (i !== index) return t;
+      if (Number.isNaN(num)) return { ...t, [field]: field === 'maxTweets' ? 1 : 0 };
+      return { ...t, [field]: field === 'maxTweets' ? Math.max(1, num) : Math.max(0, num) };
+    }));
+    setSaved(false);
+  };
+
+  const addTier = () => {
+    setSummaryTiers(prev => {
+      const finite = prev.filter(t => Number.isFinite(t.maxChars));
+      const infinity = prev.find(t => !Number.isFinite(t.maxChars)) || { maxChars: Infinity, maxTweets: 7 };
+      const lastFinite = finite.length ? finite[finite.length - 1] : { maxChars: 1000, maxTweets: 1 };
+      const newTier: SummaryTier = {
+        maxChars: lastFinite.maxChars + 5000,
+        maxTweets: Math.min(infinity.maxTweets, lastFinite.maxTweets + 1),
+      };
+      return [...finite, newTier, infinity];
+    });
+    setSaved(false);
+  };
+
+  const removeTier = (index: number) => {
+    setSummaryTiers(prev => {
+      // Never remove the unbounded catch-all tier
+      if (!Number.isFinite(prev[index]?.maxChars)) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+    setSaved(false);
+  };
+
   const handleSave = async () => {
     try {
       setSaving(true);
@@ -151,6 +240,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       for (const [key, value] of Object.entries(formData)) {
         const isBooleanSetting = key === 'auto_transcribe_podcasts' ||
                                  key === 'auto_generate_audio_for_articles' ||
+                                 key === 'auto_generate_summary' ||
+                                 key === 'summarize_comments' ||
                                  key === 'wallabag_sync_enabled' ||
                                  key === 'image_alt_text_enabled' ||
                                  key === 'narrate_ea_forum_comments' ||
@@ -163,6 +254,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           toSave[key] = value;
         }
       }
+
+      // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
+      toSave.summary_tiers = serializeTiers(summaryTiers);
 
       console.log('Saving settings:', toSave);
       await userSettingsAPI.setBulk(toSave);
@@ -503,6 +597,88 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Requires Gemini API key.
                 </small>
              </div>
+        </section>
+
+        {/* Summaries Section */}
+        <section className="settings-section">
+          <h3><FileText size={20} /> Summaries</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+            Short "Twitter thread" summaries (each paragraph ≤ 280 characters), written by the same
+            narration LLM. Generated separately from audio — both can run at the same time.
+          </p>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.auto_generate_summary === 'true'}
+                onChange={(e) => handleChange('auto_generate_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Auto-generate a summary when an article is added
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.summarize_comments === 'true'}
+                onChange={(e) => handleChange('summarize_comments', e.target.checked ? 'true' : 'false')}
+              />
+              Also summarize comments
+            </label>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+              Adds a separate comment-discussion summary below the article summary (when the item has comments).
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label>Summary length tiers</label>
+            <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
+              Longer content gets more paragraphs. The character count is measured automatically; the matching
+              tier sets the maximum number of paragraphs ("tweets").
+            </small>
+            <div className="summary-tiers-editor">
+              <div className="summary-tier-row summary-tier-header">
+                <span>Up to (characters)</span>
+                <span>Max paragraphs</span>
+                <span></span>
+              </div>
+              {summaryTiers.map((tier, index) => {
+                const isInfinity = !Number.isFinite(tier.maxChars);
+                return (
+                  <div className="summary-tier-row" key={index}>
+                    {isInfinity ? (
+                      <span className="summary-tier-infinity">Anything larger</span>
+                    ) : (
+                      <input
+                        type="number"
+                        min="1"
+                        value={tier.maxChars}
+                        onChange={(e) => updateTier(index, 'maxChars', e.target.value)}
+                      />
+                    )}
+                    <input
+                      type="number"
+                      min="1"
+                      value={tier.maxTweets}
+                      onChange={(e) => updateTier(index, 'maxTweets', e.target.value)}
+                    />
+                    {isInfinity ? (
+                      <span></span>
+                    ) : (
+                      <button type="button" className="summary-tier-remove" title="Remove tier" onClick={() => removeTier(index)}>
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <button type="button" className="summary-tier-add" onClick={addTier}>
+              <Plus size={16} /> Add tier
+            </button>
+          </div>
         </section>
 
         {/* Playback / Queue Settings */}

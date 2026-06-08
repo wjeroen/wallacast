@@ -217,6 +217,11 @@ export async function initializeDatabase() {
     const feedItemAuthorMigration = await fs.readFile(feedItemAuthorMigrationPath, 'utf-8');
     await client.query(feedItemAuthorMigration);
 
+    // Run migration to add summary + comment_summary columns (article/comment summaries)
+    const summaryColumnsMigrationPath = path.join(__dirname, 'migrations', '019_add_summary_columns.sql');
+    const summaryColumnsMigration = await fs.readFile(summaryColumnsMigrationPath, 'utf-8');
+    await client.query(summaryColumnsMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
@@ -234,6 +239,21 @@ export async function initializeDatabase() {
 
     if (resetResult.rowCount && resetResult.rowCount > 0) {
       console.log(`Reset ${resetResult.rowCount} stuck generation task(s) to failed status`);
+    }
+
+    // Reset any stuck summary statuses (server restart during summary generation).
+    // Wrapped in try/catch: the summary_status column is created by migration 019 just above,
+    // but guard anyway so a missing column can never crash initialization (CLAUDE.md rule).
+    try {
+      const summaryResetResult = await client.query(`
+        UPDATE content_items SET summary_status = 'idle'
+        WHERE summary_status = 'generating'
+      `);
+      if (summaryResetResult.rowCount && summaryResetResult.rowCount > 0) {
+        console.log(`Reset ${summaryResetResult.rowCount} stuck summary task(s) to idle`);
+      }
+    } catch (e) {
+      // Column might not exist yet on a very old/odd schema — safe to skip
     }
 
     // Update table statistics so PostgreSQL's query planner picks optimal plans.
