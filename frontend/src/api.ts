@@ -88,6 +88,9 @@ export const contentAPI = {
   generateAudio: (id: number, regenerate: boolean = false, excludeComments: boolean = false) =>
     api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate, exclude_comments: excludeComments }),
 
+  generateSummary: (id: number, regenerate: boolean = false) =>
+    api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, { regenerate }),
+
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),
 

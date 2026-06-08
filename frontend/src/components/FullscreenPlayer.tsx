@@ -75,6 +75,8 @@ interface FullscreenPlayerProps {
   onRefetch?: () => void;
   onGenerateAudio?: (regenerate: boolean) => void;
   onRemoveAudio?: () => void;
+  onGenerateSummary?: (regenerate: boolean) => void;
+  onRemoveSummary?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
@@ -87,7 +89,7 @@ interface FullscreenPlayerProps {
   onPlayQueueItem?: (item: ContentItem) => void;
 }
 
-type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
+type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'queue';
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
@@ -296,6 +298,8 @@ export function FullscreenPlayer({
   onRefetch,
   onGenerateAudio,
   onRemoveAudio,
+  onGenerateSummary,
+  onRemoveSummary,
   onRegenerateTranscript,
   onContentUpdated,
   themeMode,
@@ -496,9 +500,12 @@ export function FullscreenPlayer({
     // if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');  // Comments tab
     if (content.type === 'podcast_episode') tabs.push('description');
     tabs.push('read-along');
+    // Summary tab sits immediately to the right of the "Content" (read-along) tab,
+    // and only appears once an article-body summary has been generated.
+    if ((content.summary || '').trim()) tabs.push('summary');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.url, parsedComments.length]);
+  }, [content.type, content.url, content.summary, parsedComments.length]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -1140,6 +1147,30 @@ export function FullscreenPlayer({
           </div>
         );
       }
+      case 'summary': {
+        const toParagraphs = (text?: string) =>
+          (text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+        const articleTweets = toParagraphs(content.summary);
+        const commentTweets = toParagraphs(content.comment_summary);
+        return (
+          <div className="tab-content-display">
+            <div className="summary-thread">
+              {articleTweets.map((tweet, i) => (
+                <p key={`a-${i}`} className="summary-tweet">{tweet}</p>
+              ))}
+              {commentTweets.length > 0 && (
+                <>
+                  <div className="summary-divider" role="separator" aria-label="Comment summary" />
+                  <p className="summary-section-label">Comments</p>
+                  {commentTweets.map((tweet, i) => (
+                    <p key={`c-${i}`} className="summary-tweet">{tweet}</p>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      }
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
           switch (libraryContext.filter) {
@@ -1360,6 +1391,25 @@ export function FullscreenPlayer({
                         Remove audio
                       </button>
                     )}
+                    {/* Summary options (independent of audio — both can be generated at once) */}
+                    {onGenerateSummary && content.summary_status === 'generating' && (
+                      <button disabled>Generating summary…</button>
+                    )}
+                    {onGenerateSummary && content.summary_status !== 'generating' && !content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummary(false); }}>
+                        Generate summary
+                      </button>
+                    )}
+                    {onGenerateSummary && content.summary_status !== 'generating' && content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummary(true); }}>
+                        Regenerate summary
+                      </button>
+                    )}
+                    {onRemoveSummary && content.summary_status !== 'generating' && content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onRemoveSummary(); }}>
+                        Remove summary
+                      </button>
+                    )}
                   </>
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
@@ -1404,6 +1454,7 @@ export function FullscreenPlayer({
             {tab === 'description' && 'Description'}
             {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
             {tab === 'read-along' && 'Content'}
+            {tab === 'summary' && 'Summary'}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}
