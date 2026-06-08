@@ -134,46 +134,44 @@ function parseMaxWords(raw: string | null): number {
 
 const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
   if (maxTweets <= 1) {
-    return `You write a one-paragraph, tweet-style summary of an article.
+    return `You write a one-paragraph, tweet-style summary of an article, in the author's own voice — as if the author wrote it to summarize their own piece. The title and author are given at the top of the input.
 - Write a single paragraph, at most ${maxWords} words, that captures the article's central thesis or main takeaway.
+- Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- The title and author are given at the top of the input. Refer to the author by name; do not assume the author's gender, and use "they" if a pronoun is unavoidable and the gender is unclear.
-- Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
+- Keep all facts, numbers, and names accurate, and never add anything not in the article. Focus on the main argument, not minor details.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
-  return `You write a concise summary of an article as a short thread of tweet-style paragraphs that together convey the article's main argument.
-- The FIRST paragraph states the article's central thesis or main takeaway.
+  return `You write a concise summary of an article as a short thread of tweet-style paragraphs, in the author's own voice — as if the author wrote the thread to summarize their own piece. The title and author are given at the top of the input.
+- The first paragraph states the central thesis or main takeaway.
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
+- Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open paragraphs with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
 - If the article is itself a roundup of several news stories, just highlight the most interesting ones rather than trying to cover them all.
 - Write at most ${maxTweets} paragraphs. Use fewer when the article is simple; do not pad to reach the limit.
-- Each paragraph is at most ${maxWords} words and reads on its own, but together they must form one coherent line of reasoning.
+- Each paragraph is at most ${maxWords} words and reads on its own, but together they form one coherent line of reasoning.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- The title and author are given at the top of the input. Refer to the author by name; do not assume the author's gender, and use "they" if a pronoun is unavoidable and the gender is unclear.
-- Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
+- Keep all facts, numbers, and names accurate, and never add anything not in the article. Focus on the main argument and key points, not minor details.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 };
 
 const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
   if (maxTweets <= 1) {
-    return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
+    return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
 - Write a single paragraph, at most ${maxWords} words, capturing the overall gist of the discussion: its general tenor and the main point or two raised.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- The article's title and author are given at the top, for context. Do not assume the gender of the author or any commenter; use names or "they" rather than guessing he or she.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
-  return `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
-- The FIRST paragraph captures the overall vibe of the discussion: its general tenor and where the room lands (broad agreement, sharp disagreement, mixed, mostly minor quibbles, etc.).
+  return `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
+- The first paragraph captures the overall vibe of the discussion: its general tenor and where the room lands (broad agreement, sharp disagreement, mixed, mostly minor quibbles, etc.).
 - The remaining paragraphs cover the main threads: key points, agreements, disagreements, questions, and notable additions. Group related points together rather than listing comments one by one.
 - Write at most ${maxTweets} paragraphs. Use fewer when the discussion is simple; do not pad to reach the limit.
 - Each paragraph is at most ${maxWords} words and reads on its own, but together they form one coherent overview.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- The article's title and author are given at the top, for context. Do not assume the gender of the author or any commenter; use names or "they" rather than guessing he or she.
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
