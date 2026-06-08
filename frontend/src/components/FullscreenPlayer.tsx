@@ -87,6 +87,7 @@ interface FullscreenPlayerProps {
   hasNextTrack?: boolean;
   hasPrevTrack?: boolean;
   onPlayQueueItem?: (item: ContentItem) => void;
+  initialTab?: string;
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'queue';
@@ -309,6 +310,7 @@ export function FullscreenPlayer({
   hasNextTrack = false,
   hasPrevTrack = false,
   onPlayQueueItem,
+  initialTab,
 }: FullscreenPlayerProps) {
   // Queue state for the Queue tab + autoplay toggle
   const manualItems = useQueueStore(s => s.manualItems);
@@ -513,6 +515,15 @@ export function FullscreenPlayer({
       setActiveTab(availableTabs[0]);
     }
   }, [availableTabs, activeTab]);
+
+  // Honor a requested initial tab (e.g. "Read more" in the library → Summary tab).
+  // Runs after the auto-select effect so it wins when both fire on a new item.
+  useEffect(() => {
+    if (initialTab === 'summary' && (content.summary || '').trim()) {
+      setActiveTab('summary');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id, initialTab]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {

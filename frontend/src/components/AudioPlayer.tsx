@@ -42,11 +42,12 @@ interface AudioPlayerProps {
    */
   autoPlayToken?: number;
   onPlayQueueItem?: (item: ContentItem) => void;
+  initialTab?: string;
 }
 
 export function AudioPlayer({
   content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onGenerateSummary, onRemoveSummary,
-  onRegenerateTranscript,
+  onRegenerateTranscript, initialTab,
   onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
   autoPlayToken = 0, onPlayQueueItem,
@@ -652,6 +653,7 @@ export function AudioPlayer({
           hasNextTrack={hasNextTrack}
           hasPrevTrack={hasPrevTrack}
           onPlayQueueItem={onPlayQueueItem}
+          initialTab={initialTab}
         />
       ) : (
         <MiniPlayer
