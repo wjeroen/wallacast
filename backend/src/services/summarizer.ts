@@ -136,15 +136,20 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
   if (maxTweets <= 1) {
     return `You write a one-paragraph, tweet-style summary of an article.
 - Write a single paragraph, at most ${maxChars} characters (counting spaces and punctuation), that captures the article's central thesis or main takeaway.
-- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
+- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claim over minor details.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
   return `You write a concise summary of an article as a short thread of tweet-style paragraphs that together convey the article's main argument.
 - The FIRST paragraph states the article's central thesis or main takeaway.
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
+- If the article is itself a roundup of several news stories, just highlight the most interesting ones rather than trying to cover them all.
 - Write at most ${maxTweets} paragraphs. Use fewer when the article is simple; do not pad to reach the limit.
 - Each paragraph is at most ${maxChars} characters (counting spaces and punctuation) and reads on its own, but together they must form one coherent line of reasoning.
-- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
+- Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the article. Prioritize the author's core claims and reasoning over minor details.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 };
@@ -152,8 +157,10 @@ const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
 const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => {
   if (maxTweets <= 1) {
     return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
-- Write a single paragraph, at most ${maxChars} characters (counting spaces and punctuation), capturing the overall gist of the discussion — its general tenor and the main point or two raised.
-- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the comments.
+- Write a single paragraph, at most ${maxChars} characters (counting spaces and punctuation), capturing the overall gist of the discussion: its general tenor and the main point or two raised.
+- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
   }
   return `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article is provided only as context. Do NOT summarize the article itself; summarize what the commenters say.
@@ -161,7 +168,9 @@ const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxChars: number): string => 
 - The remaining paragraphs cover the main threads: key points, agreements, disagreements, questions, and notable additions. Group related points together rather than listing comments one by one.
 - Write at most ${maxTweets} paragraphs. Use fewer when the discussion is simple; do not pad to reach the limit.
 - Each paragraph is at most ${maxChars} characters (counting spaces and punctuation) and reads on its own, but together they form one coherent overview.
-- Use plain, direct language. Keep all facts, numbers, and names accurate, and never add anything not in the comments.
+- Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 };

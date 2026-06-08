@@ -33,6 +33,16 @@ function cleanHtml(text: string): string {
   return cleaned;
 }
 
+// Split a summary into tweet paragraphs. Prefers blank-line separation (what the summarizer is
+// asked for), falling back to single newlines.
+function toTweets(text: string): string[] {
+  const t = (text || '').trim();
+  if (!t) return [];
+  let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
+  return parts;
+}
+
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem) => void;
 }
@@ -61,10 +71,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
   const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
+  // "Twitter feed" mode: show the article summary instead of the description on library cards.
+  const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
 
   // Fetch content on mount
   useEffect(() => {
     fetchContent();
+  }, []);
+
+  // Load the "show summary on library cards" preference
+  useEffect(() => {
+    userSettingsAPI.get('library_show_summary')
+      .then(res => setShowSummaryInLibrary(res.data.value === 'true'))
+      .catch(() => {});
   }, []);
 
   // Close dropdown when clicking outside
@@ -562,9 +581,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     </a>
                   </p>
                 )}
-                {item.description && (
+                {showSummaryInLibrary && item.summary ? (
+                  <div className="library-summary">
+                    {toTweets(item.summary).map((tweet, i) => (
+                      <p key={i} className="library-summary-tweet">{tweet}</p>
+                    ))}
+                  </div>
+                ) : item.description ? (
                   <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
-                )}
+                ) : null}
                 <div className="metadata">
                   <span className="type" title={item.type}>
                     {item.type === 'article' && <Newspaper size={16} className="icon-article" />}

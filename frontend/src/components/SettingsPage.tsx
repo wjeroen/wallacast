@@ -58,7 +58,7 @@ interface TTSVoiceChoice { model: string; voice: string; }
 
 // Catalog of voices, grouped by provider/model. Only groups whose API key is configured
 // are shown. Each voice carries its model so the rotation can span providers.
-const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'deepinfra'; voices: { id: string; label: string }[] }[] = [
+const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'deepinfra'; note?: string; voices: { id: string; label: string }[] }[] = [
   {
     group: 'OpenAI', model: 'gpt-4o-mini-tts', requiresKey: 'openai',
     voices: [
@@ -69,9 +69,12 @@ const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'de
   },
   {
     group: 'Kokoro (DeepInfra)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
+    note: 'AF/AM = American female/male, BF/BM = British female/male',
     voices: [
-      { id: 'af_heart', label: 'Heart (F)' }, { id: 'af_bella', label: 'Bella (F)' }, { id: 'af_nicole', label: 'Nicole (F)' },
-      { id: 'am_adam', label: 'Adam (M)' }, { id: 'am_michael', label: 'Michael (M)' }, { id: 'am_puck', label: 'Puck (M)' },
+      { id: 'af_heart', label: 'Heart (AF)' }, { id: 'af_bella', label: 'Bella (AF)' }, { id: 'af_nicole', label: 'Nicole (AF)' },
+      { id: 'am_adam', label: 'Adam (AM)' }, { id: 'am_fenrir', label: 'Fenrir (AM)' }, { id: 'am_michael', label: 'Michael (AM)' }, { id: 'am_puck', label: 'Puck (AM)' },
+      { id: 'bf_emma', label: 'Emma (BF)' }, { id: 'bf_isabella', label: 'Isabella (BF)' },
+      { id: 'bm_fable', label: 'Fable (BM)' }, { id: 'bm_lewis', label: 'Lewis (BM)' },
     ],
   },
 ];
@@ -142,6 +145,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     auto_generate_summary: 'false',
     summarize_comments: 'true',
     summary_max_chars: '240',
+    library_show_summary: 'false',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -198,6 +202,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_chars: loaded.summary_max_chars || '240',
+        library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -314,6 +319,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                  key === 'auto_generate_audio_for_articles' ||
                                  key === 'auto_generate_summary' ||
                                  key === 'summarize_comments' ||
+                                 key === 'library_show_summary' ||
                                  key === 'wallabag_sync_enabled' ||
                                  key === 'image_alt_text_enabled' ||
                                  key === 'narrate_ea_forum_comments' ||
@@ -580,6 +586,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   availableVoiceGroups.map(group => (
                     <div key={group.model} className="voice-group">
                       <div className="voice-group-title">{group.group}</div>
+                      {group.note && <div className="voice-group-note">{group.note}</div>}
                       <div className="voice-grid">
                         {group.voices.map(v => (
                           <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
@@ -706,6 +713,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </label>
             <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
               Adds a separate comment-discussion summary below the article summary (when the item has comments).
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.library_show_summary === 'true'}
+                onChange={(e) => handleChange('library_show_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Show summaries on library cards (Twitter-feed mode)
+            </label>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+              Replaces each library card's description with its full article summary (comment summaries excluded). Falls back to the description when no summary exists.
             </small>
           </div>
 
