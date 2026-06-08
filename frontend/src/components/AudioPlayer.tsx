@@ -23,9 +23,31 @@ interface AudioPlayerProps {
   onRemoveAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
+  isDark: boolean;
+  themeMode?: 'dark' | 'light' | 'system';
+  onCycleTheme?: () => void;
+  // Queue integration — parent owns the queue store, player just calls up
+  onTrackEnded?: () => void;
+  onSkipNextTrack?: () => void;
+  onSkipPrevTrack?: () => void;
+  hasNextTrack?: boolean;
+  hasPrevTrack?: boolean;
+  /**
+   * Parent increments this whenever it swaps `content` because of an auto-
+   * advance or explicit next/prev. AudioPlayer watches it and auto-plays
+   * the new track once metadata loads. Manual content clicks from the
+   * library leave the counter alone, so the first track doesn't auto-play.
+   */
+  autoPlayToken?: number;
+  onPlayQueueItem?: (item: ContentItem) => void;
 }
 
-export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript, onContentUpdated }: AudioPlayerProps) {
+export function AudioPlayer({
+  content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript,
+  onContentUpdated, isDark, themeMode, onCycleTheme,
+  onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
+  autoPlayToken = 0, onPlayQueueItem,
+}: AudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -50,6 +72,16 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
   // Mirrors the current content prop so permanent event handlers (with [] deps)
   // always see the up-to-date item without needing to be re-registered.
   const contentRef = useRef(content);
+  // Latest onTrackEnded callback — read by the audio 'ended' handler which is
+  // registered once with empty deps. Kept in a ref so prop changes are picked up.
+  const onTrackEndedRef = useRef(onTrackEnded);
+  const lastAutoPlayTokenRef = useRef(0);
+  // Tracks the last audio URL we actually set on the <audio> element. Content
+  // objects get replaced (new reference, same item) every time the parent
+  // refreshes metadata, expands comments, regenerates audio, etc. Without this
+  // guard every refresh resets audio.src, interrupts playback, and leaves the
+  // user unable to resume without closing and re-opening the player.
+  const lastAudioSrcRef = useRef<string>('');
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -59,10 +91,80 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
     contentRef.current = content;
   }, [content]);
 
+  useEffect(() => {
+    onTrackEndedRef.current = onTrackEnded;
+  }, [onTrackEnded]);
+
+
   // Reset user-pause intent when switching to a new item
   useEffect(() => {
     userPausedRef.current = false;
   }, [content?.id]);
+
+  // Hook up the OS MediaSession API so headset / lock-screen / bluetooth
+  // controls can drive the player. Deliberately map *next/previous* to
+  // seek ±15s (podcast-style) rather than true track-nav — the user
+  // preferred that for long-form audio. The dedicated seekbackward /
+  // seekforward actions do the same thing so both UIs are covered.
+  useEffect(() => {
+    if (!content) return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+
+    ms.metadata = new window.MediaMetadata({
+      title: content.title || 'wallacast',
+      artist: content.podcast_show_name || content.author || 'wallacast',
+      album: content.type === 'podcast_episode' ? (content.podcast_show_name || 'Podcast') : 'Library',
+      artwork: content.preview_picture
+        ? [{ src: content.preview_picture, sizes: '512x512', type: 'image/png' }]
+        : [],
+    });
+
+    const seekBy = (delta: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const next = Math.min(
+        Math.max(0, audio.currentTime + delta),
+        audio.duration && isFinite(audio.duration) ? audio.duration : audio.currentTime + delta,
+      );
+      audio.currentTime = next;
+      setCurrentTime(next);
+    };
+
+    // Do NOT register custom play/pause handlers. The browser's <audio>
+    // element already handles play/pause from lock screen / headphones
+    // natively via DOM events, which flow through our handlePlay/handlePause
+    // with all the wear-sensor debounce and userPausedRef guards. A custom
+    // MediaSession play handler bypasses those guards and causes headphone
+    // disconnect to resume paused audio (the bug we fixed before).
+    try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch {}
+    try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch {}
+    try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch {}
+    try { ms.setActionHandler('seekforward', (d: any) => seekBy(d?.seekOffset || 15)); } catch {}
+    try {
+      ms.setActionHandler('seekto', (d: any) => {
+        if (typeof d?.seekTime !== 'number') return;
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.currentTime = d.seekTime;
+        setCurrentTime(d.seekTime);
+      });
+    } catch {}
+
+    return () => {
+      try { ms.setActionHandler('previoustrack', null); } catch {}
+      try { ms.setActionHandler('nexttrack', null); } catch {}
+      try { ms.setActionHandler('seekbackward', null); } catch {}
+      try { ms.setActionHandler('seekforward', null); } catch {}
+      try { ms.setActionHandler('seekto', null); } catch {}
+    };
+  }, [content?.id, content?.title, content?.podcast_show_name, content?.preview_picture, content?.author, content?.type]);
+
+  // Reflect playback state so OS UIs show the right play/pause state
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
 
   // Sync speed from backend on mount (for cross-device persistence)
   useEffect(() => {
@@ -123,51 +225,78 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!content) return;
+    if (!audioRef.current) return;
 
-    if (audioRef.current) {
-      const audio = audioRef.current;
-      const startPosition = content.playback_position || 0;
+    const audio = audioRef.current;
+    const startPosition = content.playback_position || 0;
 
-      // Podcast episodes are proxied through our own backend to avoid CORS issues
-      // with external CDNs (e.g. api.substack.com blocks browser range requests).
-      // The backend forwards Range headers byte-for-byte so only requested chunks
-      // are fetched from upstream — no full-file downloads.
-      // Articles/texts use their stored audio_url (already our /api endpoint) with
-      // a cache-buster to force the browser to re-fetch when audio is regenerated.
-      let audioSrc: string;
-      if (content.type === 'podcast_episode') {
-        const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
-        audioSrc = `${apiBase}/content/${content.id}/audio`;
-      } else if (content.audio_url) {
-        const cacheBuster = `${content.file_size || 0}-${content.duration || 0}`;
-        const separator = content.audio_url.includes('?') ? '&' : '?';
-        audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
-      } else {
-        audioSrc = '';
-      }
-      audio.src = audioSrc;
-      
-      // Use global speed from localStorage (instant, no API call needed)
-      const storedSpeed = getStoredSpeed();
-      audio.playbackRate = storedSpeed;
-      setPlaybackSpeed(storedSpeed);
-
-      const handleLoadedMetadata = () => {
-        if (startPosition > 0) {
-          audio.currentTime = startPosition;
-          setCurrentTime(startPosition);
-        }
-        // We still save duration for the UI progress bar, but we won't use it for sync
-        if ((!content.duration || content.duration === 0) && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
-          const durationInSeconds = Math.floor(audio.duration);
-          contentAPI.update(content.id, { duration: durationInSeconds } as any).catch(() => {});
-        }
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      };
-
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    let audioSrc: string;
+    if (content.type === 'podcast_episode') {
+      const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
+      audioSrc = `${apiBase}/content/${content.id}/audio`;
+    } else if (content.audio_url) {
+      const cacheBuster = `${content.file_size || 0}`;
+      const separator = content.audio_url.includes('?') ? '&' : '?';
+      audioSrc = `${content.audio_url}${separator}v=${cacheBuster}`;
+    } else {
+      audioSrc = '';
     }
-  }, [content]);
+
+    // Auto-play only when this content change was paired with a token bump
+    // (queue advance/skip). Checking directly here instead of via a separate
+    // ref prevents stale pending flags from leaking across unrelated content
+    // changes (e.g. library clicks).
+    const shouldAutoPlay = autoPlayToken > 0 && autoPlayToken !== lastAutoPlayTokenRef.current;
+    if (shouldAutoPlay) {
+      lastAutoPlayTokenRef.current = autoPlayToken;
+    }
+
+    // Guard against redundant src resets. The parent replaces `content` with
+    // a new object reference on many non-audio events (comment fetches,
+    // metadata refreshes, star/archive toggles, etc.). Without this, every
+    // one of those resets audio.src and interrupts playback.
+    if (audioSrc === lastAudioSrcRef.current) {
+      return;
+    }
+    lastAudioSrcRef.current = audioSrc;
+    audio.src = audioSrc;
+
+    const storedSpeed = getStoredSpeed();
+    audio.playbackRate = storedSpeed;
+    setPlaybackSpeed(storedSpeed);
+
+    const handleLoadedMetadata = () => {
+      if (startPosition > 0) {
+        audio.currentTime = startPosition;
+        setCurrentTime(startPosition);
+      }
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        const realDuration = Math.floor(audio.duration);
+        // Only auto-correct upwards if the DB has no duration. Don't override
+        // an existing duration based on the browser reading — the backend now
+        // trims trailing silence post-Whisper, and the browser would happily
+        // report the bogus pre-trim value, undoing that fix.
+        if (!content.duration || content.duration === 0) {
+          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+        } else if (realDuration < content.duration - 2) {
+          // Browser says the file is SHORTER than DB — trust the browser
+          // (file probably truncated). Update DB so the timeline isn't too long.
+          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+        }
+      }
+      if (shouldAutoPlay) {
+        userPausedRef.current = false;
+        appPlayRef.current = true;
+        audio.play().catch(() => { appPlayRef.current = false; });
+      }
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    return () => {
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [content, autoPlayToken]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -179,6 +308,8 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
       setIsPlaying(false);
       userPausedRef.current = false; // natural end — reset intent
       savePlaybackPosition(0);
+      // Defer the queue check so the state update lands before parent reloads content
+      setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
     // Sync React state with actual DOM audio state.
     // Three guards run in order to decide whether to accept an incoming play:
@@ -319,8 +450,20 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
 
   const handleSeek = (time: number) => {
     if (!audioRef.current) return;
-    audioRef.current.currentTime = time;
+    const audio = audioRef.current;
+    audio.currentTime = time;
     setCurrentTime(time);
+    savePlaybackPosition(time);
+    // Some MP3 files lack proper seeking headers, causing the browser to
+    // silently ignore the currentTime assignment. Detect this and snap the
+    // displayed time back to where the audio actually is.
+    const checkSeek = () => {
+      if (Math.abs(audio.currentTime - time) > 2) {
+        setCurrentTime(audio.currentTime);
+      }
+    };
+    audio.addEventListener('seeked', checkSeek, { once: true });
+    setTimeout(() => audio.removeEventListener('seeked', checkSeek), 1000);
   };
 
   const handleSkipBackward = () => handleSeek(Math.max(0, currentTime - 15));
@@ -497,6 +640,13 @@ export function AudioPlayer({ content, onClose, onRefetch, onGenerateAudio, onRe
           onRemoveAudio={onRemoveAudio}
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
+          themeMode={themeMode || (isDark ? 'dark' : 'light')}
+          onCycleTheme={onCycleTheme || (() => {})}
+          onSkipNextTrack={onSkipNextTrack}
+          onSkipPrevTrack={onSkipPrevTrack}
+          hasNextTrack={hasNextTrack}
+          hasPrevTrack={hasPrevTrack}
+          onPlayQueueItem={onPlayQueueItem}
         />
       ) : (
         <MiniPlayer

@@ -212,11 +212,21 @@ export async function initializeDatabase() {
     const commentSourceMigration = await fs.readFile(commentSourceMigrationPath, 'utf-8');
     await client.query(commentSourceMigration);
 
+    // Run migration to add author column to feed_items
+    const feedItemAuthorMigrationPath = path.join(__dirname, 'migrations', '018_add_feed_item_author.sql');
+    const feedItemAuthorMigration = await fs.readFile(feedItemAuthorMigrationPath, 'utf-8');
+    await client.query(feedItemAuthorMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
+    // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
       UPDATE content_items
       SET generation_status = 'failed',
-          generation_error = 'Server restarted during generation',
+          generation_error = CASE
+            WHEN current_operation IN ('transcribing', 'aligning_content')
+              THEN 'Server restarted during transcript generation. Audio may be intact — try regenerating the transcript.'
+            ELSE 'Server restarted during audio generation'
+          END,
           generation_progress = 0,
           current_operation = NULL
       WHERE generation_status NOT IN ('idle', 'completed', 'failed')

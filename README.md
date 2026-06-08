@@ -177,7 +177,7 @@ Wallacast supports multiple users with complete data isolation:
     - `audio_data: null, audio_url: null` removes audio from articles/texts
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
-  - `POST /:id/generate-audio` - Manually trigger audio generation
+  - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
@@ -186,16 +186,21 @@ Wallacast supports multiple users with complete data isolation:
 - **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
   - `GET /search?q=` - Smart search: iTunes directory for text queries, RSS feed fetch for URLs (auto-detects)
   - `POST /subscribe` - Subscribe to podcast or RSS feed URL (auto-detects type: podcast/newsletter/blog)
-  - `POST /:id/refresh` - Fetch new episodes from feed
-  - `GET /:id/preview-episodes` - Get episodes without saving to library (for subscribed feeds)
-  - `GET /preview-by-url?url=` - Preview episodes/articles from any RSS feed URL without subscribing
+  - `GET /:id/preview-episodes?limit&offset` - Get episodes without saving to library (for subscribed feeds), server-side paginated
+  - `GET /preview-by-url?url=&limit&offset` - Preview episodes/articles from any RSS feed URL without subscribing, server-side paginated
+  - `GET /search-feed?url=&q=` - Search full RSS feed for episodes matching query (searches cached XML server-side)
   - **Feed Caching (Performance Optimization)**:
-    - `GET /feed-items?feedId&limit` - Get cached feed items from database (instant, no network requests)
+    - `GET /feed-items?feedId&limit&offset` - Get cached feed items from database with pagination (instant, no network requests)
     - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
     - `GET /last-refresh` - Get timestamp of last feed refresh
 
-- **`routes/queue.ts`**: Queue management (partially implemented)
-  - Standard CRUD for queue items with position management
+- **`routes/queue.ts`**: Manual play queue (per-user)
+  - `GET /` - List queue items joined with content (aliases queue_id/queue_position/queue_added_at)
+  - `POST /` - Append item to end of queue
+  - `POST /front` - Insert at position 0 (used when deferred audio generation finishes)
+  - `DELETE /:id` - Remove from queue and renumber positions
+  - `PUT /reorder` - Update positions in bulk
+  - `DELETE /` - Clear entire queue
 
 - **`routes/transcription.ts`**: Dedicated transcription endpoint
   - `POST /content/:id` - Trigger transcription for podcast episode
@@ -286,8 +291,10 @@ Wallacast supports multiple users with complete data isolation:
   - `fetchPodcastDetails()`: Extracts feed metadata and auto-detects type (podcast vs newsletter) based on MIME types
   - `detectFeedType()`: Analyzes feed items - checks if enclosures are `audio/*` (podcast) or `image/*` (newsletter)
   - `fetchPodcastEpisodes()`: Gets episodes and saves to DB
-  - `getPreviewEpisodes()`: Gets episodes/articles without saving (handles both audio podcast episodes and text newsletter articles)
+  - `getPreviewEpisodes()`: Gets episodes/articles without saving, with server-side pagination via offset/limit (iterative regex parsing, stops early)
+  - `searchFeedEpisodes()`: Searches full cached XML feed for episodes matching a query string
   - `extractNestedXMLTag()`: Handles nested XML structures like Substack's `<image><url>...</url></image>`
+  - **XML Cache**: In-memory cache for downloaded RSS XML (5-min TTL, max 20 feeds). Avoids re-downloading on each Load More or search request. Used by `getPreviewEpisodes()` and `searchFeedEpisodes()`.
   - **Feed Caching (Performance Optimization)**:
     - `refreshFeedFromNetwork()`: Fetches RSS feed, parses items, saves to `feed_items` table, cleans up old items (keeps 100 most recent)
     - `refreshAllFeedsFromNetwork()`: Refreshes all subscribed feeds for a user sequentially
@@ -343,8 +350,10 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
   - **Search Results**: Click any result to preview episodes/articles before subscribing. "Show All Search Results" button clears preview and returns to search results
+  - **Episode Search**: Search within any podcast/RSS feed for specific episodes (searches full feed server-side via XML cache)
   - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons and unsubscribe option
-  - **Recent Updates**: Shows 100 most recent episodes/articles across all subscribed feeds (loaded from database cache, instant)
+  - **Recent Updates**: Server-side paginated feed items from database cache. Load More fetches next 50 items via offset.
+  - **Podcast/Search Detail**: Server-side paginated via XML cache. Load More fetches next 50 episodes from cached RSS XML without re-downloading.
   - **Refresh Button**: Next to "Recent Updates" heading - refreshes all feeds from network, shows last refresh time ("5 mins ago")
   - **Performance**: Database caching eliminates 70+ network requests per page load (instant instead of 30+ seconds for 70 subscriptions)
   - **Feed Detail View**: Click a feed to see expanded card with full description + that feed's content. "Show All Subscriptions" button to return to full list
@@ -370,7 +379,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
   - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
   - **Description tab** (podcasts only): Podcast episode description with HTML formatting
-  - **Queue tab**: Placeholder (work in progress)
+  - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
@@ -401,7 +410,7 @@ Wallacast is a fully-functional Progressive Web App that can be installed on mob
 
 **Implementation Files:**
 - **`public/manifest.json`**: Web app manifest defining app name, icons, display mode, theme colors
-- **`public/service-worker.js`**: Service worker implementing caching strategies (cache-first for static assets, network-first for API calls)
+- **`public/service-worker.js`**: Service worker implementing caching strategies (cache-first for static assets, network-first for API calls, audio streams bypass SW for native byte-range seeking)
 - **`main.tsx`**: Service worker registration on app load
 - **`index.html`**: PWA meta tags, manifest link, favicons, iOS-specific meta tags
 - **`public/AppIcons/`**: Icon assets organized by platform (android, ios, windows11)
@@ -492,11 +501,13 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - **Unique constraint**: `(feed_id, guid)` - Prevents duplicate items in the same feed
 - **Performance**: Loading 70 feeds with 100 items each = instant database query instead of 70 network requests
 
-### queue_items (not fully implemented in UI)
+### queue_items (manual play queue)
 - `id`: Primary key
 - `user_id`: FK to users table (queues are per-user)
 - `content_item_id`: FK to content_items table
-- `position`, `added_at`
+- `position`: integer ordering (0 = head). Renumbered on delete / bumped on insert-at-front
+- `added_at`: timestamp for display
+- **Note**: Only the *manual* queue is persisted here. The Spotify-style "Up next from library" stream is computed client-side from the captured library filter + `contentStore.allItems`, so no migration was needed when the Queue tab landed.
 
 ## Deployment (Railway)
 
