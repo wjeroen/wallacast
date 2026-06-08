@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon, SunMoon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, FileText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -496,6 +496,40 @@ function App() {
     }
   };
 
+  const handleBulkGenerateSummaries = async () => {
+    setShowUserMenu(false);
+
+    // No comment cutoff for summaries. Eligible = articles/texts without a summary
+    // and not already generating one.
+    const eligibleItems = allContent.filter(
+      item => (item.type === 'article' || item.type === 'text') && !item.is_archived &&
+              !item.summary_generated_at && item.summary_status !== 'generating'
+    );
+
+    if (eligibleItems.length === 0) {
+      alert('No items need a summary.');
+      return;
+    }
+
+    const confirmed = confirm(`Generate summaries for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`);
+    if (!confirmed) return;
+
+    let started = 0;
+    for (const item of eligibleItems) {
+      try {
+        await contentAPI.generateSummary(item.id, false);
+        started++;
+        refreshItem(item.id);
+      } catch (error) {
+        console.error(`Failed to start summary generation for item ${item.id}:`, error);
+      }
+    }
+
+    if (started > 0) {
+      alert(`Started summary generation for ${started} item${started !== 1 ? 's' : ''}.`);
+    }
+  };
+
   const handleLogout = async () => {
     setShowUserMenu(false);
     await logout();
@@ -588,6 +622,11 @@ function App() {
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
                 <Volume2 size={18} />
                 <span>Generate All Audio</span>
+              </button>
+
+              <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
+                <FileText size={18} />
+                <span>Generate All Summaries</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>
