@@ -626,7 +626,7 @@ function App() {
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
                 <FileText size={18} />
-                <span>Generate All Summaries</span>
+                <span>Generate Summaries</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>
