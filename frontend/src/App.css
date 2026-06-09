@@ -931,12 +931,12 @@
   /* A midpoint between the card's normal color and the box color (--bg-raised), so the
      description/summary boxes stay visibly distinct on hover. Works in both themes since it
      mixes the theme variables. */
-  background: color-mix(in srgb, var(--bg-surface) 60%, var(--bg-raised));
+  background: color-mix(in srgb, var(--bg-surface) 40%, var(--bg-raised));
   border-color: var(--bg-hover);
 }
 
 .content-card.selected {
-  background: color-mix(in srgb, var(--bg-surface) 60%, var(--bg-raised));
+  background: color-mix(in srgb, var(--bg-surface) 40%, var(--bg-raised));
   border-color: #3b82f6;
   box-shadow: 0 0 0 1px #3b82f6;
 }
