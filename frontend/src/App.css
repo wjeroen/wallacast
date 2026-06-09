@@ -3697,6 +3697,7 @@
 }
 .library-summary-tweet {
   margin: 0; /* override .description's margin-top so the flex gap handles spacing */
+  font-size: 1rem; /* larger than the 0.875rem description size — the summary is the main read */
 }
 .read-more-link {
   color: #60a5fa;          /* same link blue as card links / active tab */
