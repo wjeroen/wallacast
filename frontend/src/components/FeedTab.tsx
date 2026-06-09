@@ -475,10 +475,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               onClick={() => loadSearchResultEpisodes(podcast)}
               style={{ cursor: 'pointer' }}
             >
-              {podcast.preview_picture && (
-                <img src={podcast.preview_picture} alt={podcast.title} className="thumbnail" />
-              )}
               <div className="content-info">
+                {podcast.preview_picture && (
+                  <img src={podcast.preview_picture} alt={podcast.title} className="thumbnail" />
+                )}
                 <h3>{podcast.title}</h3>
                 <p className="author">{podcast.author}</p>
                 {podcast.description && (
@@ -512,10 +512,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
           {/* Expanded Feed Card */}
           <div className="content-card selected-podcast-card">
-            {selectedSearchResult.preview_picture && (
-              <img src={selectedSearchResult.preview_picture} alt={selectedSearchResult.title} className="thumbnail" />
-            )}
             <div className="content-info">
+              {selectedSearchResult.preview_picture && (
+                <img src={selectedSearchResult.preview_picture} alt={selectedSearchResult.title} className="thumbnail" />
+              )}
               <h3>{selectedSearchResult.title}</h3>
               <p className="author">{selectedSearchResult.author}</p>
               {selectedSearchResult.description && (
@@ -552,10 +552,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             )}
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
-                {episode.preview_picture && (
-                  <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                )}
                 <div className="content-info">
+                  {episode.preview_picture && (
+                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
+                  )}
                   <h3>{episode.title}</h3>
                   <p className="author">
                     {episode.author && <>{episode.author} • </>}
@@ -614,10 +614,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
           {/* Expanded Podcast Card */}
           <div className="content-card selected-podcast-card">
-            {selectedPodcast.preview_picture && (
-              <img src={selectedPodcast.preview_picture} alt={selectedPodcast.title} className="thumbnail" />
-            )}
             <div className="content-info">
+              {selectedPodcast.preview_picture && (
+                <img src={selectedPodcast.preview_picture} alt={selectedPodcast.title} className="thumbnail" />
+              )}
               <h3>{selectedPodcast.title}</h3>
               <p className="author">{selectedPodcast.author}</p>
               {selectedPodcast.description && (
@@ -654,10 +654,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             )}
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
-                {episode.preview_picture && (
-                  <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                )}
                 <div className="content-info">
+                  {episode.preview_picture && (
+                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
+                  )}
                   <h3>{episode.title}</h3>
                   <p className="author">
                     {episode.author && <>{episode.author} • </>}
@@ -782,10 +782,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             </div>
             {visibleEpisodes.map((episode, index) => (
               <div key={episode.audio_url || episode.url || index} className="content-card">
-                {episode.preview_picture && (
-                  <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                )}
                 <div className="content-info">
+                  {episode.preview_picture && (
+                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
+                  )}
                   <h3>{episode.title}</h3>
                   <p className="author">
                     {episode.author && <>{episode.author} • </>}

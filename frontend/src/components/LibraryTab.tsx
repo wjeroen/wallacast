@@ -545,10 +545,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   {selectedItems.has(item.id) ? <CheckSquare size={20} /> : <Square size={20} />}
                 </div>
               )}
-              {item.preview_picture && (
-                <img src={item.preview_picture} alt={item.title} className="thumbnail" />
-              )}
               <div className="content-info">
+                {item.preview_picture && (
+                  <img src={item.preview_picture} alt={item.title} className="thumbnail" />
+                )}
                 <h3>{item.title}</h3>
                 {item.author && (
                   <p className="author">
