@@ -482,7 +482,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                 <h3>{podcast.title}</h3>
                 <p className="author">{podcast.author}</p>
                 {podcast.description && (
-                  <p className="description">{cleanHtml(podcast.description).slice(0, 150)}...</p>
+                  <p className="description">{cleanHtml(podcast.description).slice(0, 280)}...</p>
                 )}
                 <div className="metadata">
                   <span className="type">
@@ -571,7 +571,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                     </p>
                   )}
                   {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
+                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
                   )}
                   <div className="metadata">
                     <span className="type">
@@ -673,7 +673,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                     </p>
                   )}
                   {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
+                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
                   )}
                   <div className="metadata">
                     <span className="type">
@@ -801,7 +801,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                     </p>
                   )}
                   {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 150)}...</p>
+                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
                   )}
                   <div className="metadata">
                     <span className="type">
