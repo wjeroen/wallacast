@@ -533,7 +533,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           <p>No content found. Start by adding some articles or subscribing to podcasts!</p>
         </div>
       ) : (
-        <div className="content-list">
+        <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
           {content.map((item) => (
             <div
               key={item.id}
@@ -609,7 +609,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     </div>
                   );
                 })() : item.description ? (
-                  <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
+                  <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
                 ) : null}
                 <div className="metadata">
                   <span className="type" title={item.type}>
