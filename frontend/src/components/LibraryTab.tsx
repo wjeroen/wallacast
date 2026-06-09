@@ -585,6 +585,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   const tweets = toTweets(item.summary);
                   const shown = tweets.slice(0, 3);
                   const hasMore = tweets.length > 3;
+                  const moreCount = tweets.length - shown.length;
                   return (
                     <div className="library-summary">
                       {shown.map((tweet, i) => {
@@ -599,7 +600,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                                   className="read-more-link"
                                   onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
                                 >
-                                  [...]
+                                  [{moreCount} more]
                                 </span>
                               </>
                             )}
