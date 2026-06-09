@@ -977,6 +977,17 @@
   min-width: 0;
 }
 
+/* Float the thumbnail inside .content-info so the title/author/link wrap beside the picture,
+   while the description/summary clears to full card width below it (matches a pictureless card). */
+.content-card .content-info > .thumbnail {
+  float: left;
+  margin: 0 0.75rem 0.5rem 0;
+}
+.content-card .content-info > .description,
+.content-card .content-info > .library-summary {
+  clear: left;
+}
+
 .content-info h3 {
   font-size: 1rem;
   margin-bottom: 0.25rem;
