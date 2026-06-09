@@ -3697,7 +3697,12 @@
 }
 .library-summary-tweet {
   margin: 0; /* override .description's margin-top so the flex gap handles spacing */
-  font-size: 1rem; /* larger than the 0.875rem description size — the summary is the main read */
+}
+
+/* In "Twitter-feed" mode the card body (summary tweets AND fallback descriptions) is the main
+   read, so bump it to 1rem. Outside tweet mode, descriptions keep the default 0.875rem. */
+.content-list.tweet-mode .description {
+  font-size: 1rem;
 }
 .read-more-link {
   color: #60a5fa;          /* same link blue as card links / active tab */
