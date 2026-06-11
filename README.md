@@ -398,7 +398,7 @@ Wallacast supports multiple users with complete data isolation:
   - Test connection buttons for validating credentials
   - Sync controls (pull, push, full sync) with status indicators
 
-- **`components/AudioPlayer.tsx`**: Manages audio playback state (HTMLAudioElement, position saving, speed, sleep timer). Renders either the compact MiniPlayer (above the bottom tab bar) or the FullscreenPlayer overlay. Handles the iOS headphone-disconnect guard, play/pause icon sync, and podcast audio proxying through the backend.
+- **`components/AudioPlayer.tsx`**: Manages audio playback state (HTMLAudioElement, position saving, speed, sleep timer). Renders either the compact MiniPlayer (above the bottom tab bar) or the FullscreenPlayer overlay — items WITHOUT audio render fullscreen only (the mini player is playback chrome, so it never shows for them and the fullscreen minimize button hides). Handles the iOS headphone-disconnect guard, play/pause icon sync, and podcast audio proxying through the backend.
 
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
   - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
