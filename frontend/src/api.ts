@@ -78,6 +78,20 @@ export const contentAPI = {
 
   getById: (id: number) => api.get<ContentItem>(`/content/${id}`),
 
+  // Batch poll for generation/summary status only (a few hundred bytes for the whole
+  // batch). Used by the library's 2s poll while items generate, instead of getById per
+  // item (which ships the full transcript + 9k word timestamps + alignment every tick).
+  // The full item is still fetched once, at completion, via getById/refreshItem.
+  getStatuses: (ids: number[]) =>
+    api.post<Array<{
+      id: number;
+      generation_status: ContentItem['generation_status'];
+      generation_progress: number | null;
+      generation_error: string | null;
+      current_operation: string | null;
+      summary_status: ContentItem['summary_status'];
+    }>>('/content/status', { ids }),
+
   create: (data: Partial<ContentItem>) => api.post<ContentItem>('/content', data),
 
   update: (id: number, data: Partial<ContentItem>) =>
