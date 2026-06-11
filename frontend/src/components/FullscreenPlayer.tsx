@@ -1504,9 +1504,13 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
-          <button onClick={onMinimize} className="header-button" title="Minimize">
-            <Minimize2 size={20} />
-          </button>
+          {/* No minimize without audio — the mini player is playback chrome, so
+              audio-less items live in fullscreen only (close is the way out) */}
+          {content.audio_url && (
+            <button onClick={onMinimize} className="header-button" title="Minimize">
+              <Minimize2 size={20} />
+            </button>
+          )}
           <button onClick={onClose} className="header-button" title="Close">
             <X size={20} />
           </button>
