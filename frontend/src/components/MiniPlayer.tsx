@@ -36,11 +36,11 @@ export function MiniPlayer({
   onExpand,
   onClose,
 }: MiniPlayerProps) {
-  if (!content) return null;
-
-  // Parse content alignment to get comments start time
+  // Parse content alignment to get comments start time.
+  // NOTE: hooks must run on every render in the same order (rules-of-hooks),
+  // so the `!content` bail-out lives BELOW them — hence the null-safe access.
   const commentsStartTime = useMemo(() => {
-    if (!content.content_alignment) return null;
+    if (!content?.content_alignment) return null;
     try {
       const alignment = typeof content.content_alignment === 'string'
         ? JSON.parse(content.content_alignment)
@@ -49,13 +49,15 @@ export function MiniPlayer({
     } catch {
       return null;
     }
-  }, [content.content_alignment]);
+  }, [content?.content_alignment]);
 
   // Calculate marker position as percentage
   const commentsMarkerPosition = useMemo(() => {
     if (!commentsStartTime || !duration || duration === 0) return null;
     return (commentsStartTime / duration) * 100;
   }, [commentsStartTime, duration]);
+
+  if (!content) return null;
 
   return (
     <div className="mini-player">

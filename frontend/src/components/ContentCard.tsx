@@ -396,7 +396,9 @@ export function ContentCard({
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}
                   >
-                    {(!item.transcript || item.transcript.trim() === '') ? 'Generate transcript' : 'Regenerate transcript'}
+                    {/* transcript_words, not transcript — the list endpoint doesn't send
+                        the (large) transcript column, so checking it always said "Generate" */}
+                    {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>
                 )}
                 <button onClick={() => onAddToQueue(item)}>

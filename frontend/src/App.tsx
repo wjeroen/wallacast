@@ -49,7 +49,7 @@ function App() {
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemPrefersDark);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    try { localStorage.setItem('wallacast-theme', themeMode); } catch {}
+    try { localStorage.setItem('wallacast-theme', themeMode); } catch { /* private mode */ }
   }, [isDark, themeMode]);
   const cycleTheme = () => setThemeMode(m => m === 'dark' ? 'light' : m === 'light' ? 'system' : 'dark');
 
