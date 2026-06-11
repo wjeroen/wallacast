@@ -1,47 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Search, Filter } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Filter } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore, itemMatchesFilter, getSearchSnippet } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
+import { ContentCard } from './ContentCard';
 import type { ContentItem } from '../types';
-
-function getDomainFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-function cleanHtml(text: string): string {
-  if (!text) return '';
-  // Remove CDATA wrapper
-  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Remove HTML tags
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  // Decode HTML entities
-  cleaned = cleaned
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-  // Clean up whitespace
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  return cleaned;
-}
-
-// Split a summary into tweet paragraphs. Prefers blank-line separation (what the summarizer is
-// asked for), falling back to single newlines.
-function toTweets(text: string): string[] {
-  const t = (text || '').trim();
-  if (!t) return [];
-  let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-  if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
-  return parts;
-}
 
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
@@ -486,133 +449,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
-  const getGenerationStatusDisplay = (item: ContentItem) => {
-    if (!item.generation_status || item.generation_status === 'idle') {
-      return null;
-    }
-
-    if (item.generation_status === 'completed') {
-      // Show "Completed ✓" for 5 seconds after completion
-      if (recentlyCompleted.has(item.id)) {
-        return (
-          <div className="generation-status completed" style={{ color: '#10b981' }}>
-            <span>✓ Completed</span>
-          </div>
-        );
-      }
-      return null;
-    }
-
-    if (item.generation_status === 'failed') {
-      return (
-        <div className="generation-status error">
-          <span>Generation failed</span>
-          {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
-        </div>
-      );
-    }
-
-    let statusMessage = '';
-    const progressPercent = item.generation_progress || 0;
-
-    // Check current_operation first (more specific than generation_status)
-    if (item.current_operation) {
-      switch (item.current_operation) {
-        case 'processing_images':
-          statusMessage = `Processing image descriptions... ${progressPercent}%`;
-          break;
-        case 'scripting_content':
-          statusMessage = `Preparing narration script... ${progressPercent}%`;
-          break;
-        case 'synthesizing_audio':
-          statusMessage = `Generating audio... ${progressPercent}%`;
-          break;
-        case 'concatenating_audio':
-          statusMessage = `Combining audio files... ${progressPercent}%`;
-          break;
-        case 'finalizing_audio':
-          statusMessage = `Finalizing audio... ${progressPercent}%`;
-          break;
-        case 'transcribing':
-          statusMessage = `Creating transcript... ${progressPercent}%`;
-          break;
-        case 'aligning_content':
-          statusMessage = `Aligning content... ${progressPercent}%`;
-          break;
-        default:
-          // Check for audio chunk pattern (e.g., "audio_chunk_3_of_10")
-          if (item.current_operation.startsWith('audio_chunk_')) {
-            const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
-            if (match) {
-              const [, current, total] = match;
-              statusMessage = `Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
-            } else {
-              statusMessage = `Generating audio... ${progressPercent}%`;
-            }
-          }
-          // Check for image processing pattern (e.g., "processing_image_3_of_10")
-          else if (item.current_operation.startsWith('processing_image_')) {
-            const match = item.current_operation.match(/processing_image_(\d+)_of_(\d+)/);
-            if (match) {
-              const [, current, total] = match;
-              statusMessage = `Processing image ${current}/${total}... ${progressPercent}%`;
-            } else {
-              statusMessage = `Processing images... ${progressPercent}%`;
-            }
-          }
-          else if (item.generation_status === 'starting') {
-            statusMessage = 'Starting...';
-          } else if (item.generation_status === 'extracting_content') {
-            statusMessage = 'Extracting content...';
-          } else if (item.generation_status === 'generating_transcript') {
-            statusMessage = `Generating transcript... ${progressPercent}%`;
-          } else {
-            statusMessage = `Processing... ${progressPercent}%`;
-          }
-      }
-    } else if (item.generation_status === 'starting') {
-      statusMessage = 'Starting...';
-    } else if (item.generation_status === 'extracting_content') {
-      statusMessage = 'Extracting content...';
-    } else if (item.generation_status === 'generating_transcript') {
-      statusMessage = `Generating transcript... ${progressPercent}%`;
-    } else {
-      statusMessage = `Processing... ${progressPercent}%`;
-    }
-
-    return (
-      <div className="generation-status generating">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-          <span style={{ flex: 1 }}>{statusMessage}</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleCancelGeneration(item.id);
-            }}
-            className="cancel-generation-btn"
-            title="Stop generation"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '0.25rem',
-              display: 'flex',
-              alignItems: 'center',
-              color: '#ef4444',
-            }}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        {progressPercent > 0 && (
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div className="library-tab">
       <div className="library-header">
@@ -773,242 +609,32 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       ) : (
         <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
           {content.map((item) => (
-            <div
+            <ContentCard
               key={item.id}
-              className={`content-card ${selectedItems.has(item.id) ? 'selected' : ''}`}
-              onClick={() => bulkMode ? toggleSelection(item.id) : handlePlayContent(item)}
-            >
-              {bulkMode && (
-                <div className="checkbox">
-                  {selectedItems.has(item.id) ? <CheckSquare size={20} /> : <Square size={20} />}
-                </div>
-              )}
-              <div className="content-info">
-                {item.preview_picture && (
-                  <img src={item.preview_picture} alt={item.title} className="thumbnail" />
-                )}
-                <h3>{item.title}</h3>
-                {item.author && (
-                  <p className="author">
-                    {item.author}
-                    {item.published_at && (
-                      <> &bull; {new Date(item.published_at).toLocaleDateString('en-GB')}</>
-                    )}
-                    {item.karma !== undefined && item.karma !== null && (
-                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {item.karma}</>
-                    )}
-                    {item.comment_count !== undefined && item.comment_count > 0 && (
-                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {item.comment_count}</>
-                    )}
-                  </p>
-                )}
-                {item.type === 'podcast_episode' && item.podcast_show_name && (
-                  <p className="author">
-                    {item.podcast_show_name}
-                    {item.published_at && (
-                      <> • {new Date(item.published_at).toLocaleDateString('en-GB')}</>
-                    )}
-                  </p>
-                )}
-                {/* Only show domain URL for articles (not podcasts/texts) */}
-                {item.url && item.type === 'article' && (
-                  <p className="content-source-link">
-                    <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                      {getDomainFromUrl(item.url)}
-                      <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
-                    </a>
-                  </p>
-                )}
-                {showSummaryInLibrary && item.summary ? (() => {
-                  const tweets = toTweets(item.summary);
-                  const shown = tweets.slice(0, 3);
-                  const hasMore = tweets.length > 3;
-                  const moreCount = tweets.length - shown.length;
-                  return (
-                    <div className="library-summary">
-                      {shown.map((tweet, i) => {
-                        const isLast = i === shown.length - 1;
-                        return (
-                          <p key={i} className="description library-summary-tweet">
-                            {tweet}
-                            {hasMore && isLast && (
-                              <>
-                                {' '}
-                                <span
-                                  className="read-more-link"
-                                  onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
-                                >
-                                  [{moreCount} more]
-                                </span>
-                              </>
-                            )}
-                          </p>
-                        );
-                      })}
-                    </div>
-                  );
-                })() : item.description ? (
-                  <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
-                ) : null}
-                {searchQuery.trim() && (() => {
-                  const snippet = getSearchSnippet(item, searchQuery);
-                  return snippet ? (
-                    <p className="search-snippet">matched in text: <em>“{snippet}”</em></p>
-                  ) : null;
-                })()}
-                <div className="metadata">
-                  <span className="type" title={item.type}>
-                    {item.type === 'article' && <Newspaper size={16} className="icon-article" />}
-                    {item.type === 'text' && <NotebookPen size={16} className="icon-text" />}
-                    {item.type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-                    {item.type === 'pdf' && <FileText size={16} />}
-                  </span>
-                  {item.audio_url && <span className="badge">Audio</span>}
-                  {item.summary_status === 'generating' && (
-                    <span className="badge summarizing">Summarizing…</span>
-                  )}
-                  {item.summary_status !== 'generating' && item.summary_generated_at && (
-                    <span className="badge summary">Summary</span>
-                  )}
-                  {item.type === 'podcast_episode' && item.transcript_words && (
-                    <span className="badge transcript">Transcript</span>
-                  )}
-                  {item.playback_position > 0 && item.duration && item.duration > 0 && (
-                    <span className="progress">
-                      {Math.round((item.playback_position / item.duration) * 100)}% complete
-                    </span>
-                  )}
-                  {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
-                </div>
-                {getGenerationStatusDisplay(item)}
-              </div>
-              {!bulkMode && (
-                <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    onClick={() => handleToggleStarred(item.id)}
-                    className={item.is_starred ? 'active' : ''}
-                    title="Toggle star"
-                  >
-                    <Star size={16} fill={item.is_starred ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
-                    onClick={() => handleToggleArchive(item.id)}
-                    title={item.is_archived ? "Restore from archive" : "Archive"}
-                    className={item.is_archived ? 'active' : ''}
-                  >
-                    {item.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="delete-btn"
-                    title="Delete"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                  <div className="dropdown-container" ref={openDropdown === item.id ? dropdownRef : null}>
-                    <button
-                      onClick={() => setOpenDropdown(openDropdown === item.id ? null : item.id)}
-                      title="More options"
-                      className="more-options-btn"
-                    >
-                      <MoreVertical size={16} />
-                    </button>
-                    {openDropdown === item.id && (
-                      <div className="dropdown-menu">
-                        {(item.type === 'article' || item.type === 'text') && (
-                          <>
-                            {!item.audio_url && (
-                              <button
-                                onClick={() => handleGenerateAudio(item.id, false)}
-                                disabled={item.generation_status === 'generating_audio'}
-                              >
-                                Generate audio
-                              </button>
-                            )}
-                            {item.audio_url && (
-                              <>
-                                <button
-                                  onClick={() => handleGenerateAudio(item.id, true)}
-                                  disabled={item.generation_status === 'generating_audio'}
-                                >
-                                  Regenerate audio
-                                </button>
-                                <button onClick={() => handleRemoveAudio(item.id)}>
-                                  Remove audio
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                        {(item.type === 'article' || item.type === 'text') && (
-                          <>
-                            {item.summary_status === 'generating' ? (
-                              <button disabled>Generating summary…</button>
-                            ) : !item.summary_generated_at ? (
-                              <button onClick={() => handleGenerateSummary(item.id, false)}>
-                                Generate summary
-                              </button>
-                            ) : (
-                              <>
-                                <button onClick={() => handleGenerateSummary(item.id, true)}>
-                                  Regenerate summary
-                                </button>
-                                <button onClick={() => handleRemoveSummary(item.id)}>
-                                  Remove summary
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                        {(item.type === 'article' || item.type === 'text') && item.audio_url && (
-                          <button
-                            onClick={() => handleRegenerateTranscript(item.id)}
-                            disabled={item.generation_status === 'generating_transcript'}
-                          >
-                            Regenerate transcript
-                          </button>
-                        )}
-                        {item.type === 'article' && item.url && (
-                          <button onClick={() => handleRefetchContent(item.id)}>
-                            Refetch from web
-                          </button>
-                        )}
-                        {item.type === 'podcast_episode' && (
-                          <>
-                            {(!item.transcript || item.transcript.trim() === '') ? (
-                              <button
-                                onClick={() => handleRegenerateTranscript(item.id)}
-                                disabled={item.generation_status === 'generating_transcript'}
-                              >
-                                Generate transcript
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleRegenerateTranscript(item.id)}
-                                disabled={item.generation_status === 'generating_transcript'}
-                              >
-                                Regenerate transcript
-                              </button>
-                            )}
-                          </>
-                        )}
-                        <button
-                          onClick={() => {
-                            setOpenDropdown(null);
-                            useQueueStore.getState().addToQueue(item);
-                          }}
-                        >
-                          Add to queue
-                        </button>
-                        <button onClick={() => handleDownloadDataZip(item)}>
-                          Download data (zip)
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+              item={item}
+              bulkMode={bulkMode}
+              selected={selectedItems.has(item.id)}
+              onToggleSelect={toggleSelection}
+              onPlay={handlePlayContent}
+              searchQuery={searchQuery}
+              showSummary={showSummaryInLibrary}
+              justCompleted={recentlyCompleted.has(item.id)}
+              dropdownOpen={openDropdown === item.id}
+              dropdownRef={openDropdown === item.id ? dropdownRef : null}
+              onToggleDropdown={() => setOpenDropdown(openDropdown === item.id ? null : item.id)}
+              onCancelGeneration={handleCancelGeneration}
+              onToggleStarred={handleToggleStarred}
+              onToggleArchive={handleToggleArchive}
+              onDelete={handleDelete}
+              onGenerateAudio={handleGenerateAudio}
+              onRemoveAudio={handleRemoveAudio}
+              onGenerateSummary={handleGenerateSummary}
+              onRemoveSummary={handleRemoveSummary}
+              onRegenerateTranscript={handleRegenerateTranscript}
+              onRefetch={handleRefetchContent}
+              onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}
+              onDownloadZip={handleDownloadDataZip}
+            />
           ))}
         </div>
       )}
@@ -1050,14 +676,4 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       )}
     </div>
   );
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
 }
