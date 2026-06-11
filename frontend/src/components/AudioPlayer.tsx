@@ -21,6 +21,8 @@ interface AudioPlayerProps {
   onRefetch?: () => void;
   onGenerateAudio?: (regenerate: boolean) => void;
   onRemoveAudio?: () => void;
+  onGenerateSummary?: (regenerate: boolean) => void;
+  onRemoveSummary?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
@@ -40,10 +42,12 @@ interface AudioPlayerProps {
    */
   autoPlayToken?: number;
   onPlayQueueItem?: (item: ContentItem) => void;
+  initialTab?: string;
 }
 
 export function AudioPlayer({
-  content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onRegenerateTranscript,
+  content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onGenerateSummary, onRemoveSummary,
+  onRegenerateTranscript, initialTab,
   onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
   autoPlayToken = 0, onPlayQueueItem,
@@ -638,6 +642,8 @@ export function AudioPlayer({
           onRefetch={onRefetch}
           onGenerateAudio={onGenerateAudio}
           onRemoveAudio={onRemoveAudio}
+          onGenerateSummary={onGenerateSummary}
+          onRemoveSummary={onRemoveSummary}
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
           themeMode={themeMode || (isDark ? 'dark' : 'light')}
@@ -647,6 +653,7 @@ export function AudioPlayer({
           hasNextTrack={hasNextTrack}
           hasPrevTrack={hasPrevTrack}
           onPlayQueueItem={onPlayQueueItem}
+          initialTab={initialTab}
         />
       ) : (
         <MiniPlayer

@@ -928,12 +928,15 @@
 }
 
 .content-card:hover {
-  background: var(--bg-raised);
+  /* A midpoint between the card's normal color and the box color (--bg-raised), so the
+     description/summary boxes stay visibly distinct on hover. Works in both themes since it
+     mixes the theme variables. */
+  background: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
   border-color: var(--bg-hover);
 }
 
 .content-card.selected {
-  background: var(--bg-raised);
+  background: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
   border-color: #3b82f6;
   box-shadow: 0 0 0 1px #3b82f6;
 }
@@ -975,6 +978,17 @@
 .content-info {
   flex: 1;
   min-width: 0;
+}
+
+/* Float the thumbnail inside .content-info so the title/author/link wrap beside the picture,
+   while the description/summary clears to full card width below it (matches a pictureless card). */
+.content-card .content-info > .thumbnail {
+  float: left;
+  margin: 0 0.75rem 0.5rem 0;
+}
+.content-card .content-info > .description,
+.content-card .content-info > .library-summary {
+  clear: left;
 }
 
 .content-info h3 {
@@ -3513,4 +3527,216 @@
     padding-left: 0.35rem;
     margin-left: -0.35rem;
   }
+}
+
+/* =============================================
+   Summaries (Twitter-thread style) + status badges
+   ============================================= */
+
+/* Library card badges */
+.metadata .badge.summary {
+  background: #4c1d95;
+  color: #ede9fe;
+}
+[data-theme="light"] .metadata .badge.summary {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+.metadata .badge.summarizing {
+  background: #7c2d12;
+  color: #fed7aa;
+}
+[data-theme="light"] .metadata .badge.summarizing {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+/* Summary tab — each paragraph reads like a tweet */
+.summary-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 640px;
+}
+.summary-tweet {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  margin: 0;
+  line-height: 1.5;
+  color: var(--t1);
+  font-size: calc(1rem * var(--reader-font-scale, 1));
+}
+.summary-section-label {
+  margin: 0.25rem 0 0;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.8rem;
+}
+/* Orange divider between the article summary and the comment summary */
+.summary-divider {
+  height: 3px;
+  border-radius: 3px;
+  background: #f59e0b;
+  margin: 0.5rem 0 0.25rem;
+}
+
+/* Settings: editable summary length tiers */
+.summary-tiers-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.summary-tier-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+.summary-tier-header {
+  font-size: 0.8rem;
+  color: var(--t3);
+}
+.summary-tier-row input[type="number"] {
+  width: 100%;
+}
+.summary-tier-infinity {
+  color: var(--t3);
+  font-style: italic;
+  padding: 0.25rem 0;
+}
+.summary-tier-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+.summary-tier-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  background: var(--bg-raised);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.summary-tier-add:hover {
+  background: var(--bg-hover);
+}
+
+/* Collapsible subsection (e.g. summary length settings) */
+.settings-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--t1);
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.4rem 0;
+}
+.settings-collapse-body {
+  margin-top: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--bg-raised);
+}
+
+/* Destructive bulk-wipe buttons */
+.wipe-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #7f1d1d;
+  color: #fee2e2;
+  border: 1px solid #991b1b;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.wipe-button:hover:not(:disabled) { background: #991b1b; }
+.wipe-button:disabled { opacity: 0.6; cursor: default; }
+[data-theme="light"] .wipe-button {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+[data-theme="light"] .wipe-button:hover:not(:disabled) { background: #fecaca; }
+
+/* Voice variety multi-select chips */
+.voice-group { margin-bottom: 0.6rem; }
+.voice-group-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--t2);
+  margin-bottom: 0.35rem;
+}
+.voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
+
+/* Library "Twitter feed" mode: article summary in place of the description.
+   Each paragraph IS a `.description` box (bg-raised, rounded, no border), so it matches the
+   podcast/description box exactly — no nested boxes. The flex gap controls the spacing. */
+.library-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.library-summary-tweet {
+  margin: 0; /* override .description's margin-top so the flex gap handles spacing */
+}
+
+/* In "Twitter-feed" mode the card body (summary tweets AND fallback descriptions) is the main
+   read, so bump it to 1rem. Outside tweet mode, descriptions keep the default 0.875rem. */
+.content-list.tweet-mode .description {
+  font-size: 1rem;
+}
+.read-more-link {
+  color: #60a5fa;          /* same link blue as card links / active tab */
+  font-weight: 600;
+  cursor: pointer;
+}
+.read-more-link:hover {
+  text-decoration: underline;
+}
+.voice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.voice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--t1);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.voice-chip input { margin: 0; }
+.voice-chip.selected {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+[data-theme="light"] .voice-chip.selected {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1e40af;
 }

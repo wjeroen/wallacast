@@ -7,6 +7,7 @@ import { query } from '../database/db.js';
 import { fetchArticleContent } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
+import { generateSummaryForContent } from '../services/summarizer.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
@@ -21,7 +22,7 @@ router.get('/', async (req, res) => {
 
     // Exclude large columns (html_content, comments, transcript) for performance
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -71,7 +72,7 @@ router.post('/audio-error-log', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -438,6 +439,28 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Auto-generate summary for articles/texts (independent of audio — both can run at once).
+    // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
+    if ((type === 'article' || type === 'text') && (processedContent || htmlContent)) {
+      const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
+      if (autoGenerateSummary === 'true') {
+        console.log(`Auto-generating summary for ${type} ${createdItem.id}`);
+        await query(
+          'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+          ['generating', createdItem.id]
+        );
+        generateSummaryForContent(createdItem.id)
+          .then(() => console.log(`Summary generation finished for ${createdItem.id}`))
+          .catch(async (error) => {
+            console.error('Auto summary generation error:', error);
+            await query(
+              'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+              ['failed', createdItem.id]
+            ).catch(() => { /* swallow */ });
+          });
+      }
+    }
+
     // Auto-generate transcript for podcast episodes
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
       const autoTranscribe = await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
@@ -522,6 +545,14 @@ router.patch('/:id', async (req, res) => {
           allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
         }
       }
+    }
+
+    // Remove summary (mirrors audio removal): frontend sends { summary: null } to clear it.
+    if (updates.summary === null) {
+      updates.comment_summary = null;
+      updates.summary_status = 'idle';
+      updates.summary_generated_at = null;
+      allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at');
     }
 
     if (updates.regenerate_content === true) {
@@ -787,7 +818,7 @@ router.patch('/:id', async (req, res) => {
     // during playback (saves every 10s). For playback-only updates, return minimal data.
     // For content updates, return the same columns as the list endpoint.
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at'
       : 'RETURNING id, playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
@@ -854,6 +885,7 @@ router.get('/:id/export', async (req, res) => {
               COALESCE(comment_count_total, 0) AS comment_count,
               content_source, content_fetched_at, audio_generated_at,
               images_processed, image_alt_text_data,
+              summary, comment_summary, summary_status, summary_generated_at,
               created_at, updated_at, user_id
        FROM content_items WHERE id = $1 AND user_id = $2`,
       [id, req.user!.userId]
@@ -1088,6 +1120,117 @@ router.post('/:id/generate-audio', async (req, res) => {
   } catch (error) {
     console.error('Error starting TTS generation:', error);
     res.status(500).json({ error: 'Failed to start audio generation' });
+  }
+});
+
+// Generate (or regenerate) the article + comment summaries for an article/text.
+// Runs independently of audio generation — uses its own `summary_status` field so both
+// can be in progress at the same time.
+router.post('/:id/generate-summary', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contentResult = await query(
+      'SELECT id, type, summary_status FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const contentItem = contentResult.rows[0];
+
+    if (contentItem.type !== 'article' && contentItem.type !== 'text') {
+      return res.status(400).json({ error: 'Summaries are only available for articles and text' });
+    }
+
+    if (contentItem.summary_status === 'generating') {
+      return res.status(409).json({
+        error: 'Summary generation already in progress',
+        summary_status: 'generating',
+      });
+    }
+
+    await query(
+      'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+      ['generating', id]
+    );
+
+    generateSummaryForContent(parseInt(id))
+      .then(() => console.log(`Summary generation finished for ${id}`))
+      .catch(async (error) => {
+        console.error('Background summary generation error:', error);
+        await query(
+          'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+          ['failed', id]
+        ).catch(() => { /* swallow */ });
+      });
+
+    res.json({ message: 'Summary generation started', summary_status: 'generating' });
+  } catch (error) {
+    console.error('Error starting summary generation:', error);
+    res.status(500).json({ error: 'Failed to start summary generation' });
+  }
+});
+
+// Bulk-wipe all generated TTS audio (and its timing: alignment, transcript, chunks) for the
+// user's articles/texts. Mirrors the per-item "remove audio" logic. Does NOT touch podcasts —
+// their audio is the external source, not something we generated.
+router.post('/wipe-all-audio', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    // Count BEFORE updating. The UPDATE below nulls large BYTEA blobs and can be slow enough
+    // to trip the connection-retry wrapper; if a retry runs after a partial commit it would
+    // match 0 rows and report 0. A pre-count SELECT is idempotent, so the number stays right.
+    const countRes = await query(
+      `SELECT count(*)::int AS n FROM content_items
+       WHERE user_id = $1 AND type IN ('article', 'text')
+         AND (audio_data IS NOT NULL OR audio_url IS NOT NULL OR transcript IS NOT NULL OR content_alignment IS NOT NULL)`,
+      [userId]
+    );
+    const cleared = countRes.rows[0]?.n || 0;
+    await query(
+      `UPDATE content_items
+       SET audio_data = NULL, audio_url = NULL, duration = NULL,
+           content_alignment = NULL, transcript = NULL, transcript_words = NULL,
+           tts_chunks = NULL, generation_status = 'idle', generation_progress = 0,
+           generation_error = NULL, current_operation = NULL
+       WHERE user_id = $1 AND type IN ('article', 'text')
+         AND (audio_data IS NOT NULL OR audio_url IS NOT NULL OR transcript IS NOT NULL OR content_alignment IS NOT NULL)`,
+      [userId]
+    );
+    console.log(`[wipe-all-audio] user=${userId} cleared=${cleared}`);
+    res.json({ cleared });
+  } catch (error) {
+    console.error('Error wiping audio:', error);
+    res.status(500).json({ error: 'Failed to wipe audio' });
+  }
+});
+
+// Bulk-wipe all generated summaries (article + comment) for the user's items.
+router.post('/wipe-all-summaries', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const countRes = await query(
+      `SELECT count(*)::int AS n FROM content_items
+       WHERE user_id = $1
+         AND (summary IS NOT NULL OR comment_summary IS NOT NULL OR summary_generated_at IS NOT NULL)`,
+      [userId]
+    );
+    const cleared = countRes.rows[0]?.n || 0;
+    await query(
+      `UPDATE content_items
+       SET summary = NULL, comment_summary = NULL, summary_status = 'idle', summary_generated_at = NULL
+       WHERE user_id = $1
+         AND (summary IS NOT NULL OR comment_summary IS NOT NULL OR summary_generated_at IS NOT NULL)`,
+      [userId]
+    );
+    console.log(`[wipe-all-summaries] user=${userId} cleared=${cleared}`);
+    res.json({ cleared });
+  } catch (error) {
+    console.error('Error wiping summaries:', error);
+    res.status(500).json({ error: 'Failed to wipe summaries' });
   }
 });
 

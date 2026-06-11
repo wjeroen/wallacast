@@ -33,8 +33,18 @@ function cleanHtml(text: string): string {
   return cleaned;
 }
 
+// Split a summary into tweet paragraphs. Prefers blank-line separation (what the summarizer is
+// asked for), falling back to single newlines.
+function toTweets(text: string): string[] {
+  const t = (text || '').trim();
+  if (!t) return [];
+  let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
+  return parts;
+}
+
 interface LibraryTabProps {
-  onPlayContent: (content: ContentItem) => void;
+  onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
 
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
@@ -61,10 +71,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
   const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
+  // "Twitter feed" mode: show the article summary instead of the description on library cards.
+  const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
 
   // Fetch content on mount
   useEffect(() => {
     fetchContent();
+  }, []);
+
+  // Load the "show summary on library cards" preference
+  useEffect(() => {
+    userSettingsAPI.get('library_show_summary')
+      .then(res => setShowSummaryInLibrary(res.data.value === 'true'))
+      .catch(() => {});
   }, []);
 
   // Close dropdown when clicking outside
@@ -87,7 +106,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Poll for progress updates on items that are generating
   useEffect(() => {
     const generatingItems = content.filter(
-      item => item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)
+      item =>
+        (item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)) ||
+        item.summary_status === 'generating'
     );
 
     if (generatingItems.length === 0) return;
@@ -124,15 +145,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     return () => clearInterval(pollInterval);
   }, [content, updateItem, refreshItem]);
 
-  const handlePlayContent = async (item: ContentItem) => {
+  const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
       // Fetch latest content data to get current playback position
       const response = await contentAPI.getById(item.id);
-      onPlayContent(response.data);
+      onPlayContent(response.data, opts);
     } catch (error) {
       console.error('Failed to load content details:', error);
       // Fall back to using the list item if fetch fails
-      onPlayContent(item);
+      onPlayContent(item, opts);
     }
   };
 
@@ -241,6 +262,30 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     } catch (error) {
       console.error('Failed to remove audio:', error);
       alert('Failed to remove audio');
+    }
+  };
+
+  const handleGenerateSummary = async (id: number, regenerate: boolean = false) => {
+    try {
+      setOpenDropdown(null);
+      await contentAPI.generateSummary(id, regenerate);
+      // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
+      updateItem(id, { summary_status: 'generating' } as any);
+      refreshItem(id);
+    } catch (error: any) {
+      console.error('Failed to generate summary:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary');
+    }
+  };
+
+  const handleRemoveSummary = async (id: number) => {
+    try {
+      setOpenDropdown(null);
+      await contentAPI.update(id, { summary: null } as any);
+      refreshItem(id);
+    } catch (error) {
+      console.error('Failed to remove summary:', error);
+      alert('Failed to remove summary');
     }
   };
 
@@ -488,7 +533,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           <p>No content found. Start by adding some articles or subscribing to podcasts!</p>
         </div>
       ) : (
-        <div className="content-list">
+        <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
           {content.map((item) => (
             <div
               key={item.id}
@@ -500,10 +545,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   {selectedItems.has(item.id) ? <CheckSquare size={20} /> : <Square size={20} />}
                 </div>
               )}
-              {item.preview_picture && (
-                <img src={item.preview_picture} alt={item.title} className="thumbnail" />
-              )}
               <div className="content-info">
+                {item.preview_picture && (
+                  <img src={item.preview_picture} alt={item.title} className="thumbnail" />
+                )}
                 <h3>{item.title}</h3>
                 {item.author && (
                   <p className="author">
@@ -536,9 +581,37 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     </a>
                   </p>
                 )}
-                {item.description && (
-                  <p className="description">{cleanHtml(item.description).slice(0, 150)}...</p>
-                )}
+                {showSummaryInLibrary && item.summary ? (() => {
+                  const tweets = toTweets(item.summary);
+                  const shown = tweets.slice(0, 3);
+                  const hasMore = tweets.length > 3;
+                  const moreCount = tweets.length - shown.length;
+                  return (
+                    <div className="library-summary">
+                      {shown.map((tweet, i) => {
+                        const isLast = i === shown.length - 1;
+                        return (
+                          <p key={i} className="description library-summary-tweet">
+                            {tweet}
+                            {hasMore && isLast && (
+                              <>
+                                {' '}
+                                <span
+                                  className="read-more-link"
+                                  onClick={(e) => { e.stopPropagation(); handlePlayContent(item, { tab: 'summary' }); }}
+                                >
+                                  [{moreCount} more]
+                                </span>
+                              </>
+                            )}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  );
+                })() : item.description ? (
+                  <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
+                ) : null}
                 <div className="metadata">
                   <span className="type" title={item.type}>
                     {item.type === 'article' && <Newspaper size={16} className="icon-article" />}
@@ -547,6 +620,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     {item.type === 'pdf' && <FileText size={16} />}
                   </span>
                   {item.audio_url && <span className="badge">Audio</span>}
+                  {item.summary_status === 'generating' && (
+                    <span className="badge summarizing">Summarizing…</span>
+                  )}
+                  {item.summary_status !== 'generating' && item.summary_generated_at && (
+                    <span className="badge summary">Summary</span>
+                  )}
                   {item.type === 'podcast_episode' && item.transcript_words && (
                     <span className="badge transcript">Transcript</span>
                   )}
@@ -612,6 +691,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                                 </button>
                                 <button onClick={() => handleRemoveAudio(item.id)}>
                                   Remove audio
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                        {(item.type === 'article' || item.type === 'text') && (
+                          <>
+                            {item.summary_status === 'generating' ? (
+                              <button disabled>Generating summary…</button>
+                            ) : !item.summary_generated_at ? (
+                              <button onClick={() => handleGenerateSummary(item.id, false)}>
+                                Generate summary
+                              </button>
+                            ) : (
+                              <>
+                                <button onClick={() => handleGenerateSummary(item.id, true)}>
+                                  Regenerate summary
+                                </button>
+                                <button onClick={() => handleRemoveSummary(item.id)}>
+                                  Remove summary
                                 </button>
                               </>
                             )}
