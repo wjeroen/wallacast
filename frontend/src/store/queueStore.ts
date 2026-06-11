@@ -86,7 +86,71 @@ function shuffled<T>(arr: T[]): T[] {
   return a;
 }
 
-export const useQueueStore = create<QueueStore>((set, get) => ({
+export const useQueueStore = create<QueueStore>((set, get) => {
+  // Snapshot a stable random order over the full library, rotated so the
+  // currently-playing item sits at position 0. Rotation keeps items that
+  // landed before current in the random order playable (they move to the
+  // end) instead of being dropped by the pivot — see commit history
+  // ("shuffle next-goes-back" fix).
+  const buildShuffleOrder = (currentId?: number | null): number[] => {
+    const ids = useContentStore.getState().allItems.map(i => i.id);
+    if (ids.length === 0) return [];
+    const order = shuffled(ids);
+    if (currentId != null) {
+      const idx = order.indexOf(currentId);
+      if (idx > 0) return [...order.slice(idx), ...order.slice(0, idx)];
+    }
+    return order;
+  };
+
+  // The shuffle flag can be hydrated from settings before the library has
+  // loaded, in which case no order exists yet. Build it lazily on first use
+  // instead of silently dropping the saved preference (the old hydrate-time
+  // build raced fetchContent and lost the user's shuffle setting on reload).
+  const ensureShuffleOrder = (currentId: number | null): number[] => {
+    const { shuffleOrder } = get();
+    if (shuffleOrder.length > 0) return shuffleOrder;
+    const order = buildShuffleOrder(currentId);
+    if (order.length > 0) set({ shuffleOrder: order });
+    return order;
+  };
+
+  // Build the ordered non-manual id stream and locate the pivot for
+  // currentId. The pivot is found on the FULL id stream (shuffle order or
+  // library order), NOT the filtered list — so an item that stops matching
+  // the captured filter mid-play (e.g. archived right before it ends, which
+  // also wipes its audio) keeps its position and the stream continues
+  // forward, instead of falling back to the original library click and
+  // replaying already-played items.
+  const getStream = (currentId: number | null) => {
+    const { libraryContext, shuffleNonManual } = get();
+    if (!libraryContext) return null;
+
+    const allItems = useContentStore.getState().allItems;
+    const byId = new Map(allItems.map(i => [i.id, i]));
+
+    let streamIds: number[];
+    if (shuffleNonManual) {
+      const order = ensureShuffleOrder(currentId);
+      // Items added to the library after shuffle started — tack them on
+      const inOrder = new Set(order);
+      const added = allItems.filter(i => !inOrder.has(i.id)).map(i => i.id);
+      streamIds = added.length > 0 ? [...order, ...added] : order;
+    } else {
+      streamIds = allItems.map(i => i.id);
+    }
+
+    let pivot = currentId != null ? streamIds.indexOf(currentId) : -1;
+    if (pivot < 0) pivot = streamIds.indexOf(libraryContext.capturedFromId);
+
+    // Items that match the captured library filter AND have audio
+    const matches = (item: ContentItem | undefined): item is ContentItem =>
+      !!item && !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
+
+    return { streamIds, byId, pivot, matches };
+  };
+
+  return {
   manualItems: [],
   loading: false,
   libraryContext: null,
@@ -120,10 +184,9 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     try {
       const res = await userSettingsAPI.get('queue_shuffle');
       if (res.data.value === 'true') {
-        const ids = useContentStore.getState().allItems.map(i => i.id);
-        if (ids.length > 0) {
-          set({ shuffleNonManual: true, shuffleOrder: shuffled(ids) });
-        }
+        // Only set the flag — the library may not be loaded yet, so the
+        // shuffle order is built lazily by ensureShuffleOrder() on first use
+        set({ shuffleNonManual: true });
       }
     } catch { /* default false */ }
   },
@@ -240,6 +303,10 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
 
   setLibraryContext: (filter, capturedFromId) => {
     set({ libraryContext: { filter, capturedFromId } });
+    // If shuffle was hydrated from settings before the library loaded, the
+    // order doesn't exist yet — build it now (rotated to the clicked item)
+    // so render-time getters find it ready.
+    if (get().shuffleNonManual) ensureShuffleOrder(capturedFromId);
   },
 
   setAutoplay: async (v) => {
@@ -253,18 +320,7 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
 
   setShuffleNonManual: async (v, currentId) => {
     if (v) {
-      const ids = useContentStore.getState().allItems.map(i => i.id);
-      const order = shuffled(ids);
-      if (currentId != null) {
-        const idx = order.indexOf(currentId);
-        if (idx > 0) {
-          const rotated = [...order.slice(idx), ...order.slice(0, idx)];
-          set({ shuffleNonManual: true, shuffleOrder: rotated });
-          userSettingsAPI.set('queue_shuffle', 'true').catch(() => {});
-          return;
-        }
-      }
-      set({ shuffleNonManual: true, shuffleOrder: order });
+      set({ shuffleNonManual: true, shuffleOrder: buildShuffleOrder(currentId) });
     } else {
       set({ shuffleNonManual: false, shuffleOrder: [] });
     }
@@ -293,46 +349,23 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
   },
 
   getNonManualItems: (currentId) => {
-    const { libraryContext, manualItems, shuffleNonManual, shuffleOrder } = get();
-    if (!libraryContext) return [];
+    const stream = getStream(currentId);
+    if (!stream) return [];
 
-    const allItems = useContentStore.getState().allItems;
-    const manualIds = new Set(manualItems.map(m => m.id));
+    const manualIds = new Set(get().manualItems.map(m => m.id));
 
-    // Items that match the captured library filter AND have audio.
-    // Don't pre-exclude currentId here — we need it to find the pivot.
-    const matchesFilter = (item: ContentItem) =>
-      !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
-    const filtered = allItems.filter(matchesFilter);
-
-    // Apply stable shuffle order if shuffle is on, else use library order.
-    let ordered: ContentItem[];
-    if (shuffleNonManual && shuffleOrder.length > 0) {
-      const byId = new Map(filtered.map(i => [i.id, i]));
-      ordered = [];
-      for (const id of shuffleOrder) {
-        const item = byId.get(id);
-        if (item) {
-          ordered.push(item);
-          byId.delete(id);
-        }
+    // "Up next" starts from the position AFTER the playing item. The pivot
+    // is position-based (full id stream), so it survives the current item
+    // being archived / losing audio mid-play. If there's no pivot at all,
+    // fall back to the whole stream — never silently drop everything.
+    const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
+    const result: ContentItem[] = [];
+    for (const id of after) {
+      const item = stream.byId.get(id);
+      if (stream.matches(item) && !manualIds.has(item.id) && item.id !== currentId) {
+        result.push(item);
       }
-      // Any items added to the library after shuffle started — tack them on
-      for (const item of byId.values()) ordered.push(item);
-    } else {
-      ordered = filtered;
     }
-
-    // Pivot on the current item's position in `ordered` so "Up next" starts
-    // from the item AFTER the one playing. In shuffle mode this prevents
-    // already-played items (which sit before current in the rotated shuffle
-    // order) from re-appearing at the top. If current isn't in `ordered`
-    // (rare — e.g. archived item), fall back to capturedFromId, then the
-    // whole list — never want to silently drop everything.
-    let pivot = ordered.findIndex(i => i.id === currentId);
-    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
-    const after = pivot >= 0 ? ordered.slice(pivot + 1) : ordered;
-    const result = after.filter(i => !manualIds.has(i.id) && i.id !== currentId);
     return result;
   },
 
@@ -377,32 +410,18 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
   },
 
   getPrevItem: (currentId) => {
-    const { manualItems, libraryContext } = get();
+    const { manualItems } = get();
     const manualIdx = manualItems.findIndex(m => m.id === currentId);
     if (manualIdx > 0) return manualItems[manualIdx - 1];
 
-    // Step back one position in the non-manual stream.
-    if (!libraryContext) return null;
-    const allItems = useContentStore.getState().allItems;
-    const { shuffleNonManual, shuffleOrder } = get();
-    const matchesFilter = (item: ContentItem) =>
-      !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
-    const filtered = allItems.filter(matchesFilter);
-    let ordered: ContentItem[];
-    if (shuffleNonManual && shuffleOrder.length > 0) {
-      const byId = new Map(filtered.map(i => [i.id, i]));
-      ordered = [];
-      for (const id of shuffleOrder) {
-        const item = byId.get(id);
-        if (item) { ordered.push(item); byId.delete(id); }
-      }
-      for (const item of byId.values()) ordered.push(item);
-    } else {
-      ordered = filtered;
+    // Step back through the non-manual stream to the nearest playable item.
+    const stream = getStream(currentId);
+    if (!stream || stream.pivot <= 0) return null;
+    for (let i = stream.pivot - 1; i >= 0; i--) {
+      const item = stream.byId.get(stream.streamIds[i]);
+      if (stream.matches(item)) return item;
     }
-    let pivot = ordered.findIndex(i => i.id === currentId);
-    if (pivot < 0) pivot = ordered.findIndex(i => i.id === libraryContext.capturedFromId);
-    if (pivot > 0) return ordered[pivot - 1];
     return null;
   },
-}));
+  };
+});
