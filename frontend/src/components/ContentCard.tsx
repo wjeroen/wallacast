@@ -356,7 +356,9 @@ export function ContentCard({
                     )}
                   </>
                 )}
-                {(item.type === 'article' || item.type === 'text') && (
+                {/* Summaries: articles/texts summarize their body; podcasts their transcript
+                    (the parent warns + chains transcription when none exists yet) */}
+                {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && (
                   <>
                     {item.summary_status === 'generating' ? (
                       <button disabled>Generating summary…</button>

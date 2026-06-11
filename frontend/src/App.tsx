@@ -25,6 +25,8 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
+  // Podcast summaries need a transcript first — confirm before running Whisper + summary
+  const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
 
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
@@ -383,20 +385,21 @@ function App() {
     }
   };
 
-  const handleGenerateSummary = async (regenerate: boolean) => {
+  const startSummaryGeneration = async (regenerate: boolean, generateTranscript: boolean) => {
     if (!currentContent) return;
     const id = currentContent.id;
     try {
-      await contentAPI.generateSummary(id, regenerate);
+      await contentAPI.generateSummary(id, regenerate, generateTranscript);
       // Reflect "generating" immediately, then poll until it finishes (independent of audio).
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
       let tries = 0;
+      const maxTries = generateTranscript ? 200 : 30; // transcription first can take many minutes
       const poll = async () => {
         tries++;
         try {
           const response = await contentAPI.getById(id);
           setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
-          if (response.data.summary_status === 'generating' && tries < 30) {
+          if (response.data.summary_status === 'generating' && tries < maxTries) {
             setTimeout(poll, 3000);
           }
         } catch {
@@ -408,6 +411,17 @@ function App() {
       console.error('Failed to generate summary:', error);
       alert(error?.response?.data?.error || 'Failed to generate summary');
     }
+  };
+
+  const handleGenerateSummary = async (regenerate: boolean) => {
+    if (!currentContent) return;
+    // Podcast summaries are made from the TRANSCRIPT — if there is none yet, confirm
+    // before running Whisper + summary back to back
+    if (currentContent.type === 'podcast_episode' && !(currentContent.transcript || '').trim()) {
+      setSummaryTranscriptWarning(true);
+      return;
+    }
+    await startSummaryGeneration(regenerate, false);
   };
 
   const handleRemoveSummary = async () => {
@@ -730,6 +744,31 @@ function App() {
                 onClick={() => setCommentWarning(null)}
               >
                 Don't generate audio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {summaryTranscriptWarning && (
+        <div className="comment-warning-overlay" onClick={() => setSummaryTranscriptWarning(false)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  setSummaryTranscriptWarning(false);
+                  startSummaryGeneration(false, true);
+                }}
+              >
+                Generate transcript + summary
+              </button>
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setSummaryTranscriptWarning(false)}
+              >
+                Cancel
               </button>
             </div>
           </div>

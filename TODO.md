@@ -32,7 +32,7 @@
 - [ ] **[P3]** Allow texts (not articles) to be edited with markdown support, doesn't automatically regenerate audio
 - [x] **[P7]** Add button to summarize content — Twitter-thread style article + comment summaries; generate from the fullscreen player, the library dropdown, or auto-on-add; editable length tiers in settings (2026-06-08)
   - [ ] Enhancement: for EA Forum articles, check whether the summarybot already wrote a summary in the comments and reuse that instead of generating a new one
-- [ ] **[P6]** Podcast summaries — summarize podcast episodes (Twitter-thread style, like articles). Depends on the transcript being generated first; reuse `summarizer.ts`. Low priority.
+- [x] **[P6]** Podcast summaries — summarize podcast episodes (Twitter-thread style, like articles). Summarizes the Whisper TRANSCRIPT (not the episode description) with a podcast-specific prompt. "Generate summary" shows for episodes without a transcript too: a warning modal offers "Generate transcript + summary" and the backend chains Whisper → summary. Same warning in bulk summarize (with a "skip episodes without transcript" option). (2026-06-11)
 - [ ] **[P6]** OpenRouter API compatibility — add OpenRouter as an LLM provider option (one key, many models) in `ai-providers.ts` routing + Settings. (No need to implement yet.)
 - [ ] **[P4]** Keep version history of all previous content/comment fetches in case articles get deleted or regeneration went poorly (don't do this with audio, would take up too much space)
 - [ ] **[P4]** Implement import functionality (export done via "Download data (zip)" button — import still needed)
@@ -180,6 +180,8 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Podcast summaries** (2026-06-11): see the marked task under Features — transcript-based summaries with the transcript-first warning modal (single + bulk).
+- [x] **Smart bulk star/archive toggles (Gmail-style) + colors** (2026-06-11): one star button — stars mixed selections, unstars when everything selected is already starred (same for archive/unarchive); Unstar/Unarchive removed from the overflow menu. Bulk bar and status selector/menu now use the app's state colors (gold star, blue archive, red delete). Status selector label hides on small screens like the other filter labels.
 - [x] **Library filter polish round 3** (2026-06-11): status selector now shows the current status's icon + label + chevron (Inbox/Star/Archive, always highlighted) instead of a funnel icon; status menu items and the bulk Unstar/Unarchive menu items got matching icons; star/archive buttons stay visible on cards in Select mode so starred/archived state is visible while bulk-editing.
 - [x] **One card to rule them all** (2026-06-11): extracted the library card into `ContentCard.tsx` and the Feed tab's seven copy-pasted card blocks into `FeedCard`/`FeedEpisodeCard` (`FeedCards.tsx`); shared `format.ts` helpers; deleted dead legacy card CSS. Same look and behavior, one source of truth per card type.
 - [x] **Library filter polish round 2** (2026-06-11): Select mode shows the bulk bar immediately (0 selected); funnel button stretches to row height like its siblings; funnel moved between search and "All"; only the type chips scroll on small screens so the status dropdown is never clipped; dropdown-menu item styling hardened globally (left-aligned, no colored hover edges, regardless of which container hosts the menu); the active type chip shows its item count.
