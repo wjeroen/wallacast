@@ -54,6 +54,46 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Batch generation-status poll. Returns ONLY the tiny status fields for many items
+// in a single request (a few hundred bytes total). The library polls this every 2s
+// while items are generating, instead of calling GET /:id per item.
+//
+// WHY THIS EXISTS: GET /:id returns the FULL item — transcript, 9,000+ word-level
+// timestamps, alignment, comments — roughly 0.5MB for a transcribed podcast. Polling
+// that per item every 2s is the same class of bug as the 80GB data incident (see
+// README "Critical Performance Fix"). The full item is still fetched once, at
+// completion, via GET /:id (the frontend's refreshItem). Keep this endpoint lean —
+// never add large columns (transcript_words, content_alignment, comments, html_content).
+//
+// IMPORTANT: a POST so it can take a list of ids in the body without colliding with
+// the GET '/:id' route below. Defined before '/:id' to mirror the audio-error-log convention.
+router.post('/status', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.json([]);
+    }
+    // Coerce to integers, drop junk, and cap to a sane batch size.
+    const safeIds = ids
+      .map((id: any) => parseInt(id, 10))
+      .filter((id: number) => Number.isFinite(id))
+      .slice(0, 500);
+    if (safeIds.length === 0) {
+      return res.json([]);
+    }
+    const result = await query(
+      `SELECT id, generation_status, generation_progress, generation_error, current_operation, summary_status
+         FROM content_items
+        WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user!.userId, safeIds]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching content statuses:', error);
+    res.status(500).json({ error: 'Failed to fetch content statuses' });
+  }
+});
+
 // Debug endpoint: receives audio errors from the frontend and logs them to Railway.
 // IMPORTANT: must be defined before '/:id' so Express doesn't treat 'audio-error-log' as an id.
 router.post('/audio-error-log', (req, res) => {
