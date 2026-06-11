@@ -23,7 +23,7 @@
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from RSS feeds)
 - [ ] **[P8]** Groq API compatibility (VERY LOW PRIORITY - DeepInfra now implemented for both Kokoro TTS and Whisper transcription, much cheaper than OpenAI)
 - [x] **[P1]** Make auto-generating podcast transcriptions optional in settings when adding podcasts - SAVES MONEY! (2026-01-24)
-- [ ] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens
+- [x] **[P3]** Use icons instead of showing the full word 'articles' etc. in library filter buttons on smaller screens, only show full words with the icons on wide enough screens — `.filter-label` is hidden below 740px via App.css; the new single-row filter header keeps this behavior (2026-06-11)
 - [x] **[P3]** Set website title to "wallacast" (all lowercase), add icon, and turn site into PWA - search entire project for "frontend" used as website title in <title> tag or metadata objects, replace with "wallacast" (all lowercase) (2026-02-12)
 - [x] **[P3]** Add dark/light mode toggle in user dropdown menu — CSS variables for full theme support, persisted in localStorage (2026-04-15)
 - [x] **[P3]** Add font size changer in fullscreen player — Display button (Type icon) next to speed/sleep timer; -/+ steps (75–175%); CSS variable `--reader-font-scale` scales `.article-content`, `.comment-content`, `.read-along-text` with headings in `em` for proportional scaling; also scales in-tab metadata (title/author/karma/provenance) and comment metadata; persisted to localStorage + backend `reader_font_scale` setting (2026-04-16)
