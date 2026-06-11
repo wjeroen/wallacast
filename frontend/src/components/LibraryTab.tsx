@@ -135,12 +135,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setSelectedItems(new Set());
   };
 
-  // Count for the "All" chip: items matching the current status across all
-  // types, ignoring search (so the number stays stable while typing)
-  const statusCount = useMemo(
-    () => allItems.filter(i => itemMatchesFilter(i, { typeFilter: 'all', statusFilter, searchQuery: '' })).length,
-    [allItems, statusFilter]
-  );
+  // Per-type counts under the current status, ignoring search (so the number
+  // stays stable while typing). The count is shown on the ACTIVE type chip.
+  const typeCounts = useMemo(() => {
+    const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
+    for (const i of allItems) {
+      if (!itemMatchesFilter(i, { typeFilter: 'all', statusFilter, searchQuery: '' })) continue;
+      counts.all++;
+      if (i.type === 'article') counts.articles++;
+      else if (i.type === 'text') counts.texts++;
+      else if (i.type === 'podcast_episode') counts.podcasts++;
+    }
+    return counts;
+  }, [allItems, statusFilter]);
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -284,6 +291,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleBulkGenerateAudio = async () => {
     setBulkMenuOpen(false);
+    if (selectedItems.size === 0) return;
     let maxComments = 50;
     try {
       const res = await userSettingsAPI.get('max_narrated_comments');
@@ -309,6 +317,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleBulkGenerateSummaries = async () => {
     setBulkMenuOpen(false);
+    if (selectedItems.size === 0) return;
     const eligible = selectedContentItems().filter(item =>
       (item.type === 'article' || item.type === 'text') &&
       !item.summary_generated_at &&
@@ -328,6 +337,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleBulkRefetch = async () => {
     setBulkMenuOpen(false);
+    if (selectedItems.size === 0) return;
     const eligible = selectedContentItems().filter(item => item.type === 'article' && item.url);
     if (eligible.length === 0) {
       alert('No selected items are eligible (needs to be an article with a URL).');
@@ -498,33 +508,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             >
               <Search size={16} />
             </button>
-            <button
-              className={typeFilter === 'all' ? 'active' : ''}
-              onClick={() => changeTypeFilter('all')}
-            >
-              All ({statusCount})
-            </button>
-            <button
-              className={typeFilter === 'articles' ? 'active' : ''}
-              onClick={() => changeTypeFilter('articles')}
-            >
-              <Newspaper size={16} />
-              <span className="filter-label">Articles</span>
-            </button>
-            <button
-              className={typeFilter === 'texts' ? 'active' : ''}
-              onClick={() => changeTypeFilter('texts')}
-            >
-              <NotebookPen size={16} />
-              <span className="filter-label">Texts</span>
-            </button>
-            <button
-              className={typeFilter === 'podcasts' ? 'active' : ''}
-              onClick={() => changeTypeFilter('podcasts')}
-            >
-              <Podcast size={16} />
-              <span className="filter-label">Podcasts</span>
-            </button>
             <div className="dropdown-container" ref={statusMenuRef}>
               <button
                 className={`status-funnel-btn ${statusFilter !== 'active' ? 'active' : ''}`}
@@ -537,7 +520,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 )}
               </button>
               {statusMenuOpen && (
-                <div className="dropdown-menu">
+                <div className="dropdown-menu menu-left">
                   <button onClick={() => changeStatusFilter('active')}>
                     {statusFilter === 'active' ? '✓ ' : ''}Active
                   </button>
@@ -550,9 +533,41 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 </div>
               )}
             </div>
+            <div className="filter-chips-scroll">
+              <button
+                className={typeFilter === 'all' ? 'active' : ''}
+                onClick={() => changeTypeFilter('all')}
+              >
+                All{typeFilter === 'all' && <span> ({typeCounts.all})</span>}
+              </button>
+              <button
+                className={typeFilter === 'articles' ? 'active' : ''}
+                onClick={() => changeTypeFilter('articles')}
+              >
+                <Newspaper size={16} />
+                <span className="filter-label">Articles</span>
+                {typeFilter === 'articles' && <span>({typeCounts.articles})</span>}
+              </button>
+              <button
+                className={typeFilter === 'texts' ? 'active' : ''}
+                onClick={() => changeTypeFilter('texts')}
+              >
+                <NotebookPen size={16} />
+                <span className="filter-label">Texts</span>
+                {typeFilter === 'texts' && <span>({typeCounts.texts})</span>}
+              </button>
+              <button
+                className={typeFilter === 'podcasts' ? 'active' : ''}
+                onClick={() => changeTypeFilter('podcasts')}
+              >
+                <Podcast size={16} />
+                <span className="filter-label">Podcasts</span>
+                {typeFilter === 'podcasts' && <span>({typeCounts.podcasts})</span>}
+              </button>
+            </div>
           </div>
         </div>
-        {bulkMode && selectedItems.size > 0 && (
+        {bulkMode && (
           <div className="bulk-actions">
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
@@ -583,9 +598,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <button onClick={() => runInstantBulk('remove_summary', `Remove summaries from ${selectedItems.size} item(s)?`)}>
                     Remove summaries
                   </button>
-                  <button onClick={handleBulkGenerateAudio}>Generate audio…</button>
-                  <button onClick={handleBulkGenerateSummaries}>Generate summaries…</button>
-                  <button onClick={handleBulkRefetch}>Refetch from web…</button>
+                  <button onClick={handleBulkGenerateAudio}>Generate audio</button>
+                  <button onClick={handleBulkGenerateSummaries}>Generate summaries</button>
+                  <button onClick={handleBulkRefetch}>Refetch from web</button>
                 </div>
               )}
             </div>

@@ -752,6 +752,27 @@
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: stretch;
+  min-width: 0;
+  flex: 1;
+}
+
+/* The type chips live in their own strip so only THEY scroll on small
+   screens — the search/funnel buttons stay put, and the funnel's dropdown
+   isn't clipped by an overflowing container */
+.filter-chips-scroll {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Dropdown triggers inside the filter row stretch to the row height, like
+   the sibling buttons do (a bare .dropdown-container div doesn't stretch
+   its inner button by itself) */
+.filter-buttons .dropdown-container {
+  display: flex;
+  align-items: stretch;
 }
 
 .filter-buttons button {
@@ -1068,14 +1089,24 @@
   overflow: hidden;
 }
 
+/* Dropdown items must look the same no matter which container the menu is
+   mounted in. Containers like .filter-buttons and .bulk-actions style their
+   own buttons (flex centering, colored hover borders) and those rules would
+   otherwise bleed into the menu items — hence the explicit resets below.
+   When adding a new dropdown anywhere: just use .dropdown-container +
+   .dropdown-menu and you get this styling for free. */
 .dropdown-menu button {
+  display: block;
   width: 100%;
   padding: 0.75rem 1rem;
   background: none;
   border: none;
   border-bottom: 1px solid var(--bg-raised);
+  border-radius: 0;
   color: var(--t1);
   text-align: left;
+  justify-content: flex-start;
+  gap: 0;
   cursor: pointer;
   transition: all 0.2s;
   font-size: 0.875rem;
@@ -1087,12 +1118,20 @@
 
 .dropdown-menu button:hover:not(:disabled) {
   background: var(--bg-raised);
+  border-color: var(--bg-raised); /* keep the divider neutral — no colored hover edges */
   color: #60a5fa;
 }
 
 .dropdown-menu button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Menus whose trigger sits near the LEFT screen edge open to the right
+   instead of the default right-aligned position */
+.dropdown-menu.menu-left {
+  left: 0;
+  right: auto;
 }
 
 /* Generation Status */
@@ -1723,6 +1762,12 @@
   }
 
   .filter-buttons {
+    flex-wrap: nowrap;
+  }
+
+  /* Only the type-chip strip scrolls — never the row that hosts the funnel
+     dropdown (an overflow container would clip the menu) */
+  .filter-chips-scroll {
     overflow-x: auto;
     flex-wrap: nowrap;
   }
