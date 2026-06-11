@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Search, Filter } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter, getSearchSnippet } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem } from '../types';
 
@@ -51,10 +51,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Use Zustand store for content state
   const {
     items: content,
-    filter,
+    allItems,
+    typeFilter,
+    statusFilter,
+    searchQuery,
     loading,
-    allCount,
-    setFilter,
+    setTypeFilter,
+    setStatusFilter,
+    setSearchQuery,
     fetchContent,
     toggleStarred,
     toggleArchived,
@@ -67,6 +71,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [bulkMode, setBulkMode] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Search bar (expands above the filter row when the search icon is tapped)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState(''); // immediate value, debounced into the store
+
+  // Status filter funnel menu (Active / Favorites / Archived)
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  const statusMenuRef = useRef<HTMLDivElement>(null);
+
+  // Bulk actions overflow menu + sequential progress counter
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
+  const bulkMenuRef = useRef<HTMLDivElement>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ label: string; done: number; total: number } | null>(null);
 
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
@@ -102,6 +119,65 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [openDropdown]);
+
+  // Close the status funnel menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(event.target as Node)) {
+        setStatusMenuOpen(false);
+      }
+    };
+    if (statusMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [statusMenuOpen]);
+
+  // Close the bulk overflow menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (bulkMenuRef.current && !bulkMenuRef.current.contains(event.target as Node)) {
+        setBulkMenuOpen(false);
+      }
+    };
+    if (bulkMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [bulkMenuOpen]);
+
+  // Debounce the search input into the store (the store filters on every change).
+  // Also drops the selection — a select-all from a previous search shouldn't
+  // keep acting on now-hidden items.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearchQuery(searchInput);
+      setSelectedItems(new Set());
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, setSearchQuery]);
+
+  // Filter changes clear the selection for the same reason
+  const changeTypeFilter = (t: Parameters<typeof setTypeFilter>[0]) => {
+    setTypeFilter(t);
+    setSelectedItems(new Set());
+  };
+  const changeStatusFilter = (s: Parameters<typeof setStatusFilter>[0]) => {
+    setStatusFilter(s);
+    setStatusMenuOpen(false);
+    setSelectedItems(new Set());
+  };
+
+  // Count for the "All" chip: items matching the current status across all
+  // types, ignoring search (so the number stays stable while typing)
+  const statusCount = useMemo(
+    () => allItems.filter(i => itemMatchesFilter(i, { typeFilter: 'all', statusFilter, searchQuery: '' })).length,
+    [allItems, statusFilter]
+  );
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -197,32 +273,109 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setSelectedItems(new Set());
   };
 
-  const handleBulkDelete = async () => {
+  type BulkAction = 'star' | 'unstar' | 'archive' | 'unarchive' | 'delete' | 'remove_audio' | 'remove_summary';
+
+  // Instant bulk actions: one request to POST /content/bulk, then refetch.
+  // Refetching (instead of optimistic updates) keeps us in sync with server
+  // side effects like archive wiping audio or delete propagating to Wallabag.
+  const runInstantBulk = async (action: BulkAction, confirmMsg?: string) => {
+    // Intersect with the visible list — defensive, selection should already
+    // only contain visible items
+    const ids = content.filter(item => selectedItems.has(item.id)).map(item => item.id);
+    if (ids.length === 0) return;
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    setBulkMenuOpen(false);
     try {
-      await Promise.all(Array.from(selectedItems).map(id => deleteItem(id)));
+      await contentAPI.bulkAction(action, ids);
       setSelectedItems(new Set());
+      await fetchContent();
     } catch (error) {
-      console.error('Failed to bulk delete:', error);
+      console.error(`Bulk ${action} failed:`, error);
+      alert('Bulk action failed');
     }
   };
 
-  const handleBulkArchive = async () => {
-    try {
-      await Promise.all(Array.from(selectedItems).map(id => toggleArchived(id)));
-      setSelectedItems(new Set());
-    } catch (error) {
-      console.error('Failed to bulk archive:', error);
+  // Long-running bulk actions: kick off existing per-item endpoints one by
+  // one. The start endpoints return immediately; real progress comes from the
+  // existing 2-second generation poll once each item's status flips.
+  const runSequentialBulk = async (label: string, ids: number[], fn: (id: number) => Promise<unknown>) => {
+    setBulkMenuOpen(false);
+    setBulkProgress({ label, done: 0, total: ids.length });
+    let failed = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        await fn(ids[i]);
+        refreshItem(ids[i]);
+      } catch (error) {
+        failed++;
+        console.error(`${label} failed for item ${ids[i]}:`, error);
+      }
+      setBulkProgress({ label, done: i + 1, total: ids.length });
     }
+    setBulkProgress(null);
+    setSelectedItems(new Set());
+    if (failed > 0) alert(`${label}: ${failed} of ${ids.length} failed (see console).`);
   };
 
-  const handleBulkStar = async () => {
+  const selectedContentItems = () => content.filter(item => selectedItems.has(item.id));
+
+  const handleBulkGenerateAudio = async () => {
+    setBulkMenuOpen(false);
+    let maxComments = 50;
     try {
-      await Promise.all(Array.from(selectedItems).map(id => contentAPI.update(id, { is_starred: true })));
-      setSelectedItems(new Set());
-      fetchContent(); // Refresh after bulk operation
-    } catch (error) {
-      console.error('Failed to bulk star:', error);
+      const res = await userSettingsAPI.get('max_narrated_comments');
+      if (res.data.value) maxComments = parseInt(res.data.value, 10) || 50;
+    } catch { /* use default */ }
+
+    const candidates = selectedContentItems().filter(item =>
+      (item.type === 'article' || item.type === 'text') &&
+      !item.audio_url &&
+      (!item.generation_status || ['idle', 'failed', 'completed'].includes(item.generation_status))
+    );
+    const eligible = candidates.filter(item => !item.comment_count || item.comment_count <= maxComments);
+    const skipped = candidates.length - eligible.length;
+
+    if (eligible.length === 0) {
+      alert('No selected items are eligible (needs to be an article/text without audio).');
+      return;
     }
+    const skipNote = skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments — generate those individually.` : '';
+    if (!confirm(`Generate audio for ${eligible.length} item(s)? This uses your TTS API credits.${skipNote}`)) return;
+    await runSequentialBulk('Starting audio generation', eligible.map(i => i.id), id => contentAPI.generateAudio(id, false));
+  };
+
+  const handleBulkGenerateSummaries = async () => {
+    setBulkMenuOpen(false);
+    const eligible = selectedContentItems().filter(item =>
+      (item.type === 'article' || item.type === 'text') &&
+      !item.summary_generated_at &&
+      item.summary_status !== 'generating'
+    );
+    if (eligible.length === 0) {
+      alert('No selected items are eligible (needs to be an article/text without a summary).');
+      return;
+    }
+    if (!confirm(`Generate summaries for ${eligible.length} item(s)? This uses your LLM API credits.`)) return;
+    await runSequentialBulk('Starting summaries', eligible.map(i => i.id), async (id) => {
+      await contentAPI.generateSummary(id, false);
+      // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
+      updateItem(id, { summary_status: 'generating' });
+    });
+  };
+
+  const handleBulkRefetch = async () => {
+    setBulkMenuOpen(false);
+    const eligible = selectedContentItems().filter(item => item.type === 'article' && item.url);
+    if (eligible.length === 0) {
+      alert('No selected items are eligible (needs to be an article with a URL).');
+      return;
+    }
+    if (!confirm(`Refetch ${eligible.length} article(s) from the web?`)) return;
+    await runSequentialBulk('Refetching', eligible.map(i => i.id), id => contentAPI.refetch(id));
+    // Refetch is fire-and-forget on the backend — refresh after delays to pick
+    // up updated data (bulk analogue of the 3s/8s per-item refreshes)
+    setTimeout(() => fetchContent(), 4000);
+    setTimeout(() => fetchContent(), 10000);
   };
 
   const doGenerateAudio = async (id: number, regenerate: boolean, excludeComments: boolean) => {
@@ -463,6 +616,29 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   return (
     <div className="library-tab">
       <div className="library-header">
+        {searchOpen && (
+          <div className="library-search">
+            <Search size={16} className="library-search-icon" />
+            <input
+              type="search"
+              className="library-search-input"
+              placeholder="Search library…"
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              autoFocus
+              autoCapitalize="off"
+              autoCorrect="off"
+              enterKeyHint="search"
+            />
+            <button
+              className="library-search-clear"
+              onClick={() => { setSearchInput(''); setSearchQuery(''); setSearchOpen(false); }}
+              title="Close search"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
         <div className="header-top">
           <button
             onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
@@ -472,46 +648,72 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           </button>
           <div className="filter-buttons">
             <button
-              className={filter === 'all' ? 'active' : ''}
-              onClick={() => setFilter('all')}
+              className={searchOpen || searchQuery.trim() ? 'active' : ''}
+              onClick={() => {
+                if (searchOpen) {
+                  setSearchInput('');
+                  setSearchQuery('');
+                  setSearchOpen(false);
+                } else {
+                  setSearchOpen(true);
+                }
+              }}
+              title="Search library"
             >
-              All ({allCount})
+              <Search size={16} />
             </button>
             <button
-              className={filter === 'articles' ? 'active' : ''}
-              onClick={() => setFilter('articles')}
+              className={typeFilter === 'all' ? 'active' : ''}
+              onClick={() => changeTypeFilter('all')}
+            >
+              All ({statusCount})
+            </button>
+            <button
+              className={typeFilter === 'articles' ? 'active' : ''}
+              onClick={() => changeTypeFilter('articles')}
             >
               <Newspaper size={16} />
               <span className="filter-label">Articles</span>
             </button>
             <button
-              className={filter === 'texts' ? 'active' : ''}
-              onClick={() => setFilter('texts')}
+              className={typeFilter === 'texts' ? 'active' : ''}
+              onClick={() => changeTypeFilter('texts')}
             >
               <NotebookPen size={16} />
               <span className="filter-label">Texts</span>
             </button>
             <button
-              className={filter === 'podcasts' ? 'active' : ''}
-              onClick={() => setFilter('podcasts')}
+              className={typeFilter === 'podcasts' ? 'active' : ''}
+              onClick={() => changeTypeFilter('podcasts')}
             >
               <Podcast size={16} />
               <span className="filter-label">Podcasts</span>
             </button>
-            <button
-              className={filter === 'favorites' ? 'active' : ''}
-              onClick={() => setFilter('favorites')}
-            >
-              <Star size={16} />
-              <span className="filter-label">Favorites</span>
-            </button>
-            <button
-              className={filter === 'archived' ? 'active' : ''}
-              onClick={() => setFilter('archived')}
-            >
-              <Archive size={16} />
-              <span className="filter-label">Archived</span>
-            </button>
+            <div className="dropdown-container" ref={statusMenuRef}>
+              <button
+                className={`status-funnel-btn ${statusFilter !== 'active' ? 'active' : ''}`}
+                onClick={() => setStatusMenuOpen(!statusMenuOpen)}
+                title="Filter by status"
+              >
+                <Filter size={16} />
+                {statusFilter !== 'active' && (
+                  <span>{statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
+                )}
+              </button>
+              {statusMenuOpen && (
+                <div className="dropdown-menu">
+                  <button onClick={() => changeStatusFilter('active')}>
+                    {statusFilter === 'active' ? '✓ ' : ''}Active
+                  </button>
+                  <button onClick={() => changeStatusFilter('favorites')}>
+                    {statusFilter === 'favorites' ? '✓ ' : ''}Favorites
+                  </button>
+                  <button onClick={() => changeStatusFilter('archived')}>
+                    {statusFilter === 'archived' ? '✓ ' : ''}Archived
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {bulkMode && selectedItems.size > 0 && (
@@ -519,10 +721,42 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            <button onClick={handleBulkStar} title="Star selected"><Star size={16} /></button>
-            <button onClick={handleBulkArchive} title="Archive selected"><Archive size={16} /></button>
-            <button onClick={handleBulkDelete} title="Delete selected"><Trash2 size={16} /></button>
+            <button onClick={() => runInstantBulk('star')} title="Star selected"><Star size={16} /></button>
+            {statusFilter === 'archived' ? (
+              <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected"><ArchiveRestore size={16} /></button>
+            ) : (
+              <button onClick={() => runInstantBulk('archive')} title="Archive selected"><Archive size={16} /></button>
+            )}
+            <button
+              onClick={() => runInstantBulk('delete', `Delete ${selectedItems.size} item(s)? Wallabag-synced items will be deleted there too. This cannot be undone.`)}
+              title="Delete selected"
+            >
+              <Trash2 size={16} />
+            </button>
+            <div className="dropdown-container" ref={bulkMenuRef}>
+              <button onClick={() => setBulkMenuOpen(!bulkMenuOpen)} title="More bulk actions">
+                <MoreVertical size={16} />
+              </button>
+              {bulkMenuOpen && (
+                <div className="dropdown-menu">
+                  <button onClick={() => runInstantBulk('unstar')}>Unstar selected</button>
+                  <button onClick={() => runInstantBulk('unarchive')}>Unarchive selected</button>
+                  <button onClick={() => runInstantBulk('remove_audio', `Remove generated audio from ${selectedItems.size} item(s)? (Podcast episodes are never affected.)`)}>
+                    Remove audio
+                  </button>
+                  <button onClick={() => runInstantBulk('remove_summary', `Remove summaries from ${selectedItems.size} item(s)?`)}>
+                    Remove summaries
+                  </button>
+                  <button onClick={handleBulkGenerateAudio}>Generate audio…</button>
+                  <button onClick={handleBulkGenerateSummaries}>Generate summaries…</button>
+                  <button onClick={handleBulkRefetch}>Refetch from web…</button>
+                </div>
+              )}
+            </div>
           </div>
+        )}
+        {bulkProgress && (
+          <div className="bulk-progress">{bulkProgress.label} {bulkProgress.done}/{bulkProgress.total}…</div>
         )}
       </div>
 
@@ -530,7 +764,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         <div className="loading">Loading...</div>
       ) : content.length === 0 ? (
         <div className="empty-state">
-          <p>No content found. Start by adding some articles or subscribing to podcasts!</p>
+          {searchQuery.trim() ? (
+            <p>No results for “{searchQuery.trim()}”.</p>
+          ) : (
+            <p>No content found. Start by adding some articles or subscribing to podcasts!</p>
+          )}
         </div>
       ) : (
         <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
@@ -612,6 +850,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 })() : item.description ? (
                   <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
                 ) : null}
+                {searchQuery.trim() && (() => {
+                  const snippet = getSearchSnippet(item, searchQuery);
+                  return snippet ? (
+                    <p className="search-snippet">matched in text: <em>“{snippet}”</em></p>
+                  ) : null;
+                })()}
                 <div className="metadata">
                   <span className="type" title={item.type}>
                     {item.type === 'article' && <Newspaper size={16} className="icon-article" />}
