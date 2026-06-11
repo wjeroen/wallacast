@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, Sun, Moon, SunMoon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, FileText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -20,6 +20,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
+  // Which fullscreen-player tab to open on next play (e.g. "Read more" → Summary tab)
+  const [initialPlayerTab, setInitialPlayerTab] = useState<'summary' | undefined>(undefined);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
@@ -184,9 +186,10 @@ function App() {
   // current filter as a "play context" (Spotify-style) so the non-manual
   // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
   // click should load the track, not play it automatically.
-  const handlePlayContent = (content: ContentItem) => {
+  const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const filter = useContentStore.getState().filter;
     useQueueStore.getState().setLibraryContext(filter, content.id);
+    setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
   };
 
@@ -380,6 +383,46 @@ function App() {
     }
   };
 
+  const handleGenerateSummary = async (regenerate: boolean) => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    try {
+      await contentAPI.generateSummary(id, regenerate);
+      // Reflect "generating" immediately, then poll until it finishes (independent of audio).
+      setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
+      let tries = 0;
+      const poll = async () => {
+        tries++;
+        try {
+          const response = await contentAPI.getById(id);
+          setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+          if (response.data.summary_status === 'generating' && tries < 30) {
+            setTimeout(poll, 3000);
+          }
+        } catch {
+          /* stop polling on error */
+        }
+      };
+      setTimeout(poll, 3000);
+    } catch (error: any) {
+      console.error('Failed to generate summary:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary');
+    }
+  };
+
+  const handleRemoveSummary = async () => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    try {
+      await contentAPI.update(id, { summary: null } as any);
+      const response = await contentAPI.getById(id);
+      setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+    } catch (error) {
+      console.error('Failed to remove summary:', error);
+      alert('Failed to remove summary');
+    }
+  };
+
   const handleRegenerateTranscript = async () => {
     if (!currentContent) return;
     try {
@@ -453,6 +496,40 @@ function App() {
         summary += ` Skipped ${skippedItems.length} with ${COMMENT_THRESHOLD}+ comments.`;
       }
       alert(summary);
+    }
+  };
+
+  const handleBulkGenerateSummaries = async () => {
+    setShowUserMenu(false);
+
+    // No comment cutoff for summaries. Eligible = articles/texts without a summary
+    // and not already generating one.
+    const eligibleItems = allContent.filter(
+      item => (item.type === 'article' || item.type === 'text') && !item.is_archived &&
+              !item.summary_generated_at && item.summary_status !== 'generating'
+    );
+
+    if (eligibleItems.length === 0) {
+      alert('No items need a summary.');
+      return;
+    }
+
+    const confirmed = confirm(`Generate summaries for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`);
+    if (!confirmed) return;
+
+    let started = 0;
+    for (const item of eligibleItems) {
+      try {
+        await contentAPI.generateSummary(item.id, false);
+        started++;
+        refreshItem(item.id);
+      } catch (error) {
+        console.error(`Failed to start summary generation for item ${item.id}:`, error);
+      }
+    }
+
+    if (started > 0) {
+      alert(`Started summary generation for ${started} item${started !== 1 ? 's' : ''}.`);
     }
   };
 
@@ -550,6 +627,11 @@ function App() {
                 <span>Generate All Audio</span>
               </button>
 
+              <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
+                <FileText size={18} />
+                <span>Generate Summaries</span>
+              </button>
+
               <button className="user-dropdown-item" onClick={handleLogout}>
                 <LogOut size={18} />
                 <span>Switch Account</span>
@@ -576,8 +658,11 @@ function App() {
             onRefetch={handleRefetchContent}
             onGenerateAudio={handleGenerateAudio}
             onRemoveAudio={handleRemoveAudio}
+            onGenerateSummary={handleGenerateSummary}
+            onRemoveSummary={handleRemoveSummary}
             onRegenerateTranscript={handleRegenerateTranscript}
             onContentUpdated={(updated) => setCurrentContent(updated)}
+            initialTab={initialPlayerTab}
             isDark={isDark}
             themeMode={themeMode}
             onCycleTheme={cycleTheme}

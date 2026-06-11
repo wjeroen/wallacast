@@ -216,6 +216,44 @@ export async function getTTSOptionsForUser(userId: number): Promise<{ voice: str
   return { voice, model };
 }
 
+// A single selectable voice. `model` carries the provider (OpenAI vs Kokoro/DeepInfra) so a
+// list of voices can span TTS models — the TTS client is routed per the picked model.
+export interface TTSVoiceChoice { model: string; voice: string; }
+
+// Parse the user's `tts_voices` setting (JSON array of { model, voice }). Returns [] on any
+// problem, which makes callers fall back to the single openai_tts_voice/model.
+export async function getSelectedTTSVoices(userId: number): Promise<TTSVoiceChoice[]> {
+  const raw = await getUserSetting(userId, 'tts_voices');
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((v: any) => v && typeof v.model === 'string' && typeof v.voice === 'string' && v.model && v.voice)
+      .map((v: any) => ({ model: v.model, voice: v.voice }));
+  } catch {
+    return [];
+  }
+}
+
+// Pick a random voice from the user's selected list, or null if none are usable.
+// Random (not alternating) so there's no cross-generation state to persist. Voices whose
+// provider key isn't configured are skipped so we never pick something we can't synthesize.
+export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice | null> {
+  let voices = await getSelectedTTSVoices(userId);
+  if (voices.length === 0) return null;
+
+  const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
+  const hasOpenAI = !!(await getUserSetting(userId, 'openai_api_key'));
+  voices = voices.filter(v => {
+    const isKokoro = v.model.includes('Kokoro') || v.model.startsWith('hexgrad/');
+    return isKokoro ? hasDeepInfra : hasOpenAI;
+  });
+  if (voices.length === 0) return null;
+
+  return voices[Math.floor(Math.random() * voices.length)];
+}
+
 export async function hasUserConfiguredAPIKey(userId: number): Promise<boolean> {
     const openaiKey = await getUserSetting(userId, 'openai_api_key');
     const diKey = await getUserSetting(userId, 'deepinfra_api_key');

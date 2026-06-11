@@ -16,7 +16,8 @@ const VALID_SETTING_KEYS = [
   'deepinfra_api_key',     // NEW: DeepInfra key for cheaper audio
   'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
   'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
-  'openai_tts_voice',      // 'alloy', 'af_heart', etc.
+  'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
+  'tts_voices',            // JSON array of { model, voice } — rotate randomly between these
   'anthropic_api_key',
   'anthropic_model',
   'google_api_key',
@@ -40,6 +41,11 @@ const VALID_SETTING_KEYS = [
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
+  'auto_generate_summary',      // Auto-generate a summary when an article/text is added
+  'summarize_comments',         // Also generate a summary of the comment discussion (default: true)
+  'summary_tiers',              // JSON: sorted list of { maxChars, maxTweets } tiers (Infinity stored as null)
+  'summary_max_words',          // Max words per summary paragraph ("tweet"); default 40
+  'library_show_summary',       // Show the article summary (not the description) on library cards
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)
