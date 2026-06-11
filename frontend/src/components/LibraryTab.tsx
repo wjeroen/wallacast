@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -51,6 +51,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
   const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
+  // Podcasts need a transcript before a summary can be generated — this modal asks first.
+  // readyIds = items that can summarize right away; podcastIds = need transcript first.
+  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
 
@@ -134,6 +137,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setStatusMenuOpen(false);
     setSelectedItems(new Set());
   };
+
+  // Selection state for the smart star/archive toggles: all-starred → button unstars,
+  // otherwise it stars (already-starred items stay starred). Same for archive.
+  const selectedObjs = content.filter(i => selectedItems.has(i.id));
+  const allSelectedStarred = selectedObjs.length > 0 && selectedObjs.every(i => i.is_starred);
+  const allSelectedArchived = selectedObjs.length > 0 && selectedObjs.every(i => i.is_archived);
 
   // Per-type counts under the current status, ignoring search (so the number
   // stays stable while typing). The count is shown on the ACTIVE type chip.
@@ -319,20 +328,24 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setBulkMenuOpen(false);
     if (selectedItems.size === 0) return;
     const eligible = selectedContentItems().filter(item =>
-      (item.type === 'article' || item.type === 'text') &&
+      (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') &&
       !item.summary_generated_at &&
       item.summary_status !== 'generating'
     );
     if (eligible.length === 0) {
-      alert('No selected items are eligible (needs to be an article/text without a summary).');
+      alert('No selected items are eligible (no summary yet).');
       return;
     }
-    if (!confirm(`Generate summaries for ${eligible.length} item(s)? This uses your LLM API credits.`)) return;
-    await runSequentialBulk('Starting summaries', eligible.map(i => i.id), async (id) => {
-      await contentAPI.generateSummary(id, false);
-      // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
-      updateItem(id, { summary_status: 'generating' });
-    });
+    // Podcasts without a transcript need Whisper first — ask via the modal instead
+    // of silently spending transcription credits
+    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
+    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
+    if (podcastIds.length > 0) {
+      setTranscriptWarning({ podcastIds, readyIds });
+      return;
+    }
+    if (!confirm(`Generate summaries for ${readyIds.length} item(s)? This uses your LLM API credits.`)) return;
+    await runSummaryBatch(readyIds, []);
   };
 
   const handleBulkRefetch = async () => {
@@ -392,16 +405,36 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   };
 
   const handleGenerateSummary = async (id: number, regenerate: boolean = false) => {
+    setOpenDropdown(null);
+    // Podcasts summarize their TRANSCRIPT (not the episode description) — if there's no
+    // transcript yet, ask before kicking off Whisper + summary
+    const item = allItems.find(c => c.id === id);
+    if (item && item.type === 'podcast_episode' && !item.transcript_words) {
+      setTranscriptWarning({ podcastIds: [id], readyIds: [] });
+      return;
+    }
     try {
-      setOpenDropdown(null);
       await contentAPI.generateSummary(id, regenerate);
       // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
-      updateItem(id, { summary_status: 'generating' } as any);
+      updateItem(id, { summary_status: 'generating' });
       refreshItem(id);
     } catch (error: any) {
       console.error('Failed to generate summary:', error);
       alert(error?.response?.data?.error || 'Failed to generate summary');
     }
+  };
+
+  // Kick off summaries for a mixed batch: readyIds summarize directly; podcastIds get
+  // a transcript first (generate_transcript=true), then the summary chains server-side.
+  const runSummaryBatch = async (readyIds: number[], podcastIds: number[]) => {
+    const podcastSet = new Set(podcastIds);
+    const ids = [...readyIds, ...podcastIds];
+    if (ids.length === 0) return;
+    await runSequentialBulk('Starting summaries', ids, async (id) => {
+      await contentAPI.generateSummary(id, false, podcastSet.has(id));
+      // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
+      updateItem(id, { summary_status: 'generating' });
+    });
   };
 
   const handleRemoveSummary = async (id: number) => {
@@ -517,9 +550,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 title="Filter by status"
               >
                 {statusFilter === 'active' && <Inbox size={16} />}
-                {statusFilter === 'favorites' && <Star size={16} />}
-                {statusFilter === 'archived' && <Archive size={16} />}
-                <span>{statusFilter === 'active' ? 'Active' : statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
+                {statusFilter === 'favorites' && <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} />}
+                {statusFilter === 'archived' && <Archive size={16} style={{ color: '#3b82f6' }} />}
+                <span className="filter-label">{statusFilter === 'active' ? 'Active' : statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
                 <ChevronDown size={14} />
               </button>
               {statusMenuOpen && (
@@ -535,14 +568,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     onClick={() => changeStatusFilter('favorites')}
                     style={statusFilter === 'favorites' ? { color: '#60a5fa' } : undefined}
                   >
-                    <Star size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    <Star size={14} fill="currentColor" style={{ marginRight: 6, verticalAlign: '-2px', color: '#fbbf24' }} />
                     Favorites
                   </button>
                   <button
                     onClick={() => changeStatusFilter('archived')}
                     style={statusFilter === 'archived' ? { color: '#60a5fa' } : undefined}
                   >
-                    <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px', color: '#3b82f6' }} />
                     Archived
                   </button>
                 </div>
@@ -587,17 +620,28 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            <button onClick={() => runInstantBulk('star')} title="Star selected"><Star size={16} /></button>
-            {statusFilter === 'archived' ? (
-              <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected"><ArchiveRestore size={16} /></button>
+            {/* Smart toggles (Gmail-style): star/archive act on the whole selection —
+                mixed selections get starred/archived; uniform ones get the inverse */}
+            <button
+              onClick={() => runInstantBulk(allSelectedStarred ? 'unstar' : 'star')}
+              title={allSelectedStarred ? 'Unstar selected' : 'Star selected'}
+            >
+              <Star size={16} fill={allSelectedStarred ? 'currentColor' : 'none'} style={allSelectedStarred ? { color: '#fbbf24' } : undefined} />
+            </button>
+            {allSelectedArchived ? (
+              <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected">
+                <ArchiveRestore size={16} style={{ color: '#3b82f6' }} />
+              </button>
             ) : (
-              <button onClick={() => runInstantBulk('archive')} title="Archive selected"><Archive size={16} /></button>
+              <button onClick={() => runInstantBulk('archive')} title="Archive selected">
+                <Archive size={16} />
+              </button>
             )}
             <button
               onClick={() => runInstantBulk('delete', `Delete ${selectedItems.size} item(s)? Wallabag-synced items will be deleted there too. This cannot be undone.`)}
               title="Delete selected"
             >
-              <Trash2 size={16} />
+              <Trash2 size={16} style={{ color: '#ef4444' }} />
             </button>
             <div className="dropdown-container" ref={bulkMenuRef}>
               <button onClick={() => setBulkMenuOpen(!bulkMenuOpen)} title="More bulk actions">
@@ -605,14 +649,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               </button>
               {bulkMenuOpen && (
                 <div className="dropdown-menu">
-                  <button onClick={() => runInstantBulk('unstar')}>
-                    <StarOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    Unstar selected
-                  </button>
-                  <button onClick={() => runInstantBulk('unarchive')}>
-                    <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    Unarchive selected
-                  </button>
                   <button onClick={() => runInstantBulk('remove_audio', `Remove generated audio from ${selectedItems.size} item(s)? (Podcast episodes are never affected.)`)}>
                     Remove audio
                   </button>
@@ -672,6 +708,50 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onDownloadZip={handleDownloadDataZip}
             />
           ))}
+        </div>
+      )}
+
+      {transcriptWarning && (
+        <div className="comment-warning-overlay" onClick={() => setTranscriptWarning(null)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>
+              {transcriptWarning.podcastIds.length === 1 && transcriptWarning.readyIds.length === 0 ? (
+                <>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</>
+              ) : (
+                <><strong>{transcriptWarning.podcastIds.length} podcast episode{transcriptWarning.podcastIds.length > 1 ? 's' : ''}</strong> in your selection {transcriptWarning.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.</>
+              )}
+            </p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  const w = transcriptWarning;
+                  setTranscriptWarning(null);
+                  runSummaryBatch(w.readyIds, w.podcastIds);
+                }}
+              >
+                Generate transcript{transcriptWarning.podcastIds.length > 1 ? 's' : ''} + summar{transcriptWarning.podcastIds.length + transcriptWarning.readyIds.length > 1 ? 'ies' : 'y'}
+              </button>
+              {transcriptWarning.readyIds.length > 0 && (
+                <button
+                  className="comment-warning-btn exclude"
+                  onClick={() => {
+                    const w = transcriptWarning;
+                    setTranscriptWarning(null);
+                    runSummaryBatch(w.readyIds, []);
+                  }}
+                >
+                  Skip episodes without transcript
+                </button>
+              )}
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setTranscriptWarning(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
