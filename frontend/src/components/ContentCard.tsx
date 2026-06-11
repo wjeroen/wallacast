@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets } from '../format';
@@ -58,6 +59,9 @@ export function ContentCard({
   onAddToQueue,
   onDownloadZip,
 }: ContentCardProps) {
+  // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
+  // rest inline on the card (article summary only — never the comment summary)
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
   const generationStatusDisplay = () => {
     if (!item.generation_status || item.generation_status === 'idle') {
       return null;
@@ -233,8 +237,8 @@ export function ContentCard({
         )}
         {showSummary && item.summary ? (() => {
           const tweets = toTweets(item.summary);
-          const shown = tweets.slice(0, 3);
-          const hasMore = tweets.length > 3;
+          const shown = summaryExpanded ? tweets : tweets.slice(0, 3);
+          const hasMore = !summaryExpanded && tweets.length > 3;
           const moreCount = tweets.length - shown.length;
           return (
             <div className="library-summary">
@@ -248,7 +252,7 @@ export function ContentCard({
                         {' '}
                         <span
                           className="read-more-link"
-                          onClick={(e) => { e.stopPropagation(); onPlay(item, { tab: 'summary' }); }}
+                          onClick={(e) => { e.stopPropagation(); setSummaryExpanded(true); }}
                         >
                           [{moreCount} more]
                         </span>
