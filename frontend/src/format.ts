@@ -48,3 +48,53 @@ export function toTweets(text: string): string[] {
   if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
   return parts;
 }
+
+// Convert article HTML to readable Markdown-ish plain text (used by "Copy
+// content"). Walks block elements: headings → #, lists → -, blockquotes → >,
+// code → fenced. Images and other chrome are dropped.
+export function htmlToMarkdown(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const out: string[] = [];
+
+  const inlineText = (el: Element): string =>
+    (el.textContent || '').replace(/\s+/g, ' ').trim();
+
+  const hasBlockChildren = (el: Element): boolean =>
+    Array.from(el.children).some(c =>
+      /^(H[1-6]|P|UL|OL|LI|BLOCKQUOTE|PRE|DIV|SECTION|ARTICLE|FIGURE|TABLE)$/.test(c.tagName));
+
+  const walk = (el: Element) => {
+    const tag = el.tagName;
+    if (/^H[1-6]$/.test(tag)) {
+      const t = inlineText(el);
+      if (t) out.push('#'.repeat(Number(tag[1])) + ' ' + t);
+    } else if (tag === 'P') {
+      const t = inlineText(el);
+      if (t) out.push(t);
+    } else if (tag === 'LI') {
+      const t = inlineText(el);
+      if (t) out.push('- ' + t);
+    } else if (tag === 'PRE') {
+      const t = (el.textContent || '').trim();
+      if (t) out.push('```\n' + t + '\n```');
+    } else if (tag === 'BLOCKQUOTE') {
+      const inner: string[] = [];
+      const prev = out.length;
+      Array.from(el.children).forEach(walk);
+      // Move whatever the children produced into a quoted block
+      inner.push(...out.splice(prev));
+      const t = inner.length > 0 ? inner.join('\n\n') : inlineText(el);
+      if (t) out.push(t.split('\n').map(l => '> ' + l).join('\n'));
+    } else if (tag === 'IMG' || tag === 'SCRIPT' || tag === 'STYLE') {
+      // skip
+    } else if (hasBlockChildren(el)) {
+      Array.from(el.children).forEach(walk);
+    } else {
+      const t = inlineText(el);
+      if (t) out.push(t);
+    }
+  };
+
+  Array.from(doc.body.children).forEach(walk);
+  return out.join('\n\n');
+}
