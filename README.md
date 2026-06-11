@@ -356,13 +356,19 @@ Wallacast supports multiple users with complete data isolation:
   - Displays auth errors from authStore
   - Uses lucide-react icons for visual polish
 - **`components/LibraryTab.tsx`**: Main library view. Uses Zustand store for state. Polls for generation progress updates; cards display karma (upvote count) and comment count with icons. "Generate All Audio" button is in the user dropdown menu (top-right).
-  - **Filters (two dimensions, one row)**: type chips (All / Articles / Texts / Podcasts) + a funnel button opening a status menu (Active / Favorites / Archived). The dimensions combine (e.g. Podcasts + Archived). The funnel button highlights and shows the status name when it isn't Active. Semantics: Active = not archived, Favorites = starred (incl. archived), Archived = archived. Filtering is client-side via `itemMatchesFilter()` in `contentStore.ts` (shared with the queue's "Up next" stream).
+  - **Filters (two dimensions, one row)**: search icon + funnel button + type chips (All / Articles / Texts / Podcasts). The funnel opens a status menu (Active / Favorites / Archived); the dimensions combine (e.g. Podcasts + Archived). The funnel button highlights and shows the status name when it isn't Active; the active type chip shows its item count. Only the type-chip strip scrolls horizontally on small screens (search/funnel stay fixed so the funnel's dropdown isn't clipped). Semantics: Active = not archived, Favorites = starred (incl. archived), Archived = archived. Filtering is client-side via `itemMatchesFilter()` in `contentStore.ts` (shared with the queue's "Up next" stream).
   - **Search**: search icon expands into a full-width debounced search bar. Client-side, case-insensitive substring over title, author, description, tags, podcast show name AND the full body text (`content` column, already in the list response). Cards matching only in the body show a "matched in text: …" snippet. No fuzzy matching.
   - **Bulk selection mode**: Select button toggles checkboxes. Bulk bar: count, All/None, Star, Archive (Unarchive when viewing Archived), Delete — each ONE request via `POST /content/bulk` — plus an overflow (⋮) menu: Unstar, Unarchive, Remove audio, Remove summaries, and sequential Generate audio / Generate summaries / Refetch from web (cost-confirm dialogs with item counts, progress counter, per-card status badges via the existing poll). Selection is cleared whenever filters or search change, so select-all only ever acts on visible items.
   - Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
+
+- **`components/ContentCard.tsx`**: The library item card (thumbnail, title, metadata badges, generation status, star/archive/delete + dropdown menu). Extracted from LibraryTab — all state/handlers stay in LibraryTab and come in as props.
+
+- **`components/FeedCards.tsx`**: Shared Feed tab cards — `FeedCard` (podcast/newsletter rows + the expanded selected-feed card, variants: `search-result`/`subscription`/`expanded`) and `FeedEpisodeCard` (episode/article rows used by all three Feed tab lists). Action buttons are passed in by the caller. Replaces seven copy-pasted card JSX blocks.
+
+- **`format.ts`**: Shared formatting helpers (`cleanHtml`, `formatDuration`, `getDomainFromUrl`, `toTweets`, `htmlToMarkdown`) previously duplicated across components.
 
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
@@ -402,7 +408,7 @@ Wallacast supports multiple users with complete data isolation:
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
   - LLM content blocks (LessWrong/EA Forum `div.llm-content-block`): displayed in serif font with purple left border and model name badge (e.g., "Claude Opus 4.6"). TTS narration announces model attribution
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
-  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, and three HTML download options (cleaned, read-along, original via refetch)
+  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `format.ts`), and "Download data (zip)"
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
