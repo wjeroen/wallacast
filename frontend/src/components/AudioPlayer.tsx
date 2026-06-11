@@ -616,6 +616,13 @@ export function AudioPlayer({
 
   if (!content) return null;
 
+  // Entering an audio-less item must set fullscreen STATE, not just override the
+  // render below — otherwise a stale minimized state (from a previously played
+  // audio item) kicks in the moment generated audio arrives, collapsing the view
+  // to the mini player mid-read. Guarded setState during render converges in one
+  // pass (React's sanctioned "adjusting state when props change" pattern).
+  if (!content.audio_url && !isExpanded) setIsExpanded(true);
+
   return (
     <>
       <audio ref={audioRef} />
