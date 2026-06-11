@@ -141,14 +141,19 @@ export async function transcribeWithTimestamps(
         // HYBRID PROMPT STRATEGY:
         // 1. Chunk 1: Use the full initialPrompt to establish names/context.
         // 2. Chunk 2+: Combine the Metadata (first 600 chars) with Continuity (last 200 chars).
+        // IMPORTANT: the continuation prompt must ALWAYS be bounded. previousTranscript
+        // holds the FULL text of the previous chunk (often >10k chars for a 15-min chunk);
+        // sending it unbounded made DeepInfra's Whisper endpoint reject chunk 2+ with a
+        // bare 400 whenever initialPrompt was empty — which it always is since
+        // whisper-prompt.ts started returning '' (OpenAI silently truncates instead).
         let currentPrompt = previousTranscript;
-        
-        if (i > 0 && initialPrompt) {
+
+        if (i > 0) {
             // Take the Metadata (Title, Author, Comments) from the start
-            const metadataPart = initialPrompt.slice(0, 600);
+            const metadataPart = initialPrompt ? initialPrompt.slice(0, 600) : '';
             // Take the Continuity (last few sentences) from the actual previous text
             const continuityPart = previousTranscript.slice(-200);
-            currentPrompt = `${metadataPart} ... ${continuityPart}`;
+            currentPrompt = metadataPart ? `${metadataPart} ... ${continuityPart}` : continuityPart;
         }
 
         const transcription = await withChunkRetry(

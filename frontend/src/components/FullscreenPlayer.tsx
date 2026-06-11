@@ -30,6 +30,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
+import { htmlToMarkdown } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, Comment } from '../types';
@@ -678,6 +679,53 @@ export function FullscreenPlayer({
   // --------------------------------------------------------------------------
   const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
 
+  // Copy the readable content (title, link, author, date, body, comments) to
+  // the clipboard as Markdown — what Ctrl+A/Ctrl+C *should* give you, without
+  // the player chrome.
+  const handleCopyContent = async () => {
+    setShowDropdown(false);
+
+    const lines: string[] = [`# ${content.title}`];
+    const meta: string[] = [];
+    if (content.author) meta.push(`By ${content.author}`);
+    if (content.type === 'podcast_episode' && content.podcast_show_name) meta.push(content.podcast_show_name);
+    if (content.published_at) meta.push(new Date(content.published_at).toLocaleDateString('en-GB'));
+    if (content.karma !== undefined && content.karma !== null) meta.push(`${content.karma} upvotes`);
+    if (meta.length > 0) lines.push(meta.join(' • '));
+    if (content.url) lines.push(content.url);
+
+    const body = content.html_content
+      ? htmlToMarkdown(content.html_content)
+      : content.type === 'podcast_episode' && content.transcript
+        ? content.transcript
+        : (content.content || '');
+    if (body.trim()) lines.push('', body.trim());
+
+    if (parsedComments.length > 0) {
+      const renderComment = (c: Comment, depth: number): string => {
+        const head: string[] = [c.username];
+        if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
+        if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
+        const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
+        // Replies become nested Markdown quotes
+        const prefixed = depth > 0
+          ? block.split('\n').map(l => `${'>'.repeat(depth)} ${l}`.trimEnd()).join('\n')
+          : block;
+        const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
+        return [prefixed, ...replies].join('\n\n');
+      };
+      lines.push('', `## Comments (${content.comment_count || parsedComments.length})`, '');
+      lines.push(parsedComments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
+    }
+
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+    } catch (error) {
+      console.error('Failed to copy content:', error);
+      alert('Failed to copy to clipboard');
+    }
+  };
+
   const handleDownloadDataZip = async () => {
     setShowDropdown(false);
     try {
@@ -1191,15 +1239,11 @@ export function FullscreenPlayer({
       }
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
-          switch (libraryContext.filter) {
-            case 'articles': return 'Up next from Articles';
-            case 'texts': return 'Up next from Texts';
-            case 'podcasts': return 'Up next from Podcasts';
-            case 'favorites': return 'Up next from Favorites';
-            case 'archived': return 'Up next from Archived';
-            case 'all':
-            default: return 'Up next from Library';
-          }
+          const f = libraryContext.filter;
+          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
+          const statusLabel = f.statusFilter === 'favorites' ? 'Favorite ' : f.statusFilter === 'archived' ? 'Archived ' : '';
+          const searchLabel = f.searchQuery.trim() ? ` · “${f.searchQuery.trim()}”` : '';
+          return `Up next from ${statusLabel}${typeLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
@@ -1409,7 +1453,13 @@ export function FullscreenPlayer({
                         Remove audio
                       </button>
                     )}
-                    {/* Summary options (independent of audio — both can be generated at once) */}
+                  </>
+                )}
+                {/* Summary options (independent of audio — both can be generated at once).
+                    Podcasts summarize their transcript; App.tsx confirms + chains Whisper
+                    first when no transcript exists yet. */}
+                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
+                  <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
                       <button disabled>Generating summary…</button>
                     )}
@@ -1445,15 +1495,22 @@ export function FullscreenPlayer({
                     Refetch from web
                   </button>
                 )}
+                <button onClick={handleCopyContent}>
+                  Copy content
+                </button>
                 <button onClick={handleDownloadDataZip}>
                   Download data (zip)
                 </button>
               </div>
             )}
           </div>
-          <button onClick={onMinimize} className="header-button" title="Minimize">
-            <Minimize2 size={20} />
-          </button>
+          {/* No minimize without audio — the mini player is playback chrome, so
+              audio-less items live in fullscreen only (close is the way out) */}
+          {content.audio_url && (
+            <button onClick={onMinimize} className="header-button" title="Minimize">
+              <Minimize2 size={20} />
+            </button>
+          )}
           <button onClick={onClose} className="header-button" title="Close">
             <X size={20} />
           </button>

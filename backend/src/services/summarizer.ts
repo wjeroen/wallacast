@@ -177,6 +177,29 @@ const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => 
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 };
 
+const PODCAST_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
+  if (maxTweets <= 1) {
+    return `You write a one-paragraph, tweet-style summary of a podcast episode based on its transcript. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+- Write a single paragraph, at most ${maxWords} words, that captures the episode's central topic or main takeaway.
+- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
+- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the input. Ignore ads, sponsor reads, and housekeeping.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+  }
+  return `You write a concise summary of a podcast episode based on its transcript, as a short thread of tweet-style paragraphs. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+- The first paragraph states the episode's central topic or main takeaway.
+- The remaining paragraphs cover the main threads of the conversation in the order that best conveys the substance, not necessarily chronological order.
+- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
+- Write at most ${maxTweets} paragraphs. Use fewer when the episode is simple; do not pad to reach the limit.
+- Each paragraph is at most ${maxWords} words and reads on its own, but together they form one coherent overview.
+- Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the input. Ignore ads, sponsor reads, and housekeeping.
+- Separate paragraphs with a single blank line.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+};
+
 const ARTICLE_INPUT_CAP = 200000;       // chars sent to the article summarizer
 const ARTICLE_CONTEXT_CAP = 50000;      // chars of article context for the comment summarizer
 const COMMENTS_INPUT_CAP = 200000;      // chars of comments sent to the comment summarizer
@@ -189,7 +212,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
   console.log(`[Summary] ===== Generating summary for content ${contentId} =====`);
   try {
     const result = await query(
-      'SELECT id, type, title, author, html_content, content, comments, user_id FROM content_items WHERE id = $1',
+      'SELECT id, type, title, author, description, html_content, content, comments, transcript, podcast_show_name, user_id FROM content_items WHERE id = $1',
       [contentId]
     );
     if (result.rows.length === 0) {
@@ -198,16 +221,22 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     }
     const item = result.rows[0];
     const userId = item.user_id;
+    const isPodcast = item.type === 'podcast_episode';
 
-    // 1. Article text + char count (counted in code, NOT by the model)
-    const articleText = item.html_content ? htmlToPlainText(item.html_content) : (item.content || '').trim();
+    // 1. Source text + char count (counted in code, NOT by the model).
+    // Podcasts summarize their Whisper transcript; articles/texts their body.
+    const articleText = isPodcast
+      ? (item.transcript || '').trim()
+      : item.html_content ? htmlToPlainText(item.html_content) : (item.content || '').trim();
     if (!articleText) {
-      throw new Error('No article text available to summarize');
+      throw new Error(isPodcast ? 'No transcript available to summarize' : 'No article text available to summarize');
     }
     const articleChars = articleText.length;
 
     // Title + author header so the model can name the author instead of guessing a gender.
-    const metaHeader = `TITLE: ${item.title || 'Untitled'}\n${item.author ? `AUTHOR: ${item.author}\n` : ''}\n`;
+    const metaHeader = isPodcast
+      ? `EPISODE: ${item.title || 'Untitled'}\n${item.podcast_show_name ? `SHOW: ${item.podcast_show_name}\n` : ''}${item.author ? `HOST: ${item.author}\n` : ''}\n`
+      : `TITLE: ${item.title || 'Untitled'}\n${item.author ? `AUTHOR: ${item.author}\n` : ''}\n`;
 
     // 2. Tier lookup → maxTweets for the article; per-paragraph word cap from settings
     const tiers = parseTiers(await getUserSetting(userId, 'summary_tiers'));
@@ -221,12 +250,32 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     }
     console.log(`[Summary] articleChars=${articleChars} -> maxTweetsArticle=${maxTweetsArticle} maxWords=${maxWords} model=${chat.model}`);
 
-    // 4. Article summary
+    // 4. Article/episode summary
+    // Podcasts get the RSS episode description as labeled context: it usually
+    // contains the correctly-spelled guest names, while the Whisper transcript
+    // routinely mangles them. The description is NOT part of the char count for
+    // the tier lookup and is never summarized itself.
+    const descriptionContext = isPodcast && item.description
+      ? htmlToPlainText(item.description).slice(0, 2000)
+      : '';
+    const userContent = isPodcast
+      ? metaHeader +
+        (descriptionContext
+          ? `EPISODE DESCRIPTION (context only — do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
+          : '') +
+        `TRANSCRIPT (auto-generated — may contain transcription mistakes, especially in names):\n${articleText.slice(0, ARTICLE_INPUT_CAP)}`
+      : metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP);
+
     const articleResponse = await chat.client.chat.completions.create({
       model: chat.model,
       messages: [
-        { role: 'system', content: ARTICLE_SUMMARY_PROMPT(maxTweetsArticle, maxWords) },
-        { role: 'user', content: metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP) },
+        {
+          role: 'system',
+          content: isPodcast
+            ? PODCAST_SUMMARY_PROMPT(maxTweetsArticle, maxWords)
+            : ARTICLE_SUMMARY_PROMPT(maxTweetsArticle, maxWords),
+        },
+        { role: 'user', content: userContent },
       ],
     });
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();

@@ -1,36 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Podcast, Newspaper, Link, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Link, RefreshCw } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
+import { FeedCard, FeedEpisodeCard, type FeedEpisode } from './FeedCards';
+import { cleanHtml } from '../format';
 import type { Podcast as PodcastType } from '../types';
-
-function cleanHtml(text: string): string {
-  if (!text) return '';
-  // Remove CDATA wrapper
-  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  // Remove HTML tags
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  // Decode HTML entities
-  cleaned = cleaned
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-  // Clean up whitespace
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  return cleaned;
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
-}
 
 function formatRefreshTime(date: Date): string {
   const now = new Date();
@@ -44,15 +17,6 @@ function formatRefreshTime(date: Date): string {
   if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
   if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
   return date.toLocaleDateString('en-GB');
-}
-
-function getDomainFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
 }
 
 const PAGE_SIZE = 50;
@@ -393,6 +357,18 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
 
   const episodeSearchInputRef = React.useRef<HTMLInputElement>(null);
 
+  // The add-to-library plus button passed into FeedEpisodeCard (same in all
+  // three episode lists)
+  const addToLibraryButton = (episode: FeedEpisode) => (
+    <button
+      onClick={() => handleAddToLibrary(episode)}
+      disabled={addingToLibrary === (episode.audio_url || episode.url)}
+      title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
+    >
+      <Plus size={16} />
+    </button>
+  );
+
   const renderEpisodeSectionHeader = (label: string) => (
     <div className="episode-section-header">
       {episodeSearchOpen ? (
@@ -469,34 +445,17 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             </button>
           </div>
           {searchResults.map((podcast, index) => (
-            <div
+            <FeedCard
               key={index}
-              className="content-card podcast-list-card"
+              feed={podcast}
+              variant="search-result"
               onClick={() => loadSearchResultEpisodes(podcast)}
-              style={{ cursor: 'pointer' }}
-            >
-              <div className="content-info">
-                {podcast.preview_picture && (
-                  <img src={podcast.preview_picture} alt={podcast.title} className="thumbnail" />
-                )}
-                <h3>{podcast.title}</h3>
-                <p className="author">{podcast.author}</p>
-                {podcast.description && (
-                  <p className="description">{cleanHtml(podcast.description).slice(0, 280)}...</p>
-                )}
-                <div className="metadata">
-                  <span className="type">
-                    {podcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />}
-                    {podcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />}
-                  </span>
-                </div>
-              </div>
-              <div className="content-actions" onClick={(e) => e.stopPropagation()}>
+              actionButton={
                 <button onClick={() => handleSubscribe(podcast.feed_url)} title="Subscribe">
                   <Plus size={16} />
                 </button>
-              </div>
-            </div>
+              }
+            />
           ))}
         </div>
       )}
@@ -511,26 +470,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           </button>
 
           {/* Expanded Feed Card */}
-          <div className="content-card selected-podcast-card">
-            <div className="content-info">
-              {selectedSearchResult.preview_picture && (
-                <img src={selectedSearchResult.preview_picture} alt={selectedSearchResult.title} className="thumbnail" />
-              )}
-              <h3>{selectedSearchResult.title}</h3>
-              <p className="author">{selectedSearchResult.author}</p>
-              {selectedSearchResult.description && (
-                <p className="description selected-podcast-description">
-                  {cleanHtml(selectedSearchResult.description)}
-                </p>
-              )}
-              <div className="metadata">
-                <span className="type">
-                  {selectedSearchResult.type === 'podcast' && <Podcast size={16} className="icon-podcast" />}
-                  {selectedSearchResult.type === 'newsletter' && <Newspaper size={16} className="icon-article" />}
-                </span>
-              </div>
-            </div>
-            <div className="content-actions">
+          <FeedCard
+            feed={selectedSearchResult}
+            variant="expanded"
+            actionButton={
               <button
                 onClick={() => handleSubscribe(selectedSearchResult.feed_url)}
                 className="subscribe-btn"
@@ -538,8 +481,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               >
                 <Plus size={16} />
               </button>
-            </div>
-          </div>
+            }
+          />
 
           {/* Episodes/Articles preview */}
           <div className="episodes-section">
@@ -551,46 +494,11 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               <p className="no-content">No matches found.</p>
             )}
             {visibleEpisodes.map((episode, index) => (
-              <div key={episode.audio_url || episode.url || index} className="content-card">
-                <div className="content-info">
-                  {episode.preview_picture && (
-                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                  )}
-                  <h3>{episode.title}</h3>
-                  <p className="author">
-                    {episode.author && <>{episode.author} • </>}
-                    {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
-                    {episode.duration && <> • {formatDuration(episode.duration)}</>}
-                  </p>
-                  {episode.url && episode.item_type === 'article' && (
-                    <p className="content-source-link">
-                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {getDomainFromUrl(episode.url)}
-                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
-                      </a>
-                    </p>
-                  )}
-                  {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
-                  )}
-                  <div className="metadata">
-                    <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />}
-                    </span>
-                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
-                  </div>
-                </div>
-                <div className="content-actions">
-                  <button
-                    onClick={() => handleAddToLibrary(episode)}
-                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
-                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
-                  >
-                    <Plus size={16} />
-                  </button>
-                </div>
-              </div>
+              <FeedEpisodeCard
+                key={episode.audio_url || episode.url || index}
+                episode={episode}
+                actionButton={addToLibraryButton(episode)}
+              />
             ))}
             {hasMoreEpisodes && (
               loadingMore ? (
@@ -613,26 +521,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           </button>
 
           {/* Expanded Podcast Card */}
-          <div className="content-card selected-podcast-card">
-            <div className="content-info">
-              {selectedPodcast.preview_picture && (
-                <img src={selectedPodcast.preview_picture} alt={selectedPodcast.title} className="thumbnail" />
-              )}
-              <h3>{selectedPodcast.title}</h3>
-              <p className="author">{selectedPodcast.author}</p>
-              {selectedPodcast.description && (
-                <p className="description selected-podcast-description">
-                  {cleanHtml(selectedPodcast.description)}
-                </p>
-              )}
-              <div className="metadata">
-                <span className="type">
-                  {selectedPodcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />}
-                  {selectedPodcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />}
-                </span>
-              </div>
-            </div>
-            <div className="content-actions">
+          <FeedCard
+            feed={selectedPodcast}
+            variant="expanded"
+            actionButton={
               <button
                 onClick={(e) => handleUnsubscribe(selectedPodcast.id, e)}
                 className="unsubscribe-btn"
@@ -640,8 +532,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               >
                 <X size={16} />
               </button>
-            </div>
-          </div>
+            }
+          />
 
           {/* Episodes for selected podcast */}
           <div className="episodes-section">
@@ -653,46 +545,11 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               <p className="no-content">No matches found.</p>
             )}
             {visibleEpisodes.map((episode, index) => (
-              <div key={episode.audio_url || episode.url || index} className="content-card">
-                <div className="content-info">
-                  {episode.preview_picture && (
-                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                  )}
-                  <h3>{episode.title}</h3>
-                  <p className="author">
-                    {episode.author && <>{episode.author} • </>}
-                    {episode.published_at && new Date(episode.published_at).toLocaleDateString('en-GB')}
-                    {episode.duration && <> • {formatDuration(episode.duration)}</>}
-                  </p>
-                  {episode.url && episode.item_type === 'article' && (
-                    <p className="content-source-link">
-                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {getDomainFromUrl(episode.url)}
-                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
-                      </a>
-                    </p>
-                  )}
-                  {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
-                  )}
-                  <div className="metadata">
-                    <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />}
-                    </span>
-                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
-                  </div>
-                </div>
-                <div className="content-actions">
-                  <button
-                    onClick={() => handleAddToLibrary(episode)}
-                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
-                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
-                  >
-                    <Plus size={16} />
-                  </button>
-                </div>
-              </div>
+              <FeedEpisodeCard
+                key={episode.audio_url || episode.url || index}
+                episode={episode}
+                actionButton={addToLibraryButton(episode)}
+              />
             ))}
             {hasMoreEpisodes && (
               loadingMore ? (
@@ -718,25 +575,12 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
             {podcastsExpanded && (
               <div className="podcast-list">
                 {podcasts.map((podcast) => (
-                  <div
+                  <FeedCard
                     key={podcast.id}
-                    className="content-card podcast-list-card"
+                    feed={podcast}
+                    variant="subscription"
                     onClick={() => loadPodcastEpisodes(podcast)}
-                  >
-                    {podcast.preview_picture && (
-                      <img src={podcast.preview_picture} alt={podcast.title} className="thumbnail" />
-                    )}
-                    <div className="content-info">
-                      <h3>{podcast.title}</h3>
-                      <p className="author">{podcast.author}</p>
-                      <div className="metadata">
-                        <span className="type">
-                          {podcast.type === 'podcast' && <Podcast size={16} className="icon-podcast" />}
-                          {podcast.type === 'newsletter' && <Newspaper size={16} className="icon-article" />}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="content-actions" onClick={(e) => e.stopPropagation()}>
+                    actionButton={
                       <button
                         onClick={(e) => handleUnsubscribe(podcast.id, e)}
                         className="unsubscribe-btn"
@@ -744,8 +588,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
                       >
                         <X size={16} />
                       </button>
-                    </div>
-                  </div>
+                    }
+                  />
                 ))}
               </div>
             )}
@@ -781,46 +625,12 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               </button>
             </div>
             {visibleEpisodes.map((episode, index) => (
-              <div key={episode.audio_url || episode.url || index} className="content-card">
-                <div className="content-info">
-                  {episode.preview_picture && (
-                    <img src={episode.preview_picture} alt={episode.title} className="thumbnail" />
-                  )}
-                  <h3>{episode.title}</h3>
-                  <p className="author">
-                    {episode.author && <>{episode.author} • </>}
-                    {episode.podcast_title}
-                    {episode.published_at && <> • {new Date(episode.published_at).toLocaleDateString('en-GB')}</>}
-                  </p>
-                  {episode.url && episode.item_type === 'article' && (
-                    <p className="content-source-link">
-                      <a href={episode.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                        {getDomainFromUrl(episode.url)}
-                        <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
-                      </a>
-                    </p>
-                  )}
-                  {episode.description && (
-                    <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
-                  )}
-                  <div className="metadata">
-                    <span className="type">
-                      {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-                      {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />}
-                    </span>
-                    {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
-                  </div>
-                </div>
-                <div className="content-actions">
-                  <button
-                    onClick={() => handleAddToLibrary(episode)}
-                    disabled={addingToLibrary === (episode.audio_url || episode.url)}
-                    title={addingToLibrary === (episode.audio_url || episode.url) ? 'Adding...' : 'Add to Library'}
-                  >
-                    <Plus size={16} />
-                  </button>
-                </div>
-              </div>
+              <FeedEpisodeCard
+                key={episode.audio_url || episode.url || index}
+                episode={episode}
+                showShowName
+                actionButton={addToLibraryButton(episode)}
+              />
             ))}
             {hasMoreEpisodes && (
               loadingMore ? (

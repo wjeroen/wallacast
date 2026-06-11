@@ -68,6 +68,124 @@ router.post('/audio-error-log', (req, res) => {
   res.json({ ok: true });
 });
 
+// Bulk actions on many items at once (used by the library's Select mode).
+// IMPORTANT: defined before '/:id'-shaped routes so Express matches the literal path first.
+// No transaction on purpose: query() has a connection-retry wrapper (see the wipe-all comment
+// history) — every statement here is idempotent, so retrying the same request heals any
+// partial state instead of corrupting it. This matches how PATCH /:id behaves.
+router.post('/bulk', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const { action, ids } = req.body as { action?: string; ids?: unknown };
+
+    const ACTIONS = ['star', 'unstar', 'archive', 'unarchive', 'delete', 'remove_audio', 'remove_summary'];
+    if (!action || !ACTIONS.includes(action)) {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500 || !ids.every(n => Number.isInteger(n))) {
+      return res.status(400).json({ error: 'ids must be a non-empty array of integers (max 500)' });
+    }
+
+    let affected = 0;
+
+    if (action === 'star' || action === 'unstar') {
+      const r = await query(
+        `UPDATE content_items SET is_starred = $3, updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, ids, action === 'star']
+      );
+      affected = r.rowCount ?? 0;
+    }
+
+    if (action === 'archive') {
+      // Mirrors PATCH /:id is_archived=true: wipe generated audio + read-along data for
+      // NON-STARRED articles/texts only. Podcasts keep their (external) audio_url and
+      // starred items keep everything.
+      await query(
+        `UPDATE content_items
+         SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
+             transcript = NULL, transcript_words = NULL, tts_chunks = NULL
+         WHERE user_id = $1 AND id = ANY($2::int[])
+           AND type IN ('article', 'text') AND is_starred = false
+           AND (audio_data IS NOT NULL OR audio_url IS NOT NULL)`,
+        [userId, ids]
+      );
+      const r = await query(
+        `UPDATE content_items SET is_archived = true, updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, ids]
+      );
+      affected = r.rowCount ?? 0;
+    }
+
+    if (action === 'unarchive') {
+      // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio — implicitly
+      // kicking off dozens of TTS jobs would be a cost surprise. Use bulk "Generate audio".
+      const r = await query(
+        `UPDATE content_items SET is_archived = false, updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, ids]
+      );
+      affected = r.rowCount ?? 0;
+    }
+
+    if (action === 'remove_audio') {
+      // Mirrors the per-item "remove audio" field list. The type guard ensures podcast
+      // episodes are never touched — their audio_url is the source media, not generated.
+      const r = await query(
+        `UPDATE content_items
+         SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
+             transcript = NULL, transcript_words = NULL, tts_chunks = NULL,
+             generation_status = 'idle', generation_progress = 0,
+             generation_error = NULL, current_operation = NULL, updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[]) AND type IN ('article', 'text')`,
+        [userId, ids]
+      );
+      affected = r.rowCount ?? 0;
+    }
+
+    if (action === 'remove_summary') {
+      const r = await query(
+        `UPDATE content_items
+         SET summary = NULL, comment_summary = NULL, summary_status = 'idle',
+             summary_generated_at = NULL, updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, ids]
+      );
+      affected = r.rowCount ?? 0;
+    }
+
+    if (action === 'delete') {
+      // Mirrors DELETE /:id: collect Wallabag ids first, delete locally, then fire-and-forget
+      // the Wallabag deletions (non-blocking, failures only logged).
+      const wb = await query(
+        `SELECT wallabag_id FROM content_items
+         WHERE user_id = $1 AND id = ANY($2::int[]) AND wallabag_id IS NOT NULL`,
+        [userId, ids]
+      );
+      const r = await query(
+        `DELETE FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, ids]
+      );
+      affected = r.rowCount ?? 0;
+      if (wb.rows.length > 0) {
+        const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
+        for (const row of wb.rows) {
+          deleteFromWallabag(userId, row.wallabag_id).catch(err => {
+            console.error(`[bulk] Wallabag delete failed (ID: ${row.wallabag_id}):`, err);
+          });
+        }
+      }
+    }
+
+    console.log(`[bulk] user=${userId} action=${action} ids=${ids.length} affected=${affected}`);
+    res.json({ affected });
+  } catch (error) {
+    console.error('Error in bulk action:', error);
+    res.status(500).json({ error: 'Failed to perform bulk action' });
+  }
+});
+
 // Get single content item (includes large columns needed for display)
 router.get('/:id', async (req, res) => {
   try {
@@ -1123,15 +1241,19 @@ router.post('/:id/generate-audio', async (req, res) => {
   }
 });
 
-// Generate (or regenerate) the article + comment summaries for an article/text.
-// Runs independently of audio generation — uses its own `summary_status` field so both
-// can be in progress at the same time.
+// Generate (or regenerate) summaries. Articles/texts summarize their body (+ comments);
+// podcast episodes summarize their transcript. Runs independently of audio generation —
+// uses its own `summary_status` field so both can be in progress at the same time.
+// For podcasts WITHOUT a transcript: pass `generate_transcript: true` to first run Whisper
+// and then summarize (the frontend shows a confirmation before doing this); without the
+// flag the request is rejected with code 'no_transcript' so the frontend can warn.
 router.post('/:id/generate-summary', async (req, res) => {
   try {
     const { id } = req.params;
+    const generateTranscript = req.body?.generate_transcript === true;
 
     const contentResult = await query(
-      'SELECT id, type, summary_status FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -1141,8 +1263,8 @@ router.post('/:id/generate-summary', async (req, res) => {
 
     const contentItem = contentResult.rows[0];
 
-    if (contentItem.type !== 'article' && contentItem.type !== 'text') {
-      return res.status(400).json({ error: 'Summaries are only available for articles and text' });
+    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode') {
+      return res.status(400).json({ error: 'Summaries are not available for this content type' });
     }
 
     if (contentItem.summary_status === 'generating') {
@@ -1152,85 +1274,74 @@ router.post('/:id/generate-summary', async (req, res) => {
       });
     }
 
+    const needsTranscript = contentItem.type === 'podcast_episode' && !(contentItem.transcript || '').trim();
+
+    if (needsTranscript && !generateTranscript) {
+      return res.status(400).json({
+        error: 'This podcast episode has no transcript yet. Generate the transcript first.',
+        code: 'no_transcript',
+      });
+    }
+    if (needsTranscript && !contentItem.audio_url) {
+      return res.status(400).json({ error: 'Episode has no audio to transcribe' });
+    }
+    if (needsTranscript && contentItem.generation_status === 'generating_transcript') {
+      return res.status(409).json({ error: 'Transcription already in progress' });
+    }
+
     await query(
       'UPDATE content_items SET summary_status = $1 WHERE id = $2',
       ['generating', id]
     );
 
-    generateSummaryForContent(parseInt(id))
-      .then(() => console.log(`Summary generation finished for ${id}`))
-      .catch(async (error) => {
-        console.error('Background summary generation error:', error);
-        await query(
-          'UPDATE content_items SET summary_status = $1 WHERE id = $2',
-          ['failed', id]
-        ).catch(() => { /* swallow */ });
+    const runSummary = () =>
+      generateSummaryForContent(parseInt(id))
+        .then(() => console.log(`Summary generation finished for ${id}`))
+        .catch(async (error) => {
+          console.error('Background summary generation error:', error);
+          await query(
+            'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+            ['failed', id]
+          ).catch(() => { /* swallow */ });
+        });
+
+    if (needsTranscript) {
+      // Transcript-then-summary chain (same transcription flow as routes/transcription.ts)
+      await query(
+        'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
+        ['generating_transcript', 0, 'transcript', id]
+      );
+      console.log(`Starting transcription (for summary) for content ${id}`);
+      const whisperPrompt = buildWhisperPrompt({
+        title: contentItem.title,
+        author: contentItem.author,
+        published_at: contentItem.published_at,
+        comments: contentItem.comments,
       });
+      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt)
+        .then(async (result) => {
+          console.log(`Transcription complete for ${id} (${result.words.length} words) — starting summary`);
+          await query(
+            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+            [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
+          );
+          await runSummary();
+        })
+        .catch(async (error) => {
+          console.error('Background transcription (for summary) error:', error);
+          await query(
+            'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL, summary_status = $4 WHERE id = $5 AND user_id = $6',
+            ['failed', error.message || 'Failed to transcribe', 0, 'failed', id, req.user!.userId]
+          ).catch(() => { /* swallow */ });
+        });
+    } else {
+      runSummary();
+    }
 
     res.json({ message: 'Summary generation started', summary_status: 'generating' });
   } catch (error) {
     console.error('Error starting summary generation:', error);
     res.status(500).json({ error: 'Failed to start summary generation' });
-  }
-});
-
-// Bulk-wipe all generated TTS audio (and its timing: alignment, transcript, chunks) for the
-// user's articles/texts. Mirrors the per-item "remove audio" logic. Does NOT touch podcasts —
-// their audio is the external source, not something we generated.
-router.post('/wipe-all-audio', async (req, res) => {
-  try {
-    const userId = req.user!.userId;
-    // Count BEFORE updating. The UPDATE below nulls large BYTEA blobs and can be slow enough
-    // to trip the connection-retry wrapper; if a retry runs after a partial commit it would
-    // match 0 rows and report 0. A pre-count SELECT is idempotent, so the number stays right.
-    const countRes = await query(
-      `SELECT count(*)::int AS n FROM content_items
-       WHERE user_id = $1 AND type IN ('article', 'text')
-         AND (audio_data IS NOT NULL OR audio_url IS NOT NULL OR transcript IS NOT NULL OR content_alignment IS NOT NULL)`,
-      [userId]
-    );
-    const cleared = countRes.rows[0]?.n || 0;
-    await query(
-      `UPDATE content_items
-       SET audio_data = NULL, audio_url = NULL, duration = NULL,
-           content_alignment = NULL, transcript = NULL, transcript_words = NULL,
-           tts_chunks = NULL, generation_status = 'idle', generation_progress = 0,
-           generation_error = NULL, current_operation = NULL
-       WHERE user_id = $1 AND type IN ('article', 'text')
-         AND (audio_data IS NOT NULL OR audio_url IS NOT NULL OR transcript IS NOT NULL OR content_alignment IS NOT NULL)`,
-      [userId]
-    );
-    console.log(`[wipe-all-audio] user=${userId} cleared=${cleared}`);
-    res.json({ cleared });
-  } catch (error) {
-    console.error('Error wiping audio:', error);
-    res.status(500).json({ error: 'Failed to wipe audio' });
-  }
-});
-
-// Bulk-wipe all generated summaries (article + comment) for the user's items.
-router.post('/wipe-all-summaries', async (req, res) => {
-  try {
-    const userId = req.user!.userId;
-    const countRes = await query(
-      `SELECT count(*)::int AS n FROM content_items
-       WHERE user_id = $1
-         AND (summary IS NOT NULL OR comment_summary IS NOT NULL OR summary_generated_at IS NOT NULL)`,
-      [userId]
-    );
-    const cleared = countRes.rows[0]?.n || 0;
-    await query(
-      `UPDATE content_items
-       SET summary = NULL, comment_summary = NULL, summary_status = 'idle', summary_generated_at = NULL
-       WHERE user_id = $1
-         AND (summary IS NOT NULL OR comment_summary IS NOT NULL OR summary_generated_at IS NOT NULL)`,
-      [userId]
-    );
-    console.log(`[wipe-all-summaries] user=${userId} cleared=${cleared}`);
-    res.json({ cleared });
-  } catch (error) {
-    console.error('Error wiping summaries:', error);
-    res.status(500).json({ error: 'Failed to wipe summaries' });
   }
 });
 
