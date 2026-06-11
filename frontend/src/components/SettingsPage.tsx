@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, Volume2 } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI, contentAPI } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { userSettingsAPI, wallabagAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
-import { useContentStore } from '../store/contentStore';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -104,7 +103,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // Summary length tiers (editable, sorted list). Infinity tier is always last.
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
   const [showLengthSettings, setShowLengthSettings] = useState(false);
-  const [wiping, setWiping] = useState<'audio' | 'summaries' | null>(null);
 
   // Multiple voices to rotate between for audio generation (empty = use the single voice above).
   const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
@@ -275,37 +273,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         : [...prev, { model, voice }]
     );
     setSaved(false);
-  };
-
-  // --- Wipe generated data ---
-  const handleWipeAudio = async () => {
-    if (!confirm('Delete ALL generated audio (and read-along timing) for every article and text? This cannot be undone — you can regenerate it later.')) return;
-    setWiping('audio');
-    try {
-      const res = await contentAPI.wipeAllAudio();
-      await useContentStore.getState().fetchContent();
-      alert(`Wiped audio from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
-    } catch (err) {
-      console.error('Failed to wipe audio:', err);
-      alert('Failed to wipe audio.');
-    } finally {
-      setWiping(null);
-    }
-  };
-
-  const handleWipeSummaries = async () => {
-    if (!confirm('Delete ALL generated summaries (article + comment) for every item? This cannot be undone — you can regenerate them later.')) return;
-    setWiping('summaries');
-    try {
-      const res = await contentAPI.wipeAllSummaries();
-      await useContentStore.getState().fetchContent();
-      alert(`Wiped summaries from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
-    } catch (err) {
-      console.error('Failed to wipe summaries:', err);
-      alert('Failed to wipe summaries.');
-    } finally {
-      setWiping(null);
-    }
   };
 
   const handleSave = async () => {
@@ -1023,34 +990,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           )}
         </section>
 
-        {/* Reset generated data — kept last as a "danger zone" */}
-        <section className="settings-section">
-          <h3><Trash2 size={20} /> Reset generated data</h3>
-          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
-            Bulk-delete generated content. This can't be undone, but you can regenerate it later.
-          </p>
-          <div className="form-group" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="wipe-button"
-              onClick={handleWipeAudio}
-              disabled={wiping !== null}
-            >
-              <Volume2 size={16} /> {wiping === 'audio' ? 'Wiping…' : 'Wipe all audio'}
-            </button>
-            <button
-              type="button"
-              className="wipe-button"
-              onClick={handleWipeSummaries}
-              disabled={wiping !== null}
-            >
-              <FileText size={16} /> {wiping === 'summaries' ? 'Wiping…' : 'Wipe all summaries'}
-            </button>
-          </div>
-          <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-            "Wipe all audio" also clears read-along timing (alignment + transcript) for articles and texts. Podcasts are not affected.
-          </small>
-        </section>
       </div>
     </div>
   );

@@ -141,10 +141,10 @@ export function AudioPlayer({
     // with all the wear-sensor debounce and userPausedRef guards. A custom
     // MediaSession play handler bypasses those guards and causes headphone
     // disconnect to resume paused audio (the bug we fixed before).
-    try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch {}
-    try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch {}
-    try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch {}
-    try { ms.setActionHandler('seekforward', (d: any) => seekBy(d?.seekOffset || 15)); } catch {}
+    try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch { /* unsupported */ }
+    try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch { /* unsupported */ }
+    try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch { /* unsupported */ }
+    try { ms.setActionHandler('seekforward', (d: any) => seekBy(d?.seekOffset || 15)); } catch { /* unsupported */ }
     try {
       ms.setActionHandler('seekto', (d: any) => {
         if (typeof d?.seekTime !== 'number') return;
@@ -153,14 +153,14 @@ export function AudioPlayer({
         audio.currentTime = d.seekTime;
         setCurrentTime(d.seekTime);
       });
-    } catch {}
+    } catch { /* unsupported */ }
 
     return () => {
-      try { ms.setActionHandler('previoustrack', null); } catch {}
-      try { ms.setActionHandler('nexttrack', null); } catch {}
-      try { ms.setActionHandler('seekbackward', null); } catch {}
-      try { ms.setActionHandler('seekforward', null); } catch {}
-      try { ms.setActionHandler('seekto', null); } catch {}
+      try { ms.setActionHandler('previoustrack', null); } catch { /* unsupported */ }
+      try { ms.setActionHandler('nexttrack', null); } catch { /* unsupported */ }
+      try { ms.setActionHandler('seekbackward', null); } catch { /* unsupported */ }
+      try { ms.setActionHandler('seekforward', null); } catch { /* unsupported */ }
+      try { ms.setActionHandler('seekto', null); } catch { /* unsupported */ }
     };
   }, [content?.id, content?.title, content?.podcast_show_name, content?.preview_picture, content?.author, content?.type]);
 
@@ -190,7 +190,7 @@ export function AudioPlayer({
   const parsedTranscriptWords = useMemo(() => {
     if (!content?.transcript_words) return [];
     
-    let result = content.transcript_words;
+    const result = content.transcript_words;
 
     // Handle already parsed array
     if (Array.isArray(result)) return result;
@@ -219,7 +219,7 @@ export function AudioPlayer({
       return typeof content.tts_chunks === 'string'
         ? JSON.parse(content.tts_chunks)
         : [];
-    } catch (e) {
+    } catch {
       return [];
     }
   }, [content?.tts_chunks]);
@@ -399,7 +399,7 @@ export function AudioPlayer({
         playback_position: floored,
         last_played_at: new Date().toISOString(),
       });
-    } catch (error) { /* silent */ }
+    } catch { /* silent */ }
   };
 
   // Auto-save position every 10s during playback
@@ -564,7 +564,7 @@ export function AudioPlayer({
           const offset = Math.floor(progress * totalWordsInChunk);
           return currentChunk.startWord + offset;
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
 
     // Method 3: Linear Fallback (Last Resort)
@@ -601,7 +601,7 @@ export function AudioPlayer({
             return;
           }
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
 
     // Method 3 Click
@@ -616,10 +616,19 @@ export function AudioPlayer({
 
   if (!content) return null;
 
+  // Entering an audio-less item must set fullscreen STATE, not just override the
+  // render below — otherwise a stale minimized state (from a previously played
+  // audio item) kicks in the moment generated audio arrives, collapsing the view
+  // to the mini player mid-read. Guarded setState during render converges in one
+  // pass (React's sanctioned "adjusting state when props change" pattern).
+  if (!content.audio_url && !isExpanded) setIsExpanded(true);
+
   return (
     <>
       <audio ref={audioRef} />
-      {isExpanded ? (
+      {/* Items without audio only exist in fullscreen — the mini player is pure
+          playback chrome (timeline, play button) and would be dead UI for them */}
+      {isExpanded || !content.audio_url ? (
         <FullscreenPlayer
           content={content}
           isPlaying={isPlaying}
