@@ -42,6 +42,12 @@ Update README.md if you changed:
    - Processing flows
    - API endpoints
 
+**Keep the open pull request's description current.** As you push commits that add or change features, refresh the PR description so it reflects the whole branch — don't leave it describing only the first commit. Treat it like the README and TODO.md: keeping it up to date is part of finishing a change.
+
+## Flag Sloppy Code (Don't Silently Fix It)
+
+While working, if you come across code that looks messy, buggy, sloppy, or just off — **even if it has nothing to do with the task you're currently on** — bring it to the user's attention. Briefly say what you noticed and why it looks wrong, and **offer** to fix or improve it. Do NOT silently fix unrelated code yourself; let the user decide. Any sloppiness you notice should be surfaced rather than ignored.
+
 ## Task Management: TODO.md vs TodoWrite Tool
 
 There are TWO different task tracking systems. **Use the right one for the job:**
