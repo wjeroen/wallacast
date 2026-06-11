@@ -75,6 +75,8 @@ interface FullscreenPlayerProps {
   onRefetch?: () => void;
   onGenerateAudio?: (regenerate: boolean) => void;
   onRemoveAudio?: () => void;
+  onGenerateSummary?: (regenerate: boolean) => void;
+  onRemoveSummary?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
@@ -85,9 +87,10 @@ interface FullscreenPlayerProps {
   hasNextTrack?: boolean;
   hasPrevTrack?: boolean;
   onPlayQueueItem?: (item: ContentItem) => void;
+  initialTab?: string;
 }
 
-type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'queue';
+type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'queue';
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
@@ -296,6 +299,8 @@ export function FullscreenPlayer({
   onRefetch,
   onGenerateAudio,
   onRemoveAudio,
+  onGenerateSummary,
+  onRemoveSummary,
   onRegenerateTranscript,
   onContentUpdated,
   themeMode,
@@ -305,6 +310,7 @@ export function FullscreenPlayer({
   hasNextTrack = false,
   hasPrevTrack = false,
   onPlayQueueItem,
+  initialTab,
 }: FullscreenPlayerProps) {
   // Queue state for the Queue tab + autoplay toggle
   const manualItems = useQueueStore(s => s.manualItems);
@@ -496,9 +502,12 @@ export function FullscreenPlayer({
     // if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');  // Comments tab
     if (content.type === 'podcast_episode') tabs.push('description');
     tabs.push('read-along');
+    // Summary tab sits immediately to the right of the "Content" (read-along) tab,
+    // and only appears once an article-body summary has been generated.
+    if ((content.summary || '').trim()) tabs.push('summary');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.url, parsedComments.length]);
+  }, [content.type, content.url, content.summary, parsedComments.length]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -506,6 +515,15 @@ export function FullscreenPlayer({
       setActiveTab(availableTabs[0]);
     }
   }, [availableTabs, activeTab]);
+
+  // Honor a requested initial tab (e.g. "Read more" in the library → Summary tab).
+  // Runs after the auto-select effect so it wins when both fire on a new item.
+  useEffect(() => {
+    if (initialTab === 'summary' && (content.summary || '').trim()) {
+      setActiveTab('summary');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id, initialTab]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -1140,6 +1158,37 @@ export function FullscreenPlayer({
           </div>
         );
       }
+      case 'summary': {
+        // Prefer blank-line separation (what the summarizer is asked for), but fall back to
+        // single newlines so we still split into tweets if the model omits the blank line.
+        const toParagraphs = (text?: string) => {
+          const t = (text || '').trim();
+          if (!t) return [];
+          let parts = t.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+          if (parts.length <= 1) parts = t.split(/\n+/).map(p => p.trim()).filter(Boolean);
+          return parts;
+        };
+        const articleTweets = toParagraphs(content.summary);
+        const commentTweets = toParagraphs(content.comment_summary);
+        return (
+          <div className="tab-content-display">
+            <div className="summary-thread">
+              {articleTweets.map((tweet, i) => (
+                <p key={`a-${i}`} className="summary-tweet">{tweet}</p>
+              ))}
+              {commentTweets.length > 0 && (
+                <>
+                  <div className="summary-divider" role="separator" aria-label="Comment summary" />
+                  <p className="summary-section-label">Comments</p>
+                  {commentTweets.map((tweet, i) => (
+                    <p key={`c-${i}`} className="summary-tweet">{tweet}</p>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      }
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
           switch (libraryContext.filter) {
@@ -1360,6 +1409,25 @@ export function FullscreenPlayer({
                         Remove audio
                       </button>
                     )}
+                    {/* Summary options (independent of audio — both can be generated at once) */}
+                    {onGenerateSummary && content.summary_status === 'generating' && (
+                      <button disabled>Generating summary…</button>
+                    )}
+                    {onGenerateSummary && content.summary_status !== 'generating' && !content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummary(false); }}>
+                        Generate summary
+                      </button>
+                    )}
+                    {onGenerateSummary && content.summary_status !== 'generating' && content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummary(true); }}>
+                        Regenerate summary
+                      </button>
+                    )}
+                    {onRemoveSummary && content.summary_status !== 'generating' && content.summary && (
+                      <button onClick={() => { setShowDropdown(false); onRemoveSummary(); }}>
+                        Remove summary
+                      </button>
+                    )}
                   </>
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
@@ -1404,6 +1472,7 @@ export function FullscreenPlayer({
             {tab === 'description' && 'Description'}
             {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
             {tab === 'read-along' && 'Content'}
+            {tab === 'summary' && 'Summary'}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}

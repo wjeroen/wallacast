@@ -62,6 +62,7 @@ Wallacast supports multiple users with complete data isolation:
 | Adding content | `backend/src/routes/content.ts` |
 | Wallabag sync | `backend/src/routes/wallabag.ts`, `backend/src/services/wallabag-sync.ts`, `backend/src/services/wallabag-service.ts` |
 | TTS generation | `backend/src/services/openai-tts.ts` |
+| Summaries (article + comments) | `backend/src/services/summarizer.ts`, `frontend/src/components/SettingsPage.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Image descriptions | `backend/src/services/image-alt-text.ts` |
 | Transcription | `backend/src/services/transcription.ts`, `backend/src/services/whisper-prompt.ts` |
 | Content-transcript alignment (LLM) | `backend/src/services/llm-alignment.ts` |
@@ -144,6 +145,7 @@ Wallacast supports multiple users with complete data isolation:
   - `010_add_podcast_show_name.sql`: Adds podcast_show_name column to content_items for denormalized display
   - `012_add_feed_type.sql`: Adds type column to podcasts table for RSS feed type detection (podcast/newsletter/blog)
   - `014_add_image_alt_text.sql`: Adds image alt-text generation support (images_processed BOOLEAN, image_alt_text_data JSONB) and user setting for toggle
+  - `019_add_summary_columns.sql`: Adds summary support (`summary` TEXT, `comment_summary` TEXT, `summary_status` VARCHAR, `summary_generated_at` TIMESTAMP) for article + comment summaries
 
 #### Middleware
 
@@ -175,9 +177,13 @@ Wallacast supports multiple users with complete data isolation:
     - Archiving deletes audio, alignment data, and transcript to save space (unless item is favorited)
     - Un-archiving regenerates audio, transcript, and alignment if missing
     - `audio_data: null, audio_url: null` removes audio from articles/texts
+    - `summary: null` removes the article + comment summaries from articles/texts
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
+  - `POST /:id/generate-summary` - Manually trigger summary generation (article + comments). Body: `{ regenerate?: boolean }`. Uses the independent `summary_status` field, so it can run alongside audio generation.
+  - `POST /wipe-all-audio` - Bulk-delete generated TTS audio + read-along timing (alignment/transcript/chunks) for all of the user's articles/texts. Returns `{ cleared }`. Does not touch podcasts.
+  - `POST /wipe-all-summaries` - Bulk-delete generated summaries (article + comment) for all of the user's items. Returns `{ cleared }`.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
@@ -259,6 +265,12 @@ Wallacast supports multiple users with complete data isolation:
   - TTS features: Quote block announcements ("Quote:" / "End quote."), LessWrong score filtering (only reads user-visible karma + agreement), URL narration (reads domain name instead of full URL for links in comments)
   - Comment processing: `htmlToNarrationText()` removes emojis, announces quotes, replaces URLs with domain names (e.g., "link to example.com")
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
+
+- **`services/summarizer.ts`**: Twitter-thread style summaries (requires per-user DeepInfra or OpenAI API key)
+  - `generateSummaryForContent(contentId)`: Produces TWO summaries — an article-body summary and (optionally) a comment-discussion summary. Uses the same narration LLM router as TTS (`getChatClientForUser`). Runs independently of audio via its own `summary_status` column, so audio + summary can generate at the same time.
+  - **Length logic**: the article/comment character count is measured **in code** (never by the model); the matching tier from `summary_tiers` sets `maxTweets`, which is injected into the prompt. The unbounded catch-all tier stores `maxChars` as `null` (Infinity).
+  - The comment summarizer is given the article as **context only**; the article summarizer is not given the comments.
+  - User settings: `auto_generate_summary` (auto-create on add), `summarize_comments` (default on), `summary_tiers` (editable JSON list of `{ maxChars, maxTweets }`).
 
 - **`services/whisper-prompt.ts`**: Shared utility for building Whisper prompt hints
   - `buildWhisperPrompt(item)`: Builds a prompt string from content metadata (title, author, date, podcast show name, comments) so Whisper recognizes key phrases like "Comments section:", commenter names, and dates
@@ -449,6 +461,8 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `setting_key`: Setting name (e.g., 'openai_api_key', 'openai_tts_voice')
 - `setting_value`: Setting value (encrypted for secrets)
 - `is_secret`: Boolean flag for masking in API responses
+- Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity), `summary_max_words` (max words per paragraph/"tweet"; default 40), `library_show_summary` ('true'/'false') — when on, library cards show the article `summary` instead of the description (falls back to the description when no summary exists; the list endpoint now also returns `summary`)
+- `tts_voices`: JSON array of `{ model, voice }` — when non-empty, each audio generation picks one of these voices at random (can mix providers, e.g. OpenAI + Kokoro). Empty = always use the single `openai_tts_voice`. Implemented via `pickRandomTTSVoice()` in `ai-providers.ts`, applied in `generateArticleAudio()`.
 - `created_at`, `updated_at`
 - **Unique constraint**: (user_id, setting_key)
 
@@ -475,6 +489,10 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `playback_position`, `playback_speed` (deprecated - speed now stored globally in user settings + localStorage), `last_played_at`
 - `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
+- `summary`: Article-body summary (Twitter-thread style, paragraphs separated by blank lines)
+- `comment_summary`: Comment-discussion summary (nullable)
+- `summary_status`: 'idle' | 'generating' | 'completed' | 'failed' — **independent of `generation_status`** so audio and summary can generate at the same time
+- `summary_generated_at`: When the summary was last generated
 
 ### podcasts
 - `id`: Primary key

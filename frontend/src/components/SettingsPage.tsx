@@ -1,33 +1,113 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, Volume2 } from 'lucide-react';
+import { userSettingsAPI, wallabagAPI, contentAPI } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { useContentStore } from '../store/contentStore';
 
 interface SettingsPageProps {
   onBack: () => void;
 }
 
-interface AIProvider {
-  name: string;
-  models?: {
-    chat?: string[];
-    tts?: string[];
-  };
-  voices?: string[];
-  requiredSettings: string[];
-  description: string;
-  comingSoon?: boolean;
+// A tier maps article/comment length (in characters) to a maximum number of paragraphs ("tweets").
+// The last tier uses Infinity as a catch-all for anything larger than every finite threshold.
+interface SummaryTier {
+  maxChars: number; // may be Infinity
+  maxTweets: number;
+}
+
+const DEFAULT_SUMMARY_TIERS: SummaryTier[] = [
+  { maxChars: 1500, maxTweets: 1 },
+  { maxChars: 3500, maxTweets: 2 },
+  { maxChars: 7000, maxTweets: 3 },
+  { maxChars: 12000, maxTweets: 4 },
+  { maxChars: 18000, maxTweets: 5 },
+  { maxChars: 28000, maxTweets: 6 },
+  { maxChars: Infinity, maxTweets: 7 },
+];
+
+// Infinity is not valid JSON, so the unbounded tier is stored as { maxChars: null }.
+// Always serialize sorted (finite ascending, Infinity last) so the stored list stays sorted.
+function serializeTiers(tiers: SummaryTier[]): string {
+  const sorted = [...tiers].sort((a, b) => a.maxChars - b.maxChars);
+  return JSON.stringify(
+    sorted.map(t => ({ maxChars: Number.isFinite(t.maxChars) ? t.maxChars : null, maxTweets: t.maxTweets }))
+  );
+}
+
+function parseTiers(raw: string | null | undefined): SummaryTier[] {
+  if (!raw) return DEFAULT_SUMMARY_TIERS;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_SUMMARY_TIERS;
+    const tiers: SummaryTier[] = arr.map((t: any) => ({
+      maxChars: t.maxChars === null || t.maxChars === undefined ? Infinity : Number(t.maxChars),
+      maxTweets: Math.max(1, Math.round(Number(t.maxTweets) || 1)),
+    }));
+    // Guarantee exactly one unbounded catch-all tier at the end
+    if (!tiers.some(t => !Number.isFinite(t.maxChars))) {
+      tiers.push({ maxChars: Infinity, maxTweets: 7 });
+    }
+    return tiers;
+  } catch {
+    return DEFAULT_SUMMARY_TIERS;
+  }
+}
+
+// A selectable voice carries its model so the list can span TTS providers.
+interface TTSVoiceChoice { model: string; voice: string; }
+
+// Catalog of voices, grouped by provider/model. Only groups whose API key is configured
+// are shown. Each voice carries its model so the rotation can span providers.
+const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'deepinfra'; note?: string; voices: { id: string; label: string }[] }[] = [
+  {
+    group: 'OpenAI', model: 'gpt-4o-mini-tts', requiresKey: 'openai',
+    voices: [
+      { id: 'alloy', label: 'Alloy' }, { id: 'echo', label: 'Echo' }, { id: 'fable', label: 'Fable' },
+      { id: 'onyx', label: 'Onyx' }, { id: 'nova', label: 'Nova' }, { id: 'shimmer', label: 'Shimmer' },
+      { id: 'coral', label: 'Coral' },
+    ],
+  },
+  {
+    group: 'Kokoro (DeepInfra)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
+    note: 'AF/AM = American female/male, BF/BM = British female/male',
+    voices: [
+      { id: 'af_heart', label: 'Heart (AF)' }, { id: 'af_bella', label: 'Bella (AF)' }, { id: 'af_nicole', label: 'Nicole (AF)' },
+      { id: 'am_adam', label: 'Adam (AM)' }, { id: 'am_fenrir', label: 'Fenrir (AM)' }, { id: 'am_michael', label: 'Michael (AM)' }, { id: 'am_puck', label: 'Puck (AM)' },
+      { id: 'bf_emma', label: 'Emma (BF)' }, { id: 'bf_isabella', label: 'Isabella (BF)' },
+      { id: 'bm_fable', label: 'Fable (BM)' }, { id: 'bm_lewis', label: 'Lewis (BM)' },
+    ],
+  },
+];
+
+function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((v: any) => v && typeof v.model === 'string' && typeof v.voice === 'string' && v.model && v.voice)
+      .map((v: any) => ({ model: v.model, voice: v.voice }));
+  } catch {
+    return [];
+  }
 }
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
   const [settings, setSettings] = useState<Record<string, string | null>>({});
-  const [providers, setProviders] = useState<Record<string, AIProvider>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  // Summary length tiers (editable, sorted list). Infinity tier is always last.
+  const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
+  const [showLengthSettings, setShowLengthSettings] = useState(false);
+  const [wiping, setWiping] = useState<'audio' | 'summaries' | null>(null);
+
+  // Multiple voices to rotate between for audio generation (empty = use the single voice above).
+  const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -61,6 +141,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
+    // Summaries
+    auto_generate_summary: 'false',
+    summarize_comments: 'true',
+    summary_max_words: '40',
+    library_show_summary: 'false',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -91,12 +176,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const [settingsRes, providersRes] = await Promise.all([
-        userSettingsAPI.getAll(),
-        userSettingsAPI.getAIProviders(),
-      ]);
+      const settingsRes = await userSettingsAPI.getAll();
       setSettings(settingsRes.data.settings);
-      setProviders(providersRes.data.providers);
 
       const loaded = settingsRes.data.settings;
       console.log('Loaded settings from server:', loaded);
@@ -118,6 +199,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
+        auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
+        summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
+        summary_max_words: loaded.summary_max_words || '40',
+        library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -129,6 +214,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         wallabag_password: loaded.wallabag_password === '••••••••' ? '' : (loaded.wallabag_password || ''),
         wallabag_sync_enabled: loaded.wallabag_sync_enabled !== undefined && loaded.wallabag_sync_enabled !== null ? loaded.wallabag_sync_enabled : 'false',
       }));
+
+      setSummaryTiers(parseTiers(loaded.summary_tiers));
+      setTtsVoices(parseVoices(loaded.tts_voices));
     } catch (err) {
       setError('Failed to load settings');
       console.error(err);
@@ -142,6 +230,84 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setSaved(false);
   };
 
+  // --- Summary tier editor helpers ---
+  const updateTier = (index: number, field: 'maxChars' | 'maxTweets', raw: string) => {
+    const num = parseInt(raw, 10);
+    setSummaryTiers(prev => prev.map((t, i) => {
+      if (i !== index) return t;
+      if (Number.isNaN(num)) return { ...t, [field]: field === 'maxTweets' ? 1 : 0 };
+      return { ...t, [field]: field === 'maxTweets' ? Math.max(1, num) : Math.max(0, num) };
+    }));
+    setSaved(false);
+  };
+
+  const addTier = () => {
+    setSummaryTiers(prev => {
+      const finite = prev.filter(t => Number.isFinite(t.maxChars));
+      const infinity = prev.find(t => !Number.isFinite(t.maxChars)) || { maxChars: Infinity, maxTweets: 7 };
+      const lastFinite = finite.length ? finite[finite.length - 1] : { maxChars: 1000, maxTweets: 1 };
+      const newTier: SummaryTier = {
+        maxChars: lastFinite.maxChars + 5000,
+        maxTweets: Math.min(infinity.maxTweets, lastFinite.maxTweets + 1),
+      };
+      return [...finite, newTier, infinity];
+    });
+    setSaved(false);
+  };
+
+  const removeTier = (index: number) => {
+    setSummaryTiers(prev => {
+      // Never remove the unbounded catch-all tier
+      if (!Number.isFinite(prev[index]?.maxChars)) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+    setSaved(false);
+  };
+
+  // --- Voice rotation helpers ---
+  const isVoiceSelected = (model: string, voice: string) =>
+    ttsVoices.some(v => v.model === model && v.voice === voice);
+
+  const toggleVoice = (model: string, voice: string) => {
+    setTtsVoices(prev =>
+      prev.some(v => v.model === model && v.voice === voice)
+        ? prev.filter(v => !(v.model === model && v.voice === voice))
+        : [...prev, { model, voice }]
+    );
+    setSaved(false);
+  };
+
+  // --- Wipe generated data ---
+  const handleWipeAudio = async () => {
+    if (!confirm('Delete ALL generated audio (and read-along timing) for every article and text? This cannot be undone — you can regenerate it later.')) return;
+    setWiping('audio');
+    try {
+      const res = await contentAPI.wipeAllAudio();
+      await useContentStore.getState().fetchContent();
+      alert(`Wiped audio from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
+    } catch (err) {
+      console.error('Failed to wipe audio:', err);
+      alert('Failed to wipe audio.');
+    } finally {
+      setWiping(null);
+    }
+  };
+
+  const handleWipeSummaries = async () => {
+    if (!confirm('Delete ALL generated summaries (article + comment) for every item? This cannot be undone — you can regenerate them later.')) return;
+    setWiping('summaries');
+    try {
+      const res = await contentAPI.wipeAllSummaries();
+      await useContentStore.getState().fetchContent();
+      alert(`Wiped summaries from ${res.data.cleared} item${res.data.cleared !== 1 ? 's' : ''}.`);
+    } catch (err) {
+      console.error('Failed to wipe summaries:', err);
+      alert('Failed to wipe summaries.');
+    } finally {
+      setWiping(null);
+    }
+  };
+
   const handleSave = async () => {
     try {
       setSaving(true);
@@ -151,6 +317,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       for (const [key, value] of Object.entries(formData)) {
         const isBooleanSetting = key === 'auto_transcribe_podcasts' ||
                                  key === 'auto_generate_audio_for_articles' ||
+                                 key === 'auto_generate_summary' ||
+                                 key === 'summarize_comments' ||
+                                 key === 'library_show_summary' ||
                                  key === 'wallabag_sync_enabled' ||
                                  key === 'image_alt_text_enabled' ||
                                  key === 'narrate_ea_forum_comments' ||
@@ -163,6 +332,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           toSave[key] = value;
         }
       }
+
+      // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
+      toSave.summary_tiers = serializeTiers(summaryTiers);
+      // Selected rotation voices (empty array = always use the single voice).
+      toSave.tts_voices = JSON.stringify(ttsVoices);
 
       console.log('Saving settings:', toSave);
       await userSettingsAPI.setBulk(toSave);
@@ -258,8 +432,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     );
   }
 
-  const currentProvider = providers[formData.ai_provider];
-  const isDeepInfraTTS = formData.openai_tts_model?.includes('hexgrad') || formData.openai_tts_model?.includes('Kokoro');
+  const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
+  const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
+  const availableVoiceGroups = VOICE_CATALOG.filter(g =>
+    g.requiresKey === 'openai' ? hasOpenAIKey : hasDeepInfraKey
+  );
 
   return (
     <div className="settings-page">
@@ -395,34 +572,35 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </div>
 
             <div className="form-group">
-                <label>TTS Model</label>
-                <select value={formData.openai_tts_model} onChange={(e) => handleChange('openai_tts_model', e.target.value)}>
-                   {currentProvider?.models?.tts?.map(model => (
-                     <option key={model} value={model}>{model}</option>
-                   ))}
-                   {!currentProvider?.models?.tts?.includes('hexgrad/Kokoro-82M') && (
-                      <option value="hexgrad/Kokoro-82M">Kokoro 82M (DeepInfra) - 25x Cheaper</option>
-                   )}
-                </select>
-            </div>
-
-            <div className="form-group">
-                <label>TTS Voice</label>
-                {isDeepInfraTTS ? (
-                    <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        <option value="af_heart">Heart (Female)</option>
-                        <option value="af_bella">Bella (Female)</option>
-                        <option value="af_nicole">Nicole (Female)</option>
-                        <option value="am_adam">Adam (Male)</option>
-                        <option value="am_michael">Michael (Male)</option>
-                        <option value="am_puck">Puck (Male) - Recommended</option>
-                    </select>
+                <label>Voices</label>
+                <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
+                  Pick one voice for a consistent sound, or several to rotate between — each new audio
+                  uses a random one (can mix providers).
+                  {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
+                </small>
+                {availableVoiceGroups.length === 0 ? (
+                  <p className="no-content" style={{ fontSize: '0.9rem' }}>
+                    Add an OpenAI or DeepInfra API key above to choose voices.
+                  </p>
                 ) : (
-                    <select value={formData.openai_tts_voice} onChange={(e) => handleChange('openai_tts_voice', e.target.value)}>
-                        {currentProvider?.voices?.map(voice => (
-                             <option key={voice} value={voice}>{voice}</option>
+                  availableVoiceGroups.map(group => (
+                    <div key={group.model} className="voice-group">
+                      <div className="voice-group-title">{group.group}</div>
+                      {group.note && <div className="voice-group-note">{group.note}</div>}
+                      <div className="voice-grid">
+                        {group.voices.map(v => (
+                          <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={isVoiceSelected(group.model, v.id)}
+                              onChange={() => toggleVoice(group.model, v.id)}
+                            />
+                            {v.label}
+                          </label>
                         ))}
-                    </select>
+                      </div>
+                    </div>
+                  ))
                 )}
             </div>
 
@@ -503,6 +681,131 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Requires Gemini API key.
                 </small>
              </div>
+        </section>
+
+        {/* Summaries Section */}
+        <section className="settings-section">
+          <h3><FileText size={20} /> Summaries</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+            Short "Twitter thread" summaries written by the same narration LLM. Generated separately
+            from audio — both can run at the same time.
+          </p>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.auto_generate_summary === 'true'}
+                onChange={(e) => handleChange('auto_generate_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Auto-generate a summary when an article is added
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.summarize_comments === 'true'}
+                onChange={(e) => handleChange('summarize_comments', e.target.checked ? 'true' : 'false')}
+              />
+              Also summarize comments
+            </label>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+              Adds a separate comment-discussion summary below the article summary (when the item has comments).
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.library_show_summary === 'true'}
+                onChange={(e) => handleChange('library_show_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Show summaries on library cards (Twitter-feed mode)
+            </label>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
+              Replaces each library card's description with its full article summary (comment summaries excluded). Falls back to the description when no summary exists.
+            </small>
+          </div>
+
+          <button
+            type="button"
+            className="settings-collapse-toggle"
+            onClick={() => setShowLengthSettings(v => !v)}
+            aria-expanded={showLengthSettings}
+          >
+            {showLengthSettings ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <span>Length settings</span>
+          </button>
+
+          {showLengthSettings && (
+            <div className="settings-collapse-body">
+              <div className="form-group">
+                <label>Words per paragraph</label>
+                <input
+                  type="number"
+                  min="5"
+                  max="500"
+                  value={formData.summary_max_words}
+                  onChange={(e) => handleChange('summary_max_words', e.target.value)}
+                  style={{ width: '7rem' }}
+                />
+                <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+                  Max number of words in each "tweet" paragraph. Default 40.
+                </small>
+              </div>
+
+              <div className="form-group">
+                <label>Summary length tiers</label>
+                <small style={{display: 'block', marginTop: '0.25rem', marginBottom: '0.5rem', color: '#888', fontSize: '0.85rem'}}>
+                  Longer content gets more paragraphs. The character count is measured automatically; the matching
+                  tier sets the maximum number of paragraphs ("tweets").
+                </small>
+                <div className="summary-tiers-editor">
+                  <div className="summary-tier-row summary-tier-header">
+                    <span>Up to (characters)</span>
+                    <span>Max paragraphs</span>
+                    <span></span>
+                  </div>
+                  {summaryTiers.map((tier, index) => {
+                    const isInfinity = !Number.isFinite(tier.maxChars);
+                    return (
+                      <div className="summary-tier-row" key={index}>
+                        {isInfinity ? (
+                          <span className="summary-tier-infinity">Anything larger</span>
+                        ) : (
+                          <input
+                            type="number"
+                            min="1"
+                            value={tier.maxChars}
+                            onChange={(e) => updateTier(index, 'maxChars', e.target.value)}
+                          />
+                        )}
+                        <input
+                          type="number"
+                          min="1"
+                          value={tier.maxTweets}
+                          onChange={(e) => updateTier(index, 'maxTweets', e.target.value)}
+                        />
+                        {isInfinity ? (
+                          <span></span>
+                        ) : (
+                          <button type="button" className="summary-tier-remove" title="Remove tier" onClick={() => removeTier(index)}>
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <button type="button" className="summary-tier-add" onClick={addTier}>
+                  <Plus size={16} /> Add tier
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Playback / Queue Settings */}
@@ -718,6 +1021,35 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               )}
             </>
           )}
+        </section>
+
+        {/* Reset generated data — kept last as a "danger zone" */}
+        <section className="settings-section">
+          <h3><Trash2 size={20} /> Reset generated data</h3>
+          <p className="section-description" style={{fontSize: '0.9rem', color: '#666', marginBottom: '1rem'}}>
+            Bulk-delete generated content. This can't be undone, but you can regenerate it later.
+          </p>
+          <div className="form-group" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeAudio}
+              disabled={wiping !== null}
+            >
+              <Volume2 size={16} /> {wiping === 'audio' ? 'Wiping…' : 'Wipe all audio'}
+            </button>
+            <button
+              type="button"
+              className="wipe-button"
+              onClick={handleWipeSummaries}
+              disabled={wiping !== null}
+            >
+              <FileText size={16} /> {wiping === 'summaries' ? 'Wiping…' : 'Wipe all summaries'}
+            </button>
+          </div>
+          <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+            "Wipe all audio" also clears read-along timing (alignment + transcript) for articles and texts. Podcasts are not affected.
+          </small>
         </section>
       </div>
     </div>
