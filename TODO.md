@@ -180,6 +180,7 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 
 ## Completed Recently ✅
 
+- [x] **Library filter polish round 3** (2026-06-11): status selector now shows the current status's icon + label + chevron (Inbox/Star/Archive, always highlighted) instead of a funnel icon; status menu items and the bulk Unstar/Unarchive menu items got matching icons; star/archive buttons stay visible on cards in Select mode so starred/archived state is visible while bulk-editing.
 - [x] **One card to rule them all** (2026-06-11): extracted the library card into `ContentCard.tsx` and the Feed tab's seven copy-pasted card blocks into `FeedCard`/`FeedEpisodeCard` (`FeedCards.tsx`); shared `format.ts` helpers; deleted dead legacy card CSS. Same look and behavior, one source of truth per card type.
 - [x] **Library filter polish round 2** (2026-06-11): Select mode shows the bulk bar immediately (0 selected); funnel button stretches to row height like its siblings; funnel moved between search and "All"; only the type chips scroll on small screens so the status dropdown is never clipped; dropdown-menu item styling hardened globally (left-aligned, no colored hover edges, regardless of which container hosts the menu); the active type chip shows its item count.
 - [x] **"Copy content" in fullscreen player dropdown** (2026-06-11): copies title • author • date • link, the article body as Markdown, and the nested comment thread to the clipboard — what Ctrl+A/Ctrl+C should have produced without the player chrome.

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Filter } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -509,26 +509,41 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <Search size={16} />
             </button>
             <div className="dropdown-container" ref={statusMenuRef}>
+              {/* Status selector: shows the current status's icon + label with a
+                  chevron, always highlighted (it always has a value) */}
               <button
-                className={`status-funnel-btn ${statusFilter !== 'active' ? 'active' : ''}`}
+                className="status-funnel-btn active"
                 onClick={() => setStatusMenuOpen(!statusMenuOpen)}
                 title="Filter by status"
               >
-                <Filter size={16} />
-                {statusFilter !== 'active' && (
-                  <span>{statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
-                )}
+                {statusFilter === 'active' && <Inbox size={16} />}
+                {statusFilter === 'favorites' && <Star size={16} />}
+                {statusFilter === 'archived' && <Archive size={16} />}
+                <span>{statusFilter === 'active' ? 'Active' : statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
+                <ChevronDown size={14} />
               </button>
               {statusMenuOpen && (
                 <div className="dropdown-menu menu-left">
-                  <button onClick={() => changeStatusFilter('active')}>
-                    {statusFilter === 'active' ? '✓ ' : ''}Active
+                  <button
+                    onClick={() => changeStatusFilter('active')}
+                    style={statusFilter === 'active' ? { color: '#60a5fa' } : undefined}
+                  >
+                    <Inbox size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    Active
                   </button>
-                  <button onClick={() => changeStatusFilter('favorites')}>
-                    {statusFilter === 'favorites' ? '✓ ' : ''}Favorites
+                  <button
+                    onClick={() => changeStatusFilter('favorites')}
+                    style={statusFilter === 'favorites' ? { color: '#60a5fa' } : undefined}
+                  >
+                    <Star size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    Favorites
                   </button>
-                  <button onClick={() => changeStatusFilter('archived')}>
-                    {statusFilter === 'archived' ? '✓ ' : ''}Archived
+                  <button
+                    onClick={() => changeStatusFilter('archived')}
+                    style={statusFilter === 'archived' ? { color: '#60a5fa' } : undefined}
+                  >
+                    <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    Archived
                   </button>
                 </div>
               )}
@@ -590,8 +605,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               </button>
               {bulkMenuOpen && (
                 <div className="dropdown-menu">
-                  <button onClick={() => runInstantBulk('unstar')}>Unstar selected</button>
-                  <button onClick={() => runInstantBulk('unarchive')}>Unarchive selected</button>
+                  <button onClick={() => runInstantBulk('unstar')}>
+                    <StarOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    Unstar selected
+                  </button>
+                  <button onClick={() => runInstantBulk('unarchive')}>
+                    <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    Unarchive selected
+                  </button>
                   <button onClick={() => runInstantBulk('remove_audio', `Remove generated audio from ${selectedItems.size} item(s)? (Podcast episodes are never affected.)`)}>
                     Remove audio
                   </button>
