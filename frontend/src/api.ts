@@ -91,9 +91,8 @@ export const contentAPI = {
   generateSummary: (id: number, regenerate: boolean = false) =>
     api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, { regenerate }),
 
-  wipeAllAudio: () => api.post<{ cleared: number }>(`/content/wipe-all-audio`),
-
-  wipeAllSummaries: () => api.post<{ cleared: number }>(`/content/wipe-all-summaries`),
+  bulkAction: (action: 'star' | 'unstar' | 'archive' | 'unarchive' | 'delete' | 'remove_audio' | 'remove_summary', ids: number[]) =>
+    api.post<{ affected: number }>('/content/bulk', { action, ids }),
 
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),

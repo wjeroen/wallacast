@@ -1,17 +1,18 @@
 import { create } from 'zustand';
 import { queueAPI, userSettingsAPI, contentAPI } from '../api';
-import { useContentStore, type FilterType } from './contentStore';
+import { useContentStore, itemMatchesFilter, type LibraryFilter } from './contentStore';
 import type { ContentItem, QueueItem } from '../types';
 
 /**
  * Snapshot of the library filter at the moment the user clicked a library item.
  * Acts like Spotify's "play context" — the non-manual queue (items that play
  * after manual ones if autoplay is on) is derived from this filter.
+ * The snapshot includes type, status AND search query, frozen at click time.
  * We intentionally do NOT persist this: if the user reloads, auto-queue is
  * recaptured when they click their next library item.
  */
 interface LibraryContext {
-  filter: FilterType;
+  filter: LibraryFilter;
   capturedFromId: number;
 }
 
@@ -48,7 +49,7 @@ interface QueueStore {
   moveUp: (queueId: number) => Promise<void>;
   moveDown: (queueId: number) => Promise<void>;
   clearQueue: () => Promise<void>;
-  setLibraryContext: (filter: FilterType, capturedFromId: number) => void;
+  setLibraryContext: (filter: LibraryFilter, capturedFromId: number) => void;
   setAutoplay: (v: boolean) => Promise<void>;
   setShuffleNonManual: (v: boolean, currentId?: number | null) => void;
   setManualAlwaysAutoplay: (v: boolean) => Promise<void>;
@@ -300,18 +301,8 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
 
     // Items that match the captured library filter AND have audio.
     // Don't pre-exclude currentId here — we need it to find the pivot.
-    const matchesFilter = (item: ContentItem) => {
-      if (!item.audio_url) return false;
-      switch (libraryContext.filter) {
-        case 'articles': return item.type === 'article' && !item.is_archived;
-        case 'texts': return item.type === 'text' && !item.is_archived;
-        case 'podcasts': return item.type === 'podcast_episode' && !item.is_archived;
-        case 'favorites': return item.is_starred;
-        case 'archived': return item.is_archived;
-        case 'all':
-        default: return !item.is_archived;
-      }
-    };
+    const matchesFilter = (item: ContentItem) =>
+      !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
     const filtered = allItems.filter(matchesFilter);
 
     // Apply stable shuffle order if shuffle is on, else use library order.
@@ -394,18 +385,8 @@ export const useQueueStore = create<QueueStore>((set, get) => ({
     if (!libraryContext) return null;
     const allItems = useContentStore.getState().allItems;
     const { shuffleNonManual, shuffleOrder } = get();
-    const matchesFilter = (item: ContentItem) => {
-      if (!item.audio_url) return false;
-      switch (libraryContext.filter) {
-        case 'articles': return item.type === 'article' && !item.is_archived;
-        case 'texts': return item.type === 'text' && !item.is_archived;
-        case 'podcasts': return item.type === 'podcast_episode' && !item.is_archived;
-        case 'favorites': return item.is_starred;
-        case 'archived': return item.is_archived;
-        case 'all':
-        default: return !item.is_archived;
-      }
-    };
+    const matchesFilter = (item: ContentItem) =>
+      !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
     const filtered = allItems.filter(matchesFilter);
     let ordered: ContentItem[];
     if (shuffleNonManual && shuffleOrder.length > 0) {

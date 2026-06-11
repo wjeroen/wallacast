@@ -866,6 +866,66 @@
   color: #60a5fa;
 }
 
+/* Status funnel button keeps its text label visible on mobile (it's the
+   "you are filtering by Favorites/Archived" badge, not a decorative label) */
+.status-funnel-btn span {
+  white-space: nowrap;
+}
+
+/* Expandable library search bar (shown above the filter row when open) */
+.library-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.library-search-icon {
+  position: absolute;
+  left: 0.75rem;
+  color: var(--t4);
+  pointer-events: none;
+}
+
+.library-search-input {
+  width: 100%;
+  padding: 0.5rem 2.25rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.375rem;
+  color: var(--t1);
+  font-size: 1rem; /* >=16px prevents iOS zoom-on-focus */
+}
+
+.library-search-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.library-search-clear {
+  position: absolute;
+  right: 0.5rem;
+  display: flex;
+  background: transparent;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+/* "matched in text" snippet on library cards during search */
+.search-snippet {
+  font-size: 0.8rem;
+  color: var(--t3);
+  margin: 0.25rem 0 0;
+}
+
+/* Progress line under the bulk bar for sequential bulk actions */
+.bulk-progress {
+  font-size: 0.85rem;
+  color: var(--t2);
+}
+
 .bulk-actions {
   display: flex;
   align-items: center;
@@ -3653,28 +3713,6 @@
   padding-left: 0.75rem;
   border-left: 2px solid var(--bg-raised);
 }
-
-/* Destructive bulk-wipe buttons */
-.wipe-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: #7f1d1d;
-  color: #fee2e2;
-  border: 1px solid #991b1b;
-  border-radius: 0.4rem;
-  padding: 0.5rem 0.85rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.wipe-button:hover:not(:disabled) { background: #991b1b; }
-.wipe-button:disabled { opacity: 0.6; cursor: default; }
-[data-theme="light"] .wipe-button {
-  background: #fee2e2;
-  color: #991b1b;
-  border-color: #fecaca;
-}
-[data-theme="light"] .wipe-button:hover:not(:disabled) { background: #fecaca; }
 
 /* Voice variety multi-select chips */
 .voice-group { margin-bottom: 0.6rem; }

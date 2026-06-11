@@ -187,8 +187,8 @@ function App() {
   // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
   // click should load the track, not play it automatically.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
-    const filter = useContentStore.getState().filter;
-    useQueueStore.getState().setLibraryContext(filter, content.id);
+    const { typeFilter, statusFilter, searchQuery } = useContentStore.getState();
+    useQueueStore.getState().setLibraryContext({ typeFilter, statusFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
   };
