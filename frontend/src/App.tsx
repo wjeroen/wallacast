@@ -27,6 +27,8 @@ function App() {
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
   // Podcast summaries need a transcript first — confirm before running Whisper + summary
   const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
+  // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts
+  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
 
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
@@ -513,13 +515,33 @@ function App() {
     }
   };
 
+  // Kick off summaries for a mixed batch: readyIds summarize directly; podcastIds get
+  // a transcript first (generate_transcript=true), then the summary chains server-side.
+  const startBulkSummaries = async (readyIds: number[], podcastIds: number[]) => {
+    const podcastSet = new Set(podcastIds);
+    let started = 0;
+    for (const id of [...readyIds, ...podcastIds]) {
+      try {
+        await contentAPI.generateSummary(id, false, podcastSet.has(id));
+        started++;
+        refreshItem(id);
+      } catch (error) {
+        console.error(`Failed to start summary generation for item ${id}:`, error);
+      }
+    }
+    if (started > 0) {
+      alert(`Started summary generation for ${started} item${started !== 1 ? 's' : ''}.`);
+    }
+  };
+
   const handleBulkGenerateSummaries = async () => {
     setShowUserMenu(false);
 
-    // No comment cutoff for summaries. Eligible = articles/texts without a summary
-    // and not already generating one.
+    // No comment cutoff for summaries. Eligible = articles/texts/podcasts without a
+    // summary and not already generating one. Podcasts summarize their transcript —
+    // episodes without one get the transcript-first warning below.
     const eligibleItems = allContent.filter(
-      item => (item.type === 'article' || item.type === 'text') && !item.is_archived &&
+      item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
 
@@ -528,23 +550,18 @@ function App() {
       return;
     }
 
-    const confirmed = confirm(`Generate summaries for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`);
+    const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
+    const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
+
+    if (podcastIds.length > 0) {
+      setBulkSummaryWarning({ podcastIds, readyIds });
+      return;
+    }
+
+    const confirmed = confirm(`Generate summaries for ${readyIds.length} item${readyIds.length !== 1 ? 's' : ''}?`);
     if (!confirmed) return;
 
-    let started = 0;
-    for (const item of eligibleItems) {
-      try {
-        await contentAPI.generateSummary(item.id, false);
-        started++;
-        refreshItem(item.id);
-      } catch (error) {
-        console.error(`Failed to start summary generation for item ${item.id}:`, error);
-      }
-    }
-
-    if (started > 0) {
-      alert(`Started summary generation for ${started} item${started !== 1 ? 's' : ''}.`);
-    }
+    await startBulkSummaries(readyIds, []);
   };
 
   const handleLogout = async () => {
@@ -744,6 +761,49 @@ function App() {
                 onClick={() => setCommentWarning(null)}
               >
                 Don't generate audio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkSummaryWarning && (
+        <div className="comment-warning-overlay" onClick={() => setBulkSummaryWarning(null)}>
+          <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
+            <p>
+              <strong>{bulkSummaryWarning.podcastIds.length} podcast episode{bulkSummaryWarning.podcastIds.length > 1 ? 's' : ''}</strong> {bulkSummaryWarning.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.
+              {bulkSummaryWarning.readyIds.length > 0 && (
+                <> The other {bulkSummaryWarning.readyIds.length} item{bulkSummaryWarning.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
+              )}
+            </p>
+            <div className="comment-warning-buttons">
+              <button
+                className="comment-warning-btn include"
+                onClick={() => {
+                  const w = bulkSummaryWarning;
+                  setBulkSummaryWarning(null);
+                  startBulkSummaries(w.readyIds, w.podcastIds);
+                }}
+              >
+                Generate transcripts + summaries
+              </button>
+              {bulkSummaryWarning.readyIds.length > 0 && (
+                <button
+                  className="comment-warning-btn exclude"
+                  onClick={() => {
+                    const w = bulkSummaryWarning;
+                    setBulkSummaryWarning(null);
+                    startBulkSummaries(w.readyIds, []);
+                  }}
+                >
+                  Skip episodes without transcript
+                </button>
+              )}
+              <button
+                className="comment-warning-btn cancel"
+                onClick={() => setBulkSummaryWarning(null)}
+              >
+                Cancel
               </button>
             </div>
           </div>
