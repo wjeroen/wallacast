@@ -294,22 +294,26 @@ export function ContentCard({
         </div>
         {generationStatusDisplay()}
       </div>
-      {!bulkMode && (
-        <div className="content-actions" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={() => onToggleStarred(item.id)}
-            className={item.is_starred ? 'active' : ''}
-            title="Toggle star"
-          >
-            <Star size={16} fill={item.is_starred ? 'currentColor' : 'none'} />
-          </button>
-          <button
-            onClick={() => onToggleArchive(item.id)}
-            title={item.is_archived ? "Restore from archive" : "Archive"}
-            className={item.is_archived ? 'active' : ''}
-          >
-            {item.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
-          </button>
+      {/* Star/archive stay visible in bulk mode — they show each item's state
+          (filled star, highlighted archive) and still work as toggles.
+          Delete and the dropdown are hidden to keep selection taps safe. */}
+      <div className="content-actions" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => onToggleStarred(item.id)}
+          className={item.is_starred ? 'active' : ''}
+          title="Toggle star"
+        >
+          <Star size={16} fill={item.is_starred ? 'currentColor' : 'none'} />
+        </button>
+        <button
+          onClick={() => onToggleArchive(item.id)}
+          title={item.is_archived ? "Restore from archive" : "Archive"}
+          className={item.is_archived ? 'active' : ''}
+        >
+          {item.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+        </button>
+        {!bulkMode && (
+          <>
           <button
             onClick={() => onDelete(item.id)}
             className="delete-btn"
@@ -402,8 +406,9 @@ export function ContentCard({
               </div>
             )}
           </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
