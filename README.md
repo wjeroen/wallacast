@@ -74,6 +74,7 @@ Wallacast supports multiple users with complete data isolation:
 | Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
+| Library filters/search/bulk actions | `frontend/src/components/LibraryTab.tsx`, `frontend/src/store/contentStore.ts` (filter model + matcher), `backend/src/routes/content.ts` (`POST /bulk`) |
 | Login/registration | `frontend/src/components/LoginPage.tsx`, `frontend/src/store/authStore.ts` |
 | Settings UI | `frontend/src/components/SettingsPage.tsx` |
 | All CSS styles | `frontend/src/App.css` |
@@ -182,8 +183,7 @@ Wallacast supports multiple users with complete data isolation:
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation (article + comments). Body: `{ regenerate?: boolean }`. Uses the independent `summary_status` field, so it can run alongside audio generation.
-  - `POST /wipe-all-audio` - Bulk-delete generated TTS audio + read-along timing (alignment/transcript/chunks) for all of the user's articles/texts. Returns `{ cleared }`. Does not touch podcasts.
-  - `POST /wipe-all-summaries` - Bulk-delete generated summaries (article + comment) for all of the user's items. Returns `{ cleared }`.
+  - `POST /bulk` - Bulk actions on many items in one request (used by the library's Select mode). Body: `{ action, ids }` (max 500 ids). Actions: `star`, `unstar`, `archive`, `unarchive`, `delete`, `remove_audio`, `remove_summary`. `archive` mirrors the single-item PATCH: wipes generated audio + read-along data for non-starred articles/texts (podcasts and starred items keep everything). `unarchive` deliberately does NOT auto-regenerate audio (use bulk Generate audio afterwards). `remove_audio` only touches articles/texts (podcast audio_url is source media). `delete` also fires Wallabag deletions for synced items. Returns `{ affected }`.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
@@ -338,7 +338,8 @@ Wallacast supports multiple users with complete data isolation:
 #### State Management
 - **`store/contentStore.ts`**: Zustand store for centralized content state management
   - Fetches all items once on mount, stores in `allItems` master list; `items` is the filtered view
-  - **Client-side filtering**: switching filters (Articles, Texts, Podcasts, etc.) is instant — no API call, just an array `.filter()` on the master list
+  - **Filter model**: `LibraryFilter` = `{ typeFilter: 'all'|'articles'|'texts'|'podcasts', statusFilter: 'active'|'favorites'|'archived', searchQuery }`. The exported `itemMatchesFilter(item, filter)` is the single matcher, also used by `queueStore` for the "Up next" stream; `getSearchSnippet()` returns the "matched in text" excerpt for cards
+  - **Client-side filtering**: switching filters or typing in search is instant — no API call, just an array `.filter()` on the master list (an internal `commit()` helper re-derives `items` + `allCount` after every mutation)
   - Provides optimistic updates for instant UI feedback (star, archive, delete) — all mutations update both `allItems` and `items`
   - Handles Wallabag bidirectional sync state
 
@@ -354,7 +355,11 @@ Wallacast supports multiple users with complete data isolation:
   - Login/registration form with toggle between modes
   - Displays auth errors from authStore
   - Uses lucide-react icons for visual polish
-- **`components/LibraryTab.tsx`**: Main library view with filters (All, Articles, Texts, Podcasts, Favorites, Archived). Uses Zustand store for state. "All" filter excludes archived items by default. Shows content cards with generation status including all TTS pipeline stages (processing images, preparing narration script, generating audio, finalizing, transcribing), handles bulk selection mode, playback position display. Polls for generation progress updates. Cards display karma (upvote count) and comment count with icons. "Generate All Audio" button is in the user dropdown menu (top-right) — triggers bulk audio generation for all unread articles without audio. Each content card has a dropdown menu (3 dots) with context-specific options:
+- **`components/LibraryTab.tsx`**: Main library view. Uses Zustand store for state. Polls for generation progress updates; cards display karma (upvote count) and comment count with icons. "Generate All Audio" button is in the user dropdown menu (top-right).
+  - **Filters (two dimensions, one row)**: type chips (All / Articles / Texts / Podcasts) + a funnel button opening a status menu (Active / Favorites / Archived). The dimensions combine (e.g. Podcasts + Archived). The funnel button highlights and shows the status name when it isn't Active. Semantics: Active = not archived, Favorites = starred (incl. archived), Archived = archived. Filtering is client-side via `itemMatchesFilter()` in `contentStore.ts` (shared with the queue's "Up next" stream).
+  - **Search**: search icon expands into a full-width debounced search bar. Client-side, case-insensitive substring over title, author, description, tags, podcast show name AND the full body text (`content` column, already in the list response). Cards matching only in the body show a "matched in text: …" snippet. No fuzzy matching.
+  - **Bulk selection mode**: Select button toggles checkboxes. Bulk bar: count, All/None, Star, Archive (Unarchive when viewing Archived), Delete — each ONE request via `POST /content/bulk` — plus an overflow (⋮) menu: Unstar, Unarchive, Remove audio, Remove summaries, and sequential Generate audio / Generate summaries / Refetch from web (cost-confirm dialogs with item counts, progress counter, per-card status badges via the existing poll). Selection is cleared whenever filters or search change, so select-all only ever acts on visible items.
+  - Each content card has a dropdown menu (3 dots) with context-specific options:
   - **Articles/Texts**: Generate audio, Regenerate audio (if exists), Remove audio (if exists)
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
@@ -391,7 +396,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
   - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
   - **Description tab** (podcasts only): Podcast episode description with HTML formatting
-  - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
+  - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot of type + status + search query; matching uses the shared `itemMatchesFilter` from `contentStore.ts`). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
   - Clickable elements seek the audio to that timestamp
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)

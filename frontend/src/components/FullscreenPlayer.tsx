@@ -1191,15 +1191,11 @@ export function FullscreenPlayer({
       }
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
-          switch (libraryContext.filter) {
-            case 'articles': return 'Up next from Articles';
-            case 'texts': return 'Up next from Texts';
-            case 'podcasts': return 'Up next from Podcasts';
-            case 'favorites': return 'Up next from Favorites';
-            case 'archived': return 'Up next from Archived';
-            case 'all':
-            default: return 'Up next from Library';
-          }
+          const f = libraryContext.filter;
+          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
+          const statusLabel = f.statusFilter === 'favorites' ? 'Favorite ' : f.statusFilter === 'archived' ? 'Archived ' : '';
+          const searchLabel = f.searchQuery.trim() ? ` · “${f.searchQuery.trim()}”` : '';
+          return `Up next from ${statusLabel}${typeLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
