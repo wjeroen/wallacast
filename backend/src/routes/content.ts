@@ -1241,15 +1241,19 @@ router.post('/:id/generate-audio', async (req, res) => {
   }
 });
 
-// Generate (or regenerate) the article + comment summaries for an article/text.
-// Runs independently of audio generation — uses its own `summary_status` field so both
-// can be in progress at the same time.
+// Generate (or regenerate) summaries. Articles/texts summarize their body (+ comments);
+// podcast episodes summarize their transcript. Runs independently of audio generation —
+// uses its own `summary_status` field so both can be in progress at the same time.
+// For podcasts WITHOUT a transcript: pass `generate_transcript: true` to first run Whisper
+// and then summarize (the frontend shows a confirmation before doing this); without the
+// flag the request is rejected with code 'no_transcript' so the frontend can warn.
 router.post('/:id/generate-summary', async (req, res) => {
   try {
     const { id } = req.params;
+    const generateTranscript = req.body?.generate_transcript === true;
 
     const contentResult = await query(
-      'SELECT id, type, summary_status FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -1259,8 +1263,8 @@ router.post('/:id/generate-summary', async (req, res) => {
 
     const contentItem = contentResult.rows[0];
 
-    if (contentItem.type !== 'article' && contentItem.type !== 'text') {
-      return res.status(400).json({ error: 'Summaries are only available for articles and text' });
+    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode') {
+      return res.status(400).json({ error: 'Summaries are not available for this content type' });
     }
 
     if (contentItem.summary_status === 'generating') {
@@ -1270,20 +1274,69 @@ router.post('/:id/generate-summary', async (req, res) => {
       });
     }
 
+    const needsTranscript = contentItem.type === 'podcast_episode' && !(contentItem.transcript || '').trim();
+
+    if (needsTranscript && !generateTranscript) {
+      return res.status(400).json({
+        error: 'This podcast episode has no transcript yet. Generate the transcript first.',
+        code: 'no_transcript',
+      });
+    }
+    if (needsTranscript && !contentItem.audio_url) {
+      return res.status(400).json({ error: 'Episode has no audio to transcribe' });
+    }
+    if (needsTranscript && contentItem.generation_status === 'generating_transcript') {
+      return res.status(409).json({ error: 'Transcription already in progress' });
+    }
+
     await query(
       'UPDATE content_items SET summary_status = $1 WHERE id = $2',
       ['generating', id]
     );
 
-    generateSummaryForContent(parseInt(id))
-      .then(() => console.log(`Summary generation finished for ${id}`))
-      .catch(async (error) => {
-        console.error('Background summary generation error:', error);
-        await query(
-          'UPDATE content_items SET summary_status = $1 WHERE id = $2',
-          ['failed', id]
-        ).catch(() => { /* swallow */ });
+    const runSummary = () =>
+      generateSummaryForContent(parseInt(id))
+        .then(() => console.log(`Summary generation finished for ${id}`))
+        .catch(async (error) => {
+          console.error('Background summary generation error:', error);
+          await query(
+            'UPDATE content_items SET summary_status = $1 WHERE id = $2',
+            ['failed', id]
+          ).catch(() => { /* swallow */ });
+        });
+
+    if (needsTranscript) {
+      // Transcript-then-summary chain (same transcription flow as routes/transcription.ts)
+      await query(
+        'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
+        ['generating_transcript', 0, 'transcript', id]
+      );
+      console.log(`Starting transcription (for summary) for content ${id}`);
+      const whisperPrompt = buildWhisperPrompt({
+        title: contentItem.title,
+        author: contentItem.author,
+        published_at: contentItem.published_at,
+        comments: contentItem.comments,
       });
+      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt)
+        .then(async (result) => {
+          console.log(`Transcription complete for ${id} (${result.words.length} words) — starting summary`);
+          await query(
+            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+            [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
+          );
+          await runSummary();
+        })
+        .catch(async (error) => {
+          console.error('Background transcription (for summary) error:', error);
+          await query(
+            'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL, summary_status = $4 WHERE id = $5 AND user_id = $6',
+            ['failed', error.message || 'Failed to transcribe', 0, 'failed', id, req.user!.userId]
+          ).catch(() => { /* swallow */ });
+        });
+    } else {
+      runSummary();
+    }
 
     res.json({ message: 'Summary generation started', summary_status: 'generating' });
   } catch (error) {

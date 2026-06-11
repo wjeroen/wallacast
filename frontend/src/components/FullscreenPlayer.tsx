@@ -1453,7 +1453,13 @@ export function FullscreenPlayer({
                         Remove audio
                       </button>
                     )}
-                    {/* Summary options (independent of audio — both can be generated at once) */}
+                  </>
+                )}
+                {/* Summary options (independent of audio — both can be generated at once).
+                    Podcasts summarize their transcript; App.tsx confirms + chains Whisper
+                    first when no transcript exists yet. */}
+                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
+                  <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
                       <button disabled>Generating summary…</button>
                     )}
