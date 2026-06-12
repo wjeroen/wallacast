@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { createReadStream, type ReadStream } from 'fs';
-import { getAudioDir } from '../config/storage.js';
+import { getAudioDir, isPersistentVolume } from '../config/storage.js';
 import { query } from '../database/db.js';
 
 /**
@@ -100,6 +100,16 @@ export async function migrateAudioBlobsToDisk(): Promise<{ migrated: number; ski
  * runs by accident.
  */
 export async function clearMigratedAudioBlobs(): Promise<{ cleared: number; kept: number }> {
+  // HARD SAFETY GUARD: only clear blobs when the disk files live on the persistent
+  // volume. On the local/ephemeral fallback the files vanish on the next redeploy —
+  // clearing the DB blobs in that state would permanently lose all generated audio.
+  if (!isPersistentVolume()) {
+    throw new Error(
+      'Refusing to clear audio blobs: storage is NOT the persistent volume (/data). ' +
+      'The disk files are on the container\'s ephemeral disk and would be lost on redeploy. ' +
+      'Fix the volume mount (must be exactly /data) first.'
+    );
+  }
   const idsRes = await query(`SELECT id FROM content_items WHERE audio_data IS NOT NULL ORDER BY id`);
   let cleared = 0, kept = 0;
   for (const { id } of idsRes.rows) {

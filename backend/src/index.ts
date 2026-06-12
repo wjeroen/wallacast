@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
+import { ensureStorageDirectories, getAudioDir, isPersistentVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
@@ -352,6 +352,11 @@ async function start() {
       // CLEAR_AUDIO_BLOBS=true, and only for items already verified on disk.
       (async () => {
         try {
+          if (isPersistentVolume()) {
+            console.log('🎵 [AudioMigration] ✅ Persistent volume detected at /data — audio files survive redeploys.');
+          } else {
+            console.warn('🎵 [AudioMigration] ⚠️ NO VOLUME AT /data — audio files are being written to the container\'s EPHEMERAL disk and will NOT survive a redeploy. Check the volume\'s mount path in Railway (must be exactly /data). DB blobs are kept, so nothing is lost — but the migration is not effective until the volume is mounted.');
+          }
           const copy = await migrateAudioBlobsToDisk();
           if (copy.migrated > 0 || copy.failed > 0) {
             console.log(`🎵 [AudioMigration] Copied ${copy.migrated} audio file(s) to disk (${copy.mb} MB), skipped ${copy.skipped}, failed ${copy.failed}.`);
@@ -359,11 +364,13 @@ async function start() {
             console.log(`🎵 [AudioMigration] Nothing to copy (${copy.skipped} already on disk or no blobs).`);
           }
           if (process.env.CLEAR_AUDIO_BLOBS === 'true') {
+            // clearMigratedAudioBlobs throws if storage isn't the persistent volume,
+            // so this can never destroy audio that only exists on ephemeral disk.
             const cleared = await clearMigratedAudioBlobs();
             console.log(`🧹 [AudioMigration] Cleared ${cleared.cleared} DB blob(s) now safely on disk; kept ${cleared.kept} (no disk file). You can now run VACUUM FULL to reclaim disk.`);
           }
         } catch (err: any) {
-          console.error('🎵 [AudioMigration] Skipped due to error:', err?.message || err);
+          console.error('🎵 [AudioMigration] Stopped:', err?.message || err);
         }
       })();
       break;
