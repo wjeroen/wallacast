@@ -5,6 +5,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
+import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
@@ -981,12 +982,24 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       || `http://localhost:${port}`;
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
-    await query(
-      'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL, audio_generated_at = NOW() WHERE id = $7',
-      [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
-    );
-
-    console.log(`✓ Audio stored for content ${contentId}`);
+    // Store audio on the volume as a file (cheap disk) instead of a Postgres BYTEA blob
+    // (expensive RAM — Postgres caches blobs for days). If the disk write fails for any
+    // reason, fall back to storing the blob in the DB so audio is never lost. Serving
+    // (index.ts) checks the disk file first and falls back to the blob, so both work.
+    const savedToDisk = await saveAudioFile(contentId, audioBuffer);
+    if (savedToDisk) {
+      await query(
+        'UPDATE content_items SET audio_data = NULL, audio_url = $1, duration = $2, file_size = $3, tts_chunks = $4, generation_status = $5, transcript = NULL, transcript_words = NULL, audio_generated_at = NOW() WHERE id = $6',
+        [audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
+      );
+      console.log(`✓ Audio stored on disk for content ${contentId} (${(audioBuffer.length / 1048576).toFixed(1)} MB)`);
+    } else {
+      await query(
+        'UPDATE content_items SET audio_data = $1, audio_url = $2, duration = $3, file_size = $4, tts_chunks = $5, generation_status = $6, transcript = NULL, transcript_words = NULL, audio_generated_at = NOW() WHERE id = $7',
+        [audioBuffer, audioUrl, audioDuration, audioBuffer.length, JSON.stringify(chunkMetadata), 'ready', contentId]
+      );
+      console.log(`✓ Audio stored in DB (disk write failed) for content ${contentId}`);
+    }
 
     // Step 6: Transcription (95-100% progress)
     console.log('[TTS] Triggering auto-transcription for Read Along...');
