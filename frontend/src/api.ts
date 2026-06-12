@@ -147,8 +147,6 @@ export const podcastAPI = {
 
   // refresh: (id: number) => api.post(`/podcasts/${id}/refresh`), // Removed - auto-added episodes to library
 
-  getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
-
   getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
     api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
 
