@@ -25,4 +25,8 @@ RUN npm run build
 EXPOSE 3001
 
 # 10. Start the application
-CMD ["npm", "start"]
+# Run node directly (not "npm start"): npm wraps the process, eats the SIGTERM
+# exit status and logs a scary-but-harmless "npm error signal SIGTERM" on every
+# normal shutdown/redeploy. Direct node lets the graceful-shutdown handler in
+# index.ts receive signals first-hand and exit cleanly.
+CMD ["node", "dist/index.js"]
