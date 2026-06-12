@@ -35,6 +35,16 @@ export function getStorageDir(): string {
 }
 
 /**
+ * True when storage is the persistent Railway volume (/data). False means the local
+ * fallback (./public) — fine for dev, but on Railway that's the container's EPHEMERAL
+ * disk: files written there vanish on every redeploy. Destructive migration steps
+ * (clearing DB audio blobs) must NEVER run in that state.
+ */
+export function isPersistentVolume(): boolean {
+  return getStorageDir() === '/data';
+}
+
+/**
  * Get the audio storage directory
  */
 export function getAudioDir(): string {
