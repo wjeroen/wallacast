@@ -181,8 +181,20 @@ router.get('/search-feed', async (req, res) => {
 // Get episodes for a podcast (saved in library)
 router.get('/:id/episodes', async (req, res) => {
   try {
+    // Explicit column list (never SELECT *): SELECT * shipped every episode's full
+    // transcript + audio blob in one response. Mirrors the lean list in GET /api/content.
+    // NOTE: this endpoint currently has no frontend callers (api.ts getEpisodes is unused).
     const result = await query(
-      'SELECT * FROM content_items WHERE podcast_id = $1 AND user_id = $2 ORDER BY published_at DESC',
+      `SELECT id, type, title, url, content, author, description, preview_picture, audio_url,
+              duration, file_size, podcast_id, podcast_show_name, episode_number, published_at,
+              is_starred, is_archived, tags, playback_position, playback_speed, last_played_at,
+              created_at, updated_at, generation_status, generation_progress, generation_error,
+              current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes,
+              summary, summary_status, summary_generated_at,
+              COALESCE(comment_count_total, 0) AS comment_count
+         FROM content_items
+        WHERE podcast_id = $1 AND user_id = $2
+        ORDER BY published_at DESC`,
       [req.params.id, req.user!.userId]
     );
     res.json(result.rows);
