@@ -122,7 +122,7 @@ Wallacast supports multiple users with complete data isolation:
 ### Backend (`/backend/src/`)
 
 #### Entry Point
-- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling.
+- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling. On every startup, logs a `📦 [Storage]` database-size breakdown to the Railway logs (audio blobs, transcripts, word timestamps, HTML, comments, table + whole-DB totals) — check the Railway backend logs after a deploy/restart to see how much disk the data uses (used for sizing the audio-to-volume migration).
 
 #### Configuration
 - **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`

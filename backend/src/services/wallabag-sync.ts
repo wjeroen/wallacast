@@ -412,8 +412,14 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
     // Find items needing push:
     // 1. wallabag_id IS NULL (never synced)
     // 2. updated_at > wallabag_updated_at (local changes since last sync)
+    // Explicit column list (never SELECT *): this can match MANY items at once, and
+    // SELECT * would load every matched item's audio_data blob (10-50MB each) into
+    // memory just to push text to Wallabag. Only the fields the loop below reads.
     const itemsResult = await query(
-      `SELECT * FROM content_items
+      `SELECT id, type, title, url, tags, wallabag_id,
+              transcript, content, html_content,
+              is_archived, is_starred, published_at
+         FROM content_items
        WHERE user_id = $1
        AND (
          wallabag_id IS NULL

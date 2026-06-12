@@ -200,6 +200,45 @@ app.use('/api/queue', requireDatabaseReady, requireAuth, queueRouter);
 app.use('/api/transcription', requireDatabaseReady, requireAuth, transcriptionRouter);
 app.use('/api/wallabag', requireDatabaseReady, wallabagRouter);
 
+// Log how much disk the database is using (audio blobs, transcripts, etc.) to the
+// Railway logs on every startup, so storage growth is visible without DB tooling.
+// Used for sizing the planned audio-to-volume migration (TODO.md, Performance section).
+// Fire-and-forget: must NEVER block or crash startup (table may not exist on a fresh DB).
+// pg_column_size() reads stored (TOASTed) sizes without loading the blobs into RAM.
+async function logStorageStats() {
+  try {
+    const items = await query(`
+      SELECT
+        COUNT(*)::int AS total_items,
+        COUNT(*) FILTER (WHERE audio_data IS NOT NULL)::int AS audio_items,
+        COALESCE(SUM(COALESCE(file_size, pg_column_size(audio_data))) FILTER (WHERE audio_data IS NOT NULL), 0)::bigint AS audio_bytes,
+        COALESCE(SUM(pg_column_size(transcript)), 0)::bigint AS transcript_bytes,
+        COALESCE(SUM(pg_column_size(transcript_words)), 0)::bigint AS transcript_words_bytes,
+        COALESCE(SUM(pg_column_size(html_content)), 0)::bigint AS html_bytes,
+        COALESCE(SUM(pg_column_size(comments)), 0)::bigint AS comments_bytes
+      FROM content_items
+    `);
+    const sizes = await query(
+      `SELECT pg_total_relation_size('content_items')::bigint AS table_bytes,
+              pg_database_size(current_database())::bigint AS db_bytes`
+    );
+    const mb = (b: any) => (Number(b) / 1024 / 1024).toFixed(1) + ' MB';
+    const s = items.rows[0];
+    const t = sizes.rows[0];
+    console.log('📦 [Storage] ===== Database storage breakdown =====');
+    console.log(`📦 [Storage] Audio blobs (audio_data):   ${mb(s.audio_bytes)} across ${s.audio_items} of ${s.total_items} items  <-- what the volume migration would move`);
+    console.log(`📦 [Storage] Transcripts (text):         ${mb(s.transcript_bytes)}`);
+    console.log(`📦 [Storage] Word timestamps (JSONB):    ${mb(s.transcript_words_bytes)}`);
+    console.log(`📦 [Storage] Article HTML:               ${mb(s.html_bytes)}`);
+    console.log(`📦 [Storage] Comments (JSONB):           ${mb(s.comments_bytes)}`);
+    console.log(`📦 [Storage] content_items table total:  ${mb(t.table_bytes)} (incl. indexes/overhead)`);
+    console.log(`📦 [Storage] Whole database on disk:     ${mb(t.db_bytes)}`);
+  } catch (error: any) {
+    // Never let stats logging affect startup (e.g. fresh DB without tables yet)
+    console.log('📦 [Storage] Stats unavailable:', error?.message || error);
+  }
+}
+
 // Initialize database and start server
 async function start() {
   // Start HTTP server FIRST so Railway sees it as healthy
@@ -252,6 +291,9 @@ async function start() {
 
       // Initialize storage directories
       await ensureStorageDirectories();
+
+      // Log storage breakdown to Railway logs (fire-and-forget, never blocks startup)
+      logStorageStats().catch(() => {});
       break;
     } catch (error) {
       retries--;
