@@ -86,9 +86,9 @@ export const contentAPI = {
     api.post<Array<{
       id: number;
       generation_status: ContentItem['generation_status'];
-      generation_progress: number | null;
-      generation_error: string | null;
-      current_operation: string | null;
+      generation_progress: ContentItem['generation_progress'];
+      generation_error: ContentItem['generation_error'];
+      current_operation: ContentItem['current_operation'];
       summary_status: ContentItem['summary_status'];
     }>>('/content/status', { ids }),
 
