@@ -792,7 +792,17 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
   activeGenerations.add(contentId);
 
   try {
-    const contentResult = await query('SELECT * FROM content_items WHERE id = $1', [contentId]);
+    // Explicit column list (never SELECT *): this runs at the START of every audio
+    // (re)generation. SELECT * pulls audio_data (the old 10-50MB BYTEA blob) plus
+    // transcript_words / content_alignment into memory for nothing — on a regenerate
+    // that's tens of MB loaded just to be overwritten seconds later. Only these columns
+    // are actually read below; if you use a new content field here, add it to this list.
+    const contentResult = await query(
+      `SELECT id, user_id, type, html_content, content, image_alt_text_data,
+              url, title, author, published_at, karma, comments, comment_source
+         FROM content_items WHERE id = $1`,
+      [contentId]
+    );
     if (contentResult.rows.length === 0) throw new Error('Content not found');
     const content = contentResult.rows[0];
 
