@@ -68,7 +68,34 @@ function buildTurndown(): TurndownService {
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
+  // Images: emit Obsidian's `![alt|WIDTH](src)` when the image has an explicit width, so
+  // narrow/small images keep their size through the round-trip (standard Markdown can't
+  // carry width). Width comes from the `width` attribute or an inline `style="width:..px"`.
+  td.addRule('imageWithWidth', {
+    filter: 'img',
+    replacement: (_content, node) => {
+      const el = node as HTMLElement;
+      const src = el.getAttribute('src') || '';
+      if (!src) return '';
+      const alt = (el.getAttribute('alt') || '').replace(/\n/g, ' ');
+      const width = imageWidth(el);
+      const label = width ? `${alt}|${width}` : alt;
+      return `![${label}](${src})`;
+    },
+  });
+
   return td;
+}
+
+// Read an integer pixel width from an <img>'s width attribute or inline style. Returns null
+// when there's no explicit width (or it's a percentage).
+function imageWidth(el: HTMLElement): number | null {
+  const attr = el.getAttribute('width');
+  if (attr && /^\d+$/.test(attr.trim())) return parseInt(attr.trim(), 10);
+  const style = el.getAttribute('style') || '';
+  const m = style.match(/(?:^|;)\s*width\s*:\s*(\d+)px/i);
+  if (m) return parseInt(m[1], 10);
+  return null;
 }
 
 const turndownService = buildTurndown();
@@ -93,6 +120,17 @@ export function markdownToHtml(markdown: string): string {
 
   const rawHtml = marked.parse(markdown, { gfm: true, async: false }) as string;
   const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+
+  // Obsidian image-resize syntax: marked renders `![alt|200](url)` with alt="alt|200".
+  // Split the trailing `|width` back out into a width attribute so narrow images keep size.
+  doc.querySelectorAll('img').forEach((img) => {
+    const alt = img.getAttribute('alt') || '';
+    const m = alt.match(/^(.*)\|(\d+)$/);
+    if (m) {
+      img.setAttribute('alt', m[1]);
+      img.setAttribute('width', m[2]);
+    }
+  });
 
   // Turn callout blockquotes back into their original structures.
   doc.querySelectorAll('blockquote').forEach((bq) => {
