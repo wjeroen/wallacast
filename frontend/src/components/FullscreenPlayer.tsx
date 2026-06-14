@@ -803,6 +803,28 @@ export function FullscreenPlayer({
     }
   };
 
+  // Footnote / in-page anchor navigation for the Content tab. Intercepts clicks on `#...`
+  // links (footnote markers and their back-links) and smoothly scrolls the target into view
+  // inside the player's scroll container — without changing the URL (which would upset the
+  // router). Works on native LessWrong/EA/Substack anchors AND our canonical `fn-N` ones.
+  const handleAnchorNav = useCallback((e: React.MouseEvent) => {
+    const a = (e.target as HTMLElement).closest('a');
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    if (!href.startsWith('#') || href.length < 2) return;
+    e.preventDefault();
+    const id = decodeURIComponent(href.slice(1));
+    const root = tabContentRef.current;
+    if (!root) return;
+    let target: Element | null = null;
+    try {
+      target = root.querySelector(`#${CSS.escape(id)}`);
+    } catch {
+      target = root.querySelector(`[id="${id.replace(/"/g, '\\"')}"]`);
+    }
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   // Copy the readable content (title, link, author, date, body, comments) to
   // the clipboard as Markdown — what Ctrl+A/Ctrl+C *should* give you, without
   // the player chrome.
@@ -1208,6 +1230,7 @@ export function FullscreenPlayer({
               <>
                 <div
                   className="article-content"
+                  onClick={handleAnchorNav}
                   dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
                 />
                 {parsedComments.length > 0 && (
@@ -1472,6 +1495,7 @@ export function FullscreenPlayer({
                 </div>
                 <div
                   className="article-content"
+                  onClick={handleAnchorNav}
                   dangerouslySetInnerHTML={{ __html: viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>' }}
                 />
               </div>

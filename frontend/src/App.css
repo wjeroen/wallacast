@@ -2809,6 +2809,35 @@
   object-fit: contain;
 }
 
+/* Footnotes — inline reference markers + the definition section at the end (clickable). */
+.article-content sup.footnote-ref a {
+  color: var(--accent, #60a5fa);
+  text-decoration: none;
+  cursor: pointer;
+}
+.article-content .footnotes {
+  margin-top: 2rem;
+  font-size: 0.9em;
+}
+.article-content .footnotes hr {
+  border: none;
+  border-top: 1px solid var(--bg-hover);
+  margin: 1rem 0;
+}
+.article-content .footnotes ol {
+  padding-left: 1.5rem;
+  color: var(--t2);
+}
+.article-content .footnotes li {
+  margin: 0.4em 0;
+}
+.article-content .footnote-backref {
+  color: var(--accent, #60a5fa);
+  text-decoration: none;
+  margin-left: 0.35em;
+  cursor: pointer;
+}
+
 /* Stretch images to the column width by default — but ONLY when no explicit width is set.
    Images with their own width (e.g. ![alt|200] stored as a width attribute, or an inline
    style width) keep their real size instead of ballooning. `max-width: 100% !important`
