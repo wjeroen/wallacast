@@ -178,20 +178,6 @@ router.get('/search-feed', async (req, res) => {
   }
 });
 
-// Get episodes for a podcast (saved in library)
-router.get('/:id/episodes', async (req, res) => {
-  try {
-    const result = await query(
-      'SELECT * FROM content_items WHERE podcast_id = $1 AND user_id = $2 ORDER BY published_at DESC',
-      [req.params.id, req.user!.userId]
-    );
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching episodes:', error);
-    res.status(500).json({ error: 'Failed to fetch episodes' });
-  }
-});
-
 // --- Feed Caching Endpoints ---
 
 // Get cached feed items from database (instant, no network requests)

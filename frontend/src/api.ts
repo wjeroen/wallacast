@@ -78,6 +78,20 @@ export const contentAPI = {
 
   getById: (id: number) => api.get<ContentItem>(`/content/${id}`),
 
+  // Batch poll for generation/summary status only (a few hundred bytes for the whole
+  // batch). Used by the library's 2s poll while items generate, instead of getById per
+  // item (which ships the full transcript + 9k word timestamps + alignment every tick).
+  // The full item is still fetched once, at completion, via getById/refreshItem.
+  getStatuses: (ids: number[]) =>
+    api.post<Array<{
+      id: number;
+      generation_status: ContentItem['generation_status'];
+      generation_progress: ContentItem['generation_progress'];
+      generation_error: ContentItem['generation_error'];
+      current_operation: ContentItem['current_operation'];
+      summary_status: ContentItem['summary_status'];
+    }>>('/content/status', { ids }),
+
   create: (data: Partial<ContentItem>) => api.post<ContentItem>('/content', data),
 
   update: (id: number, data: Partial<ContentItem>) =>
@@ -132,8 +146,6 @@ export const podcastAPI = {
   unsubscribe: (id: number) => api.delete<Podcast>(`/podcasts/${id}`),
 
   // refresh: (id: number) => api.post(`/podcasts/${id}/refresh`), // Removed - auto-added episodes to library
-
-  getEpisodes: (id: number) => api.get<ContentItem[]>(`/podcasts/${id}/episodes`),
 
   getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
     api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
