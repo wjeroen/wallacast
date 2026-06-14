@@ -30,7 +30,6 @@ import {
   ChevronDown,
   Pencil,
   Eye,
-  History,
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
@@ -549,11 +548,11 @@ export function FullscreenPlayer({
 
     // Summary sits immediately to the right of Content/Read-along, once a summary exists.
     if ((content.summary || '').trim()) tabs.push('summary');
-    // History (edit/refetch/restore snapshots) only for editable items.
-    if (isArticleOrText) tabs.push('history');
+    // History only for editable items that actually have at least one prior snapshot.
+    if (isArticleOrText && versions.length > 0) tabs.push('history');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment]);
+  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -772,9 +771,12 @@ export function FullscreenPlayer({
     }
   }, [content.id]);
 
+  // Load the (lean) version list when an editable item opens, so we know whether to even
+  // show the History tab (only items with at least one prior snapshot get it).
   useEffect(() => {
-    if (activeTab === 'history') loadVersions();
-  }, [activeTab, loadVersions]);
+    if (content.type === 'article' || content.type === 'text') loadVersions();
+    else setVersions([]);
+  }, [loadVersions, content.type]);
 
   const viewVersion = async (versionId: number) => {
     try {
@@ -1794,9 +1796,7 @@ export function FullscreenPlayer({
             {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
             {tab === 'read-along' && 'Read-along'}
             {tab === 'summary' && 'Summary'}
-            {tab === 'history' && (
-              <><History size={13} style={{ verticalAlign: '-2px', marginRight: 3 }} />History</>
-            )}
+            {tab === 'history' && 'History'}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}
