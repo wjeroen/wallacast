@@ -12,7 +12,8 @@ Deploy it yourself to try it out, or reach out to me for a link.
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
 - **File Upload → Audio**: Upload `.html` or `.htm` files directly — treated exactly like articles
-- **Texts → Audio**: Paste plain text or HTML — converted to audio with read-along alignment
+- **Texts → Audio**: Paste Markdown, plain text, or HTML — converted to audio with read-along alignment
+- **Editable**: Articles and texts can be edited in a built-in Markdown editor (round-trips with Obsidian); every edit/refetch/restore is snapshotted to version history
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
@@ -71,7 +72,10 @@ Wallacast supports multiple users with complete data isolation:
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
-| Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
+| Markdown editor / Copy content / HTML↔Markdown conversion | `frontend/src/markdown.ts` (turndown + marked), used by `FullscreenPlayer.tsx` |
+| Editing articles/texts (backend) | `backend/src/routes/content.ts` (PATCH `is_edit`) |
+| Version history (edit/refetch/restore snapshots) | `backend/src/routes/content.ts` (`/:id/versions*`), `content_versions` table, History tab in `FullscreenPlayer.tsx` |
+| Adding content (URL/text/HTML/Markdown upload) | `frontend/src/components/AddTab.tsx` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Library filters/search/bulk actions | `frontend/src/components/LibraryTab.tsx`, `frontend/src/store/contentStore.ts` (filter model + matcher), `backend/src/routes/content.ts` (`POST /bulk`) |
@@ -148,6 +152,7 @@ Wallacast supports multiple users with complete data isolation:
   - `012_add_feed_type.sql`: Adds type column to podcasts table for RSS feed type detection (podcast/newsletter/blog)
   - `014_add_image_alt_text.sql`: Adds image alt-text generation support (images_processed BOOLEAN, image_alt_text_data JSONB) and user setting for toggle
   - `019_add_summary_columns.sql`: Adds summary support (`summary` TEXT, `comment_summary` TEXT, `summary_status` VARCHAR, `summary_generated_at` TIMESTAMP) for article + comment summaries
+  - `020_add_content_versions.sql`: Adds the `content_versions` table — body snapshots (html_content/content/comments, never audio) saved before each edit/refetch/restore so changes can be rolled back
 
 #### Middleware
 
@@ -183,12 +188,16 @@ Wallacast supports multiple users with complete data isolation:
     - `summary: null` removes the article + comment summaries from articles/texts
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
+    - `is_edit: true` (with `html_content` + `content`) — manual Markdown/HTML edit of an article/text body. Snapshots the current body into `content_versions` first, sanitizes the HTML (strips `<script>`/`<style>`/`javascript:`), sets `content_fetched_at = now`, and leaves audio + read-along untouched (so the provenance shows content is newer than the narration). The frontend converts Markdown→HTML before sending.
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation. Articles/texts: body + comments. Podcast episodes: the Whisper TRANSCRIPT (podcast-specific prompt). Body: `{ regenerate?: boolean, generate_transcript?: boolean }` — for podcasts without a transcript, `generate_transcript: true` runs Whisper first and chains the summary after; without it the request returns 400 with `code: 'no_transcript'` so the UI can warn. Uses the independent `summary_status` field, so it can run alongside audio generation.
   - `POST /bulk` - Bulk actions on many items in one request (used by the library's Select mode). Body: `{ action, ids }` (max 500 ids). Actions: `star`, `unstar`, `archive`, `unarchive`, `delete`, `remove_audio`, `remove_summary`. `archive` mirrors the single-item PATCH: wipes generated audio + read-along data for non-starred articles/texts (podcasts and starred items keep everything). `unarchive` deliberately does NOT auto-regenerate audio (use bulk Generate audio afterwards). `remove_audio` only touches articles/texts (podcast audio_url is source media). `delete` also fires Wallabag deletions for synced items. Returns `{ affected }`.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Serving order**: (A) podcast episodes proxy the external `audio_url`; (B) **preferred** — generated article/text audio is streamed from the disk file on the volume (`audio-storage.ts`) with 2MB-capped range requests; (C) **fallback** — if there's no disk file yet, the legacy in-DB `audio_data` blob is served via PostgreSQL `substring()` (reads only the needed bytes, never the whole blob). The live handler is the one in `index.ts`; the near-identical one in `content.ts` is shadowed dead code (TODO: remove).
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
+  - `GET /:id/versions` - List version-history snapshots (lean metadata only — `id`, `source`, `title`, `created_at`, `html_bytes`, `has_comments`; no bodies).
+  - `GET /:id/versions/:versionId` - Fetch one version's full body (for viewing before restoring).
+  - `POST /:id/versions/:versionId/restore` - Restore a version (snapshots the current body first, then overwrites; audio/read-along untouched).
   - `DELETE /:id` - Delete content and clean up audio files
 
 - **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
@@ -371,7 +380,9 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`components/FeedCards.tsx`**: Shared Feed tab cards — `FeedCard` (podcast/newsletter rows + the expanded selected-feed card, variants: `search-result`/`subscription`/`expanded`) and `FeedEpisodeCard` (episode/article rows used by all three Feed tab lists). Action buttons are passed in by the caller. Replaces seven copy-pasted card JSX blocks.
 
-- **`format.ts`**: Shared formatting helpers (`cleanHtml`, `formatDuration`, `getDomainFromUrl`, `toTweets`, `htmlToMarkdown`) previously duplicated across components.
+- **`format.ts`**: Shared formatting helpers (`cleanHtml`, `formatDuration`, `getDomainFromUrl`, `toTweets`) previously duplicated across components. (`htmlToMarkdown` moved to `markdown.ts`.)
+
+- **`markdown.ts`**: Shared HTML↔Markdown conversion used by the editor AND "Copy content" (so they produce identical output). `htmlToMarkdown()` uses **turndown** + **turndown-plugin-gfm**; `markdownToHtml()` uses **marked** (GFM). Custom rules make Wallacast's special structures round-trip losslessly while staying Obsidian-friendly: LessWrong/EA Forum LLM blocks (`div.llm-content-block`) ↔ Obsidian callout `> [!ai] <model name>`, tweet embeds (`blockquote.twitter-tweet`) ↔ `> [!tweet]`. Tables → GFM pipe tables, images → standard `![alt](url)`, links/bold/italic native. Anything unrecognized is **kept as raw HTML** (no data loss). `markdownToHtml()` strips `<script>`/`<style>` (the backend strips again on save).
 
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
@@ -388,7 +399,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles. The **Text** type has a **Markdown / HTML format toggle** (Markdown is the friendly default — converted to HTML via `markdown.ts` `markdownToHtml()` before saving; HTML mode passes raw HTML through, cleaned server-side).
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - Organized into: API Keys, Audio Generation, Wallabag Sync
@@ -403,7 +414,9 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/AudioPlayer.tsx`**: Manages audio playback state (HTMLAudioElement, position saving, speed, sleep timer). Renders either the compact MiniPlayer (above the bottom tab bar) or the FullscreenPlayer overlay — items WITHOUT audio render fullscreen only (the mini player is playback chrome, so it never shows for them and the fullscreen minimize button hides). Handles the iOS headphone-disconnect guard, play/pause icon sync, and podcast audio proxying through the backend.
 
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
-  - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
+  - **Content tab** (articles/texts; default when there's no read-along): the current `html_content` rendered as formatted text, plus comments below. Has an **Edit** button → opens a **Markdown editor** (textarea with Write/Preview toggle; uses `markdown.ts`). Saving converts Markdown→HTML, snapshots the old body to version history, and treats the edit like a fresh fetch (audio + read-along are left untouched-but-outdated until regenerated). Articles also keep the **Refetch from web** button here.
+  - **Read-along tab** (articles/texts with audio/alignment, podcasts): synced read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays. Read-only and tied to the **audio version** of the text. Default tab when it exists. (Content and Read-along were one merged tab before; they're split so the editable live text and the frozen synced view are cleanly separated.)
+  - **History tab** (articles/texts): lists version-history snapshots (saved before each edit/refetch/restore — never audio) with View and Restore. Restore snapshots the current body first (so it's undoable).
   - **Description tab** (podcasts only): Podcast episode description with HTML formatting
   - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot of type + status + search query; matching uses the shared `itemMatchesFilter` from `contentStore.ts`). The stream pivot is position-based on the full id stream (shuffle order or library order), so archiving the playing item mid-track doesn't reset the stream. Shuffle preference persists via the `queue_shuffle` setting; the order is built lazily on first use (safe even when settings hydrate before the library loads). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
@@ -411,7 +424,7 @@ Wallacast supports multiple users with complete data isolation:
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
   - LLM content blocks (LessWrong/EA Forum `div.llm-content-block`): displayed in serif font with purple left border and model name badge (e.g., "Claude Opus 4.6"). TTS narration announces model attribution
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
-  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `format.ts`), and "Download data (zip)"
+  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `markdown.ts` — now preserves images, links, and inline formatting, identical to what the editor shows), and "Download data (zip)"
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
@@ -533,6 +546,17 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - **Unique constraint**: `(feed_id, guid)` - Prevents duplicate items in the same feed
 - **Performance**: Loading 70 feeds with 100 items each = instant database query instead of 70 network requests
 
+### content_versions (article/text version history)
+- `id`: Primary key
+- `content_item_id`: FK to content_items (ON DELETE CASCADE)
+- `user_id`: FK to users (ON DELETE CASCADE)
+- `source`: `'fetch' | 'refetch' | 'edit' | 'restore'` — the action that overwrote this snapshot
+- `title`, `html_content`, `content`: snapshot of the body before the overwrite
+- `comments`: JSONB snapshot of comments at that time
+- `created_at`
+- **Purpose**: lets a bad edit or poor refetch be rolled back. Audio is deliberately NOT versioned (too large). The app keeps the most recent 25 snapshots per item (pruned in app code on insert).
+- **Index**: `(content_item_id, created_at DESC)` for fast newest-first listing
+
 ### queue_items (manual play queue)
 - `id`: Primary key
 - `user_id`: FK to users table (queues are per-user)
@@ -653,6 +677,27 @@ The app had a catastrophic data leak that caused 80GB mobile data usage when awa
 Fixed by using explicit column lists everywhere, excluding audio_data from list/update queries, only fetching it when actually playing audio.
 
 **Result:** App is now dramatically faster, clicking items is instant, mobile data usage reduced by ~99%, query times <100ms
+
+## License & Open-Source Dependencies
+
+This project itself does not yet ship a formal license file (it's a personal, vibe-coded project — see the warning at the top). It stands on the shoulders of the following open-source libraries, all used under their respective licenses. Thanks to their authors. 🙏
+
+**Backend (runtime):**
+- MIT: `express`, `express-basic-auth`, `pg`, `bcrypt`, `jsonwebtoken`, `cors`, `node-fetch`, `jsdom`, `cheerio`, `archiver`, `fluent-ffmpeg`, `seqalign`, `copyfiles`
+- Apache-2.0: `openai`, `@google/genai`, `got-scraping`
+- BSD-2-Clause: `dotenv`
+
+**Frontend (runtime):**
+- MIT: `react`, `react-dom`, `react-router-dom`, `zustand`, `axios`, `marked`, `turndown`, `turndown-plugin-gfm`, `serve`
+- ISC: `lucide-react`
+
+**Build/dev tooling:** `typescript` (Apache-2.0), `vite`, `tsx`, `eslint` + plugins, `@vitejs/plugin-react`, and the various `@types/*` packages (all MIT).
+
+**External tools / services (not bundled):**
+- **FFmpeg** — system binary installed in the backend Dockerfile, used for audio processing. FFmpeg is licensed under the LGPL/GPL; Wallacast invokes it as a separate executable (via `fluent-ffmpeg`), it is not linked into the app.
+- TTS/transcription/LLM **models** are accessed as hosted APIs (DeepInfra, OpenAI, Google Gemini) under their respective terms — no model weights are bundled.
+
+> Note: there is no top-level `LICENSE` file for Wallacast itself. If you intend to share or open-source this, add one (e.g. MIT) to make the terms explicit.
 
 ## Task Tracking
 
