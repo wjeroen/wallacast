@@ -122,10 +122,11 @@ Wallacast supports multiple users with complete data isolation:
 ### Backend (`/backend/src/`)
 
 #### Entry Point
-- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling.
+- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling. On every startup, logs a `📦 [Storage]` database-size breakdown to the Railway logs (audio blobs, transcripts, word timestamps, HTML, comments, table + whole-DB totals) — check the Railway backend logs after a deploy/restart to see how much disk the data uses (used for sizing the audio-to-volume migration).
 
 #### Configuration
 - **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`
+- **`services/audio-storage.ts`**: File-based storage for generated article/text audio (`{id}.mp3` on the volume). Audio used to live in Postgres as a `audio_data` BYTEA blob, which Postgres cached in RAM for days (expensive — RAM is ~$10/GB/mo vs. disk ~$0.15-0.25/GB/mo). Generated audio now writes to disk; serving (`index.ts`) reads the disk file first and **falls back to the DB blob** for not-yet-migrated items. Provides `saveAudioFile`, `getAudioFileSize`, `deleteAudioFile`, `createAudioReadStream`, plus the one-time `migrateAudioBlobsToDisk()` (non-destructive copy, auto-runs at startup) and `clearMigratedAudioBlobs()` (destructive, env-gated by `CLEAR_AUDIO_BLOBS=true`). Podcast episodes are unaffected — their audio is an external `audio_url`.
 - **`config/processing.ts`**: Centralized constants for audio/text processing (TTS chunk size: 3500 chars, Whisper limits: 25MB/15min chunks, retry config: 5 attempts with exponential backoff). Makes tuning easier without code changes.
 
 #### Database
@@ -173,6 +174,7 @@ Wallacast supports multiple users with complete data isolation:
 - **`routes/content.ts`**: CRUD for content items (requires JWT auth). **All queries filter by `user_id`** for data isolation. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
   - `GET /` - List all content (excludes audio_data, html_content, comments, transcript for performance)
   - `GET /:id` - Get single item (includes comments and transcript for display)
+  - `POST /status` - **Batch generation-status poll.** Body: `{ ids: number[] }` (max 500). Returns ONLY the small status fields (`generation_status`, `generation_progress`, `current_operation`, `generation_error`, `summary_status`) for all requested ids in one request (a few hundred bytes total). The library's 2s poll uses this **instead of** `GET /:id` per item — `GET /:id` returns the full transcript + 9,000+ word timestamps + alignment (~0.5MB per transcribed podcast), which polled every 2s is the same class of bug as the 80GB data incident. The full item is still fetched once, at completion, via `GET /:id`. Keep this endpoint lean — never add large columns.
   - `POST /` - Create content, auto-extracts article HTML if URL provided. **Text items**: content is stored in both `content` and `html_content` columns so read-along/alignment works identically to articles. **HTML upload cleanup**: strips scripts/styles, fixes broken Obsidian markdown image artifacts (local `<img>` paths replaced with real URLs from `](url)` text), removes images with relative paths that can't load on the server.
   - `PATCH /:id` - Update playback position, archive status, etc. Special operations:
     - Archiving deletes audio, alignment data, and transcript to save space (unless item is favorited)
@@ -184,7 +186,7 @@ Wallacast supports multiple users with complete data isolation:
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation. Articles/texts: body + comments. Podcast episodes: the Whisper TRANSCRIPT (podcast-specific prompt). Body: `{ regenerate?: boolean, generate_transcript?: boolean }` — for podcasts without a transcript, `generate_transcript: true` runs Whisper first and chains the summary after; without it the request returns 400 with `code: 'no_transcript'` so the UI can warn. Uses the independent `summary_status` field, so it can run alongside audio generation.
   - `POST /bulk` - Bulk actions on many items in one request (used by the library's Select mode). Body: `{ action, ids }` (max 500 ids). Actions: `star`, `unstar`, `archive`, `unarchive`, `delete`, `remove_audio`, `remove_summary`. `archive` mirrors the single-item PATCH: wipes generated audio + read-along data for non-starred articles/texts (podcasts and starred items keep everything). `unarchive` deliberately does NOT auto-regenerate audio (use bulk Generate audio afterwards). `remove_audio` only touches articles/texts (podcast audio_url is source media). `delete` also fires Wallabag deletions for synced items. Returns `{ affected }`.
-  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Optimized**: Range requests use PostgreSQL `substring()` to read only the needed bytes (not the entire blob), capped at 2MB chunks. This makes seeking near-instant even for 100MB+ files.
+  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Serving order**: (A) podcast episodes proxy the external `audio_url`; (B) **preferred** — generated article/text audio is streamed from the disk file on the volume (`audio-storage.ts`) with 2MB-capped range requests; (C) **fallback** — if there's no disk file yet, the legacy in-DB `audio_data` blob is served via PostgreSQL `substring()` (reads only the needed bytes, never the whole blob). The live handler is the one in `index.ts`; the near-identical one in `content.ts` is shadowed dead code (TODO: remove).
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
   - `DELETE /:id` - Delete content and clean up audio files
@@ -556,7 +558,13 @@ DATABASE_URL=(auto-provided by Railway)
 FRONTEND_URL=https://your-frontend.up.railway.app
 JWT_SECRET=your-secret-key-here  # Optional but recommended for persistent sessions
 BACKEND_URL=https://your-backend.up.railway.app  # For audio URL generation
+CLEAR_AUDIO_BLOBS=true  # ONE-TIME, optional: after verifying audio plays from the volume,
+                        # set this to NULL the old audio_data blobs in Postgres and free
+                        # the RAM/disk they used. Safe to leave set (idempotent). See the
+                        # audio-storage migration. Requires a volume mounted at /data.
 ```
+
+**Audio storage migration (RAM cost fix):** Generated audio lives on the Railway volume at `/data/audio/{id}.mp3`, not in Postgres. On startup the backend auto-copies any remaining `audio_data` blobs to disk (non-destructive, logged as `🎵 [AudioMigration]`). Once you've confirmed playback works, set `CLEAR_AUDIO_BLOBS=true` to drop the in-DB blobs. The startup log also prints a `📦 [Storage]` size breakdown and a `🧠 [Postgres]` line showing `shared_buffers` etc. (so you can verify whether `POSTGRES_CONFIG` took effect — note: only the `feliperosenek/postgres-any-version` template reads that variable; Railway's default Postgres ignores it).
 
 **Frontend:**
 ```
@@ -632,7 +640,7 @@ The app implements several performance optimizations:
 - Zustand store for centralized state management
 - Optimistic UI updates: star/archive/delete happen instantly, then sync with server
 - Client-side filtering: all items fetched once, filter switching is instant (no API call per filter click)
-- Polling for generation status with targeted item updates
+- Polling for generation status uses a lean batch endpoint (`POST /content/status`) that returns only status fields for all generating items in one request — never the full transcript/timestamps/alignment. The full item is fetched once, at completion.
 - Large data only fetched when viewing individual items
 
 **Critical Performance Fix (January 2026):**

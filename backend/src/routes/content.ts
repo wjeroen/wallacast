@@ -12,6 +12,7 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
+import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
 
 const router = express.Router();
 
@@ -51,6 +52,46 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error fetching content:', error);
     res.status(500).json({ error: 'Failed to fetch content' });
+  }
+});
+
+// Batch generation-status poll. Returns ONLY the tiny status fields for many items
+// in a single request (a few hundred bytes total). The library polls this every 2s
+// while items are generating, instead of calling GET /:id per item.
+//
+// WHY THIS EXISTS: GET /:id returns the FULL item — transcript, 9,000+ word-level
+// timestamps, alignment, comments — roughly 0.5MB for a transcribed podcast. Polling
+// that per item every 2s is the same class of bug as the 80GB data incident (see
+// README "Critical Performance Fix"). The full item is still fetched once, at
+// completion, via GET /:id (the frontend's refreshItem). Keep this endpoint lean —
+// never add large columns (transcript_words, content_alignment, comments, html_content).
+//
+// IMPORTANT: a POST so it can take a list of ids in the body without colliding with
+// the GET '/:id' route below. Defined before '/:id' to mirror the audio-error-log convention.
+router.post('/status', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.json([]);
+    }
+    // Coerce to integers, drop junk, and cap to a sane batch size.
+    const safeIds = ids
+      .map((id: any) => parseInt(id, 10))
+      .filter((id: number) => Number.isFinite(id))
+      .slice(0, 500);
+    if (safeIds.length === 0) {
+      return res.json([]);
+    }
+    const result = await query(
+      `SELECT id, generation_status, generation_progress, generation_error, current_operation, summary_status
+         FROM content_items
+        WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user!.userId, safeIds]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching content statuses:', error);
+    res.status(500).json({ error: 'Failed to fetch content statuses' });
   }
 });
 
@@ -101,15 +142,19 @@ router.post('/bulk', async (req, res) => {
       // Mirrors PATCH /:id is_archived=true: wipe generated audio + read-along data for
       // NON-STARRED articles/texts only. Podcasts keep their (external) audio_url and
       // starred items keep everything.
-      await query(
+      // NOTE: no longer guarded on `audio_data IS NOT NULL` — audio now lives on disk, so
+      // that guard would skip disk-backed items and leave their files orphaned. We clear
+      // the (now-mostly-empty) audio columns and delete the disk file for each affected id.
+      const clearedArchive = await query(
         `UPDATE content_items
          SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
              transcript = NULL, transcript_words = NULL, tts_chunks = NULL
          WHERE user_id = $1 AND id = ANY($2::int[])
            AND type IN ('article', 'text') AND is_starred = false
-           AND (audio_data IS NOT NULL OR audio_url IS NOT NULL)`,
+         RETURNING id`,
         [userId, ids]
       );
+      for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
       const r = await query(
         `UPDATE content_items SET is_archived = true, updated_at = NOW()
          WHERE user_id = $1 AND id = ANY($2::int[])`,
@@ -138,9 +183,11 @@ router.post('/bulk', async (req, res) => {
              transcript = NULL, transcript_words = NULL, tts_chunks = NULL,
              generation_status = 'idle', generation_progress = 0,
              generation_error = NULL, current_operation = NULL, updated_at = NOW()
-         WHERE user_id = $1 AND id = ANY($2::int[]) AND type IN ('article', 'text')`,
+         WHERE user_id = $1 AND id = ANY($2::int[]) AND type IN ('article', 'text')
+         RETURNING id`,
         [userId, ids]
       );
+      for (const row of r.rows) await deleteAudioFile(row.id);
       affected = r.rowCount ?? 0;
     }
 
@@ -661,6 +708,7 @@ router.patch('/:id', async (req, res) => {
           updates.generation_status = null;
           updates.generation_progress = null;
           allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
+          await deleteAudioFile(id); // audio now lives on disk — delete the file too
         }
       }
     }
@@ -844,10 +892,15 @@ router.patch('/:id', async (req, res) => {
         // If updates.is_starred is present, use it. Otherwise use DB value.
         const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
 
+        // Audio may be in the DB blob (legacy) OR on the disk volume (new). Check both, so
+        // archiving still frees space after the migration (when audio_data is NULL).
+        const diskBytes = await getAudioFileSize(id);
+        const hasAudio = !!audio_data || diskBytes !== null;
+
         // Only delete audio for articles (not podcasts) and only if not favorited
-        if (audio_data && (type === 'article' || type === 'text') && !effectiveStarred) {
-          const audioSizeMB = (audio_data.length / 1024 / 1024).toFixed(2);
-          console.log(`Archived: Deleting ${audioSizeMB} MB of audio data to save space`);
+        if (hasAudio && (type === 'article' || type === 'text') && !effectiveStarred) {
+          const sizeMB = ((audio_data?.length ?? diskBytes ?? 0) / 1024 / 1024).toFixed(2);
+          console.log(`Archived: Deleting ${sizeMB} MB of audio to save space`);
           updates.audio_data = null;
           updates.audio_url = null;
           updates.duration = null;
@@ -856,7 +909,8 @@ router.patch('/:id', async (req, res) => {
           updates.transcript_words = null;
           updates.tts_chunks = null;
           allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks');
-        } else if (audio_data && effectiveStarred) {
+          await deleteAudioFile(id); // remove the on-disk file too
+        } else if (hasAudio && effectiveStarred) {
           console.log(`Archived: Preserving audio for favorited item ${id}`);
         }
       }
@@ -978,6 +1032,8 @@ router.delete('/:id', async (req, res) => {
       'DELETE FROM content_items WHERE id = $1 AND user_id = $2 RETURNING id',
       [req.params.id, req.user!.userId]
     );
+
+    await deleteAudioFile(req.params.id); // remove the on-disk audio file, if any
 
     res.json({ message: 'Content deleted successfully' });
   } catch (error) {

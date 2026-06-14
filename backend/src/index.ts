@@ -5,7 +5,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, getAudioDir } from './config/storage.js';
+import { ensureStorageDirectories, getAudioDir, isPersistentVolume } from './config/storage.js';
+import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -118,7 +119,46 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     }
 
     // -------------------------------------------------------------------------
-    // PATH B: article/text — serve audio_data from the database.
+    // PATH B (preferred): article/text audio stored as a file on the volume.
+    // Generated audio now lives on disk (cheap) instead of a Postgres blob
+    // (expensive RAM). Falls through to the DB-blob path below for items that
+    // haven't been migrated yet, so playback keeps working during the rollout.
+    // -------------------------------------------------------------------------
+    const diskSize = await getAudioFileSize(req.params.id);
+    if (diskSize !== null) {
+      const onStreamError = (err: Error) => {
+        console.error('[Audio] Disk stream error:', err.message);
+        if (!res.writableEnded) res.end();
+      };
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const maxChunk = 2 * 1024 * 1024; // 2MB — same as the DB path, for fast start
+        const end = parts[1]
+          ? Math.min(parseInt(parts[1], 10), diskSize - 1)
+          : Math.min(start + maxChunk - 1, diskSize - 1);
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${diskSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': end - start + 1,
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'public, max-age=31536000',
+        });
+        createAudioReadStream(req.params.id, start, end).on('error', onStreamError).pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Length': diskSize,
+          'Accept-Ranges': 'bytes',
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'public, max-age=31536000',
+        });
+        createAudioReadStream(req.params.id).on('error', onStreamError).pipe(res);
+      }
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // PATH C (fallback): article/text — serve audio_data from the database.
     // Uses PostgreSQL substring() for range requests so only the needed bytes
     // are read from the TOAST store (no full-blob loads = fast seeking).
     // -------------------------------------------------------------------------
@@ -200,6 +240,56 @@ app.use('/api/queue', requireDatabaseReady, requireAuth, queueRouter);
 app.use('/api/transcription', requireDatabaseReady, requireAuth, transcriptionRouter);
 app.use('/api/wallabag', requireDatabaseReady, wallabagRouter);
 
+// Log how much disk the database is using (audio blobs, transcripts, etc.) to the
+// Railway logs on every startup, so storage growth is visible without DB tooling.
+// Used for sizing the planned audio-to-volume migration (TODO.md, Performance section).
+// Fire-and-forget: must NEVER block or crash startup (table may not exist on a fresh DB).
+// pg_column_size() reads stored (TOASTed) sizes without loading the blobs into RAM.
+async function logStorageStats() {
+  try {
+    const items = await query(`
+      SELECT
+        COUNT(*)::int AS total_items,
+        COUNT(*) FILTER (WHERE audio_data IS NOT NULL)::int AS audio_items,
+        COALESCE(SUM(COALESCE(file_size, pg_column_size(audio_data))) FILTER (WHERE audio_data IS NOT NULL), 0)::bigint AS audio_bytes,
+        COALESCE(SUM(pg_column_size(transcript)), 0)::bigint AS transcript_bytes,
+        COALESCE(SUM(pg_column_size(transcript_words)), 0)::bigint AS transcript_words_bytes,
+        COALESCE(SUM(pg_column_size(html_content)), 0)::bigint AS html_bytes,
+        COALESCE(SUM(pg_column_size(comments)), 0)::bigint AS comments_bytes
+      FROM content_items
+    `);
+    const sizes = await query(
+      `SELECT pg_total_relation_size('content_items')::bigint AS table_bytes,
+              pg_database_size(current_database())::bigint AS db_bytes`
+    );
+    const mb = (b: any) => (Number(b) / 1024 / 1024).toFixed(1) + ' MB';
+    const s = items.rows[0];
+    const t = sizes.rows[0];
+    console.log('📦 [Storage] ===== Database storage breakdown =====');
+    console.log(`📦 [Storage] Audio blobs (audio_data):   ${mb(s.audio_bytes)} across ${s.audio_items} of ${s.total_items} items  <-- what the volume migration would move`);
+    console.log(`📦 [Storage] Transcripts (text):         ${mb(s.transcript_bytes)}`);
+    console.log(`📦 [Storage] Word timestamps (JSONB):    ${mb(s.transcript_words_bytes)}`);
+    console.log(`📦 [Storage] Article HTML:               ${mb(s.html_bytes)}`);
+    console.log(`📦 [Storage] Comments (JSONB):           ${mb(s.comments_bytes)}`);
+    console.log(`📦 [Storage] content_items table total:  ${mb(t.table_bytes)} (incl. indexes/overhead)`);
+    console.log(`📦 [Storage] Whole database on disk:     ${mb(t.db_bytes)}`);
+
+    // Postgres memory settings — so you can SEE whether POSTGRES_CONFIG (or any tuning)
+    // actually took effect. If shared_buffers is small (e.g. 64-128MB) the low preset is
+    // live; if it's the stock default the variable isn't being read by your DB image.
+    const cfg = await query(
+      `SELECT name, setting, unit FROM pg_settings
+        WHERE name IN ('shared_buffers','effective_cache_size','work_mem','maintenance_work_mem','max_connections')
+        ORDER BY name`
+    );
+    const fmt = cfg.rows.map((r: any) => `${r.name}=${r.setting}${r.unit ? r.unit : ''}`).join('  ');
+    console.log(`🧠 [Postgres] ${fmt}`);
+  } catch (error: any) {
+    // Never let stats logging affect startup (e.g. fresh DB without tables yet)
+    console.log('📦 [Storage] Stats unavailable:', error?.message || error);
+  }
+}
+
 // Initialize database and start server
 async function start() {
   // Start HTTP server FIRST so Railway sees it as healthy
@@ -252,6 +342,37 @@ async function start() {
 
       // Initialize storage directories
       await ensureStorageDirectories();
+
+      // Log storage breakdown to Railway logs (fire-and-forget, never blocks startup)
+      logStorageStats().catch(() => {});
+
+      // Migrate audio blobs out of Postgres onto the volume (fire-and-forget, never blocks
+      // startup). COPY is non-destructive and idempotent — safe to run every boot. The
+      // destructive CLEAR (NULL the blobs to actually free the DB) only runs when you set
+      // CLEAR_AUDIO_BLOBS=true, and only for items already verified on disk.
+      (async () => {
+        try {
+          if (isPersistentVolume()) {
+            console.log('🎵 [AudioMigration] ✅ Persistent volume detected at /data — audio files survive redeploys.');
+          } else {
+            console.warn('🎵 [AudioMigration] ⚠️ NO VOLUME AT /data — audio files are being written to the container\'s EPHEMERAL disk and will NOT survive a redeploy. Check the volume\'s mount path in Railway (must be exactly /data). DB blobs are kept, so nothing is lost — but the migration is not effective until the volume is mounted.');
+          }
+          const copy = await migrateAudioBlobsToDisk();
+          if (copy.migrated > 0 || copy.failed > 0) {
+            console.log(`🎵 [AudioMigration] Copied ${copy.migrated} audio file(s) to disk (${copy.mb} MB), skipped ${copy.skipped}, failed ${copy.failed}.`);
+          } else {
+            console.log(`🎵 [AudioMigration] Nothing to copy (${copy.skipped} already on disk or no blobs).`);
+          }
+          if (process.env.CLEAR_AUDIO_BLOBS === 'true') {
+            // clearMigratedAudioBlobs throws if storage isn't the persistent volume,
+            // so this can never destroy audio that only exists on ephemeral disk.
+            const cleared = await clearMigratedAudioBlobs();
+            console.log(`🧹 [AudioMigration] Cleared ${cleared.cleared} DB blob(s) now safely on disk; kept ${cleared.kept} (no disk file). You can now run VACUUM FULL to reclaim disk.`);
+          }
+        } catch (err: any) {
+          console.error('🎵 [AudioMigration] Stopped:', err?.message || err);
+        }
+      })();
       break;
     } catch (error) {
       retries--;
