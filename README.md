@@ -1,5 +1,11 @@
 # Wallacast
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
+![PWA](https://img.shields.io/badge/PWA-enabled-5A0FC8?logo=pwa&logoColor=white)
+
 A personal read-it-later and podcast PWA that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Podcasting. It has bidirectional wallabag sync. Optimized for LessWrong, the Effective Altruism Forum, and Substack (supports comments and LLM blocks).
 
 Deploy it yourself to try it out, or reach out to me for a link.
@@ -678,27 +684,6 @@ Fixed by using explicit column lists everywhere, excluding audio_data from list/
 
 **Result:** App is now dramatically faster, clicking items is instant, mobile data usage reduced by ~99%, query times <100ms
 
-## License & Open-Source Dependencies
-
-This project itself does not yet ship a formal license file (it's a personal, vibe-coded project — see the warning at the top). It stands on the shoulders of the following open-source libraries, all used under their respective licenses. Thanks to their authors. 🙏
-
-**Backend (runtime):**
-- MIT: `express`, `express-basic-auth`, `pg`, `bcrypt`, `jsonwebtoken`, `cors`, `node-fetch`, `jsdom`, `cheerio`, `archiver`, `fluent-ffmpeg`, `seqalign`, `copyfiles`
-- Apache-2.0: `openai`, `@google/genai`, `got-scraping`
-- BSD-2-Clause: `dotenv`
-
-**Frontend (runtime):**
-- MIT: `react`, `react-dom`, `react-router-dom`, `zustand`, `axios`, `marked`, `turndown`, `turndown-plugin-gfm`, `serve`
-- ISC: `lucide-react`
-
-**Build/dev tooling:** `typescript` (Apache-2.0), `vite`, `tsx`, `eslint` + plugins, `@vitejs/plugin-react`, and the various `@types/*` packages (all MIT).
-
-**External tools / services (not bundled):**
-- **FFmpeg** — system binary installed in the backend Dockerfile, used for audio processing. FFmpeg is licensed under the LGPL/GPL; Wallacast invokes it as a separate executable (via `fluent-ffmpeg`), it is not linked into the app.
-- TTS/transcription/LLM **models** are accessed as hosted APIs (DeepInfra, OpenAI, Google Gemini) under their respective terms — no model weights are bundled.
-
-> Note: there is no top-level `LICENSE` file for Wallacast itself. If you intend to share or open-source this, add one (e.g. MIT) to make the terms explicit.
-
 ## Task Tracking
 
 See **TODO.md** for current tasks, bug fixes, and feature roadmap.
@@ -718,3 +703,7 @@ npm run dev
 ```
 
 Requires PostgreSQL running locally or set `DATABASE_URL`.
+
+## License
+
+Released under the [MIT License](LICENSE). Built with many open-source libraries (React, Express, turndown, marked, and more) — each retains its own license.
