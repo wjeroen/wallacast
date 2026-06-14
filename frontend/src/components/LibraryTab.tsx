@@ -168,32 +168,49 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
     if (generatingItems.length === 0) return;
 
-    // Poll every 2 seconds for active generation
+    // Poll every 2 seconds for active generation.
+    // ONE batch request for all generating items — returns only the small status fields
+    // (a few hundred bytes), NOT the full item. Previously this looped getById per item,
+    // which shipped the entire transcript + 9k word timestamps + alignment every tick
+    // (~0.5MB per transcribed podcast). The full item is still fetched ONCE, at
+    // completion, via refreshItem.
     const pollInterval = setInterval(async () => {
-      for (const item of generatingItems) {
-        try {
-          const response = await contentAPI.getById(item.id);
-          const updated = response.data;
+      try {
+        const ids = generatingItems.map(i => i.id);
+        const response = await contentAPI.getStatuses(ids);
 
-          // Update just this item in the store
-          updateItem(item.id, updated);
+        for (const status of response.data) {
+          const before = generatingItems.find(i => i.id === status.id);
+          if (!before) continue;
 
-          // If item completed, refresh to get full data and track completion time
-          if (updated.generation_status === 'completed' && item.generation_status !== 'completed') {
-            setRecentlyCompleted(prev => new Map(prev).set(item.id, Date.now()));
-            setTimeout(() => refreshItem(item.id), 500);
+          // Merge just the small status fields (progress bar + badges keep animating)
+          updateItem(status.id, status);
+
+          const audioJustCompleted =
+            status.generation_status === 'completed' && before.generation_status !== 'completed';
+          const summaryJustFinished =
+            before.summary_status === 'generating' &&
+            (status.summary_status === 'completed' || status.summary_status === 'failed');
+
+          // Pull the FULL item once, now that it's done (transcript, alignment, summary text)
+          if (audioJustCompleted || summaryJustFinished) {
+            setTimeout(() => refreshItem(status.id), 500);
+          }
+
+          if (audioJustCompleted) {
+            setRecentlyCompleted(prev => new Map(prev).set(status.id, Date.now()));
             // Clear from recently completed after 5 seconds
             setTimeout(() => {
               setRecentlyCompleted(prev => {
                 const newMap = new Map(prev);
-                newMap.delete(item.id);
+                newMap.delete(status.id);
                 return newMap;
               });
             }, 5000);
           }
-        } catch (error) {
-          console.error('Failed to fetch item status:', error);
         }
+      } catch (error) {
+        console.error('Failed to fetch item statuses:', error);
       }
     }, 2000);
 
