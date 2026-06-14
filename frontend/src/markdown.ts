@@ -68,9 +68,20 @@ function buildTurndown(): TurndownService {
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
-  // Images: emit Obsidian's `![alt|WIDTH](src)` when the image has an explicit width, so
-  // narrow/small images keep their size through the round-trip (standard Markdown can't
-  // carry width). Width comes from the `width` attribute or an inline `style="width:..px"`.
+  // Keep figures that carry an explicit width (e.g. LessWrong's `image_resized` /
+  // `style="width:20.8%"`) as raw HTML — the size lives on the <figure>, as a percentage,
+  // which Markdown can't express. Plain figures (no width) still convert to Markdown.
+  td.keep((node) => {
+    const el = node as HTMLElement;
+    return (
+      el.nodeName === 'FIGURE' &&
+      (/width\s*:/i.test(el.getAttribute('style') || '') ||
+        (el.getAttribute('class') || '').includes('image_resized'))
+    );
+  });
+
+  // Images: emit Obsidian's `![alt|WIDTH](src)` when a bare image has an explicit pixel
+  // width, so it keeps its size through the round-trip (standard Markdown can't carry width).
   td.addRule('imageWithWidth', {
     filter: 'img',
     replacement: (_content, node) => {
