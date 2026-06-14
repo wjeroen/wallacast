@@ -536,20 +536,20 @@ export function FullscreenPlayer({
     const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
     const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
 
+    // Tab order: Description (podcasts) · Read-along · Content · History · Summary · Queue
     if (content.type === 'podcast_episode') {
       tabs.push('description');
       tabs.push('read-along');
     } else if (isArticleOrText) {
-      tabs.push('content');
       if (hasReadAlongData) tabs.push('read-along');
+      tabs.push('content');
+      // History only for editable items that actually have at least one prior snapshot.
+      if (versions.length > 0) tabs.push('history');
     } else {
       tabs.push('read-along');
     }
 
-    // Summary sits immediately to the right of Content/Read-along, once a summary exists.
     if ((content.summary || '').trim()) tabs.push('summary');
-    // History only for editable items that actually have at least one prior snapshot.
-    if (isArticleOrText && versions.length > 0) tabs.push('history');
     tabs.push('queue');
     return tabs;
   }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length]);
