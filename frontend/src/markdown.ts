@@ -10,8 +10,10 @@
 //     <-> Obsidian callout `> [!ai] X`
 //   - Tweet embeds (<blockquote class="twitter-tweet">) <-> `> [!tweet]` callout
 //   - Tables -> GFM pipe tables, images -> ![alt](url) (standard, Obsidian-native)
-//   - Anything we don't recognize (iframes, footnote markers) is KEPT as raw HTML so
-//     no information is silently dropped — Obsidian renders raw HTML too.
+//   - Footnotes (LessWrong/EA Forum `#fnXXX`, Substack `#footnote-N`) <-> Markdown
+//     `[^n]` references and `[^n]: ...` definitions (renumbered 1..N, back-links dropped)
+//   - Anything else we don't recognize (iframes, figures with captions/width) is KEPT as
+//     raw HTML so no information is silently dropped — Obsidian renders raw HTML too.
 //
 // Because the SAME functions power both the editor and "Copy content", what you copy is
 // exactly what you'd see in the editor.
@@ -120,7 +122,83 @@ const turndownService = buildTurndown();
  */
 export function htmlToMarkdown(html: string): string {
   if (!html) return '';
-  return turndownService.turndown(html).trim();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const footnotes = extractFootnotes(doc);
+  let md = turndownService.turndown(doc.body.innerHTML).trim();
+  // Turn the inline marker tokens left by extractFootnotes into `[^n]`.
+  md = md.replace(/XWCFNREFX(\d+)X/g, (_m, n) => `[^${n}]`);
+  if (footnotes.length > 0) {
+    md = md.trim() + '\n\n' + footnotes.map((f) => `[^${f.n}]: ${f.body}`).join('\n\n');
+  }
+  return md.trim();
+}
+
+interface ExtractedFootnote {
+  n: number;
+  body: string;
+}
+
+// Convert article footnotes into Markdown footnote syntax. Handles LessWrong/EA Forum
+// (`<sup><a href="#fnXXX">[1]</a></sup>` + an `<ol>` of definitions with `^` back-links) and
+// Substack (`<a href="#footnote-1">1</a>` + `#footnote-anchor-1` back-links). MUTATES `doc`:
+// each inline marker becomes a token (the caller swaps it for `[^n]`), and the definition
+// elements are removed and returned so the caller can append `[^n]: ...` lines. References are
+// renumbered 1..N by first appearance; back-reference carets are dropped.
+function extractFootnotes(doc: Document): ExtractedFootnote[] {
+  const isForwardRef = (href: string | null): boolean =>
+    !!href && /^#(fn(?!ref)|footnote-(?!anchor))/i.test(href);
+
+  const markers = Array.from(doc.querySelectorAll('a[href^="#"]')).filter((a) =>
+    isForwardRef(a.getAttribute('href'))
+  );
+  if (markers.length === 0) return [];
+
+  const targetToNum = new Map<string, number>();
+  const order: Array<{ id: string; n: number }> = [];
+  let counter = 0;
+
+  for (const a of markers) {
+    const id = decodeURIComponent((a.getAttribute('href') || '').slice(1));
+    if (!id) continue;
+    if (!targetToNum.has(id)) {
+      targetToNum.set(id, ++counter);
+      order.push({ id, n: counter });
+    }
+    const n = targetToNum.get(id)!;
+    // Replace the whole <sup> wrapper if it only holds this marker, else just the <a>.
+    const sup = a.closest('sup');
+    const toReplace = sup && (sup.textContent || '').trim() === (a.textContent || '').trim() ? sup : a;
+    toReplace.parentNode?.replaceChild(doc.createTextNode(`XWCFNREFX${n}X`), toReplace);
+  }
+
+  const footnotes: ExtractedFootnote[] = [];
+  const parents = new Set<Element>();
+
+  for (const { id, n } of order) {
+    const def = doc.getElementById(id);
+    if (!def) continue;
+    // Drop back-reference links (and their <sup> wrappers).
+    def.querySelectorAll('a[href^="#fnref"], a[href^="#footnote-anchor"]').forEach((back) => {
+      const sup = back.closest('sup');
+      (sup && (sup.textContent || '').trim() === (back.textContent || '').trim() ? sup : back).remove();
+    });
+    let body = turndownService.turndown(def.innerHTML).replace(/\s+/g, ' ').trim();
+    body = body.replace(/^[\^↩\s]+/, '').replace(/[↩\s]+$/, '').trim();
+    footnotes.push({ n, body });
+    if (def.parentElement) parents.add(def.parentElement);
+    def.remove();
+  }
+
+  // Remove now-empty footnote containers (the <ol>, and a wrapping footnotes section).
+  parents.forEach((p) => {
+    if (p.childElementCount === 0) {
+      const gp = p.parentElement;
+      p.remove();
+      if (gp && gp.childElementCount === 0 && /footnote/i.test(gp.className || '')) gp.remove();
+    }
+  });
+
+  return footnotes.sort((a, b) => a.n - b.n);
 }
 
 /**
@@ -131,7 +209,37 @@ export function htmlToMarkdown(html: string): string {
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return '';
 
-  const rawHtml = marked.parse(markdown, { gfm: true, async: false }) as string;
+  let md = markdown;
+
+  // Footnotes: pull out the `[^k]: body` definitions, then turn inline `[^k]` references into
+  // <sup> links. Rendered back as one canonical, clickable footnote section at the end (ids
+  // `fn-k` / `fnref-k` — recognized by the player's footnote click handler).
+  const footnoteDefs = new Map<string, string>();
+  md = md.replace(/^[ \t]*\[\^([^\]]+)\]:[ \t]?(.*)$/gm, (_m, key, body) => {
+    footnoteDefs.set(String(key).trim(), String(body || '').trim());
+    return '';
+  });
+  if (footnoteDefs.size > 0) {
+    md = md.replace(/\[\^([^\]]+)\]/g, (whole, key) => {
+      const k = String(key).trim();
+      if (!footnoteDefs.has(k)) return whole;
+      return `<sup class="footnote-ref" id="fnref-${k}"><a href="#fn-${k}">[${k}]</a></sup>`;
+    });
+  }
+
+  let rawHtml = marked.parse(md, { gfm: true, async: false }) as string;
+
+  if (footnoteDefs.size > 0) {
+    const items = Array.from(footnoteDefs.entries())
+      .map(
+        ([key, body]) =>
+          `<li id="fn-${key}">${marked.parseInline(body, { async: false }) as string} ` +
+          `<a href="#fnref-${key}" class="footnote-backref" aria-label="Back to content">↩</a></li>`
+      )
+      .join('');
+    rawHtml += `<section class="footnotes"><hr><ol>${items}</ol></section>`;
+  }
+
   const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
 
   // Obsidian image-resize syntax: marked renders `![alt|200](url)` with alt="alt|200".
