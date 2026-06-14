@@ -57,6 +57,19 @@ export interface ContentItem {
   summary_generated_at?: string; // When the summary was last generated
 }
 
+// A snapshot of an article/text body saved before an edit/refetch/restore (version history).
+export interface ContentVersion {
+  id: number;
+  source: 'fetch' | 'refetch' | 'edit' | 'restore';
+  title?: string;
+  created_at: string;
+  html_bytes?: number;      // present in the lean list response
+  has_comments?: boolean;   // present in the lean list response
+  html_content?: string;    // present when fetching a single version
+  content?: string;
+  comments?: Comment[] | string;
+}
+
 export interface Podcast {
   id: number;
   title: string;
