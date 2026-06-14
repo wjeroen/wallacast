@@ -28,12 +28,15 @@ import {
   Shuffle,
   ChevronUp,
   ChevronDown,
+  Pencil,
+  Eye,
+  History,
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { htmlToMarkdown } from '../format';
+import { htmlToMarkdown, markdownToHtml } from '../markdown';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
-import type { ContentItem, Comment } from '../types';
+import type { ContentItem, ContentVersion, Comment } from '../types';
 
 interface TranscriptWord {
   word: string;
@@ -91,7 +94,18 @@ interface FullscreenPlayerProps {
   initialTab?: string;
 }
 
-type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'queue';
+type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
+
+// Human-readable label for a version snapshot's source (the action that overwrote it).
+function versionSourceLabel(source: ContentVersion['source']): string {
+  switch (source) {
+    case 'edit': return 'Before edit';
+    case 'refetch': return 'Before refetch';
+    case 'restore': return 'Before restore';
+    case 'fetch': return 'Original fetch';
+    default: return source;
+  }
+}
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
@@ -362,8 +376,29 @@ export function FullscreenPlayer({
   const [showDisplayPanel, setShowDisplayPanel] = useState(false);
   const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
-  const { toggleStarred, toggleArchived, deleteItem } = useContentStore();
+  const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Markdown editor (Content tab) state
+  const [editing, setEditing] = useState(false);
+  const [draftMd, setDraftMd] = useState('');
+  const [showEditPreview, setShowEditPreview] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Version history (History tab) state
+  const [versions, setVersions] = useState<ContentVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [viewingVersion, setViewingVersion] = useState<ContentVersion | null>(null);
+
+  // Reset editor + history view whenever the item changes
+  useEffect(() => {
+    setEditing(false);
+    setShowEditPreview(false);
+    setEditError(null);
+    setViewingVersion(null);
+    setVersions([]);
+  }, [content.id]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -491,24 +526,34 @@ export function FullscreenPlayer({
     return activeIdx;
   }, [isLLMAlignment, parsedAlignment, currentTime]);
 
-  // Legacy: Extract HTML sections for old aligned read-along (non-LLM)
-  // Determine which tabs are available
-  // NOTE: 'content' (Original Content) and 'comments' tabs are hidden — the read-along
-  // tab now renders content AND comments with per-element timestamps and is the default.
-  // The old tabs are kept in the code so they can be re-enabled easily if needed.
+  // Determine which tabs are available.
+  // Articles/texts get an editable "Content" tab (current text) plus a read-only
+  // "Read-along" tab (synced to the audio version) once audio/alignment exists — so the
+  // editable live text and the frozen synced view are cleanly separated. The Read-along
+  // tab is the default when it exists; otherwise Content is the default.
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
-    // Hidden tabs (uncomment to re-enable):
-    // if (content.type === 'article' || content.type === 'text') tabs.push('content');  // Original Content tab
-    // if (content.type === 'article' && isEAForumOrLessWrong(content.url || '')) tabs.push('comments');  // Comments tab
-    if (content.type === 'podcast_episode') tabs.push('description');
-    tabs.push('read-along');
-    // Summary tab sits immediately to the right of the "Content" (read-along) tab,
-    // and only appears once an article-body summary has been generated.
+    const isArticleOrText = content.type === 'article' || content.type === 'text';
+    const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
+    const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
+
+    if (content.type === 'podcast_episode') {
+      tabs.push('description');
+      tabs.push('read-along');
+    } else if (isArticleOrText) {
+      tabs.push('content');
+      if (hasReadAlongData) tabs.push('read-along');
+    } else {
+      tabs.push('read-along');
+    }
+
+    // Summary sits immediately to the right of Content/Read-along, once a summary exists.
     if ((content.summary || '').trim()) tabs.push('summary');
+    // History (edit/refetch/restore snapshots) only for editable items.
+    if (isArticleOrText) tabs.push('history');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.url, content.summary, parsedComments.length]);
+  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -678,6 +723,83 @@ export function FullscreenPlayer({
   // Download data as zip (backend generates zip, frontend triggers download)
   // --------------------------------------------------------------------------
   const safeName = (content.title || 'content').replace(/[^a-zA-Z0-9-_ ]/g, '');
+
+  // ---- Markdown editor (Content tab) ----
+  const startEdit = () => {
+    setEditError(null);
+    setDraftMd(htmlToMarkdown(content.html_content || content.content || ''));
+    setShowEditPreview(false);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setShowEditPreview(false);
+    setEditError(null);
+  };
+
+  const saveEdit = async () => {
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const html = markdownToHtml(draftMd);
+      const plain = (new DOMParser().parseFromString(html, 'text/html').body.textContent || '').trim();
+      await contentAPI.saveEdit(content.id, html, plain);
+      // The PATCH response omits html_content; fetch the full fresh item to update the view + store.
+      const fresh = await contentAPI.getById(content.id);
+      onContentUpdated?.(fresh.data);
+      updateItem(content.id, fresh.data);
+      setEditing(false);
+      setShowEditPreview(false);
+    } catch (e) {
+      console.error('Failed to save edit:', e);
+      setEditError('Failed to save. Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // ---- Version history (History tab) ----
+  const loadVersions = useCallback(async () => {
+    setVersionsLoading(true);
+    try {
+      const res = await contentAPI.listVersions(content.id);
+      setVersions(res.data);
+    } catch (e) {
+      console.error('Failed to load versions:', e);
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [content.id]);
+
+  useEffect(() => {
+    if (activeTab === 'history') loadVersions();
+  }, [activeTab, loadVersions]);
+
+  const viewVersion = async (versionId: number) => {
+    try {
+      const res = await contentAPI.getVersion(content.id, versionId);
+      setViewingVersion(res.data);
+    } catch (e) {
+      console.error('Failed to load version:', e);
+    }
+  };
+
+  const restoreVersion = async (versionId: number) => {
+    if (!confirm('Restore this version? Your current text is saved to history first, so you can undo this. Audio/read-along are not regenerated.')) return;
+    try {
+      await contentAPI.restoreVersion(content.id, versionId);
+      const fresh = await contentAPI.getById(content.id);
+      onContentUpdated?.(fresh.data);
+      updateItem(content.id, fresh.data);
+      setViewingVersion(null);
+      loadVersions();
+      setActiveTab('content');
+    } catch (e) {
+      console.error('Failed to restore version:', e);
+      alert('Failed to restore version.');
+    }
+  };
 
   // Copy the readable content (title, link, author, date, body, comments) to
   // the clipboard as Markdown — what Ctrl+A/Ctrl+C *should* give you, without
@@ -1010,19 +1132,97 @@ export function FullscreenPlayer({
                     )}
                   </p>
                 )}
+                {content.type === 'text' && (content.content_fetched_at || content.updated_at) && (
+                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
+                    Last edited on {new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB')}
+                    {content.audio_generated_at && content.audio_url && (
+                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+                    )}
+                  </p>
+                )}
               </div>
-              {content.type === 'article' && content.url && onRefetch && (
-                <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
-                  <RefreshCw size={16} />
-                  <span className="refetch-text-full">Refetch from web</span>
-                  <span className="refetch-text-short">Refetch</span>
-                </button>
+              {!editing && (content.type === 'article' || content.type === 'text') && (
+                <div className="content-header-actions">
+                  <button className="refetch-button" title="Edit as Markdown" onClick={startEdit}>
+                    <Pencil size={16} />
+                    <span className="refetch-text-full">Edit</span>
+                    <span className="refetch-text-short">Edit</span>
+                  </button>
+                  {content.type === 'article' && content.url && onRefetch && (
+                    <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
+                      <RefreshCw size={16} />
+                      <span className="refetch-text-full">Refetch from web</span>
+                      <span className="refetch-text-short">Refetch</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-            <div
-              className="article-content"
-              dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
-            />
+            {editing ? (
+              <div className="markdown-editor">
+                <div className="markdown-editor-toolbar">
+                  <button
+                    type="button"
+                    className={`md-toolbar-btn ${showEditPreview ? '' : 'active'}`}
+                    onClick={() => setShowEditPreview(false)}
+                  >
+                    <Pencil size={14} /> Write
+                  </button>
+                  <button
+                    type="button"
+                    className={`md-toolbar-btn ${showEditPreview ? 'active' : ''}`}
+                    onClick={() => setShowEditPreview(true)}
+                  >
+                    <Eye size={14} /> Preview
+                  </button>
+                  <div style={{ flex: 1 }} />
+                  <button type="button" className="md-toolbar-btn" onClick={cancelEdit} disabled={savingEdit}>
+                    Cancel
+                  </button>
+                  <button type="button" className="md-toolbar-btn primary" onClick={saveEdit} disabled={savingEdit}>
+                    {savingEdit ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+                {editError && <p className="md-editor-error">{editError}</p>}
+                {showEditPreview ? (
+                  <div
+                    className="article-content"
+                    dangerouslySetInnerHTML={{ __html: markdownToHtml(draftMd) || '<p>Nothing to preview</p>' }}
+                  />
+                ) : (
+                  <textarea
+                    className="markdown-editor-textarea"
+                    value={draftMd}
+                    onChange={(e) => setDraftMd(e.target.value)}
+                    spellCheck={false}
+                  />
+                )}
+                <p className="md-editor-hint">
+                  Markdown editor — works with Obsidian (copy/paste both ways). Saving does not
+                  regenerate audio; the read-along stays on the old version until you regenerate it.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div
+                  className="article-content"
+                  dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+                />
+                {parsedComments.length > 0 && (
+                  <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
+                    <div className="read-along-comments-divider" />
+                    <div className="comments-header">
+                      <h3>Comments ({totalCommentCount})</h3>
+                    </div>
+                    <div className="comments-list">
+                      {parsedComments.map((comment, index) => (
+                        <CommentComponent key={index} comment={comment} depth={0} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         );
       case 'description':
@@ -1234,6 +1434,70 @@ export function FullscreenPlayer({
                 </>
               )}
             </div>
+          </div>
+        );
+      }
+      case 'history': {
+        return (
+          <div className="tab-content-display">
+            <div className="content-header">
+              <h2>Version history</h2>
+            </div>
+            <p className="md-editor-hint" style={{ marginTop: 0 }}>
+              Snapshots saved automatically before each edit, refetch, or restore. Audio is not versioned.
+            </p>
+            {versionsLoading ? (
+              <p className="no-content">Loading…</p>
+            ) : viewingVersion ? (
+              <div className="version-viewer">
+                <div className="content-header-with-button">
+                  <div className="content-header">
+                    <h3>
+                      {versionSourceLabel(viewingVersion.source)} &bull;{' '}
+                      {new Date(viewingVersion.created_at).toLocaleString('en-GB')}
+                    </h3>
+                  </div>
+                  <div className="content-header-actions">
+                    <button className="refetch-button" onClick={() => setViewingVersion(null)}>
+                      Back
+                    </button>
+                    <button className="refetch-button" onClick={() => restoreVersion(viewingVersion.id)}>
+                      <RotateCcw size={16} />
+                      <span className="refetch-text-full">Restore this</span>
+                      <span className="refetch-text-short">Restore</span>
+                    </button>
+                  </div>
+                </div>
+                <div
+                  className="article-content"
+                  dangerouslySetInnerHTML={{ __html: viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>' }}
+                />
+              </div>
+            ) : versions.length === 0 ? (
+              <p className="no-content">
+                No earlier versions yet. A snapshot is saved automatically before you edit, refetch, or restore.
+              </p>
+            ) : (
+              <ul className="version-list">
+                {versions.map((v) => (
+                  <li key={v.id} className="version-row">
+                    <div className="version-meta">
+                      <span className={`version-badge version-${v.source}`}>{versionSourceLabel(v.source)}</span>
+                      <span className="version-date">{new Date(v.created_at).toLocaleString('en-GB')}</span>
+                      <span className="version-size">{Math.max(1, Math.round((v.html_bytes || 0) / 1024))} KB</span>
+                    </div>
+                    <div className="version-actions">
+                      <button className="md-toolbar-btn" onClick={() => viewVersion(v.id)}>
+                        View
+                      </button>
+                      <button className="md-toolbar-btn" onClick={() => restoreVersion(v.id)}>
+                        Restore
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         );
       }
@@ -1525,11 +1789,14 @@ export function FullscreenPlayer({
             className={`tab-button ${activeTab === tab ? 'active' : ''}`}
             onClick={() => handleTabClick(tab)}
           >
-            {tab === 'content' && 'Original Content'}
+            {tab === 'content' && 'Content'}
             {tab === 'description' && 'Description'}
             {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
-            {tab === 'read-along' && 'Content'}
+            {tab === 'read-along' && 'Read-along'}
             {tab === 'summary' && 'Summary'}
+            {tab === 'history' && (
+              <><History size={13} style={{ verticalAlign: '-2px', marginRight: 3 }} />History</>
+            )}
             {tab === 'queue' && 'Queue'}
           </button>
         ))}

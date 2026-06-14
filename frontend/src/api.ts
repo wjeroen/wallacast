@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ContentItem, Podcast, QueueItem, User, AuthTokens } from './types';
+import type { ContentItem, ContentVersion, Podcast, QueueItem, User, AuthTokens } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -96,6 +96,19 @@ export const contentAPI = {
 
   update: (id: number, data: Partial<ContentItem>) =>
     api.patch<ContentItem>(`/content/${id}`, data),
+
+  // Save a Markdown/HTML edit of an article/text body. The backend snapshots the previous
+  // body into version history, sanitizes, and bumps content_fetched_at (audio is untouched).
+  saveEdit: (id: number, html_content: string, content: string) =>
+    api.patch<ContentItem>(`/content/${id}`, { is_edit: true, html_content, content }),
+
+  // Version history (article/text edit/refetch/restore snapshots)
+  listVersions: (id: number) =>
+    api.get<ContentVersion[]>(`/content/${id}/versions`),
+  getVersion: (id: number, versionId: number) =>
+    api.get<ContentVersion>(`/content/${id}/versions/${versionId}`),
+  restoreVersion: (id: number, versionId: number) =>
+    api.post<{ message: string }>(`/content/${id}/versions/${versionId}/restore`),
 
   delete: (id: number) => api.delete(`/content/${id}`),
 

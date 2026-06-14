@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
+import { markdownToHtml } from '../markdown';
 import type { ContentItem } from '../types';
 
 type ContentType = 'article' | 'text' | 'upload' | 'podcast_episode';
+type TextFormat = 'markdown' | 'html';
 
 interface AddTabProps {
   onContentAdded: (item: ContentItem) => void;
@@ -14,6 +16,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [uploadedContent, setUploadedContent] = useState<string>('');
@@ -68,7 +71,9 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         }
         data.url = url;
       } else if (contentType === 'text') {
-        data.content = text;
+        // Markdown is the friendly default — convert it to the HTML we store/display.
+        // HTML mode passes the text straight through (backend cleans it).
+        data.content = textFormat === 'markdown' ? markdownToHtml(text) : text;
       } else if (contentType === 'upload') {
         if (!uploadedContent || !title) {
           setMessage('Please select a file and enter a title');
@@ -176,12 +181,36 @@ export function AddTab({ onContentAdded }: AddTabProps) {
               />
             </div>
             <div className="form-group">
-              <label htmlFor="text">Text Content</label>
+              <label>Format</label>
+              <div className="text-format-toggle">
+                <button
+                  type="button"
+                  className={textFormat === 'markdown' ? 'active' : ''}
+                  onClick={() => setTextFormat('markdown')}
+                >
+                  Markdown
+                </button>
+                <button
+                  type="button"
+                  className={textFormat === 'html' ? 'active' : ''}
+                  onClick={() => setTextFormat('html')}
+                >
+                  HTML
+                </button>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
+                {textFormat === 'markdown'
+                  ? 'Write in Markdown (works great with Obsidian) — it’s converted to formatted text automatically.'
+                  : 'Paste raw HTML — stored as-is (scripts/styles are stripped).'}
+              </p>
+            </div>
+            <div className="form-group">
+              <label htmlFor="text">{textFormat === 'markdown' ? 'Markdown Content' : 'HTML Content'}</label>
               <textarea
                 id="text"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="Paste or type your text here..."
+                placeholder={textFormat === 'markdown' ? '# My note\n\nWrite **Markdown** here...' : '<h1>My note</h1>\n<p>Write HTML here...</p>'}
                 rows={10}
                 required
               />
