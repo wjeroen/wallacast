@@ -239,7 +239,25 @@ function extractContentElements(
         elements.push({ type: 'blockquote', html: (el as Element).outerHTML, text: `Quote: ${text}` });
       }
     } else if (tagName === 'ul' || tagName === 'ol') {
-      if (text) {
+      // Split the list into ONE element per <li> so read-along highlights item-by-item
+      // instead of lighting up the whole list at once. Each item is re-wrapped in its parent
+      // list type so bullets/numbers still render; ordered lists get a `start` so the count
+      // stays correct. A sub-list nested inside an item stays part of that item (one chunk).
+      // This only shapes the alignment/read-along data — the stored html_content is untouched.
+      const isOrdered = tagName === 'ol';
+      const startAttr = parseInt(el.getAttribute('start') || '1', 10) || 1;
+      const items = Array.from(el.children).filter(c => c.tagName.toLowerCase() === 'li');
+      if (items.length > 0) {
+        items.forEach((li, idx) => {
+          const liText = (li.textContent || '').trim();
+          if (!liText) return;
+          const wrapped = isOrdered
+            ? `<ol start="${startAttr + idx}">${(li as Element).outerHTML}</ol>`
+            : `<ul>${(li as Element).outerHTML}</ul>`;
+          elements.push({ type: 'list', html: wrapped, text: liText });
+        });
+      } else if (text) {
+        // No <li> children (odd markup) — fall back to the whole list as one element.
         elements.push({ type: 'list', html: (el as Element).outerHTML, text });
       }
     } else if (tagName === 'pre') {
