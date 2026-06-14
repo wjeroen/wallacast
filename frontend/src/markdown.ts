@@ -68,16 +68,18 @@ function buildTurndown(): TurndownService {
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
-  // Keep figures that carry an explicit width (e.g. LessWrong's `image_resized` /
-  // `style="width:20.8%"`) as raw HTML — the size lives on the <figure>, as a percentage,
-  // which Markdown can't express. Plain figures (no width) still convert to Markdown.
+  // Keep figures as raw HTML islands when they carry a caption or an explicit width — both
+  // are things Markdown can't faithfully express (a `<figcaption>`, or a percentage width on
+  // the `<figure>`, e.g. LessWrong's `image_resized` / `style="width:20.8%"`). A bare
+  // `<figure><img></figure>` with neither still converts to a plain Markdown image.
   td.keep((node) => {
     const el = node as HTMLElement;
-    return (
-      el.nodeName === 'FIGURE' &&
-      (/width\s*:/i.test(el.getAttribute('style') || '') ||
-        (el.getAttribute('class') || '').includes('image_resized'))
-    );
+    if (el.nodeName !== 'FIGURE') return false;
+    const hasWidth =
+      /width\s*:/i.test(el.getAttribute('style') || '') ||
+      (el.getAttribute('class') || '').includes('image_resized');
+    const hasCaption = !!el.querySelector('figcaption');
+    return hasWidth || hasCaption;
   });
 
   // Images: emit Obsidian's `![alt|WIDTH](src)` when a bare image has an explicit pixel
