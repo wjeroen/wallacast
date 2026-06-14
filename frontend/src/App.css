@@ -2802,19 +2802,12 @@
 
 .article-content img {
   position: static !important;
+  width: 100% !important;
   height: auto !important;
-  max-width: 100% !important;
+  max-width: 100%;
   border-radius: 0.5rem;
   margin: 1.5em 0;
   object-fit: contain;
-}
-
-/* Default: stretch images to the column width — but ONLY when the source/editor didn't
-   specify an explicit width. Images with a width (e.g. Obsidian's ![alt|200] syntax,
-   stored as a width attribute) keep their own size, capped at the column width above,
-   so small/narrow images don't blow up to full width. */
-.article-content img:not([width]):not([style*="width"]) {
-  width: 100% !important;
 }
 
 /* Twitter/X embed styling — override full-width img for tweet profile pics */
