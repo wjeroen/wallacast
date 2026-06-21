@@ -193,6 +193,7 @@ Wallacast supports multiple users with complete data isolation:
     - Un-archiving regenerates audio, transcript, and alignment if missing
     - `audio_data: null, audio_url: null` removes audio from articles/texts
     - `summary: null` removes the article + comment summaries from articles/texts
+    - `dismiss_generation_error: true` / `dismiss_summary_error: true` reset a `failed` generation/summary status to `idle` and clear the stored error (the card's red error box is dismissed via its X button)
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
     - `is_edit: true` (with `html_content` + `content`) — manual Markdown/HTML edit of an article/text body. Snapshots the current body into `content_versions` first, sanitizes the HTML (strips `<script>`/`<style>`/`javascript:`), sets `content_fetched_at = now`, and leaves audio + read-along untouched (so the provenance shows content is newer than the narration). The frontend converts Markdown→HTML before sending.
@@ -383,7 +384,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
-- **`components/ContentCard.tsx`**: The library item card (thumbnail, title, metadata badges, generation status, star/archive/delete + dropdown menu). Extracted from LibraryTab — all state/handlers stay in LibraryTab and come in as props.
+- **`components/ContentCard.tsx`**: The library item card (thumbnail, title, metadata badges, generation status, star/archive/delete + dropdown menu). Extracted from LibraryTab — all state/handlers stay in LibraryTab and come in as props. **Failed generation AND failed summary both show a red error box with the message, a Retry button (re-transcribe for podcasts / regenerate audio otherwise; regenerate summary for summaries) and a dismiss X** (`onDismissError` → PATCH `dismiss_generation_error`/`dismiss_summary_error`).
 
 - **`components/FeedCards.tsx`**: Shared Feed tab cards — `FeedCard` (podcast/newsletter rows + the expanded selected-feed card, variants: `search-result`/`subscription`/`expanded`) and `FeedEpisodeCard` (episode/article rows used by all three Feed tab lists). Action buttons are passed in by the caller. Replaces seven copy-pasted card JSX blocks.
 
