@@ -1154,10 +1154,15 @@
   border: 1px solid #93c5fd;
 }
 
+/* Error banner: message on the left, Retry + dismiss X grouped together on the
+   right. A flex row keeps every piece on one baseline so the heights line up. */
 .generation-status.error {
   background: #991b1b;
   color: #fecaca;
   border: 1px solid #ef4444;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 
 [data-theme="light"] .generation-status.error {
@@ -1166,17 +1171,27 @@
   border: 1px solid #fca5a5;
 }
 
+.generation-status .error-message {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5rem; /* match the action buttons' height so the row reads level */
+}
+
 .generation-status .error-detail {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 0.75rem;
   opacity: 0.9;
+  word-break: break-word;
+}
+
+.generation-status .error-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
 }
 
 .generation-status .error-retry-btn {
-  display: inline-block;
-  margin-top: 0.4rem;
-  padding: 0.2rem 0.6rem;
+  height: 1.5rem;
+  padding: 0 0.6rem;
   font-size: 0.75rem;
   font-weight: 600;
   background: rgba(255, 255, 255, 0.15);
@@ -1189,18 +1204,13 @@
   background: rgba(255, 255, 255, 0.28);
 }
 
-.generation-status.error {
-  position: relative;
-  padding-right: 1.75rem; /* room for the dismiss X */
-}
 .generation-status .error-dismiss-btn {
-  position: absolute;
-  top: 0.3rem;
-  right: 0.3rem;
+  width: 1.5rem;
+  height: 1.5rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0.15rem;
+  padding: 0;
   background: transparent;
   color: inherit;
   border: none;
@@ -2243,6 +2253,46 @@
 .ai-job-fields select,
 .ai-job-fields input[type="text"] {
   width: 100%;
+}
+.ai-job-fields {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* One consistent muted colour for every settings description (section intro text
+   and per-field hints). var(--t3) is the brightest grey in dark mode. */
+.settings-section .section-description,
+.settings-section .settings-hint {
+  color: var(--t3);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.settings-section .section-description {
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+.settings-section .settings-hint {
+  display: block;
+  margin-top: 0.25rem;
+}
+.settings-section .settings-hint.indent {
+  margin-left: 1.5rem;
+}
+
+/* Inline checkbox + label (e.g. "Use the same model as Narration"): keep them
+   together on the left. Without this the checkbox inherits width:100% from the
+   generic input rule and stretches, pushing the label to the right. */
+.settings-section .checkbox-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-section .checkbox-inline input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
 }
 
 .settings-section h3 {
@@ -3909,7 +3959,7 @@
   color: var(--t2);
   margin-bottom: 0.35rem;
 }
-.voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
+.voice-group-note { font-weight: 400; color: var(--t3); font-size: 0.8rem; margin-bottom: 0.35rem; }
 
 /* Library "Twitter feed" mode: article summary in place of the description.
    Each paragraph IS a `.description` box (bg-raised, rounded, no border), so it matches the
