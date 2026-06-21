@@ -93,22 +93,26 @@ export function ContentCard({
       };
       return (
         <div className="generation-status error">
-          <button
-            className="error-dismiss-btn"
-            onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'generation'); }}
-            title="Dismiss"
-          >
-            <X size={13} />
-          </button>
-          <span>Generation failed</span>
-          {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
-          <button
-            className="error-retry-btn"
-            onClick={(e) => { e.stopPropagation(); retryGeneration(); }}
-            title="Retry"
-          >
-            Retry
-          </button>
+          <span className="error-message">
+            Generation failed
+            {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
+          </span>
+          <span className="error-actions">
+            <button
+              className="error-retry-btn"
+              onClick={(e) => { e.stopPropagation(); retryGeneration(); }}
+              title="Retry"
+            >
+              Retry
+            </button>
+            <button
+              className="error-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'generation'); }}
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </span>
         </div>
       );
     }
@@ -324,22 +328,26 @@ export function ContentCard({
         {generationStatusDisplay()}
         {item.summary_status === 'failed' && (
           <div className="generation-status error">
-            <button
-              className="error-dismiss-btn"
-              onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
-              title="Dismiss"
-            >
-              <X size={13} />
-            </button>
-            <span>Summary failed</span>
-            {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
-            <button
-              className="error-retry-btn"
-              onClick={(e) => { e.stopPropagation(); onGenerateSummary(item.id, !!item.summary_generated_at); }}
-              title="Retry summary generation"
-            >
-              Retry
-            </button>
+            <span className="error-message">
+              Summary failed
+              {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
+            </span>
+            <span className="error-actions">
+              <button
+                className="error-retry-btn"
+                onClick={(e) => { e.stopPropagation(); onGenerateSummary(item.id, !!item.summary_generated_at); }}
+                title="Retry summary generation"
+              >
+                Retry
+              </button>
+              <button
+                className="error-dismiss-btn"
+                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </span>
           </div>
         )}
       </div>
