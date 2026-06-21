@@ -159,6 +159,7 @@ Wallacast supports multiple users with complete data isolation:
   - `014_add_image_alt_text.sql`: Adds image alt-text generation support (images_processed BOOLEAN, image_alt_text_data JSONB) and user setting for toggle
   - `019_add_summary_columns.sql`: Adds summary support (`summary` TEXT, `comment_summary` TEXT, `summary_status` VARCHAR, `summary_generated_at` TIMESTAMP) for article + comment summaries
   - `020_add_content_versions.sql`: Adds the `content_versions` table — body snapshots (html_content/content/comments, never audio) saved before each edit/refetch/restore so changes can be rolled back
+  - `021_add_summary_error.sql`: Adds `summary_error` TEXT — the error message stored when summary generation fails, surfaced on library cards with a Retry button
 
 #### Middleware
 
@@ -284,7 +285,7 @@ Wallacast supports multiple users with complete data isolation:
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/summarizer.ts`**: Twitter-thread style summaries (requires per-user DeepInfra or OpenAI API key)
-  - `generateSummaryForContent(contentId)`: Produces TWO summaries — an article-body summary and (optionally) a comment-discussion summary. Uses the same narration LLM router as TTS (`getChatClientForUser`). Runs independently of audio via its own `summary_status` column, so audio + summary can generate at the same time.
+  - `generateSummaryForContent(contentId)`: Produces TWO summaries — an article-body summary and (optionally) a comment-discussion summary. Uses the same narration LLM router as TTS (`getChatClientForUser`). Runs independently of audio via its own `summary_status` column, so audio + summary can generate at the same time. **Retries** each LLM call with exponential backoff (`chatCreateWithRetry`, using `PROCESSING_CONFIG.retry`) on connection errors (e.g. "Premature close" on a reused keep-alive socket — Node #63989) and 429/5xx; 4xx are not retried. On final failure it stores the message in `summary_error`. (Summaries previously had no retry, so these surfaced as failures while TTS/transcription, which already retry, silently recovered.)
   - **Podcast episodes**: summarizes the Whisper TRANSCRIPT with a podcast-specific prompt (names hosts/guests, ignores ads/sponsor reads) and an `EPISODE/SHOW/HOST` header; no comment summary. The RSS episode description is included as a labeled CONTEXT block — it usually spells guest names correctly while the transcript mangles them, so the prompt says to trust the description's spelling on conflicts; the description itself is never summarized and is excluded from the length-tier character count (transcript only).
   - **Length logic**: the article/comment character count is measured **in code** (never by the model); the matching tier from `summary_tiers` sets `maxTweets`, which is injected into the prompt. The unbounded catch-all tier stores `maxChars` as `null` (Infinity).
   - The comment summarizer is given the article as **context only**; the article summarizer is not given the comments.
@@ -528,6 +529,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `comment_summary`: Comment-discussion summary (nullable)
 - `summary_status`: 'idle' | 'generating' | 'completed' | 'failed' — **independent of `generation_status`** so audio and summary can generate at the same time
 - `summary_generated_at`: When the summary was last generated
+- `summary_error`: Error message stored when `summary_status='failed'` (cleared on success/removal). Surfaced on library cards with a Retry button so summary failures are visible in-app, not just in the Railway logs
 
 ### podcasts
 - `id`: Primary key
