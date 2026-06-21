@@ -38,7 +38,7 @@ function parseTiers(raw: string | null | undefined): SummaryTier[] {
   try {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_SUMMARY_TIERS;
-    const tiers: SummaryTier[] = arr.map((t: any) => ({
+    const tiers: SummaryTier[] = (arr as Array<{ maxChars?: number | null; maxTweets?: number }>).map(t => ({
       maxChars: t.maxChars === null || t.maxChars === undefined ? Infinity : Number(t.maxChars),
       maxTweets: Math.max(1, Math.round(Number(t.maxTweets) || 1)),
     }));
@@ -83,9 +83,13 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
   try {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((v: any) => v && typeof v.model === 'string' && typeof v.voice === 'string' && v.model && v.voice)
-      .map((v: any) => ({ model: v.model, voice: v.voice }));
+    const isChoice = (v: unknown): v is TTSVoiceChoice =>
+      typeof v === 'object' && v !== null &&
+      typeof (v as TTSVoiceChoice).model === 'string' && !!(v as TTSVoiceChoice).model &&
+      typeof (v as TTSVoiceChoice).voice === 'string' && !!(v as TTSVoiceChoice).voice;
+    return (arr as unknown[])
+      .filter(isChoice)
+      .map(v => ({ model: v.model, voice: v.voice }));
   } catch {
     return [];
   }
@@ -764,8 +768,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><Key size={20} /> API keys</h3>
           <p className="section-description">
-            Add a key for each service you want to use. Each one lists the jobs it can power:
-            narration, read-along, summaries, TTS, transcription, image descriptions.
+            Add a key for each service you want to use; each one lists the jobs it can power.
+            {' '}
+            <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
 
           <div className="form-group">
@@ -831,8 +836,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <small className="settings-hint">Narration, read-along, summaries.</small>
             <small className="settings-hint">
               <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-              {' · '}
-              <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing</a>
             </small>
           </div>
 
@@ -854,7 +857,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </div>
             <small className="settings-hint">Narration, read-along, summaries.</small>
             <small className="settings-hint">
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
+              <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
             </small>
           </div>
 
@@ -874,7 +877,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <small className="settings-hint">Image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
             <small className="settings-hint">
               <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
             </small>
@@ -1140,10 +1143,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               {wallabagStatus && (
                 <div className="form-group" style={{
                   padding: '0.5rem',
-                  background: '#f0f0f0',
+                  background: 'var(--bg-app)',
                   borderRadius: '4px',
                   fontSize: '0.9rem',
-                  color: '#666'
+                  color: 'var(--t3)'
                 }}>
                   <div>
                     <strong>Status:</strong> {wallabagStatus.enabled ? 'Enabled' : 'Disabled'}
