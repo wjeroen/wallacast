@@ -2,7 +2,7 @@ import type OpenAI from 'openai';
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getChatClientForUser, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting } from './ai-providers.js';
 
 // Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
 // "Premature close" / ECONNRESET on a reused keep-alive socket — see Node #63989) and
@@ -274,10 +274,10 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const maxTweetsArticle = maxTweetsForChars(articleChars, tiers);
     const maxWords = parseMaxWords(await getUserSetting(userId, 'summary_max_words'));
 
-    // 3. LLM client (same router the narration scriptwriter uses)
-    const chat = await getChatClientForUser(userId);
+    // 3. LLM client for the Summaries job (provider/model/reasoning configurable in Settings)
+    const chat = await getChatClientForJob(userId, 'summary');
     if (!chat) {
-      throw new Error('No AI API key set. Configure OpenAI or DeepInfra in Settings.');
+      throw new Error('No AI API key set. Configure a provider for Summaries in Settings.');
     }
     console.log(`[Summary] articleChars=${articleChars} -> maxTweetsArticle=${maxTweetsArticle} maxWords=${maxWords} model=${chat.model}`);
 
@@ -299,6 +299,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
 
     const articleResponse = await chatCreateWithRetry(chat.client, {
       model: chat.model,
+      ...chat.extraParams,
       messages: [
         {
           role: 'system',
@@ -327,6 +328,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         console.log(`[Summary] commentChars=${commentChars} -> maxTweetsComments=${maxTweetsComments}`);
         const commentResponse = await chatCreateWithRetry(chat.client, {
           model: chat.model,
+          ...chat.extraParams,
           messages: [
             { role: 'system', content: COMMENT_SUMMARY_PROMPT(maxTweetsComments, maxWords) },
             {

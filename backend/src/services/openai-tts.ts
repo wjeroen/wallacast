@@ -8,7 +8,7 @@ import { getTempDir } from '../config/storage.js';
 import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForUser, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
@@ -391,7 +391,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
-async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-5-nano'): Promise<string> {
+async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
@@ -479,6 +479,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
 
     const response = await openai.chat.completions.create({
       model: modelId,
+      ...extraParams,
       messages: [
         {
           role: 'system',
@@ -527,6 +528,7 @@ Failure to preserve image descriptions is a critical error.`;
 
       const retryResponse = await openai.chat.completions.create({
         model: modelId,
+        ...extraParams,
         messages: [
           { role: 'system', content: retrySystemPrompt },
           { role: 'user', content: cleanHtml.slice(0, 400000) }
@@ -883,10 +885,10 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       ['scripting_content', 20, contentId]
     );
 
-    const chatConfig = await getChatClientForUser(content.user_id);
+    const chatConfig = await getChatClientForJob(content.user_id, 'narration');
     if (chatConfig && sourceContent.includes('<')) {
         console.log(`[TTS] Scriptwriter using model: ${chatConfig.model}`);
-        articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model);
+        articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model, chatConfig.extraParams);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
     }

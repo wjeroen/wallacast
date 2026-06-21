@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForUser, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting } from './ai-providers.js';
 import { query } from '../database/db.js';
 
 interface TranscriptWord {
@@ -790,13 +790,14 @@ ${closingInstruction}`;
   // Helper: call LLM and parse >>> markers from response
   async function callAndParse(
     prompt: string,
-    chatConfig: { client: any; model: string },
+    chatConfig: { client: any; model: string; extraParams?: Record<string, any> },
     label: string
   ): Promise<Map<number, number>> {
     console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
 
     const response = await chatConfig.client.chat.completions.create({
       model: chatConfig.model,
+      ...(chatConfig.extraParams || {}),
       messages: [{ role: 'user', content: prompt }],
       max_completion_tokens: 128000,
     });
@@ -837,7 +838,7 @@ ${closingInstruction}`;
   }
 
   // Get LLM client
-  const chatConfig = await getChatClientForUser(userId);
+  const chatConfig = await getChatClientForJob(userId, 'alignment');
   if (!chatConfig) {
     throw new Error('No LLM configured. Please set up a DeepInfra or OpenAI API key in Settings.');
   }
