@@ -465,6 +465,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
+  // Dismiss a failed-generation or failed-summary error from a card (the X button).
+  // Optimistically clears the status so the red box vanishes instantly, then persists it.
+  const handleDismissError = async (id: number, kind: 'generation' | 'summary') => {
+    try {
+      if (kind === 'summary') {
+        updateItem(id, { summary_status: 'idle', summary_error: undefined });
+        await contentAPI.update(id, { dismiss_summary_error: true } as any);
+      } else {
+        updateItem(id, { generation_status: 'idle', generation_error: undefined, current_operation: undefined, generation_progress: 0 });
+        await contentAPI.update(id, { dismiss_generation_error: true } as any);
+      }
+    } catch (error) {
+      console.error('Failed to dismiss error:', error);
+      refreshItem(id);
+    }
+  };
+
   const handleRefetchContent = async (id: number) => {
     try {
       setOpenDropdown(null);
@@ -719,6 +736,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onRemoveAudio={handleRemoveAudio}
               onGenerateSummary={handleGenerateSummary}
               onRemoveSummary={handleRemoveSummary}
+              onDismissError={handleDismissError}
               onRegenerateTranscript={handleRegenerateTranscript}
               onRefetch={handleRefetchContent}
               onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}

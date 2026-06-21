@@ -28,6 +28,7 @@ interface ContentCardProps {
   onRemoveAudio: (id: number) => void;
   onGenerateSummary: (id: number, regenerate: boolean) => void;
   onRemoveSummary: (id: number) => void;
+  onDismissError: (id: number, kind: 'generation' | 'summary') => void;
   onRegenerateTranscript: (id: number) => void;
   onRefetch: (id: number) => void;
   onAddToQueue: (item: ContentItem) => void;
@@ -54,6 +55,7 @@ export function ContentCard({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onDismissError,
   onRegenerateTranscript,
   onRefetch,
   onAddToQueue,
@@ -80,10 +82,27 @@ export function ContentCard({
     }
 
     if (item.generation_status === 'failed') {
+      // Retry the most likely intent: re-transcribe for podcasts, regenerate audio otherwise.
+      const retryGeneration = () =>
+        item.type === 'podcast_episode' ? onRegenerateTranscript(item.id) : onGenerateAudio(item.id, true);
       return (
         <div className="generation-status error">
+          <button
+            className="error-dismiss-btn"
+            onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'generation'); }}
+            title="Dismiss"
+          >
+            <X size={13} />
+          </button>
           <span>Generation failed</span>
           {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
+          <button
+            className="error-retry-btn"
+            onClick={(e) => { e.stopPropagation(); retryGeneration(); }}
+            title="Retry"
+          >
+            Retry
+          </button>
         </div>
       );
     }
@@ -299,6 +318,13 @@ export function ContentCard({
         {generationStatusDisplay()}
         {item.summary_status === 'failed' && (
           <div className="generation-status error">
+            <button
+              className="error-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
+              title="Dismiss"
+            >
+              <X size={13} />
+            </button>
             <span>Summary failed</span>
             {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
             <button
