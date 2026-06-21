@@ -106,6 +106,7 @@ const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
 const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. openai/whisper-large-v3-turbo' },
   { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. openai/whisper-1' },
 ];
 const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
 
@@ -158,12 +159,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     narration_provider: 'openai', narration_model: '', narration_reasoning_effort: '',
     alignment_same_as_narration: 'true', alignment_provider: 'openai', alignment_model: '', alignment_reasoning_effort: '',
     summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
-    // Transcription (Whisper): provider deepinfra | openai
+    // Transcription (Whisper): provider deepinfra | openai | openrouter
     transcription_provider: 'deepinfra', transcription_model: '',
+    // Route OpenAI TTS voices via OpenAI directly or via OpenRouter (same voices).
+    openai_tts_provider: 'openai',
 
-    // Gemini Settings (for image alt-text)
+    // Image alt-text: provider gemini | openrouter
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
+    image_alt_text_provider: 'gemini',
     image_alt_text_model: '',
 
     auto_transcribe_podcasts: 'true',
@@ -255,9 +259,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
         transcription_model: loaded.transcription_model || transDefaultModel,
+        openai_tts_provider: loaded.openai_tts_provider || 'openai',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
+        image_alt_text_provider: loaded.image_alt_text_provider || 'gemini',
         image_alt_text_model: loaded.image_alt_text_model || 'gemini-3-flash-preview',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
@@ -404,7 +410,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-        'transcription_provider', 'transcription_model', 'image_alt_text_model',
+        'transcription_provider', 'transcription_model', 'openai_tts_provider',
+        'image_alt_text_provider', 'image_alt_text_model',
       ]);
 
       const toSave: Record<string, string> = {};
@@ -517,8 +524,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
   const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
+  const hasOpenRouterKey = isSecretSet('openrouter_api_key') || !!formData.openrouter_api_key.trim();
+  // OpenAI voices are usable with an OpenAI key, or via OpenRouter when that's the chosen route.
+  const canUseOpenAIVoices = formData.openai_tts_provider === 'openrouter' ? hasOpenRouterKey : hasOpenAIKey;
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
-    g.requiresKey === 'openai' ? hasOpenAIKey : hasDeepInfraKey
+    g.requiresKey === 'openai' ? canUseOpenAIVoices : hasDeepInfraKey
   );
 
   return (
@@ -791,6 +801,28 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
           <div className="form-group">
             <label>
+              <Key size={16} /> OpenRouter API Key
+              {isSecretSet('openrouter_api_key') && <span className="secret-set">(configured)</span>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
+                value={formData.openrouter_api_key}
+                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
+                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
+                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">
+              <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label>
               <Key size={16} /> DeepInfra API Key
               {isSecretSet('deepinfra_api_key') && <span className="secret-set">(configured)</span>}
             </label>
@@ -830,28 +862,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
             <small className="settings-hint">
               <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> OpenRouter API Key
-              {isSecretSet('openrouter_api_key') && <span className="secret-set">(configured)</span>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
-                value={formData.openrouter_api_key}
-                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
-                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
-                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries.</small>
-            <small className="settings-hint">
-              <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
             </small>
           </div>
 
@@ -939,9 +949,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Pick one voice for a consistent sound, or several to rotate between (each new audio picks one at random).
               {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
             </small>
+            <div className="ai-field" style={{ marginTop: '0.5rem' }}>
+              <span className="ai-field-label">OpenAI voices via</span>
+              <select value={formData.openai_tts_provider} onChange={(e) => handleChange('openai_tts_provider', e.target.value)}>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+              <small className="settings-hint">Same voices either way. Kokoro voices always use DeepInfra.</small>
+            </div>
             {availableVoiceGroups.length === 0 ? (
               <p className="no-content" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
-                Add an OpenAI or DeepInfra key to choose voices.
+                Add an OpenAI, OpenRouter, or DeepInfra key to choose voices.
               </p>
             ) : (
               <div style={{ marginTop: '0.5rem' }}>
@@ -969,7 +987,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
           <div className="form-group ai-job">
             <label>Image descriptions</label>
-            <small className="settings-hint">Describes article images so they can be read aloud. Needs a Gemini key.</small>
+            <small className="settings-hint">Describes article images so they can be read aloud. Needs a Gemini or OpenRouter key.</small>
             <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: formData.image_alt_text_enabled === 'true' ? '0.5rem' : 0 }}>
               <input
                 type="checkbox"
@@ -982,8 +1000,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <div className="ai-job-fields">
                 <div className="ai-field">
                   <span className="ai-field-label">Provider</span>
-                  <select value="gemini" disabled>
+                  <select value={formData.image_alt_text_provider} onChange={(e) => handleChange('image_alt_text_provider', e.target.value)}>
                     <option value="gemini">Google Gemini</option>
+                    <option value="openrouter">OpenRouter</option>
                   </select>
                 </div>
                 <div className="ai-field">
@@ -992,8 +1011,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     type="text"
                     value={formData.image_alt_text_model}
                     onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                    placeholder="e.g. gemini-3-flash"
+                    placeholder={formData.image_alt_text_provider === 'openrouter' ? 'e.g. google/gemini-3-flash' : 'e.g. gemini-3-flash'}
                   />
+                  <small className="settings-hint">Only tested with Gemini Flash 3.</small>
                 </div>
               </div>
             )}

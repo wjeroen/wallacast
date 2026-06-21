@@ -591,11 +591,15 @@ export async function generateArticleAudio(
       }
     }
 
-    const openai = await getTTSClientForUser(userId, targetModel);
-    
-    if (!openai) {
-      throw new Error('No AI API key set. Please configure OpenAI or DeepInfra in Settings.');
+    const tts = await getTTSClientForUser(userId, targetModel);
+
+    if (!tts) {
+      throw new Error('No AI API key set. Please configure OpenAI, DeepInfra, or OpenRouter in Settings.');
     }
+    const openai = tts.client;
+    // The router may rewrite the model id (e.g. 'openai/gpt-4o-mini-tts' when routed via
+    // OpenRouter) — use it for the API calls below.
+    targetModel = tts.model;
 
     const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
     console.log(`Generating TTS audio using model '${targetModel}' for ${textChunks.length} chunk(s)...`);
