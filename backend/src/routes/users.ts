@@ -45,9 +45,11 @@ const VALID_SETTING_KEYS = [
   'narration_provider', 'narration_model', 'narration_reasoning_effort',
   'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
   'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-  // Transcription (Whisper): provider 'deepinfra' | 'openai' (no auto-routing)
+  // Transcription (Whisper): provider 'deepinfra' | 'openai' | 'openrouter' (no auto-routing)
   'transcription_provider', 'transcription_model',
-  'image_alt_text_model',    // Gemini model for image descriptions (free-text; default gemini-3-flash-preview)
+  'openai_tts_provider',     // route OpenAI TTS voices via 'openai' (default) or 'openrouter'
+  'image_alt_text_provider', // image descriptions via 'gemini' (default) or 'openrouter'
+  'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',

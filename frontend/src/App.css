@@ -1009,6 +1009,30 @@
   color: var(--t2);
 }
 
+/* Content-type pill — filled like the capability badges so the type reads as
+   strongly as Audio/Transcript/Summary. Each type keeps its colour family
+   (article=blue, text=green, podcast=purple, pdf=neutral). */
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.type-pill svg { flex-shrink: 0; }
+.type-article { background: #1e3a5f; color: #bfdbfe; }
+.type-text { background: #15803d; color: #dcfce7; }
+.type-podcast { background: #4c1d95; color: #ede9fe; }
+.type-pdf { background: var(--bg-raised); color: var(--t2); }
+[data-theme="light"] .type-article { background: #dbeafe; color: #1e40af; }
+[data-theme="light"] .type-text { background: #dcfce7; color: #15803d; }
+[data-theme="light"] .type-podcast { background: #ede9fe; color: #5b21b6; }
+[data-theme="light"] .type-pdf { background: var(--bg-raised); color: var(--t2); }
+
 .content-actions {
   display: flex;
   gap: 0.5rem;
@@ -3847,18 +3871,10 @@
 
 /* Library card badges */
 .metadata .badge.summary {
-  background: #4c1d95;
-  color: #ede9fe;
-}
-[data-theme="light"] .metadata .badge.summary {
-  background: #ede9fe;
-  color: #5b21b6;
-}
-.metadata .badge.summarizing {
   background: #7c2d12;
   color: #fed7aa;
 }
-[data-theme="light"] .metadata .badge.summarizing {
+[data-theme="light"] .metadata .badge.summary {
   background: #ffedd5;
   color: #9a3412;
 }
