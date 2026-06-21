@@ -805,6 +805,23 @@ router.patch('/:id', async (req, res) => {
       allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at', 'summary_error');
     }
 
+    // Dismiss a failed-generation / failed-summary error from the UI: reset the failed status
+    // to idle and clear the stored message so the red error box on the card goes away.
+    if (updates.dismiss_generation_error === true) {
+      updates.generation_status = 'idle';
+      updates.generation_error = null;
+      updates.current_operation = null;
+      updates.generation_progress = 0;
+      allowedFields.push('generation_status', 'generation_error', 'current_operation', 'generation_progress');
+      delete updates.dismiss_generation_error;
+    }
+    if (updates.dismiss_summary_error === true) {
+      updates.summary_status = 'idle';
+      updates.summary_error = null;
+      allowedFields.push('summary_status', 'summary_error');
+      delete updates.dismiss_summary_error;
+    }
+
     if (updates.regenerate_content === true) {
       const contentResult = await query(
         'SELECT type, url, preview_picture FROM content_items WHERE id = $1 AND user_id = $2',
