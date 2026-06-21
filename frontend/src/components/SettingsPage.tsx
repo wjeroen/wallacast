@@ -525,8 +525,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
   const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
   const hasOpenRouterKey = isSecretSet('openrouter_api_key') || !!formData.openrouter_api_key.trim();
-  // OpenAI voices are usable with an OpenAI key, or via OpenRouter when that's the chosen route.
-  const canUseOpenAIVoices = formData.openai_tts_provider === 'openrouter' ? hasOpenRouterKey : hasOpenAIKey;
+  // OpenAI voices are usable with either an OpenAI key or an OpenRouter key (the "OpenAI voices
+  // via" toggle just picks which one synthesizes them) — so flipping the toggle never hides them.
+  const canUseOpenAIVoices = hasOpenAIKey || hasOpenRouterKey;
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
     g.requiresKey === 'openai' ? canUseOpenAIVoices : hasDeepInfraKey
   );
@@ -802,7 +803,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <div className="form-group">
             <label>
               <Key size={16} /> OpenRouter API Key
-              {isSecretSet('openrouter_api_key') && <span className="secret-set">(configured)</span>}
+              {isSecretSet('openrouter_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
             <div className="input-with-toggle">
               <input
@@ -816,15 +819,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
-            <small className="settings-hint">
-              <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
           </div>
 
           <div className="form-group">
             <label>
               <Key size={16} /> DeepInfra API Key
-              {isSecretSet('deepinfra_api_key') && <span className="secret-set">(configured)</span>}
+              {isSecretSet('deepinfra_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
             <div className="input-with-toggle">
               <input
@@ -838,15 +840,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
-            <small className="settings-hint">
-              <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
           </div>
 
           <div className="form-group">
             <label>
               <Key size={16} /> OpenAI API Key
-              {isSecretSet('openai_api_key') && <span className="secret-set">(configured)</span>}
+              {isSecretSet('openai_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
             <div className="input-with-toggle">
               <input
@@ -860,15 +861,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
-            <small className="settings-hint">
-              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
           </div>
 
           <div className="form-group">
             <label>
               <Key size={16} /> Anthropic API Key
-              {isSecretSet('anthropic_api_key') && <span className="secret-set">(configured)</span>}
+              {isSecretSet('anthropic_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
             <div className="input-with-toggle">
               <input
@@ -882,15 +882,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries.</small>
-            <small className="settings-hint">
-              <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
           </div>
 
           <div className="form-group">
             <label>
               <Key size={16} /> Gemini API Key
-              {isSecretSet('gemini_api_key') && <span className="secret-set">(configured)</span>}
+              {isSecretSet('gemini_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
             <div className="input-with-toggle">
               <input
@@ -904,9 +903,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
-            <small className="settings-hint">
-              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>
-            </small>
           </div>
         </section>
 

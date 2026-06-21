@@ -2,29 +2,6 @@ import OpenAI from 'openai';
 import { query } from '../database/db.js';
 import { decrypt } from './encryption.js';
 
-// AI Provider interface
-export interface AIProvider {
-  name: string;
-  chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string>;
-  textToSpeech?(text: string, options?: TTSOptions): Promise<Buffer>;
-}
-
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-export interface ChatOptions {
-  model?: string;
-  maxTokens?: number;
-}
-
-export interface TTSOptions {
-  model?: string;
-  voice?: string;
-  instructions?: string;
-}
-
 // Get user setting from database (decrypts encrypted values transparently)
 export async function getUserSetting(userId: number, key: string): Promise<string | null> {
   const result = await query(
@@ -36,71 +13,6 @@ export async function getUserSetting(userId: number, key: string): Promise<strin
   return decrypt(value);
 }
 
-// OpenAI Provider implementation
-class OpenAIProvider implements AIProvider {
-  name = 'openai';
-  private client: OpenAI;
-  private userId: number;
-
-  constructor(apiKey: string, userId: number) {
-    this.client = new OpenAI({ apiKey });
-    this.userId = userId;
-  }
-
-  async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
-    // Always default to gpt-5-nano — don't read openai_model from DB which may
-    // contain stale values like 'gpt-4o-mini' from before migration
-    const model = options?.model || 'gpt-5-nano';
-
-    const response = await this.client.chat.completions.create({
-      model: model,
-      messages: messages as any,
-      // UPDATED: gpt-5-nano supports a larger output limit (128k), ensuring long tasks don't get cut off
-      max_tokens: options?.maxTokens || 128000,
-    });
-
-    return response.choices[0]?.message?.content || '';
-  }
-
-  async textToSpeech(text: string, options?: TTSOptions): Promise<Buffer> {
-    const model = options?.model || await getUserSetting(this.userId, 'openai_tts_model') || 'gpt-4o-mini-tts';
-    const voice = options?.voice || await getUserSetting(this.userId, 'openai_tts_voice') || 'coral';
-
-    // Route request to the correct client (DeepInfra / OpenAI / OpenRouter).
-    // The router may rewrite the model id (e.g. namespaced for OpenRouter), so use tts.model.
-    const tts = await getTTSClientForUser(this.userId, model);
-
-    if (!tts) {
-        throw new Error("No API client configured for TTS");
-    }
-
-    const response = await tts.client.audio.speech.create({
-      model: tts.model as any,
-      voice: voice as any,
-      input: text,
-      // Instructions are only supported by some models/endpoints
-      // OpenAI TTS API doesn't officially verify instructions param in some SDK versions but we pass it
-    });
-
-    return Buffer.from(await response.arrayBuffer());
-  }
-}
-
-// Factory function to get AI provider for a user
-export async function getAIProvider(userId: number): Promise<AIProvider | null> {
-  const providerName = await getUserSetting(userId, 'ai_provider') || 'openai';
-
-  switch (providerName) {
-    case 'openai': {
-      const apiKey = await getUserSetting(userId, 'openai_api_key');
-      if (!apiKey) return null;
-      return new OpenAIProvider(apiKey, userId);
-    }
-    default:
-      console.warn(`Unknown AI provider: ${providerName}`);
-      return null;
-  }
-}
 
 /**
  * Returns a DeepInfra-configured OpenAI client
