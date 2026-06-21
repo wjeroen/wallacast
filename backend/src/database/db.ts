@@ -227,6 +227,11 @@ export async function initializeDatabase() {
     const contentVersionsMigration = await fs.readFile(contentVersionsMigrationPath, 'utf-8');
     await client.query(contentVersionsMigration);
 
+    // Run migration to add summary_error column (surface failed summaries in the UI)
+    const summaryErrorMigrationPath = path.join(__dirname, 'migrations', '021_add_summary_error.sql');
+    const summaryErrorMigration = await fs.readFile(summaryErrorMigrationPath, 'utf-8');
+    await client.query(summaryErrorMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

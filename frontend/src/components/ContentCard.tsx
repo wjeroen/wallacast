@@ -297,6 +297,19 @@ export function ContentCard({
           {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
         </div>
         {generationStatusDisplay()}
+        {item.summary_status === 'failed' && (
+          <div className="generation-status error">
+            <span>Summary failed</span>
+            {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
+            <button
+              className="error-retry-btn"
+              onClick={(e) => { e.stopPropagation(); onGenerateSummary(item.id, !!item.summary_generated_at); }}
+              title="Retry summary generation"
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
       {/* Star/archive stay visible in bulk mode — they show each item's state
           (filled star, highlighted archive) and still work as toggles.
