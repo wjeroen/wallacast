@@ -82,9 +82,15 @@ export function ContentCard({
     }
 
     if (item.generation_status === 'failed') {
-      // Retry the most likely intent: re-transcribe for podcasts, regenerate audio otherwise.
-      const retryGeneration = () =>
-        item.type === 'podcast_episode' ? onRegenerateTranscript(item.id) : onGenerateAudio(item.id, true);
+      // Retry the step that actually failed. The backend tags refetch/transcript failures
+      // via current_operation ('failed_refetch' / 'failed_transcript'); podcasts only ever
+      // fail on transcription; everything else is audio generation.
+      const retryGeneration = () => {
+        if (item.type === 'podcast_episode') return onRegenerateTranscript(item.id);
+        if (item.current_operation === 'failed_refetch') return onRefetch(item.id);
+        if (item.current_operation === 'failed_transcript') return onRegenerateTranscript(item.id);
+        return onGenerateAudio(item.id, true);
+      };
       return (
         <div className="generation-status error">
           <button

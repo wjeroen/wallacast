@@ -898,7 +898,8 @@ router.patch('/:id', async (req, res) => {
             } catch (error) {
               console.error('Content refetch error:', error);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                // Mark the failed step so the card's Retry re-runs a refetch (not audio gen)
+                "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
                 ['failed', (error as Error).message || 'Failed to regenerate content', 0, id]
               );
             }
@@ -977,7 +978,8 @@ router.patch('/:id', async (req, res) => {
             } catch (error) {
               console.error('Transcript regeneration error:', error);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                // Mark the failed step so the card's Retry re-runs transcript regen (not audio gen)
+                "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
                 ['failed', (error as Error).message || 'Failed to regenerate transcript', 0, id]
               );
             }
