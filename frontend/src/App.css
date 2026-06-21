@@ -2256,7 +2256,22 @@
 }
 .ai-job-fields {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.6rem;
+}
+/* A labelled field inside an AI-job card: small caption above the input so the
+   placeholder only needs to show examples (keeps hints short on small screens). */
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.ai-field .ai-field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--t2);
+}
+.ai-field .settings-hint {
+  margin-top: 0.1rem;
 }
 
 /* One consistent muted colour for every settings description (section intro text
