@@ -36,7 +36,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
-| Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
+| Image Descriptions | Google Gemini for alt-text narrations (model configurable in Settings, default gemini-3-flash-preview; per-user API key, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), Substack comment extraction (via _preloads JSON), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -249,9 +249,11 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
   - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
-  - `getChatClientForUser(userId)`: Intelligent router for narration LLM - prefers DeepSeek-V3.2 via DeepInfra (cheaper), falls back to OpenAI GPT-5-Nano. User can override with `narration_llm` setting ('auto'|'deepseek'|'openai')
+  - **Provider registry (`CHAT_PROVIDERS`)**: OpenAI, DeepInfra, OpenRouter, Anthropic, Google Gemini — all spoken to via the **OpenAI SDK** (just a different `baseURL` + key), so one client handles every provider. OpenRouter is the easy on-ramp for Claude/Gemini/etc. (`provider/model` ids).
+  - `getChatClientForJob(userId, job)`: per-job model selection — `job` = `'narration'` (prepares text for TTS) | `'alignment'` (read-along) | `'summary'`. Each job has its own `{provider, model, reasoning_effort}` setting; read-along & summaries can defer to narration ("use same model as narration"). Returns `{ client, model, extraParams }` where `extraParams` carries the reasoning_effort param (empty = provider default, so behavior is unchanged unless set). **Read-time fallback**: if a job isn't configured yet, it derives from the legacy `narration_llm` routing, so existing users keep working and the Settings fields pre-fill with the model actually in use.
+  - `getChatClientForUser(userId)`: back-compat wrapper (narration job, no reasoning extraParams).
   - `getTTSClientForUser(userId, modelId)`: Intelligent router - returns DeepInfra client for Kokoro models, OpenAI client otherwise
-  - `getTranscriptionClientForUser(userId)`: Prefers DeepInfra Whisper if configured (cheaper), falls back to OpenAI
+  - `getTranscriptionClientForUser(userId)`: Whisper client from explicit `transcription_provider` (`deepinfra` | `openai`) + `transcription_model` settings, with legacy auto-routing (DeepInfra preferred) as the fallback when unset
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
   - No global API keys - each user must configure their own (OpenAI and/or DeepInfra, or both)
@@ -413,8 +415,9 @@ The matching CSS (`App.css`) caps every image at the column width (`max-width: 1
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - Organized into: API Keys, Audio Generation, Wallabag Sync
-  - API Keys section: DeepInfra (primary/cheapest), OpenAI (optional), Gemini (optional, for image descriptions)
-  - Audio Generation: Narration LLM (Auto/DeepSeek/OpenAI), TTS model/voice, auto-generate/transcribe toggles
+  - API Keys section: DeepInfra (primary/cheapest), OpenAI, **OpenRouter** (one key → Claude/Gemini/Llama via `provider/model`), **Anthropic**, Gemini (image descriptions)
+  - **Per-job model selection**: Narration / Read-along alignment / Summaries each get a **provider dropdown + free-text model field** (placeholder hints change per provider) + a **reasoning-effort field** (blank = provider default). Read-along & summaries have a "Use the same model as Narration" checkbox (ticked by default). Transcription has its own provider (DeepInfra/OpenAI) + model. Image descriptions are Gemini-only (locked provider) with a free-text model field. Rendered via the `renderChatJob()` helper for a cohesive "AI job card" look. Fields pre-fill from your current `narration_llm` so nothing changes on first load.
+  - TTS model/voice (voice picker), auto-generate/transcribe toggles
   - Comment Narration toggles: separate on/off toggles for EA Forum/LessWrong comments and Substack comments (allows users to skip comment audio on a per-platform basis). When disabled, comments still display in read-along view but without audio sync
   - With just a DeepInfra key, users get full functionality (narration prep via DeepSeek, TTS via Kokoro, transcription via Whisper)
   - Wallabag integration settings (URL, client ID/secret, username/password)
@@ -500,6 +503,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `is_secret`: Boolean flag for masking in API responses
 - Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity), `summary_max_words` (max words per paragraph/"tweet"; default 40), `library_show_summary` ('true'/'false') — when on, library cards show the article `summary` instead of the description (falls back to the description when no summary exists; the list endpoint now also returns `summary`)
 - `tts_voices`: JSON array of `{ model, voice }` — when non-empty, each audio generation picks one of these voices at random (can mix providers, e.g. OpenAI + Kokoro). Empty = always use the single `openai_tts_voice`. Implemented via `pickRandomTTSVoice()` in `ai-providers.ts`, applied in `generateArticleAudio()`.
+- **Provider keys**: `openai_api_key`, `deepinfra_api_key`, `openrouter_api_key`, `anthropic_api_key`, `gemini_api_key` (all secret/masked)
+- **Per-job model config** (read by `getChatClientForJob`): `{job}_provider` / `{job}_model` / `{job}_reasoning_effort` for `job` ∈ `narration | alignment | summary`; `alignment_same_as_narration` / `summary_same_as_narration` ('true'/'false') defer to the narration config. `narration_llm` is the LEGACY routing kept only as the read-time fallback/pre-fill source.
+- **Transcription**: `transcription_provider` (`deepinfra` | `openai`), `transcription_model`. **Image descriptions**: `image_alt_text_model` (Gemini model, free-text; default `gemini-3-flash-preview`).
 - `created_at`, `updated_at`
 - **Unique constraint**: (user_id, setting_key)
 
