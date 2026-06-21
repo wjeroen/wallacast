@@ -2229,6 +2229,22 @@
   border: 1px solid var(--bg-raised);
 }
 
+/* AI "job" card — provider/model selection blocks (narration, alignment, summaries,
+   transcription, image descriptions) read as one cohesive group. */
+.settings-section .form-group.ai-job {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+.settings-section .form-group.ai-job > label {
+  font-weight: 600;
+}
+.ai-job-fields select,
+.ai-job-fields input[type="text"] {
+  width: 100%;
+}
+
 .settings-section h3 {
   display: flex;
   align-items: center;
