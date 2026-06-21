@@ -91,6 +91,20 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
   }
 }
 
+// Chat-LLM providers (all spoken to via the OpenAI-compatible API). Model is free text.
+const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'openai', label: 'OpenAI', hint: 'e.g. gpt-5-mini, gpt-5-nano' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. deepseek-ai/DeepSeek-V3.2, meta-llama/Llama-3.3-70B-Instruct' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'e.g. claude-haiku-4-5, claude-sonnet-4-6' },
+  { id: 'gemini', label: 'Google Gemini', hint: 'e.g. gemini-3-flash, gemini-2.5-pro' },
+];
+const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. openai/whisper-large-v3-turbo' },
+  { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
+];
+const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
+
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
   const [settings, setSettings] = useState<Record<string, string | null>>({});
@@ -129,13 +143,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     // DeepInfra Settings
     deepinfra_api_key: '',
+    openrouter_api_key: '',
+    anthropic_api_key: '',
 
-    // Narration LLM
+    // Narration LLM (legacy; per-job config below supersedes it)
     narration_llm: 'auto',
+
+    // Per-job model config (provider + free-text model + reasoning effort).
+    // narration_* pre-fill from narration_llm on load; alignment/summary default to "same as narration".
+    narration_provider: 'openai', narration_model: '', narration_reasoning_effort: '',
+    alignment_same_as_narration: 'true', alignment_provider: 'openai', alignment_model: '', alignment_reasoning_effort: '',
+    summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
+    // Transcription (Whisper): provider deepinfra | openai
+    transcription_provider: 'deepinfra', transcription_model: '',
 
     // Gemini Settings (for image alt-text)
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
+    image_alt_text_model: '',
 
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
@@ -180,6 +205,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const loaded = settingsRes.data.settings;
       console.log('Loaded settings from server:', loaded);
 
+      // Derive the per-job defaults from the legacy narration_llm routing (pre-fill).
+      const hasDeepInfraKey = !!loaded.deepinfra_api_key; // masked dots or real value are both truthy
+      const deriveLegacy = (llm: string) => {
+        if (llm === 'openai-mini') return { provider: 'openai', model: 'gpt-5-mini' };
+        if (llm === 'openai') return { provider: 'openai', model: 'gpt-5-nano' };
+        if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
+        return hasDeepInfraKey ? { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' } : { provider: 'openai', model: 'gpt-5-nano' };
+      };
+      const legacyNarration = deriveLegacy(loaded.narration_llm || 'auto');
+      const boolDefault = (v: string | null | undefined, d: string) => (v !== undefined && v !== null ? v : d);
+
       setFormData(prev => ({
         ...prev,
         ai_provider: loaded.ai_provider || 'openai',
@@ -189,11 +225,30 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         openai_tts_voice: loaded.openai_tts_voice || 'coral',
 
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
+        openrouter_api_key: loaded.openrouter_api_key === '••••••••' ? '' : (loaded.openrouter_api_key || ''),
+        anthropic_api_key: loaded.anthropic_api_key === '••••••••' ? '' : (loaded.anthropic_api_key || ''),
 
         narration_llm: loaded.narration_llm || 'auto',
 
+        // Per-job config: pre-fill from the legacy narration_llm routing if not yet saved,
+        // so the fields show the model you're actually using today.
+        narration_provider: loaded.narration_provider || legacyNarration.provider,
+        narration_model: loaded.narration_model || legacyNarration.model,
+        narration_reasoning_effort: loaded.narration_reasoning_effort || '',
+        alignment_same_as_narration: boolDefault(loaded.alignment_same_as_narration, 'true'),
+        alignment_provider: loaded.alignment_provider || legacyNarration.provider,
+        alignment_model: loaded.alignment_model || legacyNarration.model,
+        alignment_reasoning_effort: loaded.alignment_reasoning_effort || '',
+        summary_same_as_narration: boolDefault(loaded.summary_same_as_narration, 'true'),
+        summary_provider: loaded.summary_provider || legacyNarration.provider,
+        summary_model: loaded.summary_model || legacyNarration.model,
+        summary_reasoning_effort: loaded.summary_reasoning_effort || '',
+        transcription_provider: loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai'),
+        transcription_model: loaded.transcription_model || '',
+
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
+        image_alt_text_model: loaded.image_alt_text_model || '',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
@@ -226,6 +281,48 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const handleChange = (key: string, value: string) => {
     setFormData(prev => ({ ...prev, [key]: value }));
     setSaved(false);
+  };
+
+  // Renders a chat-LLM job (provider dropdown + free-text model + reasoning effort).
+  // `base` = the Narration job (no "same as" checkbox); others can defer to it.
+  const renderChatJob = (job: 'narration' | 'alignment' | 'summary', title: string, description: string, base = false) => {
+    const fd = formData as Record<string, string>;
+    const provider = fd[`${job}_provider`] || 'openai';
+    const sameKey = `${job}_same_as_narration`;
+    const usingSame = !base && fd[sameKey] === 'true';
+    return (
+      <div className="form-group ai-job" key={job}>
+        <label>{title}</label>
+        {description && (
+          <small style={{ display: 'block', marginTop: '0.1rem', marginBottom: '0.4rem', color: '#888', fontSize: '0.85rem' }}>{description}</small>
+        )}
+        {!base && (
+          <label className="checkbox-inline" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem', marginBottom: usingSame ? 0 : '0.5rem' }}>
+            <input type="checkbox" checked={fd[sameKey] === 'true'} onChange={(e) => handleChange(sameKey, e.target.checked ? 'true' : 'false')} />
+            Use the same model as Narration
+          </label>
+        )}
+        {(base || !usingSame) && (
+          <div className="ai-job-fields" style={{ display: 'grid', gap: '0.4rem' }}>
+            <select value={provider} onChange={(e) => handleChange(`${job}_provider`, e.target.value)}>
+              {CHAT_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+            <input
+              type="text"
+              value={fd[`${job}_model`] || ''}
+              onChange={(e) => handleChange(`${job}_model`, e.target.value)}
+              placeholder={chatHintFor(provider)}
+            />
+            <input
+              type="text"
+              value={fd[`${job}_reasoning_effort`] || ''}
+              onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
+              placeholder="reasoning effort — blank = provider default (e.g. minimal, low, medium, high)"
+            />
+          </div>
+        )}
+      </div>
+    );
   };
 
   // --- Summary tier editor helpers ---
@@ -280,20 +377,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setSaving(true);
       setError(null);
       
+      // Per-job config + the "same as narration" toggles must save even when empty/false
+      // (so clearing a model or unticking a box actually takes effect).
+      const alwaysSave = new Set([
+        'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
+        'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
+        'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay',
+        'narration_provider', 'narration_model', 'narration_reasoning_effort',
+        'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
+        'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
+        'transcription_provider', 'transcription_model', 'image_alt_text_model',
+      ]);
+
       const toSave: Record<string, string> = {};
       for (const [key, value] of Object.entries(formData)) {
-        const isBooleanSetting = key === 'auto_transcribe_podcasts' ||
-                                 key === 'auto_generate_audio_for_articles' ||
-                                 key === 'auto_generate_summary' ||
-                                 key === 'summarize_comments' ||
-                                 key === 'library_show_summary' ||
-                                 key === 'wallabag_sync_enabled' ||
-                                 key === 'image_alt_text_enabled' ||
-                                 key === 'narrate_ea_forum_comments' ||
-                                 key === 'narrate_substack_comments' ||
-                                 key === 'manual_queue_always_autoplay';
-
-        if (isBooleanSetting) {
+        if (alwaysSave.has(key)) {
           toSave[key] = value;
         } else if (value && value !== '' && value !== '••••••••') {
           toSave[key] = value;
@@ -498,6 +596,48 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
           <div className="form-group">
             <label>
+              <Key size={16} /> OpenRouter API Key
+              {isSecretSet('openrouter_api_key') && <span className="secret-set">(configured)</span>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
+                value={formData.openrouter_api_key}
+                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
+                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
+                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+              Optional. One key → Claude, Gemini, Llama and more (use <code>provider/model</code> ids). <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Get a key</a>.
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> Anthropic API Key
+              {isSecretSet('anthropic_api_key') && <span className="secret-set">(configured)</span>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['anthropic_api_key'] ? 'text' : 'password'}
+                value={formData.anthropic_api_key}
+                onChange={(e) => handleChange('anthropic_api_key', e.target.value)}
+                placeholder={isSecretSet('anthropic_api_key') ? '••••••••' : 'sk-ant-...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
+                {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
+              Optional. For Claude models directly (e.g. <code>claude-haiku-4-5</code>).
+            </small>
+          </div>
+
+          <div className="form-group">
+            <label>
               <Key size={16} /> Gemini API Key
               {isSecretSet('gemini_api_key') && <span className="secret-set">(configured)</span>}
             </label>
@@ -525,18 +665,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
              How articles get converted to audio: Narration LLM scripts the text, then TTS speaks it.
            </p>
 
-           <div className="form-group">
-                <label>Narration LLM</label>
-                <select value={formData.narration_llm} onChange={(e) => handleChange('narration_llm', e.target.value)}>
-                  <option value="auto">Auto (prefers DeepSeek if DeepInfra key is set)</option>
-                  <option value="deepseek">DeepSeek V3.2 (via DeepInfra)</option>
-                  <option value="openai">OpenAI GPT-5-Nano (fast, cheap)</option>
-                  <option value="openai-mini">OpenAI GPT-5-Mini (smarter, slower)</option>
-                </select>
-                <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem'}}>
-                  Prepares article text for speech.
-                </small>
-            </div>
+           {renderChatJob('narration', 'Narration', 'The model that prepares article text for speech.', true)}
+           {renderChatJob('alignment', 'Read-along alignment', 'Maps the text to audio timestamps for the synced read-along view.')}
+           {renderChatJob('summary', 'Summaries', 'Writes the tweet-thread summaries of articles and comments.')}
 
             <div className="form-group">
                 <label>Voices</label>
@@ -593,6 +724,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </label>
              </div>
 
+             <div className="form-group ai-job">
+                <label>Transcription (Whisper)</label>
+                <small style={{ display: 'block', marginTop: '0.1rem', marginBottom: '0.4rem', color: '#888', fontSize: '0.85rem' }}>
+                  Turns podcast audio into a transcript.
+                </small>
+                <div className="ai-job-fields" style={{ display: 'grid', gap: '0.4rem' }}>
+                  <select value={formData.transcription_provider} onChange={(e) => handleChange('transcription_provider', e.target.value)}>
+                    {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                  <input
+                    type="text"
+                    value={formData.transcription_model}
+                    onChange={(e) => handleChange('transcription_model', e.target.value)}
+                    placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
+                  />
+                </div>
+             </div>
+
              <div className="form-group checkbox-group">
                 <label>
                   <input
@@ -647,6 +796,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <small style={{display: 'block', marginTop: '0.25rem', color: '#888', fontSize: '0.85rem', marginLeft: '1.5rem'}}>
                   Requires Gemini API key.
                 </small>
+                {formData.image_alt_text_enabled === 'true' && (
+                  <div className="ai-job-fields" style={{ display: 'grid', gap: '0.4rem', marginLeft: '1.5rem', marginTop: '0.5rem' }}>
+                    <select value="gemini" disabled>
+                      <option value="gemini">Google Gemini</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={formData.image_alt_text_model}
+                      onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
+                      placeholder="e.g. gemini-3-flash"
+                    />
+                  </div>
+                )}
              </div>
         </section>
 
