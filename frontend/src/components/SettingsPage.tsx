@@ -220,6 +220,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const legacyNarration = deriveLegacy(loaded.narration_llm || 'auto');
       const boolDefault = (v: string | null | undefined, d: string) => (v !== undefined && v !== null ? v : d);
 
+      // Pre-fill transcription/image model fields with the effective default (the model the
+      // backend actually uses when the field is blank), so they show the model in use — same
+      // as the narration fields pre-fill from the legacy routing.
+      const transProvider = loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
+      const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
+
       setFormData(prev => ({
         ...prev,
         ai_provider: loaded.ai_provider || 'openai',
@@ -247,12 +253,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_provider: loaded.summary_provider || legacyNarration.provider,
         summary_model: loaded.summary_model || legacyNarration.model,
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
-        transcription_provider: loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai'),
-        transcription_model: loaded.transcription_model || '',
+        transcription_provider: transProvider,
+        transcription_model: loaded.transcription_model || transDefaultModel,
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
-        image_alt_text_model: loaded.image_alt_text_model || '',
+        image_alt_text_model: loaded.image_alt_text_model || 'gemini-3-flash-preview',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
@@ -306,21 +312,31 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         )}
         {(base || !usingSame) && (
           <div className="ai-job-fields">
-            <select value={provider} onChange={(e) => handleChange(`${job}_provider`, e.target.value)}>
-              {CHAT_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </select>
-            <input
-              type="text"
-              value={fd[`${job}_model`] || ''}
-              onChange={(e) => handleChange(`${job}_model`, e.target.value)}
-              placeholder={chatHintFor(provider)}
-            />
-            <input
-              type="text"
-              value={fd[`${job}_reasoning_effort`] || ''}
-              onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-              placeholder="reasoning effort — blank = provider default (e.g. minimal, low, medium, high)"
-            />
+            <div className="ai-field">
+              <span className="ai-field-label">Provider</span>
+              <select value={provider} onChange={(e) => handleChange(`${job}_provider`, e.target.value)}>
+                {CHAT_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            <div className="ai-field">
+              <span className="ai-field-label">Model</span>
+              <input
+                type="text"
+                value={fd[`${job}_model`] || ''}
+                onChange={(e) => handleChange(`${job}_model`, e.target.value)}
+                placeholder={chatHintFor(provider)}
+              />
+            </div>
+            <div className="ai-field">
+              <span className="ai-field-label">Reasoning effort</span>
+              <input
+                type="text"
+                value={fd[`${job}_reasoning_effort`] || ''}
+                onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
+                placeholder="e.g. minimal, low, medium, high"
+              />
+              <small className="settings-hint">Blank = provider default.</small>
+            </div>
           </div>
         )}
       </div>
@@ -899,15 +915,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <label>Transcription</label>
             <small className="settings-hint">Turns podcast audio into text (Whisper).</small>
             <div className="ai-job-fields">
-              <select value={formData.transcription_provider} onChange={(e) => handleChange('transcription_provider', e.target.value)}>
-                {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-              </select>
-              <input
-                type="text"
-                value={formData.transcription_model}
-                onChange={(e) => handleChange('transcription_model', e.target.value)}
-                placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
-              />
+              <div className="ai-field">
+                <span className="ai-field-label">Provider</span>
+                <select value={formData.transcription_provider} onChange={(e) => handleChange('transcription_provider', e.target.value)}>
+                  {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </div>
+              <div className="ai-field">
+                <span className="ai-field-label">Model</span>
+                <input
+                  type="text"
+                  value={formData.transcription_model}
+                  onChange={(e) => handleChange('transcription_model', e.target.value)}
+                  placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
+                />
+              </div>
             </div>
           </div>
 
@@ -958,15 +980,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </label>
             {formData.image_alt_text_enabled === 'true' && (
               <div className="ai-job-fields">
-                <select value="gemini" disabled>
-                  <option value="gemini">Google Gemini</option>
-                </select>
-                <input
-                  type="text"
-                  value={formData.image_alt_text_model}
-                  onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                  placeholder="e.g. gemini-3-flash"
-                />
+                <div className="ai-field">
+                  <span className="ai-field-label">Provider</span>
+                  <select value="gemini" disabled>
+                    <option value="gemini">Google Gemini</option>
+                  </select>
+                </div>
+                <div className="ai-field">
+                  <span className="ai-field-label">Model</span>
+                  <input
+                    type="text"
+                    value={formData.image_alt_text_model}
+                    onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
+                    placeholder="e.g. gemini-3-flash"
+                  />
+                </div>
               </div>
             )}
           </div>
