@@ -248,7 +248,6 @@ Wallacast supports multiple users with complete data isolation:
   - `bootstrapFirstUser()`: Assigns orphaned content to first user on startup
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
-  - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
   - **Provider registry (`CHAT_PROVIDERS`)**: OpenAI, DeepInfra, OpenRouter, Anthropic, Google Gemini — all spoken to via the **OpenAI SDK** (just a different `baseURL` + key), so one client handles every provider. OpenRouter is the easy on-ramp for Claude/Gemini/etc. (`provider/model` ids).
   - `getChatClientForJob(userId, job)`: per-job model selection — `job` = `'narration'` (prepares text for TTS) | `'alignment'` (read-along) | `'summary'`. Each job has its own `{provider, model, reasoning_effort}` setting; read-along & summaries can defer to narration ("use same model as narration"). Returns `{ client, model, extraParams }` where `extraParams` carries the reasoning_effort param (empty = provider default, so behavior is unchanged unless set). **Read-time fallback**: if a job isn't configured yet, it derives from the legacy `narration_llm` routing, so existing users keep working and the Settings fields pre-fill with the model actually in use.
   - `getChatClientForUser(userId)`: back-compat wrapper (narration job, no reasoning extraParams).

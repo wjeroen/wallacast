@@ -303,10 +303,10 @@ export function ContentCard({
         })()}
         <div className="metadata">
           <span className={`type-pill type-${item.type}`} title={item.type}>
-            {item.type === 'article' && <><Newspaper size={14} /> Article</>}
-            {item.type === 'text' && <><NotebookPen size={14} /> Text</>}
-            {item.type === 'podcast_episode' && <><Podcast size={14} /> Podcast</>}
-            {item.type === 'pdf' && <><FileText size={14} /> PDF</>}
+            {item.type === 'article' && <><Newspaper size={14} /> <span className="type-label">Article</span></>}
+            {item.type === 'text' && <><NotebookPen size={14} /> <span className="type-label">Text</span></>}
+            {item.type === 'podcast_episode' && <><Podcast size={14} /> <span className="type-label">Podcast</span></>}
+            {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
           {item.audio_url && <span className="badge">Audio</span>}
           {item.summary_status !== 'generating' && item.summary_generated_at && (

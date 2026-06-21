@@ -153,6 +153,11 @@
   .filter-buttons button {
     padding: 0.5rem;
   }
+
+  /* Type pill collapses to icon-only on narrow screens (same as .filter-label) */
+  .type-label {
+    display: none;
+  }
 }
 
 .settings-btn {
@@ -1024,14 +1029,13 @@
   white-space: nowrap;
 }
 .type-pill svg { flex-shrink: 0; }
-.type-article { background: #1e3a5f; color: #bfdbfe; }
-.type-text { background: #15803d; color: #dcfce7; }
-.type-podcast { background: #4c1d95; color: #ede9fe; }
+/* Each type keeps its original (vivid) icon colour, now as a filled pill background
+   so it reads as strongly as the capability badges — and stays distinct from them
+   (e.g. article blue #3b82f6 vs the muted transcript-badge navy). Same in both themes. */
+.type-article { background: #3b82f6; color: #fff; }
+.type-text { background: #10b981; color: #fff; }
+.type-podcast_episode { background: #a855f7; color: #fff; }
 .type-pdf { background: var(--bg-raised); color: var(--t2); }
-[data-theme="light"] .type-article { background: #dbeafe; color: #1e40af; }
-[data-theme="light"] .type-text { background: #dcfce7; color: #15803d; }
-[data-theme="light"] .type-podcast { background: #ede9fe; color: #5b21b6; }
-[data-theme="light"] .type-pdf { background: var(--bg-raised); color: var(--t2); }
 
 .content-actions {
   display: flex;
@@ -2419,6 +2423,19 @@
   font-size: 0.75rem;
   color: #22c55e;
   margin-left: 0.25rem;
+}
+
+/* Shown in place of "(configured)" when a key isn't set yet — a blue bracketed
+   "(get a key)" link to the provider's key page. */
+.settings-section .get-key-link {
+  font-weight: normal;
+  font-size: 0.75rem;
+  color: #4a90e2;
+  margin-left: 0.25rem;
+  text-decoration: none;
+}
+.settings-section .get-key-link:hover {
+  text-decoration: underline;
 }
 
 .settings-section input,
