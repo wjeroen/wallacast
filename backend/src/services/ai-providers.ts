@@ -66,15 +66,16 @@ class OpenAIProvider implements AIProvider {
     const model = options?.model || await getUserSetting(this.userId, 'openai_tts_model') || 'gpt-4o-mini-tts';
     const voice = options?.voice || await getUserSetting(this.userId, 'openai_tts_voice') || 'coral';
 
-    // Route request to the correct client (DeepInfra vs OpenAI)
-    const client = await getTTSClientForUser(this.userId, model);
+    // Route request to the correct client (DeepInfra / OpenAI / OpenRouter).
+    // The router may rewrite the model id (e.g. namespaced for OpenRouter), so use tts.model.
+    const tts = await getTTSClientForUser(this.userId, model);
 
-    if (!client) {
+    if (!tts) {
         throw new Error("No API client configured for TTS");
     }
 
-    const response = await client.audio.speech.create({
-      model: model as any,
+    const response = await tts.client.audio.speech.create({
+      model: tts.model as any,
       voice: voice as any,
       input: text,
       // Instructions are only supported by some models/endpoints
@@ -115,20 +116,33 @@ export async function getDeepInfraClientForUser(userId: number): Promise<OpenAI 
 }
 
 /**
- * INTELLIGENT ROUTER: Returns the correct client based on the Model ID.
- * If model is 'hexgrad/Kokoro-82M', it returns the DeepInfra client.
- * Otherwise, it returns the standard OpenAI client.
+ * INTELLIGENT ROUTER: Returns the correct client + the model id to call with.
+ * - Kokoro models → DeepInfra.
+ * - OpenAI-family models → OpenAI directly, OR via OpenRouter if the user picked
+ *   'openrouter' as their OpenAI-TTS provider (same voices; OpenRouter needs the
+ *   namespaced model id like 'openai/gpt-4o-mini-tts', so we rewrite it here).
  */
-export async function getTTSClientForUser(userId: number, modelId?: string): Promise<OpenAI | null> {
+export async function getTTSClientForUser(userId: number, modelId?: string): Promise<{ client: OpenAI; model: string } | null> {
     const model = modelId || await getUserSetting(userId, 'openai_tts_model') || 'gpt-4o-mini-tts';
 
-    // DeepInfra Routing
+    // DeepInfra Routing (Kokoro)
     if (model.includes('Kokoro') || model.startsWith('hexgrad/')) {
-        return getDeepInfraClientForUser(userId);
+        const client = await getDeepInfraClientForUser(userId);
+        return client ? { client, model } : null;
     }
 
-    // Default to OpenAI
-    return getOpenAIClientForUser(userId);
+    // OpenAI-family model: route through OpenAI directly or via OpenRouter.
+    const ttsProvider = (await getUserSetting(userId, 'openai_tts_provider')) || 'openai';
+    if (ttsProvider === 'openrouter') {
+        const k = await getUserSetting(userId, 'openrouter_api_key');
+        if (k) {
+            const orModel = model.startsWith('openai/') ? model : `openai/${model}`;
+            return { client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: orModel };
+        }
+        // No OpenRouter key configured → fall through to OpenAI.
+    }
+    const client = await getOpenAIClientForUser(userId);
+    return client ? { client, model } : null;
 }
 
 /**
@@ -148,6 +162,10 @@ export async function getTranscriptionClientForUser(userId: number): Promise<{ c
     if (provider === 'deepinfra') {
         const k = await getUserSetting(userId, 'deepinfra_api_key');
         if (k) return { client: new OpenAI({ apiKey: k, baseURL: 'https://api.deepinfra.com/v1/openai' }), model: chosenModel || 'openai/whisper-large-v3-turbo' };
+    }
+    if (provider === 'openrouter') {
+        const k = await getUserSetting(userId, 'openrouter_api_key');
+        if (k) return { client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: chosenModel || 'openai/whisper-1' };
     }
 
     // Fallback (unset, or chosen provider has no key): legacy auto-routing — prefer DeepInfra (cheaper).
@@ -310,9 +328,14 @@ export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice
 
   const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
   const hasOpenAI = !!(await getUserSetting(userId, 'openai_api_key'));
+  // OpenAI-family voices are usable either with an OpenAI key, or via OpenRouter when the
+  // user routes OpenAI TTS through it (same voices).
+  const ttsProvider = (await getUserSetting(userId, 'openai_tts_provider')) || 'openai';
+  const hasOpenRouter = !!(await getUserSetting(userId, 'openrouter_api_key'));
+  const canOpenAIVoices = ttsProvider === 'openrouter' ? hasOpenRouter : hasOpenAI;
   voices = voices.filter(v => {
     const isKokoro = v.model.includes('Kokoro') || v.model.startsWith('hexgrad/');
-    return isKokoro ? hasDeepInfra : hasOpenAI;
+    return isKokoro ? hasDeepInfra : canOpenAIVoices;
   });
   if (voices.length === 0) return null;
 

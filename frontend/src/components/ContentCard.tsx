@@ -302,16 +302,13 @@ export function ContentCard({
           ) : null;
         })()}
         <div className="metadata">
-          <span className="type" title={item.type}>
-            {item.type === 'article' && <Newspaper size={16} className="icon-article" />}
-            {item.type === 'text' && <NotebookPen size={16} className="icon-text" />}
-            {item.type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-            {item.type === 'pdf' && <FileText size={16} />}
+          <span className={`type-pill type-${item.type}`} title={item.type}>
+            {item.type === 'article' && <><Newspaper size={14} /> Article</>}
+            {item.type === 'text' && <><NotebookPen size={14} /> Text</>}
+            {item.type === 'podcast_episode' && <><Podcast size={14} /> Podcast</>}
+            {item.type === 'pdf' && <><FileText size={14} /> PDF</>}
           </span>
           {item.audio_url && <span className="badge">Audio</span>}
-          {item.summary_status === 'generating' && (
-            <span className="badge summarizing">Summarizing…</span>
-          )}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
             <span className="badge summary">Summary</span>
           )}
@@ -326,6 +323,11 @@ export function ContentCard({
           {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
         </div>
         {generationStatusDisplay()}
+        {item.summary_status === 'generating' && (
+          <div className="generation-status generating">
+            <span>Summarizing…</span>
+          </div>
+        )}
         {item.summary_status === 'failed' && (
           <div className="generation-status error">
             <span className="error-message">

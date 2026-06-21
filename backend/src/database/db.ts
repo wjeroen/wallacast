@@ -252,15 +252,21 @@ export async function initializeDatabase() {
     }
 
     // Reset any stuck summary statuses (server restart during summary generation).
-    // Wrapped in try/catch: the summary_status column is created by migration 019 just above,
-    // but guard anyway so a missing column can never crash initialization (CLAUDE.md rule).
+    // Mark them 'failed' (not 'idle') so they surface a "Summary failed — Retry" banner,
+    // consistent with how interrupted audio/transcript generation is handled above —
+    // a restart shouldn't make an in-flight summary silently disappear.
+    // Wrapped in try/catch: the summary_status/summary_error columns are created by
+    // migrations just above, but guard anyway so a missing column can never crash
+    // initialization (CLAUDE.md rule).
     try {
       const summaryResetResult = await client.query(`
-        UPDATE content_items SET summary_status = 'idle'
+        UPDATE content_items
+        SET summary_status = 'failed',
+            summary_error = 'Server restarted during summary generation'
         WHERE summary_status = 'generating'
       `);
       if (summaryResetResult.rowCount && summaryResetResult.rowCount > 0) {
-        console.log(`Reset ${summaryResetResult.rowCount} stuck summary task(s) to idle`);
+        console.log(`Reset ${summaryResetResult.rowCount} stuck summary task(s) to failed`);
       }
     } catch (e) {
       // Column might not exist yet on a very old/odd schema — safe to skip
