@@ -34,9 +34,19 @@ interface ImageAnalysisResult {
 
 export class ImageAltTextService {
   private userId: number;
+  private cachedModel: string | null = null;
 
   constructor(userId: number) {
     this.userId = userId;
+  }
+
+  // Gemini model for image descriptions (Settings → free-text; defaults to the long-tested
+  // gemini-3-flash-preview). Gemini-only — the upload/inline plumbing is Gemini-specific.
+  private async getModelName(): Promise<string> {
+    if (this.cachedModel === null) {
+      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || 'gemini-3-flash-preview';
+    }
+    return this.cachedModel;
   }
 
   /**
@@ -75,7 +85,7 @@ export class ImageAltTextService {
         total_images: 0,
         decorative_images: 0,
         cost_usd: 0,
-        model: 'gemini-3-flash-preview',
+        model: await this.getModelName(),
         processed_at: new Date().toISOString()
       };
     }
@@ -167,7 +177,7 @@ export class ImageAltTextService {
       total_images: currentImages.length,
       decorative_images: decorativeCount,
       cost_usd: forceRegenerate ? costUsd : (existingData?.cost_usd || 0) + costUsd,
-      model: 'gemini-3-flash-preview',
+      model: await this.getModelName(),
       processed_at: new Date().toISOString()
     };
   }
@@ -422,7 +432,7 @@ Important Constraints:
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to Gemini`);
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: await this.getModelName(),
       contents: [
         {
           role: 'user',
