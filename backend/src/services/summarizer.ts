@@ -1,6 +1,37 @@
+import type OpenAI from 'openai';
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
-import { getChatClientForUser, getUserSetting } from './ai-providers.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
+import { getChatClientForJob, getUserSetting } from './ai-providers.js';
+
+// Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
+// "Premature close" / ECONNRESET on a reused keep-alive socket — see Node #63989) and
+// 429/5xx are transient and almost always succeed on a fresh attempt. 4xx (bad request /
+// auth) are NOT retried. Summaries previously had no retry, so these surfaced as failures
+// while TTS/transcription (which already retry) silently recovered.
+async function chatCreateWithRetry(
+  client: OpenAI,
+  params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+  label: string
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const { maxAttempts, baseDelayMs, maxDelayMs } = PROCESSING_CONFIG.retry;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await client.chat.completions.create(params);
+    } catch (err: any) {
+      lastErr = err;
+      const status: number | undefined = err?.status;
+      // Retry connection errors (no status) and 429/5xx; give up on 4xx.
+      const retryable = status === undefined || status === 429 || (status >= 500 && status < 600);
+      if (!retryable || attempt === maxAttempts) throw err;
+      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+      console.warn(`[Summary] ${label} attempt ${attempt}/${maxAttempts} failed (${status ?? 'conn'}): ${err?.message}. Retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
 
 /**
  * Article + comment summaries ("Twitter thread" style).
@@ -243,10 +274,10 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const maxTweetsArticle = maxTweetsForChars(articleChars, tiers);
     const maxWords = parseMaxWords(await getUserSetting(userId, 'summary_max_words'));
 
-    // 3. LLM client (same router the narration scriptwriter uses)
-    const chat = await getChatClientForUser(userId);
+    // 3. LLM client for the Summaries job (provider/model/reasoning configurable in Settings)
+    const chat = await getChatClientForJob(userId, 'summary');
     if (!chat) {
-      throw new Error('No AI API key set. Configure OpenAI or DeepInfra in Settings.');
+      throw new Error('No AI API key set. Configure a provider for Summaries in Settings.');
     }
     console.log(`[Summary] articleChars=${articleChars} -> maxTweetsArticle=${maxTweetsArticle} maxWords=${maxWords} model=${chat.model}`);
 
@@ -266,8 +297,9 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         `TRANSCRIPT (auto-generated — may contain transcription mistakes, especially in names):\n${articleText.slice(0, ARTICLE_INPUT_CAP)}`
       : metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP);
 
-    const articleResponse = await chat.client.chat.completions.create({
+    const articleResponse = await chatCreateWithRetry(chat.client, {
       model: chat.model,
+      ...chat.extraParams,
       messages: [
         {
           role: 'system',
@@ -277,7 +309,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         },
         { role: 'user', content: userContent },
       ],
-    });
+    }, 'article');
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
     logTweetLengths('article', summary, maxWords);
 
@@ -294,8 +326,9 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         const commentChars = commentsText.length;
         const maxTweetsComments = maxTweetsForChars(commentChars, tiers);
         console.log(`[Summary] commentChars=${commentChars} -> maxTweetsComments=${maxTweetsComments}`);
-        const commentResponse = await chat.client.chat.completions.create({
+        const commentResponse = await chatCreateWithRetry(chat.client, {
           model: chat.model,
+          ...chat.extraParams,
           messages: [
             { role: 'system', content: COMMENT_SUMMARY_PROMPT(maxTweetsComments, maxWords) },
             {
@@ -306,7 +339,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
                 `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, COMMENTS_INPUT_CAP)}`,
             },
           ],
-        });
+        }, 'comments');
         commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
         logTweetLengths('comments', commentSummary, maxWords);
       }
@@ -316,16 +349,17 @@ export async function generateSummaryForContent(contentId: number): Promise<void
 
     await query(
       `UPDATE content_items
-       SET summary = $1, comment_summary = $2, summary_status = 'completed', summary_generated_at = NOW()
+       SET summary = $1, comment_summary = $2, summary_status = 'completed', summary_generated_at = NOW(), summary_error = NULL
        WHERE id = $3`,
       [summary, commentSummary, contentId]
     );
     console.log(`[Summary] ===== Done for content ${contentId} (article + ${commentSummary ? 'comment' : 'no comment'} summary) =====`);
   } catch (error: any) {
     console.error(`[Summary] Failed for content ${contentId}:`, error?.message || error);
+    const errMsg = (error?.message || 'Summary generation failed').toString().slice(0, 500);
     await query(
-      `UPDATE content_items SET summary_status = 'failed' WHERE id = $1`,
-      [contentId]
+      `UPDATE content_items SET summary_status = 'failed', summary_error = $2 WHERE id = $1`,
+      [contentId, errMsg]
     ).catch(() => { /* swallow */ });
   }
 }

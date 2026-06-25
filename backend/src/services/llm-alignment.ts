@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForUser, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting } from './ai-providers.js';
 import { query } from '../database/db.js';
 
 interface TranscriptWord {
@@ -239,7 +239,25 @@ function extractContentElements(
         elements.push({ type: 'blockquote', html: (el as Element).outerHTML, text: `Quote: ${text}` });
       }
     } else if (tagName === 'ul' || tagName === 'ol') {
-      if (text) {
+      // Split the list into ONE element per <li> so read-along highlights item-by-item
+      // instead of lighting up the whole list at once. Each item is re-wrapped in its parent
+      // list type so bullets/numbers still render; ordered lists get a `start` so the count
+      // stays correct. A sub-list nested inside an item stays part of that item (one chunk).
+      // This only shapes the alignment/read-along data — the stored html_content is untouched.
+      const isOrdered = tagName === 'ol';
+      const startAttr = parseInt(el.getAttribute('start') || '1', 10) || 1;
+      const items = Array.from(el.children).filter(c => c.tagName.toLowerCase() === 'li');
+      if (items.length > 0) {
+        items.forEach((li, idx) => {
+          const liText = (li.textContent || '').trim();
+          if (!liText) return;
+          const wrapped = isOrdered
+            ? `<ol start="${startAttr + idx}">${(li as Element).outerHTML}</ol>`
+            : `<ul>${(li as Element).outerHTML}</ul>`;
+          elements.push({ type: 'list', html: wrapped, text: liText });
+        });
+      } else if (text) {
+        // No <li> children (odd markup) — fall back to the whole list as one element.
         elements.push({ type: 'list', html: (el as Element).outerHTML, text });
       }
     } else if (tagName === 'pre') {
@@ -772,13 +790,14 @@ ${closingInstruction}`;
   // Helper: call LLM and parse >>> markers from response
   async function callAndParse(
     prompt: string,
-    chatConfig: { client: any; model: string },
+    chatConfig: { client: any; model: string; extraParams?: Record<string, any> },
     label: string
   ): Promise<Map<number, number>> {
     console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
 
     const response = await chatConfig.client.chat.completions.create({
       model: chatConfig.model,
+      ...(chatConfig.extraParams || {}),
       messages: [{ role: 'user', content: prompt }],
       max_completion_tokens: 128000,
     });
@@ -819,7 +838,7 @@ ${closingInstruction}`;
   }
 
   // Get LLM client
-  const chatConfig = await getChatClientForUser(userId);
+  const chatConfig = await getChatClientForJob(userId, 'alignment');
   if (!chatConfig) {
     throw new Error('No LLM configured. Please set up a DeepInfra or OpenAI API key in Settings.');
   }
