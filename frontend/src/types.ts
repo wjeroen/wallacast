@@ -55,6 +55,20 @@ export interface ContentItem {
   comment_summary?: string; // Comment-discussion summary (optional)
   summary_status?: 'idle' | 'generating' | 'completed' | 'failed';
   summary_generated_at?: string; // When the summary was last generated
+  summary_error?: string; // Error message when summary_status === 'failed' (shown on cards)
+}
+
+// A snapshot of an article/text body saved before an edit/refetch/restore (version history).
+export interface ContentVersion {
+  id: number;
+  source: 'fetch' | 'refetch' | 'edit' | 'restore';
+  title?: string;
+  created_at: string;
+  html_bytes?: number;      // present in the lean list response
+  has_comments?: boolean;   // present in the lean list response
+  html_content?: string;    // present when fetching a single version
+  content?: string;
+  comments?: Comment[] | string;
 }
 
 export interface Podcast {

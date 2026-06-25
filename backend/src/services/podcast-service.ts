@@ -575,14 +575,16 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
           [
             feedId,
             item_type,
-            cleanHtmlEntities(title),
+            // title and guid are VARCHAR(500); some feeds emit very long guids (full URLs)
+            // — truncate so one oversized item can't fail the whole insert.
+            cleanHtmlEntities(title).slice(0, 500),
             truncatedDescription,
             url,
             audio_url,
             pubDate ? new Date(pubDate) : new Date(),
             parseDuration(duration),
             preview_picture,
-            guid,
+            guid ? guid.slice(0, 500) : guid,
             cleanAuthor,
           ]
         );

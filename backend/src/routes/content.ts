@@ -16,6 +16,65 @@ import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js'
 
 const router = express.Router();
 
+// Keep at most this many version snapshots per item (HTML is tiny, but don't grow forever).
+const MAX_VERSIONS_PER_ITEM = 25;
+
+// Snapshot an item's CURRENT body into content_versions BEFORE it gets overwritten by an
+// edit / refetch / restore, so the change can be rolled back. Audio is never versioned.
+// Best-effort: a snapshot failure must never block the actual edit, so callers swallow errors.
+async function snapshotContentVersion(
+  contentItemId: number | string,
+  userId: number,
+  row: { title?: string | null; html_content?: string | null; content?: string | null; comments?: any },
+  source: 'fetch' | 'refetch' | 'edit' | 'restore'
+): Promise<void> {
+  // Nothing worth keeping if there's no body at all.
+  if (!row || (!row.html_content && !row.content)) return;
+
+  const commentsValue =
+    row.comments == null
+      ? null
+      : typeof row.comments === 'string'
+        ? row.comments
+        : JSON.stringify(row.comments);
+
+  await query(
+    `INSERT INTO content_versions (content_item_id, user_id, source, title, html_content, content, comments)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [contentItemId, userId, source, row.title ?? null, row.html_content ?? null, row.content ?? null, commentsValue]
+  );
+
+  // Prune anything beyond the most recent MAX_VERSIONS_PER_ITEM.
+  await query(
+    `DELETE FROM content_versions
+     WHERE content_item_id = $1
+       AND id NOT IN (
+         SELECT id FROM content_versions
+         WHERE content_item_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2
+       )`,
+    [contentItemId, MAX_VERSIONS_PER_ITEM]
+  );
+}
+
+// Strip <script>/<style> (and javascript: URLs) from edited HTML before storing it.
+// The frontend's markdownToHtml already strips these; this is defense-in-depth because
+// the result is rendered with dangerouslySetInnerHTML.
+function sanitizeEditedHtml(html: string): string {
+  if (!html) return '';
+  const dom = new JSDOM(html);
+  const doc = dom.window.document;
+  doc.querySelectorAll('script, style').forEach((el) => el.remove());
+  doc.querySelectorAll('a[href], img[src]').forEach((el) => {
+    for (const attr of ['href', 'src']) {
+      const val = el.getAttribute(attr);
+      if (val && /^\s*javascript:/i.test(val)) el.removeAttribute(attr);
+    }
+  });
+  return doc.body.innerHTML;
+}
+
 // Get all content items (excluding audio_data for performance)
 router.get('/', async (req, res) => {
   try {
@@ -23,7 +82,7 @@ router.get('/', async (req, res) => {
 
     // Exclude large columns (html_content, comments, transcript) for performance
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -237,7 +296,7 @@ router.post('/bulk', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -690,6 +749,30 @@ router.patch('/:id', async (req, res) => {
       'duration',
     ];
 
+    // Manual Markdown/HTML edit of an article/text body. The frontend converts Markdown ->
+    // HTML and sends { is_edit: true, html_content, content }. We snapshot the current body
+    // first (so the edit is undoable), sanitize, and treat the edit like a fresh fetch
+    // (content_fetched_at = now). Audio + read-along are left untouched-but-outdated — the
+    // provenance then shows the content is newer than the narration (regenerate to re-sync).
+    if (updates.is_edit === true) {
+      const cur = await query(
+        'SELECT type, title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
+      );
+      if (cur.rows.length > 0 && (cur.rows[0].type === 'article' || cur.rows[0].type === 'text')) {
+        await snapshotContentVersion(id, req.user!.userId, cur.rows[0], 'edit').catch((err) =>
+          console.error('Failed to snapshot version before edit:', err)
+        );
+        if (typeof updates.html_content === 'string') {
+          updates.html_content = sanitizeEditedHtml(updates.html_content);
+        }
+        updates.content_fetched_at = new Date();
+        updates.content_source = 'wallacast';
+        allowedFields.push('html_content', 'content', 'content_fetched_at', 'content_source');
+      }
+      delete updates.is_edit;
+    }
+
     if (updates.audio_data === null && updates.audio_url === null) {
       const contentResult = await query(
         'SELECT type FROM content_items WHERE id = $1 AND user_id = $2',
@@ -718,7 +801,25 @@ router.patch('/:id', async (req, res) => {
       updates.comment_summary = null;
       updates.summary_status = 'idle';
       updates.summary_generated_at = null;
-      allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at');
+      updates.summary_error = null;
+      allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at', 'summary_error');
+    }
+
+    // Dismiss a failed-generation / failed-summary error from the UI: reset the failed status
+    // to idle and clear the stored message so the red error box on the card goes away.
+    if (updates.dismiss_generation_error === true) {
+      updates.generation_status = 'idle';
+      updates.generation_error = null;
+      updates.current_operation = null;
+      updates.generation_progress = 0;
+      allowedFields.push('generation_status', 'generation_error', 'current_operation', 'generation_progress');
+      delete updates.dismiss_generation_error;
+    }
+    if (updates.dismiss_summary_error === true) {
+      updates.summary_status = 'idle';
+      updates.summary_error = null;
+      allowedFields.push('summary_status', 'summary_error');
+      delete updates.dismiss_summary_error;
     }
 
     if (updates.regenerate_content === true) {
@@ -739,6 +840,17 @@ router.patch('/:id', async (req, res) => {
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
                 ['fetching', 10, 'fetching_article', id]
               );
+
+              // Snapshot the current body before the refetch overwrites it (undoable)
+              const before = await query(
+                'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+                [id, req.user!.userId]
+              );
+              if (before.rows.length > 0) {
+                await snapshotContentVersion(id, req.user!.userId, before.rows[0], 'refetch').catch((err) =>
+                  console.error('Failed to snapshot version before refetch:', err)
+                );
+              }
 
               const articleData = await fetchArticleContent(url);
 
@@ -786,7 +898,8 @@ router.patch('/:id', async (req, res) => {
             } catch (error) {
               console.error('Content refetch error:', error);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                // Mark the failed step so the card's Retry re-runs a refetch (not audio gen)
+                "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
                 ['failed', (error as Error).message || 'Failed to regenerate content', 0, id]
               );
             }
@@ -865,7 +978,8 @@ router.patch('/:id', async (req, res) => {
             } catch (error) {
               console.error('Transcript regeneration error:', error);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                // Mark the failed step so the card's Retry re-runs transcript regen (not audio gen)
+                "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
                 ['failed', (error as Error).message || 'Failed to regenerate transcript', 0, id]
               );
             }
@@ -990,7 +1104,7 @@ router.patch('/:id', async (req, res) => {
     // during playback (saves every 10s). For playback-only updates, return minimal data.
     // For content updates, return the same columns as the list endpoint.
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error'
       : 'RETURNING id, playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
@@ -1179,6 +1293,17 @@ router.post('/:id/refetch', async (req, res) => {
       try {
         console.log(`Refetching metadata and comments for article ${id} from:`, url);
 
+        // Snapshot the current body before the refetch overwrites it (undoable via version history)
+        const before = await query(
+          'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+          [id, req.user!.userId]
+        );
+        if (before.rows.length > 0) {
+          await snapshotContentVersion(id, req.user!.userId, before.rows[0], 'refetch').catch((err) =>
+            console.error('Failed to snapshot version before refetch:', err)
+          );
+        }
+
         const articleData = await fetchArticleContent(url);
 
         const commentsJson = articleData.comments && articleData.comments.length > 0
@@ -1229,6 +1354,91 @@ router.post('/:id/refetch', async (req, res) => {
   } catch (error) {
     console.error('Error starting refetch:', error);
     res.status(500).json({ error: 'Failed to start refetch' });
+  }
+});
+
+// List version-history snapshots for an item (lean metadata only — no html bodies).
+router.get('/:id/versions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `SELECT id, source, title, created_at,
+              octet_length(COALESCE(html_content, '')) AS html_bytes,
+              (comments IS NOT NULL) AS has_comments
+       FROM content_versions
+       WHERE content_item_id = $1 AND user_id = $2
+       ORDER BY created_at DESC`,
+      [id, req.user!.userId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error listing content versions:', error);
+    res.status(500).json({ error: 'Failed to list versions' });
+  }
+});
+
+// Fetch a single version's full body (for viewing before restoring).
+router.get('/:id/versions/:versionId', async (req, res) => {
+  try {
+    const { id, versionId } = req.params;
+    const result = await query(
+      `SELECT id, source, title, html_content, content, comments, created_at
+       FROM content_versions
+       WHERE id = $1 AND content_item_id = $2 AND user_id = $3`,
+      [versionId, id, req.user!.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Version not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching content version:', error);
+    res.status(500).json({ error: 'Failed to fetch version' });
+  }
+});
+
+// Restore a previous version. Snapshots the CURRENT body first (so restore is undoable),
+// then overwrites the item's body from the chosen version. Like an edit/refetch, this leaves
+// audio + read-along untouched-but-outdated.
+router.post('/:id/versions/:versionId/restore', async (req, res) => {
+  try {
+    const { id, versionId } = req.params;
+
+    const v = await query(
+      `SELECT title, html_content, content, comments FROM content_versions
+       WHERE id = $1 AND content_item_id = $2 AND user_id = $3`,
+      [versionId, id, req.user!.userId]
+    );
+    if (v.rows.length === 0) return res.status(404).json({ error: 'Version not found' });
+    const version = v.rows[0];
+
+    const cur = await query(
+      'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+    if (cur.rows.length === 0) return res.status(404).json({ error: 'Content not found' });
+
+    await snapshotContentVersion(id, req.user!.userId, cur.rows[0], 'restore').catch((err) =>
+      console.error('Failed to snapshot before restore:', err)
+    );
+
+    const commentsValue =
+      version.comments == null
+        ? null
+        : typeof version.comments === 'string'
+          ? version.comments
+          : JSON.stringify(version.comments);
+
+    await query(
+      `UPDATE content_items SET
+         html_content = $1, content = $2, comments = $3,
+         content_source = 'wallacast', content_fetched_at = NOW(), updated_at = NOW()
+       WHERE id = $4 AND user_id = $5`,
+      [version.html_content, version.content, commentsValue, id, req.user!.userId]
+    );
+
+    res.json({ message: 'Version restored' });
+  } catch (error) {
+    console.error('Error restoring content version:', error);
+    res.status(500).json({ error: 'Failed to restore version' });
   }
 });
 

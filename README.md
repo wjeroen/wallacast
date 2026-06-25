@@ -1,5 +1,11 @@
 # Wallacast
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-339933?logo=node.js&logoColor=white)
+![PWA](https://img.shields.io/badge/PWA-enabled-5A0FC8?logo=pwa&logoColor=white)
+
 A personal read-it-later and podcast PWA that converts articles to audio (TTS) and podcasts to text (transcription). Think Wallabag/Pocket meets Podcasting. It has bidirectional wallabag sync. Optimized for LessWrong, the Effective Altruism Forum, and Substack (supports comments and LLM blocks).
 
 Deploy it yourself to try it out, or reach out to me for a link.
@@ -12,7 +18,8 @@ Deploy it yourself to try it out, or reach out to me for a link.
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
 - **File Upload → Audio**: Upload `.html` or `.htm` files directly — treated exactly like articles
-- **Texts → Audio**: Paste plain text or HTML — converted to audio with read-along alignment
+- **Texts → Audio**: Paste Markdown, plain text, or HTML — converted to audio with read-along alignment
+- **Editable**: Articles and texts can be edited in a built-in Markdown editor (round-trips with Obsidian); every edit/refetch/restore is snapshotted to version history
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
@@ -29,7 +36,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
-| Image Descriptions | Gemini 3 Flash (gemini-3-flash-preview) for generating alt-text narrations (per-user API keys, optional) |
+| Image Descriptions | Google Gemini for alt-text narrations (model configurable in Settings, default gemini-3-flash-preview; per-user API key, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), Substack comment extraction (via _preloads JSON), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
 | RSS/Atom Parsing | Custom parser supporting both RSS 2.0 and Atom feeds (podcasts & newsletters) |
@@ -71,7 +78,10 @@ Wallacast supports multiple users with complete data isolation:
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
 | Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
-| Adding content (URL/text/HTML upload) | `frontend/src/components/AddTab.tsx` |
+| Markdown editor / Copy content / HTML↔Markdown conversion | `frontend/src/markdown.ts` (turndown + marked), used by `FullscreenPlayer.tsx` |
+| Editing articles/texts (backend) | `backend/src/routes/content.ts` (PATCH `is_edit`) |
+| Version history (edit/refetch/restore snapshots) | `backend/src/routes/content.ts` (`/:id/versions*`), `content_versions` table, History tab in `FullscreenPlayer.tsx` |
+| Adding content (URL/text/HTML/Markdown upload) | `frontend/src/components/AddTab.tsx` |
 | Feed/Podcasts UI | `frontend/src/components/FeedTab.tsx` |
 | Library UI | `frontend/src/components/LibraryTab.tsx` |
 | Library filters/search/bulk actions | `frontend/src/components/LibraryTab.tsx`, `frontend/src/store/contentStore.ts` (filter model + matcher), `backend/src/routes/content.ts` (`POST /bulk`) |
@@ -148,6 +158,8 @@ Wallacast supports multiple users with complete data isolation:
   - `012_add_feed_type.sql`: Adds type column to podcasts table for RSS feed type detection (podcast/newsletter/blog)
   - `014_add_image_alt_text.sql`: Adds image alt-text generation support (images_processed BOOLEAN, image_alt_text_data JSONB) and user setting for toggle
   - `019_add_summary_columns.sql`: Adds summary support (`summary` TEXT, `comment_summary` TEXT, `summary_status` VARCHAR, `summary_generated_at` TIMESTAMP) for article + comment summaries
+  - `020_add_content_versions.sql`: Adds the `content_versions` table — body snapshots (html_content/content/comments, never audio) saved before each edit/refetch/restore so changes can be rolled back
+  - `021_add_summary_error.sql`: Adds `summary_error` TEXT — the error message stored when summary generation fails, surfaced on library cards with a Retry button
 
 #### Middleware
 
@@ -181,14 +193,19 @@ Wallacast supports multiple users with complete data isolation:
     - Un-archiving regenerates audio, transcript, and alignment if missing
     - `audio_data: null, audio_url: null` removes audio from articles/texts
     - `summary: null` removes the article + comment summaries from articles/texts
+    - `dismiss_generation_error: true` / `dismiss_summary_error: true` reset a `failed` generation/summary status to `idle` and clear the stored error (the card's red error box is dismissed via its X button)
     - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
+    - `is_edit: true` (with `html_content` + `content`) — manual Markdown/HTML edit of an article/text body. Snapshots the current body into `content_versions` first, sanitizes the HTML (strips `<script>`/`<style>`/`javascript:`), sets `content_fetched_at = now`, and leaves audio + read-along untouched (so the provenance shows content is newer than the narration). The frontend converts Markdown→HTML before sending.
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation. Articles/texts: body + comments. Podcast episodes: the Whisper TRANSCRIPT (podcast-specific prompt). Body: `{ regenerate?: boolean, generate_transcript?: boolean }` — for podcasts without a transcript, `generate_transcript: true` runs Whisper first and chains the summary after; without it the request returns 400 with `code: 'no_transcript'` so the UI can warn. Uses the independent `summary_status` field, so it can run alongside audio generation.
   - `POST /bulk` - Bulk actions on many items in one request (used by the library's Select mode). Body: `{ action, ids }` (max 500 ids). Actions: `star`, `unstar`, `archive`, `unarchive`, `delete`, `remove_audio`, `remove_summary`. `archive` mirrors the single-item PATCH: wipes generated audio + read-along data for non-starred articles/texts (podcasts and starred items keep everything). `unarchive` deliberately does NOT auto-regenerate audio (use bulk Generate audio afterwards). `remove_audio` only touches articles/texts (podcast audio_url is source media). `delete` also fires Wallabag deletions for synced items. Returns `{ affected }`.
   - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. Required for HTML5 `<audio>` elements which can't send JWT tokens. **Serving order**: (A) podcast episodes proxy the external `audio_url`; (B) **preferred** — generated article/text audio is streamed from the disk file on the volume (`audio-storage.ts`) with 2MB-capped range requests; (C) **fallback** — if there's no disk file yet, the legacy in-DB `audio_data` blob is served via PostgreSQL `substring()` (reads only the needed bytes, never the whole blob). The live handler is the one in `index.ts`; the near-identical one in `content.ts` is shadowed dead code (TODO: remove).
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
+  - `GET /:id/versions` - List version-history snapshots (lean metadata only — `id`, `source`, `title`, `created_at`, `html_bytes`, `has_comments`; no bodies).
+  - `GET /:id/versions/:versionId` - Fetch one version's full body (for viewing before restoring).
+  - `POST /:id/versions/:versionId/restore` - Restore a version (snapshots the current body first, then overwrites; audio/read-along untouched).
   - `DELETE /:id` - Delete content and clean up audio files
 
 - **`routes/podcasts.ts`**: Podcast and RSS feed subscription management (requires JWT auth, all queries filter by `user_id`)
@@ -231,10 +248,11 @@ Wallacast supports multiple users with complete data isolation:
   - `bootstrapFirstUser()`: Assigns orphaned content to first user on startup
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
-  - `getAIProvider(userId)`: Returns configured AI provider (currently OpenAI)
-  - `getChatClientForUser(userId)`: Intelligent router for narration LLM - prefers DeepSeek-V3.2 via DeepInfra (cheaper), falls back to OpenAI GPT-5-Nano. User can override with `narration_llm` setting ('auto'|'deepseek'|'openai')
-  - `getTTSClientForUser(userId, modelId)`: Intelligent router - returns DeepInfra client for Kokoro models, OpenAI client otherwise
-  - `getTranscriptionClientForUser(userId)`: Prefers DeepInfra Whisper if configured (cheaper), falls back to OpenAI
+  - **Provider registry (`CHAT_PROVIDERS`)**: OpenAI, DeepInfra, OpenRouter, Anthropic, Google Gemini — all spoken to via the **OpenAI SDK** (just a different `baseURL` + key), so one client handles every provider. OpenRouter is the easy on-ramp for Claude/Gemini/etc. (`provider/model` ids).
+  - `getChatClientForJob(userId, job)`: per-job model selection — `job` = `'narration'` (prepares text for TTS) | `'alignment'` (read-along) | `'summary'`. Each job has its own `{provider, model, reasoning_effort}` setting; read-along & summaries can defer to narration ("use same model as narration"). Returns `{ client, model, extraParams }` where `extraParams` carries the reasoning_effort param (empty = provider default, so behavior is unchanged unless set). **Read-time fallback**: if a job isn't configured yet, it derives from the legacy `narration_llm` routing, so existing users keep working and the Settings fields pre-fill with the model actually in use.
+  - `getChatClientForUser(userId)`: back-compat wrapper (narration job, no reasoning extraParams).
+  - `getTTSClientForUser(userId, modelId)`: Intelligent router returning `{ client, model }` — DeepInfra for Kokoro models; for OpenAI-family models, OpenAI directly OR via OpenRouter when `openai_tts_provider === 'openrouter'` (same voices, but the model id is namespaced to `openai/…` for OpenRouter). Callers use the returned `model` for the API call.
+  - `getTranscriptionClientForUser(userId)`: Whisper client from explicit `transcription_provider` (`deepinfra` | `openai` | `openrouter`) + `transcription_model` settings, with legacy auto-routing (DeepInfra preferred) as the fallback when unset
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
   - No global API keys - each user must configure their own (OpenAI and/or DeepInfra, or both)
@@ -242,9 +260,9 @@ Wallacast supports multiple users with complete data isolation:
 - **`services/audio-utils.ts`**: Shared audio utilities
   - `getAudioDuration()`: Get audio file duration using ffprobe (used by both TTS and transcription services)
 
-- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). **Substack support**: Detects Substack pages via `substackcdn.com` references (works on custom domains), targets `.body.markup` for cleaner content, extracts comments from `/comments` page via `window._preloads` JSON (structured data, not fragile CSS selectors), cleans up subscribe widgets/navbar/footer using stable `data-component-name` and `data-testid` attributes. **General cleanup**: Deduplicates images with same src URL, removes first h1 matching og:title, strips subtitle matching og:description, removes byline/lede sections, newsletter forms, "Related" boxes, share buttons, SVGs. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction.
+- **`services/article-fetcher.ts`**: Fetches articles using GraphQL APIs for EA Forum/LessWrong (via got-scraping with human-like headers), standard scraping for other sites (simple fetch without custom headers to avoid Cloudflare). **Substack support**: Detects Substack pages via `substackcdn.com` references (works on custom domains), targets `.body.markup` for cleaner content, extracts comments from `/comments` page via `window._preloads` JSON (structured data, not fragile CSS selectors), cleans up subscribe widgets/navbar/footer using stable `data-component-name` and `data-testid` attributes. **General cleanup**: Deduplicates images with same src URL, removes first h1 matching og:title, strips subtitle matching og:description, removes byline/lede sections, newsletter forms, "Related" boxes, share buttons, SVGs. **Strips author-set text colours** (`color`/`background-color` from inline `style` attributes, plus `data-color`) via `stripInlineColors()` — applied on BOTH the GraphQL and standard/Substack paths — so the reader's theme controls text colour (otherwise an author's explicit black renders black-on-dark in dark mode); other style props like `width` are kept. Extracts metadata (title, author, date, karma, comments with reactions). Returns both HTML and structured data. No LLM usage for extraction. (Note: only affects NEW fetches/refetches — existing items need a refetch to clean up.)
 
-- **`services/image-alt-text.ts`**: Gemini-powered image description generation for TTS (requires per-user Gemini API key)
+- **`services/image-alt-text.ts`**: Image description generation for TTS. Provider via `image_alt_text_provider`: `gemini` (native `@google/genai` SDK, default) or `openrouter` (OpenAI-compatible vision through `chat.completions` with a base64 `image_url` — only tested with Gemini Flash 3). Requires the matching per-user key.
   - `smartRegenerate()`: Intelligently processes only new images after refetch, merges with existing descriptions. Accepts `forceRegenerate` parameter to regenerate ALL images (used when regenerating audio)
   - `downloadImage()`: Downloads images ourselves with proper headers (User-Agent, Referer) to bypass CDN blocking. 30s timeout, 100MB max size
   - `analyzeImage()`: Sends downloaded image data inline to Gemini (not urlContext). Rejects if download fails or description is invalid
@@ -269,7 +287,7 @@ Wallacast supports multiple users with complete data isolation:
   - Uses centralized config from `processing.ts` for chunk sizes, retry logic with exponential backoff
 
 - **`services/summarizer.ts`**: Twitter-thread style summaries (requires per-user DeepInfra or OpenAI API key)
-  - `generateSummaryForContent(contentId)`: Produces TWO summaries — an article-body summary and (optionally) a comment-discussion summary. Uses the same narration LLM router as TTS (`getChatClientForUser`). Runs independently of audio via its own `summary_status` column, so audio + summary can generate at the same time.
+  - `generateSummaryForContent(contentId)`: Produces TWO summaries — an article-body summary and (optionally) a comment-discussion summary. Uses the same narration LLM router as TTS (`getChatClientForUser`). Runs independently of audio via its own `summary_status` column, so audio + summary can generate at the same time. **Retries** each LLM call with exponential backoff (`chatCreateWithRetry`, using `PROCESSING_CONFIG.retry`) on connection errors (e.g. "Premature close" on a reused keep-alive socket — Node #63989) and 429/5xx; 4xx are not retried. On final failure it stores the message in `summary_error`. (Summaries previously had no retry, so these surfaced as failures while TTS/transcription, which already retry, silently recovered.)
   - **Podcast episodes**: summarizes the Whisper TRANSCRIPT with a podcast-specific prompt (names hosts/guests, ignores ads/sponsor reads) and an `EPISODE/SHOW/HOST` header; no comment summary. The RSS episode description is included as a labeled CONTEXT block — it usually spells guest names correctly while the transcript mangles them, so the prompt says to trust the description's spelling on conflicts; the description itself is never summarized and is excluded from the length-tier character count (transcript only).
   - **Length logic**: the article/comment character count is measured **in code** (never by the model); the matching tier from `summary_tiers` sets `maxTweets`, which is injected into the prompt. The unbounded catch-all tier stores `maxChars` as `null` (Infinity).
   - The comment summarizer is given the article as **context only**; the article summarizer is not given the comments.
@@ -287,7 +305,7 @@ Wallacast supports multiple users with complete data isolation:
 
 - **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
-  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block), prepends title/author/date/karma as meta elements. LessWrong/EA Forum LLM content blocks are extracted as `llm-block` type with `modelName` from `data-model-name` attribute
+  - `extractContentElements()`: Parses HTML with JSDOM into block-level elements (h1-h6, p, ul, ol, blockquote, figure, img, pre, table, div.llm-content-block), prepends title/author/date/karma as meta elements. **Lists are split into one element per `<li>`** (each re-wrapped in its `<ul>`/`<ol start=N>` so bullets/numbers still render) so read-along highlights item-by-item instead of the whole list at once — this only shapes the alignment data, the stored `html_content` is untouched. LessWrong/EA Forum LLM content blocks are extracted as `llm-block` type with `modelName` from `data-model-name` attribute
   - `extractCommentElements()`: Flattens nested comments recursively with depth tracking and metadata (username, date, karma, reactions)
   - `buildTimedTranscript()`: Groups Whisper words into sentences (splitting at `.?!` boundaries) with one timestamp per line (e.g., `[14.2] I've just started a blog about effective altruism.`), giving the LLM natural sentence context for text matching
   - Uses `getChatClientForUser()` for LLM routing (DeepSeek-V3.2 via DeepInfra preferred, OpenAI GPT-5-Nano fallback)
@@ -367,11 +385,15 @@ Wallacast supports multiple users with complete data isolation:
   - **Articles only**: Regenerate content (re-extracts through LLM)
   - **Podcasts**: Generate transcript (if none), Regenerate transcript (if exists)
 
-- **`components/ContentCard.tsx`**: The library item card (thumbnail, title, metadata badges, generation status, star/archive/delete + dropdown menu). Extracted from LibraryTab — all state/handlers stay in LibraryTab and come in as props.
+- **`components/ContentCard.tsx`**: The library item card (thumbnail, title, metadata badges, generation status, star/archive/delete + dropdown menu). Extracted from LibraryTab — all state/handlers stay in LibraryTab and come in as props. **Failed generation AND failed summary both show a red error box with the message, a Retry button and a dismiss X** (`onDismissError` → PATCH `dismiss_generation_error`/`dismiss_summary_error`). The generation Retry re-runs the step that actually failed: the backend tags refetch/transcript failures via `current_operation` (`'failed_refetch'`/`'failed_transcript'`), podcasts always retry transcription, and everything else retries audio generation; summary Retry regenerates the summary.
 
 - **`components/FeedCards.tsx`**: Shared Feed tab cards — `FeedCard` (podcast/newsletter rows + the expanded selected-feed card, variants: `search-result`/`subscription`/`expanded`) and `FeedEpisodeCard` (episode/article rows used by all three Feed tab lists). Action buttons are passed in by the caller. Replaces seven copy-pasted card JSX blocks.
 
-- **`format.ts`**: Shared formatting helpers (`cleanHtml`, `formatDuration`, `getDomainFromUrl`, `toTweets`, `htmlToMarkdown`) previously duplicated across components.
+- **`format.ts`**: Shared formatting helpers (`cleanHtml`, `formatDuration`, `getDomainFromUrl`, `toTweets`) previously duplicated across components. (`htmlToMarkdown` moved to `markdown.ts`.)
+
+- **`markdown.ts`**: Shared HTML↔Markdown conversion used by the editor AND "Copy content" (so they produce identical output). `htmlToMarkdown()` uses **turndown** + **turndown-plugin-gfm**; `markdownToHtml()` uses **marked** (GFM). Custom rules make Wallacast's special structures round-trip losslessly while staying Obsidian-friendly: LessWrong/EA Forum LLM blocks (`div.llm-content-block`) ↔ Obsidian callout `> [!ai] <model name>`, tweet embeds (`blockquote.twitter-tweet`) ↔ `> [!tweet]`. Tables → GFM pipe tables, links/bold/italic native. Images use standard `![alt](url)`, and a bare image's explicit pixel width is preserved via Obsidian's `![alt|WIDTH](url)` resize syntax (stored back as a `width` attribute). **Footnotes** (LessWrong/EA Forum `#fnXXX`, Substack `#footnote-N`) convert to/from Markdown footnote syntax — `[^n]` references + `[^n]: …` definitions (renumbered 1..N, back-link carets dropped); `markdownToHtml()` rebuilds them into one canonical, clickable `<section class="footnotes">` with `fn-N`/`fnref-N` ids. **`<figure>` elements that carry a caption or a width are kept as raw HTML** (Markdown can't express a `<figcaption>` or a percentage width) — a bare `<figure><img></figure>` still flattens to a plain Markdown image. Other specific tags with no clean Markdown equivalent (`iframe`, `sub`, `kbd`, `video`, `audio`, and non-footnote `sup`) are likewise kept raw. (Note: turndown's default for *unlisted* wrapper tags is to unwrap them, so this raw-keep is an explicit per-structure list, not a blanket guarantee.) `markdownToHtml()` strips `<script>`/`<style>` (the backend strips again on save).
+
+The matching CSS (`App.css`) caps every image at the column width (`max-width: 100% !important`, so no horizontal scrollbars) and only force-stretches images that have **no** explicit width — so a bare narrow image keeps its size instead of ballooning.
 
 - **`components/FeedTab.tsx`**: Podcast and RSS feed discovery and management with database caching
   - **Smart Search**: Detects URLs vs search terms - iTunes podcast search for text, RSS feed fetch for URLs (auto-fixes Substack by adding /feed)
@@ -388,14 +410,15 @@ Wallacast supports multiple users with complete data isolation:
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles.
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles. The **Text** type has a **Markdown / HTML format toggle** (Markdown is the friendly default — converted to HTML via `markdown.ts` `markdownToHtml()` before saving; HTML mode passes raw HTML through, cleaned server-side).
 
 - **`components/SettingsPage.tsx`**: User settings management UI
-  - Organized into: API Keys, Audio Generation, Wallabag Sync
-  - API Keys section: DeepInfra (primary/cheapest), OpenAI (optional), Gemini (optional, for image descriptions)
-  - Audio Generation: Narration LLM (Auto/DeepSeek/OpenAI), TTS model/voice, auto-generate/transcribe toggles
+  - **Section order** (top to bottom): Account, Audio generation, Summaries, Playback, API keys, Models, Wallabag sync.
+  - **Audio generation** section is deliberately thin — only the "what runs automatically" toggles: auto-generate audio for articles, auto-transcribe podcasts, and the comment-narration toggles (EA Forum/LessWrong, Substack) + the max-comments cutoff. No model pickers live here anymore.
+  - **API keys** section (**OpenRouter listed first**): OpenRouter, DeepInfra, OpenAI, **Anthropic** (key page at `platform.claude.com`), Gemini. The section intro links to OpenRouter's **Compare model pricing** page (useful for picking any model, not just OpenRouter's). Each key has a two-line description — line 1 lists the jobs it can power (from: narration, read-along, summaries, TTS, transcription, image descriptions), line 2 is a "Get a key" link. **OpenRouter covers every use-case** (chat jobs natively; TTS/transcription via its OpenAI-compatible audio endpoints; image descriptions via vision) — so a single OpenRouter key can drive the whole app (Kokoro TTS still needs DeepInfra). **Gemini does chat too**, so it covers narration/read-along/summaries on top of image descriptions.
+  - **Models** section (below API keys): every provider/model picker lives here as a uniform "AI job card". Narration / Read-along alignment / Summaries each get a **provider dropdown + free-text model field** (placeholder hints change per provider) + a **reasoning-effort field** (blank = provider default). Read-along & summaries have a left-aligned "Use the same model as Narration" checkbox (ticked by default). Transcription has its own provider (DeepInfra/OpenAI/**OpenRouter**) + model. **TTS voices** is its own card (voice picker grouped by `Model name (Provider)`, e.g. `gpt-4o-mini-tts (OpenAI)`, `Kokoro-82M (DeepInfra)`), with an **"OpenAI voices via" toggle (OpenAI | OpenRouter)** — same voices, routed through whichever key. **Image descriptions** is its own card with the enable checkbox inside it; **provider toggle Gemini | OpenRouter** + free-text model field (noted as only tested with Gemini Flash 3). Chat cards render via the `renderChatJob()` helper. Each field (Provider / Model / Reasoning effort) has a small caption above it so placeholders only show examples. Fields pre-fill with the model actually in use — chat jobs from your current `narration_llm`, and Transcription/Image descriptions with their effective defaults (`whisper-1` or `openai/whisper-large-v3-turbo`, and `gemini-3-flash-preview`) — so the blanks don't make it look like nothing's configured.
+  - All settings descriptions use one consistent muted colour (`.settings-hint` / `.section-description` → `var(--t3)`); section intros use `.section-description`. No more ad-hoc `#666`/`#888`/blue inline colours.
   - Comment Narration toggles: separate on/off toggles for EA Forum/LessWrong comments and Substack comments (allows users to skip comment audio on a per-platform basis). When disabled, comments still display in read-along view but without audio sync
-  - With just a DeepInfra key, users get full functionality (narration prep via DeepSeek, TTS via Kokoro, transcription via Whisper)
   - Wallabag integration settings (URL, client ID/secret, username/password)
   - Test connection buttons for validating credentials
   - Sync controls (pull, push, full sync) with status indicators
@@ -403,7 +426,9 @@ Wallacast supports multiple users with complete data isolation:
 - **`components/AudioPlayer.tsx`**: Manages audio playback state (HTMLAudioElement, position saving, speed, sleep timer). Renders either the compact MiniPlayer (above the bottom tab bar) or the FullscreenPlayer overlay — items WITHOUT audio render fullscreen only (the mini player is playback chrome, so it never shows for them and the fullscreen minimize button hides). Handles the iOS headphone-disconnect guard, play/pause icon sync, and podcast audio proxying through the backend.
 
 - **`components/FullscreenPlayer.tsx`**: The expanded fullscreen overlay. Contains all tab rendering:
-  - **Content tab** (default for articles/texts): Read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays
+  - **Content tab** (articles/texts; default when there's no read-along): the current `html_content` rendered as formatted text, plus comments below. Has an **Edit** button → opens a **Markdown editor** (textarea with Write/Preview toggle; uses `markdown.ts`). Saving converts Markdown→HTML, snapshots the old body to version history, and treats the edit like a fresh fetch (audio + read-along are left untouched-but-outdated until regenerated). Articles also keep the **Refetch from web** button here. **Footnotes are clickable**: a small handler (`handleAnchorNav`) intercepts in-page `#…` link clicks and smooth-scrolls the target into view inside the player (marker → definition and back) without changing the URL — works on native LessWrong/EA/Substack anchors and our canonical `fn-N` ones.
+  - **Read-along tab** (articles/texts with audio/alignment, podcasts): synced read-along view with LLM alignment — every paragraph, heading, image, and comment gets its own timestamp and blue-left-border highlight as audio plays. Read-only and tied to the **audio version** of the text. Default tab when it exists. (Content and Read-along were one merged tab before; they're split so the editable live text and the frozen synced view are cleanly separated.)
+  - **History tab** (articles/texts, only once at least one prior snapshot exists): lists version-history snapshots (saved before each edit/refetch/restore — never audio) with View and Restore. Restore snapshots the current body first (so it's undoable).
   - **Description tab** (podcasts only): Podcast episode description with HTML formatting
   - **Queue tab**: Spotify-style play queue. "In queue" section lists user-added items (with per-row remove + Clear). A horizontal divider separates it from "Up next from [filter]", a virtual queue derived from the library filter captured at click-time (frozen snapshot of type + status + search query; matching uses the shared `itemMatchesFilter` from `contentStore.ts`). The stream pivot is position-based on the full id stream (shuffle order or library order), so archiving the playing item mid-track doesn't reset the stream. Shuffle preference persists via the `queue_shuffle` setting; the order is built lazily on first use (safe even when settings hydrate before the library loads). Per-session shuffle toggle reorders only the non-manual stream. Manual items without audio prompt generate-or-skip; on generate, the item re-inserts at position 0 once audio is ready (pending-requeue poller in App.tsx). Autoplay toggle (Repeat icon in player options) gates continuation into non-manual items. Prev/Next buttons in playback controls jump through manual items then non-manual when autoplay is on. State lives in `store/queueStore.ts`.
   - **Auto-scroll**: Toggle in tab header. Short elements snap to center; tall elements (bullet lists, long comment blocks) use progressive intra-element scrolling that follows audio progress — top visible at start, bottom at end
@@ -411,7 +436,7 @@ Wallacast supports multiple users with complete data isolation:
   - Tweet embeds (`blockquote.twitter-tweet`) styled as cards with 24px circular profile pictures (not full-width)
   - LLM content blocks (LessWrong/EA Forum `div.llm-content-block`): displayed in serif font with purple left border and model name badge (e.g., "Claude Opus 4.6"). TTS narration announces model attribution
   - Content versioning: two-line provenance display showing "Content fetched/updated by [source] on [date]" and "Audio & read-along generated on [date]" with Show/Shown toggle. Shows "(newer)"/"(older)" labels when content and audio are out of sync. Works for both articles and texts.
-  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `format.ts`), and "Download data (zip)"
+  - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown — generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `markdown.ts` — now preserves images, links, and inline formatting, identical to what the editor shows), and "Download data (zip)"
 
 #### Other Files
 - **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
@@ -477,6 +502,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `is_secret`: Boolean flag for masking in API responses
 - Summary-related keys: `auto_generate_summary` ('true'/'false'), `summarize_comments` ('true'/'false', default on), `summary_tiers` (JSON list of `{ maxChars, maxTweets }`; the unbounded tier stores `maxChars: null` = Infinity), `summary_max_words` (max words per paragraph/"tweet"; default 40), `library_show_summary` ('true'/'false') — when on, library cards show the article `summary` instead of the description (falls back to the description when no summary exists; the list endpoint now also returns `summary`)
 - `tts_voices`: JSON array of `{ model, voice }` — when non-empty, each audio generation picks one of these voices at random (can mix providers, e.g. OpenAI + Kokoro). Empty = always use the single `openai_tts_voice`. Implemented via `pickRandomTTSVoice()` in `ai-providers.ts`, applied in `generateArticleAudio()`.
+- **Provider keys**: `openai_api_key`, `deepinfra_api_key`, `openrouter_api_key`, `anthropic_api_key`, `gemini_api_key` (all secret/masked)
+- **Per-job model config** (read by `getChatClientForJob`): `{job}_provider` / `{job}_model` / `{job}_reasoning_effort` for `job` ∈ `narration | alignment | summary`; `alignment_same_as_narration` / `summary_same_as_narration` ('true'/'false') defer to the narration config. `narration_llm` is the LEGACY routing kept only as the read-time fallback/pre-fill source.
+- **Transcription**: `transcription_provider` (`deepinfra` | `openai` | `openrouter`), `transcription_model`. **TTS routing**: `openai_tts_provider` (`openai` | `openrouter`) routes the OpenAI voices through either (same voices; Kokoro always uses DeepInfra). **Image descriptions**: `image_alt_text_provider` (`gemini` | `openrouter`), `image_alt_text_model` (free-text; default `gemini-3-flash-preview`).
 - `created_at`, `updated_at`
 - **Unique constraint**: (user_id, setting_key)
 
@@ -507,6 +535,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `comment_summary`: Comment-discussion summary (nullable)
 - `summary_status`: 'idle' | 'generating' | 'completed' | 'failed' — **independent of `generation_status`** so audio and summary can generate at the same time
 - `summary_generated_at`: When the summary was last generated
+- `summary_error`: Error message stored when `summary_status='failed'` (cleared on success/removal). Surfaced on library cards with a Retry button so summary failures are visible in-app, not just in the Railway logs
 
 ### podcasts
 - `id`: Primary key
@@ -532,6 +561,17 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - **Purpose**: Caches parsed RSS feed items to avoid fetching from network on every page load. Keeps up to 100 most recent items per feed.
 - **Unique constraint**: `(feed_id, guid)` - Prevents duplicate items in the same feed
 - **Performance**: Loading 70 feeds with 100 items each = instant database query instead of 70 network requests
+
+### content_versions (article/text version history)
+- `id`: Primary key
+- `content_item_id`: FK to content_items (ON DELETE CASCADE)
+- `user_id`: FK to users (ON DELETE CASCADE)
+- `source`: `'fetch' | 'refetch' | 'edit' | 'restore'` — the action that overwrote this snapshot
+- `title`, `html_content`, `content`: snapshot of the body before the overwrite
+- `comments`: JSONB snapshot of comments at that time
+- `created_at`
+- **Purpose**: lets a bad edit or poor refetch be rolled back. Audio is deliberately NOT versioned (too large). The app keeps the most recent 25 snapshots per item (pruned in app code on insert).
+- **Index**: `(content_item_id, created_at DESC)` for fast newest-first listing
 
 ### queue_items (manual play queue)
 - `id`: Primary key
@@ -673,3 +713,7 @@ npm run dev
 ```
 
 Requires PostgreSQL running locally or set `DATABASE_URL`.
+
+## License
+
+Released under the [MIT License](LICENSE). Built with many open-source libraries (React, Express, turndown, marked, and more) — each retains its own license.

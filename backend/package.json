@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Backend API for Wallacast - Wallabag-compatible read-it-later with TTS",
+  "license": "MIT",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -27,7 +28,7 @@
     "jsdom": "^27.4.0",
     "jsonwebtoken": "^9.0.3",
     "node-fetch": "^3.3.2",
-    "openai": "^4.24.1",
+    "openai": "^6.44.0",
     "pg": "^8.11.3",
     "seqalign": "^1.0.6"
   },

@@ -153,6 +153,11 @@
   .filter-buttons button {
     padding: 0.5rem;
   }
+
+  /* Type pill collapses to icon-only on narrow screens (same as .filter-label) */
+  .type-label {
+    display: none;
+  }
 }
 
 .settings-btn {
@@ -1009,6 +1014,29 @@
   color: var(--t2);
 }
 
+/* Content-type pill — filled like the capability badges so the type reads as
+   strongly as Audio/Transcript/Summary. Each type keeps its colour family
+   (article=blue, text=green, podcast=purple, pdf=neutral). */
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.type-pill svg { flex-shrink: 0; }
+/* Each type keeps its original (vivid) icon colour, now as a filled pill background
+   so it reads as strongly as the capability badges — and stays distinct from them
+   (e.g. article blue #3b82f6 vs the muted transcript-badge navy). Same in both themes. */
+.type-article { background: #3b82f6; color: #fff; }
+.type-text { background: #10b981; color: #fff; }
+.type-podcast_episode { background: #a855f7; color: #fff; }
+.type-pdf { background: var(--bg-raised); color: var(--t2); }
+
 .content-actions {
   display: flex;
   gap: 0.5rem;
@@ -1154,10 +1182,15 @@
   border: 1px solid #93c5fd;
 }
 
+/* Error banner: message on the left, Retry + dismiss X grouped together on the
+   right. A flex row keeps every piece on one baseline so the heights line up. */
 .generation-status.error {
   background: #991b1b;
   color: #fecaca;
   border: 1px solid #ef4444;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 
 [data-theme="light"] .generation-status.error {
@@ -1166,11 +1199,57 @@
   border: 1px solid #fca5a5;
 }
 
+.generation-status .error-message {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5rem; /* match the action buttons' height so the row reads level */
+}
+
 .generation-status .error-detail {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 0.75rem;
   opacity: 0.9;
+  word-break: break-word;
+}
+
+.generation-status .error-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.generation-status .error-retry-btn {
+  height: 1.5rem;
+  padding: 0 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.15);
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+.generation-status .error-retry-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.generation-status .error-dismiss-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  opacity: 0.7;
+  line-height: 0;
+}
+.generation-status .error-dismiss-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .generation-status .progress-bar {
@@ -2188,6 +2267,77 @@
   border: 1px solid var(--bg-raised);
 }
 
+/* AI "job" card — provider/model selection blocks (narration, alignment, summaries,
+   transcription, image descriptions) read as one cohesive group. */
+.settings-section .form-group.ai-job {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+.settings-section .form-group.ai-job > label {
+  font-weight: 600;
+}
+.ai-job-fields select,
+.ai-job-fields input[type="text"] {
+  width: 100%;
+}
+.ai-job-fields {
+  display: grid;
+  gap: 0.6rem;
+}
+/* A labelled field inside an AI-job card: small caption above the input so the
+   placeholder only needs to show examples (keeps hints short on small screens). */
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.ai-field .ai-field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--t2);
+}
+.ai-field .settings-hint {
+  margin-top: 0.1rem;
+}
+
+/* One consistent muted colour for every settings description (section intro text
+   and per-field hints). var(--t3) is the brightest grey in dark mode. */
+.settings-section .section-description,
+.settings-section .settings-hint {
+  color: var(--t3);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.settings-section .section-description {
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+.settings-section .settings-hint {
+  display: block;
+  margin-top: 0.25rem;
+}
+.settings-section .settings-hint.indent {
+  margin-left: 1.5rem;
+}
+
+/* Inline checkbox + label (e.g. "Use the same model as Narration"): keep them
+   together on the left. Without this the checkbox inherits width:100% from the
+   generic input rule and stretches, pushing the label to the right. */
+.settings-section .checkbox-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-section .checkbox-inline input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 .settings-section h3 {
   display: flex;
   align-items: center;
@@ -2273,6 +2423,19 @@
   font-size: 0.75rem;
   color: #22c55e;
   margin-left: 0.25rem;
+}
+
+/* Shown in place of "(configured)" when a key isn't set yet — a blue bracketed
+   "(get a key)" link to the provider's key page. */
+.settings-section .get-key-link {
+  font-weight: normal;
+  font-size: 0.75rem;
+  color: #4a90e2;
+  margin-left: 0.25rem;
+  text-decoration: none;
+}
+.settings-section .get-key-link:hover {
+  text-decoration: underline;
 }
 
 .settings-section input,
@@ -2802,12 +2965,48 @@
 
 .article-content img {
   position: static !important;
-  width: 100% !important;
   height: auto !important;
-  max-width: 100%;
+  max-width: 100% !important;
   border-radius: 0.5rem;
   margin: 1.5em 0;
   object-fit: contain;
+}
+
+/* Footnotes — inline reference markers + the definition section at the end (clickable). */
+.article-content sup.footnote-ref a {
+  color: var(--accent, #60a5fa);
+  text-decoration: none;
+  cursor: pointer;
+}
+.article-content .footnotes {
+  margin-top: 2rem;
+  font-size: 0.9em;
+}
+.article-content .footnotes hr {
+  border: none;
+  border-top: 1px solid var(--bg-hover);
+  margin: 1rem 0;
+}
+.article-content .footnotes ol {
+  padding-left: 1.5rem;
+  color: var(--t2);
+}
+.article-content .footnotes li {
+  margin: 0.4em 0;
+}
+.article-content .footnote-backref {
+  color: var(--accent, #60a5fa);
+  text-decoration: none;
+  margin-left: 0.35em;
+  cursor: pointer;
+}
+
+/* Stretch images to the column width by default — but ONLY when no explicit width is set.
+   Images with their own width (e.g. ![alt|200] stored as a width attribute, or an inline
+   style width) keep their real size instead of ballooning. `max-width: 100% !important`
+   above still caps every image to the column, so this can never cause horizontal scroll. */
+.article-content img:not([width]):not([style*="width"]) {
+  width: 100% !important;
 }
 
 /* Twitter/X embed styling — override full-width img for tweet profile pics */
@@ -3005,6 +3204,146 @@
     display: inline;
   }
 }
+
+/* Group of header action buttons (Edit + Refetch) in the Content tab */
+.content-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* Markdown / HTML format toggle in the Add Text form */
+.text-format-toggle {
+  display: inline-flex;
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.text-format-toggle button {
+  background: transparent;
+  border: none;
+  padding: 0.5rem 1rem;
+  color: var(--t2);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.text-format-toggle button.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+
+/* Markdown editor (Content tab) */
+.markdown-editor {
+  max-width: 800px;
+  margin: 0 auto;
+}
+.markdown-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.md-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: transparent;
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.7rem;
+  color: var(--t1);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.md-toolbar-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--t4);
+}
+.md-toolbar-btn.active {
+  background: var(--bg-surface);
+  border-color: var(--t4);
+}
+.md-toolbar-btn.primary {
+  background: var(--accent, #2563eb);
+  border-color: var(--accent, #2563eb);
+  color: #fff;
+}
+.md-toolbar-btn.primary:hover {
+  opacity: 0.9;
+}
+.md-toolbar-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.markdown-editor-textarea {
+  width: 100%;
+  min-height: 50vh;
+  resize: vertical;
+  background: var(--bg-surface);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.markdown-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent, #2563eb);
+}
+.md-editor-error {
+  color: #ef4444;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+.md-editor-hint {
+  color: var(--t3, #9ca3af);
+  font-size: 0.8rem;
+  margin-top: 0.75rem;
+}
+
+/* Version history (History tab) */
+.version-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem auto 0;
+  max-width: 800px;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--bg-hover);
+  flex-wrap: wrap;
+}
+.version-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.version-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.375rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-hover);
+  color: var(--t1);
+}
+.version-badge.version-edit { color: #2563eb; border-color: #2563eb55; }
+.version-badge.version-refetch { color: #0891b2; border-color: #0891b255; }
+.version-badge.version-restore { color: #d97706; border-color: #d9770655; }
+.version-date { color: var(--t2); font-size: 0.85rem; }
+.version-size { color: var(--t3, #9ca3af); font-size: 0.8rem; }
+.version-actions { display: flex; gap: 0.5rem; }
+.version-viewer { max-width: 800px; margin: 0 auto; }
 
 /* Read-along Tab */
 
@@ -3549,18 +3888,10 @@
 
 /* Library card badges */
 .metadata .badge.summary {
-  background: #4c1d95;
-  color: #ede9fe;
-}
-[data-theme="light"] .metadata .badge.summary {
-  background: #ede9fe;
-  color: #5b21b6;
-}
-.metadata .badge.summarizing {
   background: #7c2d12;
   color: #fed7aa;
 }
-[data-theme="light"] .metadata .badge.summarizing {
+[data-theme="light"] .metadata .badge.summary {
   background: #ffedd5;
   color: #9a3412;
 }
@@ -3676,7 +4007,7 @@
   color: var(--t2);
   margin-bottom: 0.35rem;
 }
-.voice-group-note { font-weight: 400; color: var(--t4); font-size: 0.8rem; margin-bottom: 0.35rem; }
+.voice-group-note { font-weight: 400; color: var(--t3); font-size: 0.8rem; margin-bottom: 0.35rem; }
 
 /* Library "Twitter feed" mode: article summary in place of the description.
    Each paragraph IS a `.description` box (bg-raised, rounded, no border), so it matches the
