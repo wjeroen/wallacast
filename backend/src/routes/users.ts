@@ -14,6 +14,7 @@ const VALID_SETTING_KEYS = [
   'ai_provider',           // 'openai' (now acts as hybrid provider)
   'openai_api_key',
   'deepinfra_api_key',     // NEW: DeepInfra key for cheaper audio
+  'openrouter_api_key',    // NEW: OpenRouter key (one key → Claude, Gemini, Llama, ...)
   'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
   'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
   'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
@@ -37,7 +38,18 @@ const VALID_SETTING_KEYS = [
   // App preferences
   'theme',
   'playback_speed',
-  'narration_llm',           // 'auto', 'deepseek', 'openai', 'openai-mini' - which LLM prepares text for TTS
+  'narration_llm',           // LEGACY routing ('auto'|'deepseek'|'openai'|'openai-mini'); read-time fallback only
+  // Per-job model config (provider + free-text model + optional reasoning effort).
+  // Provider ids: 'openai' | 'deepinfra' | 'openrouter' | 'anthropic' | 'gemini'.
+  // Empty reasoning_effort = provider default (no param sent — preserves current behavior).
+  'narration_provider', 'narration_model', 'narration_reasoning_effort',
+  'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
+  'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
+  // Transcription (Whisper): provider 'deepinfra' | 'openai' | 'openrouter' (no auto-routing)
+  'transcription_provider', 'transcription_model',
+  'openai_tts_provider',     // route OpenAI TTS voices via 'openai' (default) or 'openrouter'
+  'image_alt_text_provider', // image descriptions via 'gemini' (default) or 'openrouter'
+  'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
@@ -59,6 +71,7 @@ const VALID_SETTING_KEYS = [
 const SECRET_KEYS = [
   'openai_api_key',
   'deepinfra_api_key',     // NEW: Mask this key
+  'openrouter_api_key',    // NEW: Mask OpenRouter key
   'anthropic_api_key',
   'google_api_key',
   'gemini_api_key',        // NEW: Mask Gemini key

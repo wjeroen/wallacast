@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 import { JSDOM } from 'jsdom';
 import { getUserSetting } from './ai-providers.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
@@ -34,9 +35,19 @@ interface ImageAnalysisResult {
 
 export class ImageAltTextService {
   private userId: number;
+  private cachedModel: string | null = null;
 
   constructor(userId: number) {
     this.userId = userId;
+  }
+
+  // Model for image descriptions (Settings → free-text; defaults to the long-tested
+  // gemini-3-flash-preview). Used by both the Gemini-native and OpenRouter paths.
+  private async getModelName(): Promise<string> {
+    if (this.cachedModel === null) {
+      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || 'gemini-3-flash-preview';
+    }
+    return this.cachedModel;
   }
 
   /**
@@ -75,7 +86,7 @@ export class ImageAltTextService {
         total_images: 0,
         decorative_images: 0,
         cost_usd: 0,
-        model: 'gemini-3-flash-preview',
+        model: await this.getModelName(),
         processed_at: new Date().toISOString()
       };
     }
@@ -167,7 +178,7 @@ export class ImageAltTextService {
       total_images: currentImages.length,
       decorative_images: decorativeCount,
       cost_usd: forceRegenerate ? costUsd : (existingData?.cost_usd || 0) + costUsd,
-      model: 'gemini-3-flash-preview',
+      model: await this.getModelName(),
       processed_at: new Date().toISOString()
     };
   }
@@ -392,8 +403,6 @@ export class ImageAltTextService {
   private async analyzeImage(
   imageUrl: string
 ): Promise<ImageAnalysisResult> {
-  const ai = await this.getGeminiClient();
-
   // Download the image ourselves
   const imageData = await this.downloadImage(imageUrl);
 
@@ -419,43 +428,15 @@ Important Constraints:
 - **DO NOT GUESS** the content based on context or filenames.`;
 
   try {
-    console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to Gemini`);
+    // Provider: 'gemini' (native SDK, default) or 'openrouter' (OpenAI-compatible vision).
+    const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || 'gemini';
+    console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: imageData.mimeType,
-                data: imageData.data
-              }
-            }
-          ]
-        }
-      ],
-      config: {
-        temperature: 0.3, // Lower temperature reduces creativity/hallucinations
-        maxOutputTokens: 16384,
-        thinkingConfig: {
-          includeThoughts: false
-        }
-      },
-    });
+    const raw = provider === 'openrouter'
+      ? await this.describeViaOpenRouter(prompt, imageData)
+      : await this.describeViaGemini(prompt, imageData);
 
-    // Validate response
-    const candidate = response.candidates?.[0];
-    if (!candidate?.content?.parts) {
-      throw new Error('No response candidates from Gemini');
-    }
-
-    const description = candidate.content.parts
-      .map((part: any) => part.text)
-      .join('')
-      .trim();
+    const description = (raw || '').trim();
 
     // Check for model-reported failure
     if (description.includes("FAILED") || !description || description.length < 10) {
@@ -478,10 +459,63 @@ Important Constraints:
     };
 
   } catch (error) {
-    console.error('[ImageAltText] Gemini API call failed:', error);
+    console.error('[ImageAltText] Image description API call failed:', error);
     throw error;
   }
 }
+
+  // Gemini native-SDK path: inline base64 image data.
+  private async describeViaGemini(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const ai = await this.getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: await this.getModelName(),
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: imageData.mimeType, data: imageData.data } }
+          ]
+        }
+      ],
+      config: {
+        temperature: 0.3, // Lower temperature reduces creativity/hallucinations
+        maxOutputTokens: 16384,
+        thinkingConfig: { includeThoughts: false }
+      },
+    });
+
+    const candidate = response.candidates?.[0];
+    if (!candidate?.content?.parts) {
+      throw new Error('No response candidates from Gemini');
+    }
+    return candidate.content.parts.map((part: any) => part.text).join('');
+  }
+
+  // OpenRouter path: OpenAI-compatible vision via chat.completions with a base64 data URL.
+  // Tested with Gemini Flash models (e.g. google/gemini-3-flash); other vision models may vary.
+  private async describeViaOpenRouter(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const apiKey = await getUserSetting(this.userId, 'openrouter_api_key');
+    if (!apiKey) {
+      throw new Error('No OpenRouter API key configured. Please add your key in Settings.');
+    }
+    const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
+    const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
+    const response = await client.chat.completions.create({
+      model: await this.getModelName(),
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ] as any,
+        },
+      ],
+    });
+    return response.choices[0]?.message?.content || '';
+  }
   
   /**
    * Normalize URL for comparison (remove query params, fragments)

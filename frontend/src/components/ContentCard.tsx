@@ -28,6 +28,7 @@ interface ContentCardProps {
   onRemoveAudio: (id: number) => void;
   onGenerateSummary: (id: number, regenerate: boolean) => void;
   onRemoveSummary: (id: number) => void;
+  onDismissError: (id: number, kind: 'generation' | 'summary') => void;
   onRegenerateTranscript: (id: number) => void;
   onRefetch: (id: number) => void;
   onAddToQueue: (item: ContentItem) => void;
@@ -54,6 +55,7 @@ export function ContentCard({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onDismissError,
   onRegenerateTranscript,
   onRefetch,
   onAddToQueue,
@@ -80,10 +82,37 @@ export function ContentCard({
     }
 
     if (item.generation_status === 'failed') {
+      // Retry the step that actually failed. The backend tags refetch/transcript failures
+      // via current_operation ('failed_refetch' / 'failed_transcript'); podcasts only ever
+      // fail on transcription; everything else is audio generation.
+      const retryGeneration = () => {
+        if (item.type === 'podcast_episode') return onRegenerateTranscript(item.id);
+        if (item.current_operation === 'failed_refetch') return onRefetch(item.id);
+        if (item.current_operation === 'failed_transcript') return onRegenerateTranscript(item.id);
+        return onGenerateAudio(item.id, true);
+      };
       return (
         <div className="generation-status error">
-          <span>Generation failed</span>
-          {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
+          <span className="error-message">
+            Generation failed
+            {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
+          </span>
+          <span className="error-actions">
+            <button
+              className="error-retry-btn"
+              onClick={(e) => { e.stopPropagation(); retryGeneration(); }}
+              title="Retry"
+            >
+              Retry
+            </button>
+            <button
+              className="error-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'generation'); }}
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </span>
         </div>
       );
     }
@@ -273,16 +302,13 @@ export function ContentCard({
           ) : null;
         })()}
         <div className="metadata">
-          <span className="type" title={item.type}>
-            {item.type === 'article' && <Newspaper size={16} className="icon-article" />}
-            {item.type === 'text' && <NotebookPen size={16} className="icon-text" />}
-            {item.type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-            {item.type === 'pdf' && <FileText size={16} />}
+          <span className={`type-pill type-${item.type}`} title={item.type}>
+            {item.type === 'article' && <><Newspaper size={14} /> <span className="type-label">Article</span></>}
+            {item.type === 'text' && <><NotebookPen size={14} /> <span className="type-label">Text</span></>}
+            {item.type === 'podcast_episode' && <><Podcast size={14} /> <span className="type-label">Podcast</span></>}
+            {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
           {item.audio_url && <span className="badge">Audio</span>}
-          {item.summary_status === 'generating' && (
-            <span className="badge summarizing">Summarizing…</span>
-          )}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
             <span className="badge summary">Summary</span>
           )}
@@ -297,6 +323,35 @@ export function ContentCard({
           {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
         </div>
         {generationStatusDisplay()}
+        {item.summary_status === 'generating' && (
+          <div className="generation-status generating">
+            <span>Summarizing…</span>
+          </div>
+        )}
+        {item.summary_status === 'failed' && (
+          <div className="generation-status error">
+            <span className="error-message">
+              Summary failed
+              {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
+            </span>
+            <span className="error-actions">
+              <button
+                className="error-retry-btn"
+                onClick={(e) => { e.stopPropagation(); onGenerateSummary(item.id, !!item.summary_generated_at); }}
+                title="Retry summary generation"
+              >
+                Retry
+              </button>
+              <button
+                className="error-dismiss-btn"
+                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </span>
+          </div>
+        )}
       </div>
       {/* Star/archive stay visible in bulk mode — they show each item's state
           (filled star, highlighted archive) and still work as toggles.

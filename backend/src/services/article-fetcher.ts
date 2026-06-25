@@ -197,11 +197,12 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   });
 
   const dom = new JSDOM(post.htmlBody);
+  stripInlineColors(dom.window.document.body);
   return {
     title: post.title,
     content: dom.window.document.body.textContent || '',
     html: post.htmlBody,
-    cleaned_html: post.htmlBody,
+    cleaned_html: dom.window.document.body.innerHTML,
     author: post.user?.displayName || '[deleted]',
     byline: post.user?.displayName || '[deleted]',
     site_name: isEAForum ? 'EA Forum' : 'LessWrong',
@@ -556,6 +557,28 @@ function cleanSubstackContent(contentEl: Element): void {
 
 // --- SUBSTACK HELPERS END ---
 
+// Strip author-set colours from inline styles so the reader's theme controls text colour.
+// Removes `color` / `background-color` declarations from `style` attributes (keeping other
+// props like width) and drops Substack's `data-color` attribute. Otherwise an explicit
+// colour (often black) overrides the theme and renders e.g. black-on-dark in dark mode.
+function stripInlineColors(root: Element | Document): void {
+  root.querySelectorAll('[style], [data-color]').forEach((el) => {
+    if (el.hasAttribute('data-color')) el.removeAttribute('data-color');
+    const style = el.getAttribute('style');
+    if (!style) return;
+    const kept = style
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .filter((d) => {
+        const prop = d.split(':')[0].trim().toLowerCase();
+        return prop !== 'color' && prop !== 'background-color';
+      });
+    if (kept.length > 0) el.setAttribute('style', kept.join('; '));
+    else el.removeAttribute('style');
+  });
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
@@ -860,6 +883,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       });
     }
 
+    stripInlineColors(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
 
