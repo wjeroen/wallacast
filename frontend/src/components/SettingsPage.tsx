@@ -685,7 +685,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
           <p className="section-description">
-            Short "Twitter thread" summaries. Generated separately from audio — both can run at once.
+            Short "Twitter thread" summaries. Generated separately from audio, so both can run at once.
           </p>
 
           <div className="form-group checkbox-group">
@@ -859,7 +859,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                             <div className="form-group" key={p.id}>
                               <label>
                                 {p.label}
-                                {!isDefault && <span className="settings-badge-custom"> (customized)</span>}
+                                {!isDefault && (
+                                  <>
+                                    {' '}
+                                    <button
+                                      type="button"
+                                      className="settings-badge-custom settings-reset-link"
+                                      onClick={() => { setPromptValues(s => ({ ...s, [key]: p.default })); setSaved(false); }}
+                                      title="Reset this prompt to its built-in default"
+                                    >
+                                      (customized, reset to default)
+                                    </button>
+                                  </>
+                                )}
                               </label>
                               <small className="settings-hint">{p.description}</small>
                               {p.vars.length > 0 && (
@@ -872,17 +884,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                 onChange={(e) => { setPromptValues(s => ({ ...s, [key]: e.target.value })); setSaved(false); }}
                                 rows={10}
                                 spellCheck={false}
-                                style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+                                style={{ width: '100%', marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
                               />
-                              <button
-                                type="button"
-                                className="settings-collapse-toggle"
-                                style={{ marginTop: '0.25rem', opacity: isDefault ? 0.5 : 1 }}
-                                disabled={isDefault}
-                                onClick={() => { setPromptValues(s => ({ ...s, [key]: p.default })); setSaved(false); }}
-                              >
-                                <span>Reset to default</span>
-                              </button>
                             </div>
                           );
                         })}

@@ -40,7 +40,7 @@ export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio nar
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
  * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL — the TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL. The TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
    - "$25.30" -> "twenty-five dollars and thirty cents"
    - "$1,200" -> "twelve hundred dollars"
    - "€100.000" -> "one hundred thousand euros"

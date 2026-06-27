@@ -169,7 +169,7 @@ function parseMaxWords(raw: string | null): number {
 // are independently user-editable via Settings (registered in prompt-registry.ts). Placeholders
 // {maxTweets}/{maxWords} are filled at generation time. Keep these byte-identical to the old output.
 
-export const ARTICLE_SUMMARY_MULTI_DEFAULT = `You write a concise summary of an article as a short thread of tweet-style paragraphs, in the author's own voice — as if the author wrote the thread to summarize their own piece. The title and author are given at the top of the input.
+export const ARTICLE_SUMMARY_MULTI_DEFAULT = `You write a concise summary of an article as a short thread of tweet-style paragraphs, in the author's own voice, as if the author wrote the thread to summarize their own piece. The title and author are given at the top of the input.
 - The first paragraph states the central thesis or main takeaway.
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
 - Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open paragraphs with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
@@ -182,7 +182,7 @@ export const ARTICLE_SUMMARY_MULTI_DEFAULT = `You write a concise summary of an 
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-export const ARTICLE_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of an article, in the author's own voice — as if the author wrote it to summarize their own piece. The title and author are given at the top of the input.
+export const ARTICLE_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of an article, in the author's own voice, as if the author wrote it to summarize their own piece. The title and author are given at the top of the input.
 - Write a single paragraph, at most {maxWords} words, that captures the article's central thesis or main takeaway.
 - Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
@@ -208,10 +208,10 @@ export const COMMENT_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-
 - Keep all facts, numbers, and names accurate, and never add anything not in the comments.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-export const PODCAST_SUMMARY_MULTI_DEFAULT = `You write a concise summary of a podcast episode based on its transcript, as a short thread of tweet-style paragraphs. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+export const PODCAST_SUMMARY_MULTI_DEFAULT = `You write a concise summary of a podcast episode based on its transcript, as a short thread of tweet-style paragraphs. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context. It usually spells host and guest names correctly, but do not summarize it (it can be promotional).
 - The first paragraph states the episode's central topic or main takeaway.
 - The remaining paragraphs cover the main threads of the conversation in the order that best conveys the substance, not necessarily chronological order.
-- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
+- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names. When the description and transcript disagree on a name, trust the description's spelling.
 - Write at most {maxTweets} paragraphs. Use fewer when the episode is simple; do not pad to reach the limit.
 - Each paragraph is at most {maxWords} words and reads on its own, but together they form one coherent overview.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
@@ -220,9 +220,9 @@ export const PODCAST_SUMMARY_MULTI_DEFAULT = `You write a concise summary of a p
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-export const PODCAST_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of a podcast episode based on its transcript. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+export const PODCAST_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of a podcast episode based on its transcript. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context. It usually spells host and guest names correctly, but do not summarize it (it can be promotional).
 - Write a single paragraph, at most {maxWords} words, that captures the episode's central topic or main takeaway.
-- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
+- Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names. When the description and transcript disagree on a name, trust the description's spelling.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the input. Ignore ads, sponsor reads, and housekeeping.

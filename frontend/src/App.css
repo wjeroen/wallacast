@@ -4004,6 +4004,16 @@
   font-weight: 600;
   font-size: 0.8rem;
 }
+/* The "(customized, reset to default)" tag is also the reset button: link-styled, no chrome. */
+.settings-reset-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.settings-reset-link:hover {
+  text-decoration: underline;
+}
 
 /* Voice variety multi-select chips */
 .voice-group { margin-bottom: 0.6rem; }
