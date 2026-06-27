@@ -3998,6 +3998,12 @@
   padding-left: 0.75rem;
   border-left: 2px solid var(--bg-raised);
 }
+/* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
+.settings-badge-custom {
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
 
 /* Voice variety multi-select chips */
 .voice-group { margin-bottom: 0.6rem; }
