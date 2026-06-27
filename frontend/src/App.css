@@ -4004,11 +4004,6 @@
   font-weight: 600;
   font-size: 0.8rem;
 }
-/* Caution line under a safety-critical prompt editor (TTS scriptwriter, read-along alignment). */
-.settings-section .settings-hint.settings-hint-warn {
-  color: #b45309;
-  font-weight: 500;
-}
 
 /* Voice variety multi-select chips */
 .voice-group { margin-bottom: 0.6rem; }
