@@ -179,7 +179,7 @@ export const ARTICLE_SUMMARY_TEMPLATE = `You write a concise summary of an artic
 - The first paragraph states the central thesis or main takeaway.
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
 - Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open paragraphs with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
-- If the article is itself a roundup of several news stories, just highlight the most interesting ones rather than trying to cover them all.
+- If the article is itself a roundup of several news stories, just highlight the most interesting ones.
 - Write at most {maxTweets} paragraphs. Use fewer when the article is simple; do not pad to reach the limit.
 - Each paragraph is at most {maxWords} words and reads on its own, but together they form one coherent line of reasoning.
 - Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
