@@ -53,14 +53,14 @@ export const PROMPT_REGISTRY: PromptDef[] = [
   // ----- Summaries (6: each kind has a multi-paragraph and a single-paragraph variant) -----
   {
     id: 'summary_article_multi', category: CAT_SUMMARIES,
-    label: 'Article summary (multiple paragraphs)',
-    description: 'Used for most articles/newsletters. This is the one to edit if multi-section newsletters only summarize the lead story.',
+    label: 'Article / text summary (multiple paragraphs)',
+    description: 'Used for most articles and texts (anything that is not a podcast).',
     vars: [V.maxTweets, V.maxWords], default: ARTICLE_SUMMARY_MULTI_DEFAULT,
   },
   {
     id: 'summary_article_single', category: CAT_SUMMARIES,
-    label: 'Article summary (single paragraph)',
-    description: 'Used for short articles that only get one paragraph.',
+    label: 'Article / text summary (single paragraph)',
+    description: 'Used for short articles and texts that only get one paragraph.',
     vars: [V.maxWords], default: ARTICLE_SUMMARY_SINGLE_DEFAULT,
   },
   {
