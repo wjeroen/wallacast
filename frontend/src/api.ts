@@ -236,6 +236,9 @@ export const userSettingsAPI = {
   delete: (key: string) => api.delete(`/users/settings/${key}`),
 
   getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
+
+  getSummaryPromptDefaults: () =>
+    api.get<{ article: string; comment: string; podcast: string }>('/users/summary-prompt-defaults'),
 };
 
 export const wallabagAPI = {
