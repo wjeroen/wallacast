@@ -2,11 +2,7 @@ import { Router } from 'express';
 import { query } from '../database/db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { encrypt } from '../services/encryption.js';
-import {
-  ARTICLE_SUMMARY_TEMPLATE,
-  COMMENT_SUMMARY_TEMPLATE,
-  PODCAST_SUMMARY_TEMPLATE,
-} from '../services/summarizer.js';
+import { PROMPT_REGISTRY, PROMPT_SETTING_KEYS } from '../services/prompt-registry.js';
 
 const router = Router();
 
@@ -62,9 +58,9 @@ const VALID_SETTING_KEYS = [
   'summarize_comments',         // Also generate a summary of the comment discussion (default: true)
   'summary_tiers',              // JSON: sorted list of { maxChars, maxTweets } tiers (Infinity stored as null)
   'summary_max_words',          // Max words per summary paragraph ("tweet"); default 40
-  'summary_article_prompt',     // Optional custom system prompt for article summaries (blank = built-in default)
-  'summary_comment_prompt',     // Optional custom system prompt for comment-discussion summaries (blank = default)
-  'summary_podcast_prompt',     // Optional custom system prompt for podcast-episode summaries (blank = default)
+  // Custom prompt overrides (prompt_<id>) for every editable prompt — see services/prompt-registry.ts.
+  // Blank/whitespace = use the built-in default. Spread so the list stays in sync with the registry.
+  ...PROMPT_SETTING_KEYS,
   'library_show_summary',       // Show the article summary (not the description) on library cards
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
@@ -274,15 +270,12 @@ router.get('/ai-providers', async (_req, res) => {
   res.json({ providers });
 });
 
-// GET /api/users/summary-prompt-defaults - The built-in default summary prompts, used by the
-// Settings "Custom prompts" boxes to pre-fill an editable starting point. {maxTweets}/{maxWords}
-// placeholders are substituted at generation time (these are the multi-paragraph templates).
-router.get('/summary-prompt-defaults', (_req, res) => {
-  res.json({
-    article: ARTICLE_SUMMARY_TEMPLATE,
-    comment: COMMENT_SUMMARY_TEMPLATE,
-    podcast: PODCAST_SUMMARY_TEMPLATE,
-  });
+// GET /api/users/prompts - The full prompt registry (every editable LLM prompt: id, category,
+// label, description, placeholder vars, default text, optional warning). Used by the Settings
+// "Custom prompts" editor to render one box per prompt, grouped by category, pre-filled with the
+// built-in default. Per-user overrides are stored as ordinary settings under `prompt_<id>`.
+router.get('/prompts', (_req, res) => {
+  res.json({ prompts: PROMPT_REGISTRY });
 });
 
 export default router;
