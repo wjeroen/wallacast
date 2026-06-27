@@ -12,6 +12,83 @@ import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUser
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
+import { resolveCustomPrompt } from './prompt-resolver.js';
+
+// Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
+// turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
+// image descriptions. {inputImageCount} is filled at call time. WARNING: verbatim preservation is
+// critical here — a careless override can make audio summarize or drop content.
+export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio narration service.
+
+ Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
+
+ CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM.
+ DO NOT summarize.
+ DO NOT rewrite sentences.
+ DO NOT simplify the language.
+
+ 🚨 IMAGE DESCRIPTIONS:
+ DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."*
+ 1. ALWAYS keep text that starts with "An image is displayed"
+ 2. ALWAYS keep text that ends with "End of the image description."*
+ 3. These image descriptions are REQUIRED accessibility content
+ 4. If you see image descriptions, they MUST appear in your output VERBATIM
+ 5. Image descriptions are NOT extraneous - they are essential
+ 6. PRESERVE THE EXACT WORDING - do not paraphrase or summarize them
+ *EXCEPTION: If the image description is announced but no actual description is present, just say "An image is displayed but the description is missing." without announcing the end.
+
+ The ONLY changes you are allowed to make:
+ * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
+ * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
+ * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL — the TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
+   - "$25.30" -> "twenty-five dollars and thirty cents"
+   - "$1,200" -> "twelve hundred dollars"
+   - "€100.000" -> "one hundred thousand euros"
+   - "£50m" -> "fifty million pounds"
+   - "3.5%" -> "three point five percent"
+   - "10x" -> "ten times"
+   - "§4.2" -> "section four point two"
+   - "1955" (as a year) -> "nineteen fifty-five"
+   - "2024" (as a year) -> "twenty twenty-four"
+   - "1990s" -> "nineteen nineties"
+   - "80,000" -> "eighty thousand"
+   - "3,456,789" -> "three million, four hundred fifty-six thousand, seven hundred eighty-nine"
+   - "#5" -> "number five"
+   - "100k" -> "one hundred thousand"
+   - "~50" -> "approximately fifty"
+   - "<10" -> "less than ten"
+   - ">90%" -> "more than ninety percent"
+   - "2+2=4" -> "two plus two equals four"
+   - "1/3" -> "one third"
+   - "3:1 ratio" -> "three to one ratio"
+   - "24/7" -> "twenty-four seven"
+   - "5'11"" -> "five foot eleven"
+   - "20°C" -> "twenty degrees Celsius"
+ * End every header (h1, h2, h3) with a period to enforce a breath pause.
+ * Precede list items with transition words (e.g., "First," "Second," "Next")
+ * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
+ * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
+ * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
+ * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
+ * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
+ * Convert ALL-CAPS words and phrases to normal capitalization (e.g., "HEADS UP" -> "Heads up", "DO NOT ENTER" -> "Do not enter"). This does not apply to proper acronyms like NASA or FBI. TTS engines often spell out or distort all-caps text.
+
+ Output ONLY the clean narration text.
+
+ Input HTML follows.`;
+
+export const NARRATION_SCRIPT_RETRY_DEFAULT = `
+
+🚨🚨🚨 CRITICAL ALERT 🚨🚨🚨
+The previous output dropped {inputImageCount} image descriptions.
+
+YOU MUST PRESERVE ALL TEXT that matches this pattern:
+"An image shows [description]. End of the image description."
+
+DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
+Copy them VERBATIM from input to output.
+
+Failure to preserve image descriptions is a critical error.`;
 
 interface Comment {
   id?: string;
@@ -391,7 +468,7 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
-async function scriptArticleForListening(htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
+async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
@@ -418,64 +495,7 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
     }
     
     console.log(`[TTS] Scriptwriting with model: ${modelId}`);
-        const systemPrompt = `You are a scriptwriter for an audio narration service.
-
- Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
-
- CRITICAL INSTRUCTION: You must preserve the author's original words exactly as they are written, VERBATIM.
- DO NOT summarize.
- DO NOT rewrite sentences.
- DO NOT simplify the language.
-
- 🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."*
- 1. ALWAYS keep text that starts with "An image is displayed"
- 2. ALWAYS keep text that ends with "End of the image description."*
- 3. These image descriptions are REQUIRED accessibility content
- 4. If you see image descriptions, they MUST appear in your output VERBATIM
- 5. Image descriptions are NOT extraneous - they are essential
- 6. PRESERVE THE EXACT WORDING - do not paraphrase or summarize them
- *EXCEPTION: If the image description is announced but no actual description is present, just say "An image is displayed but the description is missing." without announcing the end.
-
- The ONLY changes you are allowed to make:
- * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
- * Expand abbreviations that are hard to pronounce (e.g., "St." -> "Saint").
- * Write ALL numbers, currencies, symbols, and units as fully spoken words, exactly the way a human would say them out loud. This is CRITICAL — the TTS engine reads character by character and will produce gibberish if you leave symbols or digits. Examples:
-   - "$25.30" -> "twenty-five dollars and thirty cents"
-   - "$1,200" -> "twelve hundred dollars"
-   - "€100.000" -> "one hundred thousand euros"
-   - "£50m" -> "fifty million pounds"
-   - "3.5%" -> "three point five percent"
-   - "10x" -> "ten times"
-   - "§4.2" -> "section four point two"
-   - "1955" (as a year) -> "nineteen fifty-five"
-   - "2024" (as a year) -> "twenty twenty-four"
-   - "1990s" -> "nineteen nineties"
-   - "80,000" -> "eighty thousand"
-   - "3,456,789" -> "three million, four hundred fifty-six thousand, seven hundred eighty-nine"
-   - "#5" -> "number five"
-   - "100k" -> "one hundred thousand"
-   - "~50" -> "approximately fifty"
-   - "<10" -> "less than ten"
-   - ">90%" -> "more than ninety percent"
-   - "2+2=4" -> "two plus two equals four"
-   - "1/3" -> "one third"
-   - "3:1 ratio" -> "three to one ratio"
-   - "24/7" -> "twenty-four seven"
-   - "5'11"" -> "five foot eleven"
-   - "20°C" -> "twenty degrees Celsius"
- * End every header (h1, h2, h3) with a period to enforce a breath pause.
- * Precede list items with transition words (e.g., "First," "Second," "Next")
- * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
- * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
- * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
- * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."
- * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
- * Convert ALL-CAPS words and phrases to normal capitalization (e.g., "HEADS UP" -> "Heads up", "DO NOT ENTER" -> "Do not enter"). This does not apply to proper acronyms like NASA or FBI. TTS engines often spell out or distort all-caps text.
-
- Output ONLY the clean narration text.
-
- Input HTML follows.`;
+        const systemPrompt = await resolveCustomPrompt(userId, 'prompt_narration_script', NARRATION_SCRIPT_DEFAULT);
 
     const response = await openai.chat.completions.create({
       model: modelId,
@@ -513,18 +533,8 @@ async function scriptArticleForListening(htmlContent: string, openai: any, model
       // Retry with even more explicit instruction
       console.warn('[TTS] 🔄 Retrying with explicit instruction...');
 
-      const retrySystemPrompt = systemPrompt + `
-
-🚨🚨🚨 CRITICAL ALERT 🚨🚨🚨
-The previous output dropped ${inputImageCount} image descriptions.
-
-YOU MUST PRESERVE ALL TEXT that matches this pattern:
-"An image shows [description]. End of the image description."
-
-DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
-Copy them VERBATIM from input to output.
-
-Failure to preserve image descriptions is a critical error.`;
+      const retryAddendum = await resolveCustomPrompt(userId, 'prompt_narration_script_retry', NARRATION_SCRIPT_RETRY_DEFAULT, { inputImageCount });
+      const retrySystemPrompt = systemPrompt + retryAddendum;
 
       const retryResponse = await openai.chat.completions.create({
         model: modelId,
@@ -892,7 +902,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const chatConfig = await getChatClientForJob(content.user_id, 'narration');
     if (chatConfig && sourceContent.includes('<')) {
         console.log(`[TTS] Scriptwriter using model: ${chatConfig.model}`);
-        articleBodyScript = await scriptArticleForListening(sourceContent, chatConfig.client, chatConfig.model, chatConfig.extraParams);
+        articleBodyScript = await scriptArticleForListening(content.user_id, sourceContent, chatConfig.client, chatConfig.model, chatConfig.extraParams);
     } else {
         articleBodyScript = htmlToNarrationText(sourceContent);
     }

@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getChatClientForJob, getUserSetting } from './ai-providers.js';
+import { resolveCustomPrompt } from './prompt-resolver.js';
 
 // Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
 // "Premature close" / ECONNRESET on a reused keep-alive socket — see Node #63989) and
@@ -163,19 +164,12 @@ function parseMaxWords(raw: string | null): number {
   return Math.min(500, Math.max(5, n));
 }
 
-// Fill a prompt template's {maxTweets}/{maxWords} placeholders with the real numbers. Used for
-// both the built-in default templates below and any user-supplied custom prompt from Settings.
-function fillTemplate(tpl: string, maxTweets: number, maxWords: number): string {
-  return tpl
-    .replace(/\{maxTweets\}/g, String(maxTweets))
-    .replace(/\{maxWords\}/g, String(maxWords));
-}
+// Default summary prompts. Each of the three kinds (article/comment/podcast) has a single-paragraph
+// variant (used when the length tier allows only 1 paragraph) and a multi-paragraph variant. All six
+// are independently user-editable via Settings (registered in prompt-registry.ts). Placeholders
+// {maxTweets}/{maxWords} are filled at generation time. Keep these byte-identical to the old output.
 
-// Default multi-paragraph prompt templates. These double as the pre-fill text for the Settings
-// "Custom prompts" boxes (served via GET /api/users/summary-prompt-defaults), so the user always
-// starts editing from the exact current default. Use {maxTweets}/{maxWords} placeholders — keep
-// these byte-identical to what ARTICLE/COMMENT/PODCAST_SUMMARY_PROMPT(>1) emit.
-export const ARTICLE_SUMMARY_TEMPLATE = `You write a concise summary of an article as a short thread of tweet-style paragraphs, in the author's own voice — as if the author wrote the thread to summarize their own piece. The title and author are given at the top of the input.
+export const ARTICLE_SUMMARY_MULTI_DEFAULT = `You write a concise summary of an article as a short thread of tweet-style paragraphs, in the author's own voice — as if the author wrote the thread to summarize their own piece. The title and author are given at the top of the input.
 - The first paragraph states the central thesis or main takeaway.
 - The remaining paragraphs develop that thesis as a single line of reasoning, so reading top to bottom follows the argument rather than a list of disconnected facts.
 - Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open paragraphs with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
@@ -188,7 +182,15 @@ export const ARTICLE_SUMMARY_TEMPLATE = `You write a concise summary of an artic
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-export const COMMENT_SUMMARY_TEMPLATE = `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
+export const ARTICLE_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of an article, in the author's own voice — as if the author wrote it to summarize their own piece. The title and author are given at the top of the input.
+- Write a single paragraph, at most {maxWords} words, that captures the article's central thesis or main takeaway.
+- Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
+- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the article. Focus on the main argument, not minor details.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+
+export const COMMENT_SUMMARY_MULTI_DEFAULT = `You write a concise summary of the COMMENT DISCUSSION beneath an article, as a short thread of tweet-style paragraphs. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
 - The first paragraph captures the overall vibe of the discussion: its general tenor and where the room lands (broad agreement, sharp disagreement, mixed, mostly minor quibbles, etc.).
 - The remaining paragraphs cover the main threads: key points, agreements, disagreements, questions, and notable additions. Group related points together rather than listing comments one by one.
 - Write at most {maxTweets} paragraphs. Use fewer when the discussion is simple; do not pad to reach the limit.
@@ -199,7 +201,14 @@ export const COMMENT_SUMMARY_TEMPLATE = `You write a concise summary of the COMM
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-export const PODCAST_SUMMARY_TEMPLATE = `You write a concise summary of a podcast episode based on its transcript, as a short thread of tweet-style paragraphs. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+export const COMMENT_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
+- Write a single paragraph, at most {maxWords} words, capturing the overall gist of the discussion: its general tenor and the main point or two raised.
+- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
+- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the comments.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
+
+export const PODCAST_SUMMARY_MULTI_DEFAULT = `You write a concise summary of a podcast episode based on its transcript, as a short thread of tweet-style paragraphs. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
 - The first paragraph states the episode's central topic or main takeaway.
 - The remaining paragraphs cover the main threads of the conversation in the order that best conveys the substance, not necessarily chronological order.
 - Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
@@ -211,55 +220,36 @@ export const PODCAST_SUMMARY_TEMPLATE = `You write a concise summary of a podcas
 - Separate paragraphs with a single blank line.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
 
-const ARTICLE_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
-  if (maxTweets <= 1) {
-    return `You write a one-paragraph, tweet-style summary of an article, in the author's own voice — as if the author wrote it to summarize their own piece. The title and author are given at the top of the input.
-- Write a single paragraph, at most ${maxWords} words, that captures the article's central thesis or main takeaway.
-- Write in the author's voice. The first person is allowed, but keep "I" to a minimum: do not open with "I argue" or lean on "I" in every sentence. Let the points carry themselves.
-- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
-- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- Keep all facts, numbers, and names accurate, and never add anything not in the article. Focus on the main argument, not minor details.
-- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
-  }
-  return fillTemplate(ARTICLE_SUMMARY_TEMPLATE, maxTweets, maxWords);
-};
-
-const COMMENT_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
-  if (maxTweets <= 1) {
-    return `You write a one-paragraph, tweet-style summary of the COMMENT DISCUSSION beneath an article. The article's title and author are given at the top for context only. Do NOT summarize the article itself; summarize what the commenters say.
-- Write a single paragraph, at most ${maxWords} words, capturing the overall gist of the discussion: its general tenor and the main point or two raised.
-- Use plain, direct language. Prefer several short, simple sentences over one long sentence.
-- Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
-- Keep all facts, numbers, and names accurate, and never add anything not in the comments.
-- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
-  }
-  return fillTemplate(COMMENT_SUMMARY_TEMPLATE, maxTweets, maxWords);
-};
-
-const PODCAST_SUMMARY_PROMPT = (maxTweets: number, maxWords: number): string => {
-  if (maxTweets <= 1) {
-    return `You write a one-paragraph, tweet-style summary of a podcast episode based on its transcript. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
-- Write a single paragraph, at most ${maxWords} words, that captures the episode's central topic or main takeaway.
+export const PODCAST_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of a podcast episode based on its transcript. The episode title, show name, and host are given at the top of the input. An EPISODE DESCRIPTION from the podcast feed may also be included: use it only as context — it usually spells host and guest names correctly — but do not summarize it (it can be promotional).
+- Write a single paragraph, at most {maxWords} words, that captures the episode's central topic or main takeaway.
 - Name the hosts and guests where it helps; never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names — when the description and transcript disagree on a name, trust the description's spelling.
 - Use plain, direct language. Prefer several short, simple sentences over one long sentence.
 - Do not use em dashes or hyphens to break up sentences; write separate sentences instead.
 - Keep all facts, numbers, and names accurate, and never add anything not in the input. Ignore ads, sponsor reads, and housekeeping.
 - Output only the summary. No introductions, labels, headers, or sign-offs of any kind.`;
-  }
-  return fillTemplate(PODCAST_SUMMARY_TEMPLATE, maxTweets, maxWords);
+
+// Settings keys for the six summary prompts. Re-exported by prompt-registry.ts as well, but the
+// summarizer owns the single/multi selection logic, so the key map lives here.
+type SummaryKind = 'article' | 'comment' | 'podcast';
+const SUMMARY_PROMPTS: Record<SummaryKind, { single: string; multi: string; settingBase: string }> = {
+  article: { single: ARTICLE_SUMMARY_SINGLE_DEFAULT, multi: ARTICLE_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_article' },
+  comment: { single: COMMENT_SUMMARY_SINGLE_DEFAULT, multi: COMMENT_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_comment' },
+  podcast: { single: PODCAST_SUMMARY_SINGLE_DEFAULT, multi: PODCAST_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_podcast' },
 };
 
-// Resolve the system prompt for a summary job. A non-empty custom prompt from Settings overrides
-// the built-in default for ALL tier sizes (the user's template should include {maxTweets}/{maxWords}
-// placeholders; any it omits are simply left untouched). Blank/whitespace = use the default.
-function resolveSummaryPrompt(
-  custom: string | null,
-  defaultFn: (maxTweets: number, maxWords: number) => string,
+// Resolve the system prompt for a summary job: picks the single- vs multi-paragraph variant by the
+// tier's maxTweets, then applies the user's override (if any) and fills {maxTweets}/{maxWords}.
+async function buildSummaryPrompt(
+  userId: number,
+  kind: SummaryKind,
   maxTweets: number,
   maxWords: number
-): string {
-  const c = (custom || '').trim();
-  return c ? fillTemplate(c, maxTweets, maxWords) : defaultFn(maxTweets, maxWords);
+): Promise<string> {
+  const cfg = SUMMARY_PROMPTS[kind];
+  const single = maxTweets <= 1;
+  const settingKey = `${cfg.settingBase}_${single ? 'single' : 'multi'}`;
+  const def = single ? cfg.single : cfg.multi;
+  return resolveCustomPrompt(userId, settingKey, def, { maxTweets, maxWords });
 }
 
 const ARTICLE_INPUT_CAP = 200000;       // chars sent to the article summarizer
@@ -305,11 +295,6 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const maxTweetsArticle = maxTweetsForChars(articleChars, tiers);
     const maxWords = parseMaxWords(await getUserSetting(userId, 'summary_max_words'));
 
-    // Optional per-user custom prompts (blank = use the built-in default). The article/episode
-    // prompt key depends on the content type; comments have their own key.
-    const customArticlePrompt = await getUserSetting(userId, isPodcast ? 'summary_podcast_prompt' : 'summary_article_prompt');
-    const customCommentPrompt = await getUserSetting(userId, 'summary_comment_prompt');
-
     // 3. LLM client for the Summaries job (provider/model/reasoning configurable in Settings)
     const chat = await getChatClientForJob(userId, 'summary');
     if (!chat) {
@@ -339,12 +324,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
       messages: [
         {
           role: 'system',
-          content: resolveSummaryPrompt(
-            customArticlePrompt,
-            isPodcast ? PODCAST_SUMMARY_PROMPT : ARTICLE_SUMMARY_PROMPT,
-            maxTweetsArticle,
-            maxWords
-          ),
+          content: await buildSummaryPrompt(userId, isPodcast ? 'podcast' : 'article', maxTweetsArticle, maxWords),
         },
         { role: 'user', content: userContent },
       ],
@@ -369,7 +349,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
           model: chat.model,
           ...chat.extraParams,
           messages: [
-            { role: 'system', content: resolveSummaryPrompt(customCommentPrompt, COMMENT_SUMMARY_PROMPT, maxTweetsComments, maxWords) },
+            { role: 'system', content: await buildSummaryPrompt(userId, 'comment', maxTweetsComments, maxWords) },
             {
               role: 'user',
               content:
