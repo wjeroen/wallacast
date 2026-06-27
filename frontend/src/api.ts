@@ -250,7 +250,6 @@ export interface PromptDef {
   description: string;
   vars: PromptVar[];
   default: string;
-  warn?: string;
 }
 
 export const wallabagAPI = {

@@ -862,9 +862,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                 {!isDefault && <span className="settings-badge-custom"> (customized)</span>}
                               </label>
                               <small className="settings-hint">{p.description}</small>
-                              {p.warn && (
-                                <small className="settings-hint settings-hint-warn">⚠ {p.warn}</small>
-                              )}
                               {p.vars.length > 0 && (
                                 <small className="settings-hint">
                                   Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.

@@ -36,7 +36,6 @@ export interface PromptDef {
   description: string;
   vars: PromptVar[];
   default: string;
-  warn?: string;       // optional caution shown in the UI for safety-critical prompts
 }
 
 const V = {
@@ -95,14 +94,12 @@ export const PROMPT_REGISTRY: PromptDef[] = [
     label: 'TTS scriptwriter (main)',
     description: 'Rewrites article HTML into the plain-text script the TTS voice reads.',
     vars: [], default: NARRATION_SCRIPT_DEFAULT,
-    warn: 'This must preserve the author\'s words verbatim. A careless edit can make the audio summarize, skip, or mangle content.',
   },
   {
     id: 'narration_script_retry', category: CAT_NARRATION,
     label: 'TTS scriptwriter (image-drop retry)',
     description: 'Appended to the main prompt and retried when the first pass drops image descriptions.',
     vars: [V.inputImageCount], default: NARRATION_SCRIPT_RETRY_DEFAULT,
-    warn: 'Only used on retry. Keep the instruction to preserve image descriptions verbatim.',
   },
 
   // ----- Read-along alignment -----
@@ -111,7 +108,6 @@ export const PROMPT_REGISTRY: PromptDef[] = [
     label: 'Read-along alignment rules',
     description: 'The instruction + examples block that tells the LLM how to map each text element to an audio timestamp. The element list and transcript are added automatically around it.',
     vars: [], default: ALIGNMENT_RULES_DEFAULT,
-    warn: 'Read-along highlighting depends on these rules. Never instruct fuzzy or algorithmic matching (it always fails here). A careless edit can break sync.',
   },
 
   // ----- Image descriptions -----
