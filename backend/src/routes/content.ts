@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -431,7 +431,7 @@ router.post('/', async (req, res) => {
     const {
       type,
       title,
-      url,
+      url: rawUrl,
       content,
       author,
       description,
@@ -441,6 +441,11 @@ router.post('/', async (req, res) => {
       published_at,
       duration,
     } = req.body;
+
+    // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
+    // forum-bots.effectivealtruism.org). Applies to BOTH the Add tab and RSS "add to library",
+    // since both add paths go through this endpoint. Non-EA-Forum links are left untouched.
+    const url = normalizeEAForumUrl(rawUrl);
 
     let processedContent = content;
     let htmlContent = null;
