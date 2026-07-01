@@ -21,6 +21,9 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
+# Fake data for the local preview mock server (backend/mock-server.mjs), never real data
+mock-data.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
