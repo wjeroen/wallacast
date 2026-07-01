@@ -2,7 +2,21 @@ import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import { JSDOM } from 'jsdom';
 import { getUserSetting } from './ai-providers.js';
+import { resolveCustomPrompt } from './prompt-resolver.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
+
+// Default prompt for generating audio-friendly image descriptions. User-editable via Settings
+// (registered in prompt-registry.ts as `prompt_image_description`). Same prompt for Gemini + OpenRouter.
+export const IMAGE_DESCRIPTION_DEFAULT = `Describe this image for audio narration of a blog post. Be concise and informative.
+
+Guidelines:
+- **If it's a photo or visual:** Describe the scene, identifying key subjects, and overall mood.
+- **If it's a chart/diagram:** Summarize the primary trend or insight.
+- **If it's a social media thread:** Read it out like a script. Never summarize blocks of text that are displayed on an image, always read sentences exactly as they are written, VERBATIM.
+
+Important Constraints:
+- Just output the description, nothing else.
+- **DO NOT GUESS** the content based on context or filenames.`;
 
 interface ImageDescriptions {
   [url: string]: string;
@@ -416,16 +430,7 @@ export class ImageAltTextService {
     };
   }
 
-  const prompt = `Describe this image for audio narration of a blog post. Be concise and informative.
-
-Guidelines:
-- **If it's a photo or visual:** Describe the scene, identifying key subjects, and overall mood.
-- **If it's a chart/diagram:** Summarize the primary trend or insight.
-- **If it's a social media thread:** Read it out like a script. Never summarize blocks of text that are displayed on an image, always read sentences exactly as they are written, VERBATIM.
-
-Important Constraints:
-- Just output the description, nothing else.
-- **DO NOT GUESS** the content based on context or filenames.`;
+  const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 
   try {
     // Provider: 'gemini' (native SDK, default) or 'openrouter' (OpenAI-compatible vision).

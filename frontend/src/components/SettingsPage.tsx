@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI } from '../api';
+import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 
 interface SettingsPageProps {
@@ -123,6 +123,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
   const [showLengthSettings, setShowLengthSettings] = useState(false);
 
+  // Custom prompts (advanced). The backend registry lists every editable LLM prompt with its
+  // built-in default; `promptValues` holds the current textarea content keyed by setting key
+  // (`prompt_<id>`), pre-filled with the saved override or the default. On save, a value equal to
+  // the default is stored empty = "use built-in default". Categories are independently collapsible.
+  const [showCustomPrompts, setShowCustomPrompts] = useState(false);
+  const [prompts, setPrompts] = useState<PromptDef[]>([]);
+  const [promptValues, setPromptValues] = useState<Record<string, string>>({});
+  const [openPromptCats, setOpenPromptCats] = useState<Record<string, boolean>>({});
+  const promptKey = (id: string) => `prompt_${id}`;
+
   // Multiple voices to rotate between for audio generation (empty = use the single voice above).
   const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
 
@@ -207,11 +217,26 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const settingsRes = await userSettingsAPI.getAll();
+      const [settingsRes, promptsRes] = await Promise.all([
+        userSettingsAPI.getAll(),
+        // The editable-prompt registry is nice-to-have; if it fails the editor just stays empty.
+        userSettingsAPI.getPrompts().catch(() => null),
+      ]);
       setSettings(settingsRes.data.settings);
 
       const loaded = settingsRes.data.settings;
       console.log('Loaded settings from server:', loaded);
+
+      // Editable-prompt registry: pre-fill each box with the saved override, else the built-in
+      // default, so a box is never blank and the user always edits from a real starting point.
+      const registry = promptsRes?.data.prompts || [];
+      setPrompts(registry);
+      const pv: Record<string, string> = {};
+      for (const p of registry) {
+        const saved = loaded[promptKey(p.id)];
+        pv[promptKey(p.id)] = saved && saved.trim() ? saved : p.default;
+      }
+      setPromptValues(pv);
 
       // Derive the per-job defaults from the legacy narration_llm routing (pre-fill).
       const hasDeepInfraKey = !!loaded.deepinfra_api_key; // masked dots or real value are both truthy
@@ -425,6 +450,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
       toSave.summary_tiers = serializeTiers(summaryTiers);
+
+      // Custom prompts: store empty when blank OR identical to the built-in default, so we never
+      // pin the current default text (the backend falls back to its own default for empty values,
+      // letting future default improvements flow through). Always sent so clearing one takes effect.
+      for (const p of prompts) {
+        const key = promptKey(p.id);
+        const val = (promptValues[key] || '').trim();
+        toSave[key] = val && val !== (p.default || '').trim() ? val : '';
+      }
       // Selected rotation voices (empty array = always use the single voice).
       toSave.tts_voices = JSON.stringify(ttsVoices);
 
@@ -651,7 +685,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
           <p className="section-description">
-            Short "Twitter thread" summaries. Generated separately from audio — both can run at once.
+            Short "Twitter thread" summaries. Generated separately from audio, so both can run at once.
           </p>
 
           <div className="form-group checkbox-group">
@@ -767,6 +801,99 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   <Plus size={16} /> Add tier
                 </button>
               </div>
+            </div>
+          )}
+
+        </section>
+
+        {/* Custom prompts (advanced) — registry-driven editor for every LLM prompt, grouped by category */}
+        <section className="settings-section">
+          <h3>Custom prompts (advanced)</h3>
+          <p className="section-description">
+            Edit any LLM prompt the app uses (summaries, narration, read-along, image descriptions).
+            Leave a box at its default to keep the built-in prompt. Placeholders like <code>{'{maxWords}'}</code>{' '}
+            are filled in automatically at generation time. A custom prompt is used as-is until you reset it.
+          </p>
+
+          <button
+            type="button"
+            className="settings-collapse-toggle"
+            onClick={() => setShowCustomPrompts(v => !v)}
+            aria-expanded={showCustomPrompts}
+          >
+            {showCustomPrompts ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <span>Show prompt editor</span>
+          </button>
+
+          {showCustomPrompts && (
+            <div className="settings-collapse-body">
+              {prompts.length === 0 && (
+                <small className="settings-hint">Could not load the prompt list. Try reloading the page.</small>
+              )}
+              {[...new Set(prompts.map(p => p.category))].map(cat => {
+                const catPrompts = prompts.filter(p => p.category === cat);
+                const open = openPromptCats[cat] ?? false;
+                const customCount = catPrompts.filter(p => {
+                  const v = (promptValues[promptKey(p.id)] || '').trim();
+                  return v && v !== (p.default || '').trim();
+                }).length;
+                return (
+                  <div key={cat} style={{ marginBottom: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="settings-collapse-toggle"
+                      onClick={() => setOpenPromptCats(s => ({ ...s, [cat]: !open }))}
+                      aria-expanded={open}
+                    >
+                      {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <span>{cat}{customCount > 0 ? ` (${customCount} customized)` : ''}</span>
+                    </button>
+
+                    {open && (
+                      <div className="settings-collapse-body">
+                        {catPrompts.map(p => {
+                          const key = promptKey(p.id);
+                          const value = promptValues[key] ?? '';
+                          const isDefault = value.trim() === (p.default || '').trim();
+                          return (
+                            <div className="form-group" key={p.id}>
+                              <label>
+                                {p.label}
+                                {!isDefault && (
+                                  <>
+                                    {' '}
+                                    <button
+                                      type="button"
+                                      className="settings-badge-custom settings-reset-link"
+                                      onClick={() => { setPromptValues(s => ({ ...s, [key]: p.default })); setSaved(false); }}
+                                      title="Reset this prompt to its built-in default"
+                                    >
+                                      (customized, reset to default)
+                                    </button>
+                                  </>
+                                )}
+                              </label>
+                              <small className="settings-hint">{p.description}</small>
+                              {p.vars.length > 0 && (
+                                <small className="settings-hint">
+                                  Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.
+                                </small>
+                              )}
+                              <textarea
+                                value={value}
+                                onChange={(e) => { setPromptValues(s => ({ ...s, [key]: e.target.value })); setSaved(false); }}
+                                rows={10}
+                                spellCheck={false}
+                                style={{ width: '100%', marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
