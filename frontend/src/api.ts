@@ -236,7 +236,21 @@ export const userSettingsAPI = {
   delete: (key: string) => api.delete(`/users/settings/${key}`),
 
   getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
+
+  // The full registry of editable LLM prompts (grouped by category) with their built-in defaults.
+  getPrompts: () => api.get<{ prompts: PromptDef[] }>('/users/prompts'),
 };
+
+// One editable LLM prompt as described by the backend registry (services/prompt-registry.ts).
+export interface PromptVar { token: string; desc: string; }
+export interface PromptDef {
+  id: string;
+  category: string;
+  label: string;
+  description: string;
+  vars: PromptVar[];
+  default: string;
+}
 
 export const wallabagAPI = {
   testConnection: () =>
