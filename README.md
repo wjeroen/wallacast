@@ -722,6 +722,17 @@ npm run dev
 
 Requires PostgreSQL running locally or set `DATABASE_URL`.
 
+### Previewing the UI without a database
+
+To look at the app's screens (Settings, menus, layout) without a real account or a real Postgres database, run the mock backend instead of the real one:
+
+```bash
+cd backend
+npm run mock
+```
+
+This starts a small stand-in server on port 3001 that always "logs in" successfully (any username/password works) and returns empty or default data for everything else, so the real frontend renders normally with no live content. It never touches Railway or any real database, so it's safe to leave running. It's a plain file (`backend/mock-server.mjs`) that the real deploy command (`npm start`) never touches, so it has no effect on production.
+
 ## License
 
-Released under the [MIT License](LICENSE). Built with many open-source libraries (React, Express, turndown, marked, and more) — each retains its own license.
+Released under the [MIT License](LICENSE). Built with many open-source libraries (React, Express, turndown, marked, and more), each retains its own license.
