@@ -112,8 +112,8 @@ const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }
 // this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
 // less than turbo (4 layers) on long podcasts, for ~2x the (still tiny) cost.
 const DEEPINFRA_WHISPER_PRESETS: Array<{ id: string; label: string }> = [
-  { id: 'openai/whisper-large-v3-turbo', label: 'Whisper large-v3-turbo — fastest & cheapest ($0.012/hr)' },
-  { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full) — fewer hallucinations, recommended ($0.027/hr)' },
+  { id: 'openai/whisper-large-v3-turbo', label: 'Whisper large-v3-turbo (cheaper)' },
+  { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full)' },
 ];
 const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
 
