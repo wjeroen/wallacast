@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
+import { displayUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, ContentVersion, Comment } from '../types';
@@ -838,7 +839,7 @@ export function FullscreenPlayer({
     if (content.published_at) meta.push(new Date(content.published_at).toLocaleDateString('en-GB'));
     if (content.karma !== undefined && content.karma !== null) meta.push(`${content.karma} upvotes`);
     if (meta.length > 0) lines.push(meta.join(' • '));
-    if (content.url) lines.push(content.url);
+    if (content.url) lines.push(displayUrl(content.url));
 
     const body = content.html_content
       ? htmlToMarkdown(content.html_content)
@@ -1652,8 +1653,8 @@ export function FullscreenPlayer({
             <h2 className="fullscreen-title">{content.title}</h2>
             {content.type === 'article' && content.url && (
               <p className="fullscreen-source-link">
-                <a href={content.url} target="_blank" rel="noopener noreferrer">
-                  {getDomainFromUrl(content.url)}
+                <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
+                  {getDomainFromUrl(displayUrl(content.url))}
                   <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
                 </a>
               </p>
