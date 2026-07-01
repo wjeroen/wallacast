@@ -88,12 +88,35 @@ type ChunkResult = { text: string; words: Array<{ word: string; start: number; e
 // fallback loop; harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
 // yet — they're staged follow-ups so we can measure each knob's effect independently.
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
+  // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false
+  // (and chunk_level=segment), so WITHOUT this it returns text only and read-along breaks.
+  word_timestamps: 'true',
   condition_on_previous_text: 'false',
   temperature: '0',
   compression_ratio_threshold: '2.4',
   logprob_threshold: '-1',
   no_speech_threshold: '0.6',
 };
+
+// Fallback: if the native response ever lacks per-word timestamps, spread each segment's words
+// evenly across the segment's [start, end] span so read-along still works (approximately) instead
+// of breaking entirely. This is timing interpolation WITHIN a known segment, not content-transcript
+// matching — so it does not violate the "no fuzzy alignment" rule.
+function wordsFromSegments(segments: any[]): ChunkResult['words'] {
+  const out: ChunkResult['words'] = [];
+  for (const seg of segments) {
+    const segStart = Number(seg.start) || 0;
+    const segEnd = Number(seg.end);
+    const end = Number.isFinite(segEnd) ? segEnd : segStart;
+    const tokens = String(seg.text ?? '').trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const per = Math.max(end - segStart, 0) / tokens.length;
+    tokens.forEach((tok, idx) => {
+      out.push({ word: tok, start: segStart + per * idx, end: segStart + per * (idx + 1) });
+    });
+  }
+  return out;
+}
 
 // Call DeepInfra's native inference endpoint (NOT the OpenAI-compatible one) so the safety params
 // above are actually honored. Native response returns words as { start, end, text }; we remap
@@ -118,12 +141,19 @@ async function transcribeFileDeepInfra(filePath: string, apiKey: string, model: 
 
   const json: any = await res.json();
   const rawWords: any[] = Array.isArray(json.words) ? json.words : [];
-  if (rawWords.length === 0) {
-    // Read-along needs word timestamps. Surface this loudly in the Railway logs if it ever happens
-    // (e.g. the native endpoint stopped returning words) rather than silently shipping a wordless transcript.
-    console.warn('[Transcription] WARNING: DeepInfra native endpoint returned no word timestamps.');
+  let words = rawWords.map((w) => ({ word: w.text ?? w.word ?? '', start: w.start, end: w.end }));
+
+  if (words.length === 0) {
+    // With word_timestamps=true this shouldn't happen, but if it ever does, degrade to
+    // segment-interpolated timings so read-along still (approximately) works.
+    const segments: any[] = Array.isArray(json.segments) ? json.segments : [];
+    if (segments.length > 0) {
+      console.warn('[Transcription] DeepInfra returned no word timestamps; synthesizing from segments (read-along timing approximate).');
+      words = wordsFromSegments(segments);
+    } else {
+      console.warn('[Transcription] WARNING: DeepInfra native endpoint returned neither words nor segments.');
+    }
   }
-  const words = rawWords.map((w) => ({ word: w.text ?? w.word ?? '', start: w.start, end: w.end }));
   return { text: json.text ?? '', words };
 }
 
