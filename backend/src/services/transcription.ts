@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import { getAudioDuration } from './audio-utils.js';
-import { getTranscriptionClientForUser } from './ai-providers.js';
+import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,6 +78,81 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
   throw new Error('Unreachable');
 }
 
+// Normalized per-file transcription result (word shape matches what read-along/DB expect).
+type ChunkResult = { text: string; words: Array<{ word: string; start: number; end: number }> };
+
+// Anti-hallucination safety params for DeepInfra's NATIVE Whisper endpoint (v1).
+// condition_on_previous_text=false is the headline fix: it stops Whisper from re-reading its own
+// (possibly repetitive) output for the previous 30s window and snowballing into "even. even. even."
+// loops. The threshold params are Whisper defaults (only bite if DeepInfra runs the temperature
+// fallback loop; harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
+// yet — they're staged follow-ups so we can measure each knob's effect independently.
+const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
+  condition_on_previous_text: 'false',
+  temperature: '0',
+  compression_ratio_threshold: '2.4',
+  logprob_threshold: '-1',
+  no_speech_threshold: '0.6',
+};
+
+// Call DeepInfra's native inference endpoint (NOT the OpenAI-compatible one) so the safety params
+// above are actually honored. Native response returns words as { start, end, text }; we remap
+// `text` -> `word` so the rest of the pipeline is unchanged.
+async function transcribeFileDeepInfra(filePath: string, apiKey: string, model: string): Promise<ChunkResult> {
+  const fileBuffer = await fs.readFile(filePath);
+  const form = new FormData();
+  form.append('audio', new Blob([fileBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
+  for (const [key, value] of Object.entries(DEEPINFRA_WHISPER_PARAMS)) form.append(key, value);
+
+  const url = `https://api.deepinfra.com/v1/inference/${model}`;
+  const res = await globalThis.fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `bearer ${apiKey}` },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`DeepInfra transcription HTTP ${res.status} ${res.statusText}: ${body.slice(0, 300)}`);
+  }
+
+  const json: any = await res.json();
+  const rawWords: any[] = Array.isArray(json.words) ? json.words : [];
+  if (rawWords.length === 0) {
+    // Read-along needs word timestamps. Surface this loudly in the Railway logs if it ever happens
+    // (e.g. the native endpoint stopped returning words) rather than silently shipping a wordless transcript.
+    console.warn('[Transcription] WARNING: DeepInfra native endpoint returned no word timestamps.');
+  }
+  const words = rawWords.map((w) => ({ word: w.text ?? w.word ?? '', start: w.start, end: w.end }));
+  return { text: json.text ?? '', words };
+}
+
+// Transcribe a single audio file with the right transport for the configured provider.
+// `prompt` is only used by the OpenAI-shaped path; the DeepInfra path deliberately sends no prompt
+// (condition_on_previous_text=false handles continuity, and feeding the previous chunk's tail as a
+// prompt is exactly what seeds cross-chunk loops).
+async function transcribeFile(
+  filePath: string,
+  config: TranscriptionConfig,
+  prompt: string,
+  label: string,
+): Promise<ChunkResult> {
+  if (config.kind === 'deepinfra') {
+    return withChunkRetry(() => transcribeFileDeepInfra(filePath, config.apiKey, config.model), label);
+  }
+  const transcription = await withChunkRetry(
+    () => config.client.audio.transcriptions.create({
+      file: createReadStream(filePath),
+      model: config.model,
+      response_format: 'verbose_json',
+      timestamp_granularities: ['word'],
+      prompt,
+    }),
+    label,
+  );
+  return { text: transcription.text, words: (transcription as any).words || [] };
+}
+
 export async function transcribeWithTimestamps(
   audioSource: string | Buffer,
   userId: number,
@@ -90,10 +165,10 @@ export async function transcribeWithTimestamps(
   const tempFiles: string[] = [];
 
   try {
-    const provider = await getTranscriptionClientForUser(userId);
-    if (!provider) throw new Error('No API key set. Please configure OpenAI or DeepInfra in Settings.');
+    const config = await getTranscriptionClientForUser(userId);
+    if (!config) throw new Error('No API key set. Please configure OpenAI or DeepInfra in Settings.');
 
-    const { client, model } = provider;
+    const model = config.model;
 
     const tempDir = path.join(process.cwd(), 'temp');
     await fs.mkdir(tempDir, { recursive: true });
@@ -146,32 +221,30 @@ export async function transcribeWithTimestamps(
         // sending it unbounded made DeepInfra's Whisper endpoint reject chunk 2+ with a
         // bare 400 whenever initialPrompt was empty — which it always is since
         // whisper-prompt.ts started returning '' (OpenAI silently truncates instead).
-        let currentPrompt = previousTranscript;
-
-        if (i > 0) {
+        // OpenAI-shaped path keeps the hybrid continuity prompt; the DeepInfra native path sends
+        // NO prompt (condition_on_previous_text=false handles continuity, and feeding the previous
+        // chunk's tail is exactly what seeds cross-chunk repetition loops). previousTranscript is
+        // still tracked below because the OpenAI path's continuity depends on it.
+        let currentPrompt = '';
+        if (config.kind === 'openai') {
+          currentPrompt = previousTranscript;
+          if (i > 0) {
             // Take the Metadata (Title, Author, Comments) from the start
             const metadataPart = initialPrompt ? initialPrompt.slice(0, 600) : '';
             // Take the Continuity (last few sentences) from the actual previous text
             const continuityPart = previousTranscript.slice(-200);
             currentPrompt = metadataPart ? `${metadataPart} ... ${continuityPart}` : continuityPart;
+          }
         }
 
-        const transcription = await withChunkRetry(
-          () => client.audio.transcriptions.create({
-            file: createReadStream(chunkFiles[i]),
-            model: model,
-            response_format: 'verbose_json',
-            timestamp_granularities: ['word'],
-            prompt: currentPrompt,
-          }),
-          `Chunk ${i + 1}/${chunkFiles.length}`
+        const { text, words } = await transcribeFile(
+          chunkFiles[i], config, currentPrompt, `Chunk ${i + 1}/${chunkFiles.length}`
         );
 
-        transcriptText += (i > 0 ? ' ' : '') + transcription.text;
-        previousTranscript = transcription.text;
+        transcriptText += (i > 0 ? ' ' : '') + text;
+        previousTranscript = text;
 
-        const chunkWords = (transcription as any).words || [];
-        const adjustedWords = chunkWords.map((word: any) => ({
+        const adjustedWords = words.map((word) => ({
           ...word,
           start: word.start + timeOffset,
           end: word.end + timeOffset,
@@ -190,19 +263,12 @@ export async function transcribeWithTimestamps(
       }
 
       console.log(`Transcribing file using model ${model}...`);
-      const transcription = await withChunkRetry(
-        () => client.audio.transcriptions.create({
-          file: createReadStream(fileToTranscribe),
-          model: model,
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word'],
-          prompt: previousTranscript,
-        }),
-        'Single file'
-      );
+      // DeepInfra native path ignores the prompt; OpenAI path keeps the initial hint.
+      const singlePrompt = config.kind === 'openai' ? previousTranscript : '';
+      const { text, words } = await transcribeFile(fileToTranscribe, config, singlePrompt, 'Single file');
 
-      transcriptText = transcription.text;
-      allWords = (transcription as any).words || [];
+      transcriptText = text;
+      allWords = words;
     }
 
     return { text: transcriptText, words: allWords };
