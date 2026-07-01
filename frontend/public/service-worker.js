@@ -51,7 +51,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Audio streams: let the browser handle them natively — do NOT call
+  // Audio streams: let the browser handle them natively, do NOT call
   // event.respondWith(). Service-worker-mediated fetch can break byte-range
   // (HTTP 206) seeking on some browsers, causing the audio element to reset
   // to the beginning instead of seeking to the requested position.
@@ -93,7 +93,7 @@ self.addEventListener('fetch', (event) => {
 
   // Hashed assets (/assets/index-Abc123.js, /assets/index-Xyz.css):
   // cache-first. Vite content-hashes these filenames, so a cached copy
-  // is always correct. If the hash changes, it's a new URL — new cache entry.
+  // is always correct. If the hash changes, it's a new URL, new cache entry.
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(request).then((cachedResponse) => {

@@ -20,7 +20,7 @@ export interface FeedEpisode {
 
 // Shared cards for the Feed tab. The same markup used to be copy-pasted in
 // several places (search results, subscriptions list, expanded podcast card,
-// and three episode/article lists) — these two components are the single
+// and three episode/article lists), these two components are the single
 // source of truth now. Same CSS classes as before, so nothing changes visually.
 
 function FeedTypeIcon({ type }: { type?: string }) {

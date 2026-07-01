@@ -26,6 +26,6 @@ interface WhisperPromptInput {
 }
 
 export function buildWhisperPrompt(_item: WhisperPromptInput): string {
-  // Intentionally empty — see module docstring for rationale.
+  // Intentionally empty, see module docstring for rationale.
   return '';
 }

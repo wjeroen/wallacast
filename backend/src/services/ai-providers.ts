@@ -89,7 +89,7 @@ export async function getTranscriptionClientForUser(userId: number): Promise<Tra
         if (k) return { kind: 'openai', client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: chosenModel || 'openai/whisper-1' };
     }
 
-    // Fallback (unset, or chosen provider has no key): legacy auto-routing — prefer DeepInfra (cheaper).
+    // Fallback (unset, or chosen provider has no key): legacy auto-routing, preferring DeepInfra (cheaper).
     const deepInfraKey = await getUserSetting(userId, 'deepinfra_api_key');
     if (deepInfraKey) {
         return { kind: 'deepinfra', apiKey: deepInfraKey, model: 'openai/whisper-large-v3-turbo' };
@@ -111,7 +111,7 @@ export async function getOpenAIClientForUser(userId: number): Promise<OpenAI | n
 // ===========================================================================
 // CHAT LLM PROVIDER REGISTRY + PER-JOB ROUTING
 //
-// Every supported provider speaks the OpenAI Chat Completions format — we use
+// Every supported provider speaks the OpenAI Chat Completions format, so we use
 // the OpenAI SDK as a universal client and just swap baseURL + key. Each "chat
 // job" (narration prep, read-along alignment, summaries) has its own
 // provider+model+reasoning_effort, configured in Settings. Read-along and
@@ -192,7 +192,7 @@ export async function getChatClientForJob(userId: number, job: ChatJob): Promise
     if (apiKey) {
       return { client: buildChatClient(apiKey, def), model, extraParams: effort ? def.reasoningParams(effort) : {} };
     }
-    console.warn(`[AI] ${job}: provider '${provider}' has no API key — falling back`);
+    console.warn(`[AI] ${job}: provider '${provider}' has no API key, falling back`);
   }
 
   // Fallback: legacy narration mapping (picks DeepInfra/OpenAI by whichever key exists).
@@ -206,7 +206,7 @@ export async function getChatClientForJob(userId: number, job: ChatJob): Promise
 }
 
 /**
- * Back-compat wrapper — narration job, without the reasoning extraParams.
+ * Back-compat wrapper for the narration job, without the reasoning extraParams.
  * Prefer getChatClientForJob() in new code so reasoning effort is honored.
  */
 export async function getChatClientForUser(userId: number): Promise<{ client: OpenAI; model: string } | null> {
@@ -221,7 +221,7 @@ export async function getTTSOptionsForUser(userId: number): Promise<{ voice: str
 }
 
 // A single selectable voice. `model` carries the provider (OpenAI vs Kokoro/DeepInfra) so a
-// list of voices can span TTS models — the TTS client is routed per the picked model.
+// list of voices can span TTS models, so the TTS client is routed per the picked model.
 export interface TTSVoiceChoice { model: string; voice: string; }
 
 // Parse the user's `tts_voices` setting (JSON array of { model, voice }). Returns [] on any

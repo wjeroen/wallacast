@@ -108,9 +108,9 @@ const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }
   { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
   { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. openai/whisper-1' },
 ];
-// Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else;
+// Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else,
 // this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
-// less than turbo (4 layers) on long podcasts, for ~2x the (still tiny) cost.
+// less than turbo (4 layers) on long podcasts, for about 2x the (still tiny) cost.
 const DEEPINFRA_WHISPER_PRESETS: Array<{ id: string; label: string }> = [
   { id: 'openai/whisper-large-v3-turbo', label: 'Whisper large-v3-turbo (cheaper)' },
   { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full)' },
@@ -257,8 +257,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const boolDefault = (v: string | null | undefined, d: string) => (v !== undefined && v !== null ? v : d);
 
       // Pre-fill transcription/image model fields with the effective default (the model the
-      // backend actually uses when the field is blank), so they show the model in use — same
-      // as the narration fields pre-fill from the legacy routing.
+      // backend actually uses when the field is blank), so they show the model in use, just as
+      // the narration fields pre-fill from the legacy routing.
       const transProvider = loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
       const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
 
@@ -455,7 +455,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         }
       }
 
-      // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
+      // Summary tiers are managed in their own state, and we serialize (Infinity -> null) on save.
       toSave.summary_tiers = serializeTiers(summaryTiers);
 
       // Custom prompts: store empty when blank OR identical to the built-in default, so we never
@@ -567,7 +567,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
   const hasOpenRouterKey = isSecretSet('openrouter_api_key') || !!formData.openrouter_api_key.trim();
   // OpenAI voices are usable with either an OpenAI key or an OpenRouter key (the "OpenAI voices
-  // via" toggle just picks which one synthesizes them) — so flipping the toggle never hides them.
+  // via" toggle just picks which one synthesizes them), so flipping the toggle never hides them.
   const canUseOpenAIVoices = hasOpenAIKey || hasOpenRouterKey;
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
     g.requiresKey === 'openai' ? canUseOpenAIVoices : hasDeepInfraKey
@@ -615,7 +615,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         </section>
 
-        {/* Audio Generation Section — what gets turned into audio automatically.
+        {/* Audio Generation Section: what gets turned into audio automatically.
             Model/voice choices live in the Models section further down. */}
         <section className="settings-section">
            <h3><Mic size={20} /> Audio generation</h3>
@@ -813,7 +813,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         </section>
 
-        {/* Custom prompts (advanced) — registry-driven editor for every LLM prompt, grouped by category */}
+        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category */}
         <section className="settings-section">
           <h3>Custom prompts (advanced)</h3>
           <p className="section-description">
@@ -1040,7 +1040,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         </section>
 
-        {/* Models Section — which provider/model handles each AI job. */}
+        {/* Models Section: which provider/model handles each AI job. */}
         <section className="settings-section">
           <h3><Mic size={20} /> Models</h3>
           <p className="section-description">

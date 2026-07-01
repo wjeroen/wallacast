@@ -5,7 +5,7 @@ import type { ContentItem, QueueItem } from '../types';
 
 /**
  * Snapshot of the library filter at the moment the user clicked a library item.
- * Acts like Spotify's "play context" — the non-manual queue (items that play
+ * Acts like Spotify's "play context", the non-manual queue (items that play
  * after manual ones if autoplay is on) is derived from this filter.
  * The snapshot includes type, status AND search query, frozen at click time.
  * We intentionally do NOT persist this: if the user reloads, auto-queue is
@@ -21,7 +21,7 @@ interface QueueStore {
   manualItems: QueueItem[];
   loading: boolean;
 
-  // Captured on library click — frozen filter used to build the non-manual queue
+  // Captured on library click, frozen filter used to build the non-manual queue
   libraryContext: LibraryContext | null;
 
   // User-facing toggles
@@ -36,7 +36,7 @@ interface QueueStore {
   pendingRequeue: Set<number>;
 
   // Stable shuffle order (content IDs) captured when the user turns shuffle
-  // on. We don't reshuffle on every render — otherwise the "next" item would
+  // on. We don't reshuffle on every render. Otherwise the "next" item would
   // change every time the player re-renders.
   shuffleOrder: number[];
 
@@ -58,12 +58,12 @@ interface QueueStore {
 
   // --- Derived helpers (called by player/App) ---
   /**
-   * Auto-advance next — respects the autoplay and manualAlwaysAutoplay
+   * Auto-advance next, respects the autoplay and manualAlwaysAutoplay
    * settings. Returns null if the user has gated auto-advance off.
    */
   getNextItem: (currentId: number | null) => ContentItem | null;
   /**
-   * Manual-skip next — ignores autoplay gating. Used by the skip button
+   * Manual-skip next, ignores autoplay gating. Used by the skip button
    * so the user can always move forward regardless of settings.
    */
   peekNextItem: (currentId: number | null) => ContentItem | null;
@@ -90,7 +90,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
   // Snapshot a stable random order over the full library, rotated so the
   // currently-playing item sits at position 0. Rotation keeps items that
   // landed before current in the random order playable (they move to the
-  // end) instead of being dropped by the pivot — see commit history
+  // end) instead of being dropped by the pivot. See commit history
   // ("shuffle next-goes-back" fix).
   const buildShuffleOrder = (currentId?: number | null): number[] => {
     const ids = useContentStore.getState().allItems.map(i => i.id);
@@ -117,7 +117,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
 
   // Build the ordered non-manual id stream and locate the pivot for
   // currentId. The pivot is found on the FULL id stream (shuffle order or
-  // library order), NOT the filtered list — so an item that stops matching
+  // library order), NOT the filtered list, so an item that stops matching
   // the captured filter mid-play (e.g. archived right before it ends, which
   // also wipes its audio) keeps its position and the stream continues
   // forward, instead of falling back to the original library click and
@@ -132,7 +132,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     let streamIds: number[];
     if (shuffleNonManual) {
       const order = ensureShuffleOrder(currentId);
-      // Items added to the library after shuffle started — tack them on
+      // Items added to the library after shuffle started. Tack them on
       const inOrder = new Set(order);
       const added = allItems.filter(i => !inOrder.has(i.id)).map(i => i.id);
       streamIds = added.length > 0 ? [...order, ...added] : order;
@@ -175,7 +175,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     try {
       const res = await userSettingsAPI.get('queue_autoplay');
       if (res.data.value === 'true') set({ autoplay: true });
-    } catch { /* setting not set yet — default false */ }
+    } catch { /* setting not set yet, default false */ }
     try {
       const res = await userSettingsAPI.get('manual_queue_always_autoplay');
       // Only override the default (true) when the user explicitly stored 'false'
@@ -184,7 +184,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     try {
       const res = await userSettingsAPI.get('queue_shuffle');
       if (res.data.value === 'true') {
-        // Only set the flag — the library may not be loaded yet, so the
+        // Only set the flag, the library may not be loaded yet, so the
         // shuffle order is built lazily by ensureShuffleOrder() on first use
         set({ shuffleNonManual: true });
       }
@@ -304,7 +304,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
   setLibraryContext: (filter, capturedFromId) => {
     set({ libraryContext: { filter, capturedFromId } });
     // If shuffle was hydrated from settings before the library loaded, the
-    // order doesn't exist yet — build it now (rotated to the clicked item)
+    // order doesn't exist yet, build it now (rotated to the clicked item)
     // so render-time getters find it ready.
     if (get().shuffleNonManual) ensureShuffleOrder(capturedFromId);
   },
@@ -357,7 +357,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     // "Up next" starts from the position AFTER the playing item. The pivot
     // is position-based (full id stream), so it survives the current item
     // being archived / losing audio mid-play. If there's no pivot at all,
-    // fall back to the whole stream — never silently drop everything.
+    // fall back to the whole stream. Never silently drop everything.
     const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
     const result: ContentItem[] = [];
     for (const id of after) {
@@ -372,7 +372,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
   getNextItem: (currentId) => {
     const { manualItems, autoplay, manualAlwaysAutoplay } = get();
 
-    // 1) Next manual item — first one that isn't the currently playing one.
+    // 1) Next manual item, first one that isn't the currently playing one.
     //    Gated by `autoplay` when the user has disabled "manual items always
     //    autoplay" in settings.
     const manualAllowed = manualAlwaysAutoplay || autoplay;
@@ -382,12 +382,12 @@ export const useQueueStore = create<QueueStore>((set, get) => {
         return manualItems[manualIdx + 1];
       }
       if (manualIdx < 0 && manualItems.length > 0) {
-        // currently playing is not in manual queue — next manual is the head
+        // currently playing is not in manual queue, next manual is the head
         return manualItems[0];
       }
     }
 
-    // 2) Non-manual — only if autoplay is on
+    // 2) Non-manual, only if autoplay is on
     if (!autoplay) return null;
     const nonManual = get().getNonManualItems(currentId);
     return nonManual.length > 0 ? nonManual[0] : null;

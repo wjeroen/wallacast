@@ -115,7 +115,7 @@ export const contentAPI = {
   generateAudio: (id: number, regenerate: boolean = false, excludeComments: boolean = false) =>
     api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate, exclude_comments: excludeComments }),
 
-  // generateTranscript: for podcast episodes without a transcript — runs Whisper first,
+  // generateTranscript: for podcast episodes without a transcript, runs Whisper first,
   // then summarizes (the UI confirms with the user before setting this)
   generateSummary: (id: number, regenerate: boolean = false, generateTranscript: boolean = false) =>
     api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, { regenerate, generate_transcript: generateTranscript }),

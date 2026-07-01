@@ -1,8 +1,8 @@
 // Shared HTML <-> Markdown conversion for the article/text editor and "Copy content".
 //
 // Both directions are built on battle-tested libraries (turndown for HTML->Markdown,
-// marked for Markdown->HTML) so the boring 95% — escaping, nested lists, inline
-// formatting, GFM tables, images — is handled correctly. On top of that we add a few
+// marked for Markdown->HTML) so the boring 95% (escaping, nested lists, inline
+// formatting, GFM tables, images) is handled correctly. On top of that we add a few
 // custom rules so Wallacast's special structures round-trip losslessly AND stay
 // human-readable in Obsidian:
 //
@@ -13,7 +13,7 @@
 //   - Footnotes (LessWrong/EA Forum `#fnXXX`, Substack `#footnote-N`) <-> Markdown
 //     `[^n]` references and `[^n]: ...` definitions (renumbered 1..N, back-links dropped)
 //   - Anything else we don't recognize (iframes, figures with captions/width) is KEPT as
-//     raw HTML so no information is silently dropped — Obsidian renders raw HTML too.
+//     raw HTML so no information is silently dropped, and Obsidian renders raw HTML too.
 //
 // Because the SAME functions power both the editor and "Copy content", what you copy is
 // exactly what you'd see in the editor.
@@ -70,7 +70,7 @@ function buildTurndown(): TurndownService {
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
-  // Keep figures as raw HTML islands when they carry a caption or an explicit width — both
+  // Keep figures as raw HTML islands when they carry a caption or an explicit width. Both
   // are things Markdown can't faithfully express (a `<figcaption>`, or a percentage width on
   // the `<figure>`, e.g. LessWrong's `image_resized` / `style="width:20.8%"`). A bare
   // `<figure><img></figure>` with neither still converts to a plain Markdown image.
@@ -213,7 +213,7 @@ export function markdownToHtml(markdown: string): string {
 
   // Footnotes: pull out the `[^k]: body` definitions, then turn inline `[^k]` references into
   // <sup> links. Rendered back as one canonical, clickable footnote section at the end (ids
-  // `fn-k` / `fnref-k` — recognized by the player's footnote click handler).
+  // `fn-k` / `fnref-k`: recognized by the player's footnote click handler).
   const footnoteDefs = new Map<string, string>();
   md = md.replace(/^[ \t]*\[\^([^\]]+)\]:[ \t]?(.*)$/gm, (_m, key, body) => {
     footnoteDefs.set(String(key).trim(), String(body || '').trim());

@@ -118,11 +118,11 @@ router.get('/', async (req, res) => {
 // in a single request (a few hundred bytes total). The library polls this every 2s
 // while items are generating, instead of calling GET /:id per item.
 //
-// WHY THIS EXISTS: GET /:id returns the FULL item — transcript, 9,000+ word-level
-// timestamps, alignment, comments — roughly 0.5MB for a transcribed podcast. Polling
+// WHY THIS EXISTS: GET /:id returns the FULL item (transcript, 9,000+ word-level
+// timestamps, alignment, comments), roughly 0.5MB for a transcribed podcast. Polling
 // that per item every 2s is the same class of bug as the 80GB data incident (see
 // README "Critical Performance Fix"). The full item is still fetched once, at
-// completion, via GET /:id (the frontend's refreshItem). Keep this endpoint lean —
+// completion, via GET /:id (the frontend's refreshItem). Keep this endpoint lean,
 // never add large columns (transcript_words, content_alignment, comments, html_content).
 //
 // IMPORTANT: a POST so it can take a list of ids in the body without colliding with
@@ -171,7 +171,7 @@ router.post('/audio-error-log', (req, res) => {
 // Bulk actions on many items at once (used by the library's Select mode).
 // IMPORTANT: defined before '/:id'-shaped routes so Express matches the literal path first.
 // No transaction on purpose: query() has a connection-retry wrapper (see the wipe-all comment
-// history) — every statement here is idempotent, so retrying the same request heals any
+// history). Every statement here is idempotent, so retrying the same request heals any
 // partial state instead of corrupting it. This matches how PATCH /:id behaves.
 router.post('/bulk', async (req, res) => {
   try {
@@ -201,7 +201,7 @@ router.post('/bulk', async (req, res) => {
       // Mirrors PATCH /:id is_archived=true: wipe generated audio + read-along data for
       // NON-STARRED articles/texts only. Podcasts keep their (external) audio_url and
       // starred items keep everything.
-      // NOTE: no longer guarded on `audio_data IS NOT NULL` — audio now lives on disk, so
+      // NOTE: no longer guarded on `audio_data IS NOT NULL`. Audio now lives on disk, so
       // that guard would skip disk-backed items and leave their files orphaned. We clear
       // the (now-mostly-empty) audio columns and delete the disk file for each affected id.
       const clearedArchive = await query(
@@ -223,7 +223,7 @@ router.post('/bulk', async (req, res) => {
     }
 
     if (action === 'unarchive') {
-      // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio — implicitly
+      // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio. Implicitly
       // kicking off dozens of TTS jobs would be a cost surprise. Use bulk "Generate audio".
       const r = await query(
         `UPDATE content_items SET is_archived = false, updated_at = NOW()
@@ -235,7 +235,7 @@ router.post('/bulk', async (req, res) => {
 
     if (action === 'remove_audio') {
       // Mirrors the per-item "remove audio" field list. The type guard ensures podcast
-      // episodes are never touched — their audio_url is the source media, not generated.
+      // episodes are never touched. Their audio_url is the source media, not generated.
       const r = await query(
         `UPDATE content_items
          SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
@@ -319,7 +319,7 @@ router.get('/:id', async (req, res) => {
 // Serve audio (PUBLIC - no auth required for HTML5 audio player compatibility)
 // For articles/texts: serves audio_data stored in the database with byte-range support.
 // For podcast episodes: proxies the external CDN URL, forwarding the browser's Range
-// header so only the requested bytes are fetched from upstream — never the whole file.
+// header so only the requested bytes are fetched from upstream, never the whole file.
 router.get('/:id/audio', async (req, res) => {
   try {
     // Note: No user_id filter - audio URLs are public but content IDs are private
@@ -335,7 +335,7 @@ router.get('/:id/audio', async (req, res) => {
     const { audio_data: audioData, audio_url: audioUrl, type } = result.rows[0];
 
     // -------------------------------------------------------------------------
-    // PATH A: podcast episode — proxy the external CDN URL
+    // PATH A: podcast episode. Proxy the external CDN URL
     // Range requests are forwarded byte-for-byte so we only pull what the
     // browser actually needs. This sidesteps CORS issues (e.g. api.substack.com
     // blocking cross-origin range requests from the browser).
@@ -371,7 +371,7 @@ router.get('/:id/audio', async (req, res) => {
         return res.end();
       }
 
-      // Stream chunk by chunk — Readable.fromWeb bridges the Web ReadableStream
+      // Stream chunk by chunk. Readable.fromWeb bridges the Web ReadableStream
       // to a Node.js stream that can be piped to the Express response.
       // This ensures we never buffer the full audio file in memory.
       const { Readable } = await import('stream');
@@ -385,7 +385,7 @@ router.get('/:id/audio', async (req, res) => {
     }
 
     // -------------------------------------------------------------------------
-    // PATH B: article/text — serve audio_data stored in the database
+    // PATH B: article/text. Serve audio_data stored in the database
     // -------------------------------------------------------------------------
     if (!audioData) {
       return res.status(404).json({ error: 'Audio not found' });
@@ -482,7 +482,7 @@ router.post('/', async (req, res) => {
         const el = allElements[i];
         const text = el.textContent?.trim() || '';
 
-        // Detect ](https://...) pattern — the trailing part of a broken markdown image link
+        // Detect ](https://...) pattern, which is the trailing part of a broken markdown image link
         const mdLinkMatch = text.match(/^\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)$/);
         if (mdLinkMatch) {
           const realUrl = mdLinkMatch[1];
@@ -524,7 +524,7 @@ router.post('/', async (req, res) => {
               bracketEl.parentNode?.removeChild(bracketEl);
             }
           } else {
-            // No img found before — just remove the broken markdown text
+            // No img found before, just remove the broken markdown text
             el.parentNode?.removeChild(el);
           }
           continue;
@@ -543,12 +543,12 @@ router.post('/', async (req, res) => {
         }
       }
 
-      // Fix remaining images with relative/local paths — replace src with empty to trigger onerror,
+      // Fix remaining images with relative/local paths. Replace src with empty to trigger onerror,
       // or remove them if they can't possibly load
       doc.querySelectorAll('img').forEach(img => {
         const src = img.getAttribute('src') || '';
         if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('data:')) {
-          // Relative path — won't work on server, remove the image
+          // Relative path, won't work on server, remove the image
           img.parentNode?.removeChild(img);
         }
       });
@@ -637,7 +637,7 @@ router.post('/', async (req, res) => {
       const shouldAutoGenerate = autoGenerateAudio === 'true';
 
       if (shouldAutoGenerate) {
-        // Check max comment limit — skip auto-generation if article has too many comments
+        // Check max comment limit. Skip auto-generation if article has too many comments
         const maxCommentsStr = await getUserSetting(req.user!.userId, 'max_narrated_comments');
         const maxComments = maxCommentsStr ? parseInt(maxCommentsStr, 10) || 50 : 50;
         const articleCommentCount = createdItem.comment_count_total || 0;
@@ -668,7 +668,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Auto-generate summary for articles/texts (independent of audio — both can run at once).
+    // Auto-generate summary for articles/texts (independent of audio, both can run at once).
     // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
     if ((type === 'article' || type === 'text') && (processedContent || htmlContent)) {
       const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
@@ -757,7 +757,7 @@ router.patch('/:id', async (req, res) => {
     // Manual Markdown/HTML edit of an article/text body. The frontend converts Markdown ->
     // HTML and sends { is_edit: true, html_content, content }. We snapshot the current body
     // first (so the edit is undoable), sanitize, and treat the edit like a fresh fetch
-    // (content_fetched_at = now). Audio + read-along are left untouched-but-outdated — the
+    // (content_fetched_at = now). Audio + read-along are left untouched-but-outdated. The
     // provenance then shows the content is newer than the narration (regenerate to re-sync).
     if (updates.is_edit === true) {
       const cur = await query(
@@ -796,7 +796,7 @@ router.patch('/:id', async (req, res) => {
           updates.generation_status = null;
           updates.generation_progress = null;
           allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
-          await deleteAudioFile(id); // audio now lives on disk — delete the file too
+          await deleteAudioFile(id); // audio now lives on disk, delete the file too
         }
       }
     }
@@ -1104,7 +1104,7 @@ router.patch('/:id', async (req, res) => {
     paramCount++;
     values.push(req.user!.userId);
 
-    // CRITICAL FIX: Never use RETURNING * — it includes audio_data (BYTEA, 10-50MB),
+    // CRITICAL FIX: Never use RETURNING *. It includes audio_data (BYTEA, 10-50MB),
     // which was being sent in every response, causing ~7GB/hour of data transfer
     // during playback (saves every 10s). For playback-only updates, return minimal data.
     // For content updates, return the same columns as the list endpoint.
@@ -1161,7 +1161,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Download original (raw) HTML from source URL — no cleaning, for debugging
+// Download original (raw) HTML from source URL. No cleaning, for debugging
 // Export all fields for a content item as a zip file (except audio_data which is too large)
 router.get('/:id/export', async (req, res) => {
   try {
@@ -1362,7 +1362,7 @@ router.post('/:id/refetch', async (req, res) => {
   }
 });
 
-// List version-history snapshots for an item (lean metadata only — no html bodies).
+// List version-history snapshots for an item (lean metadata only, no html bodies).
 router.get('/:id/versions', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1513,7 +1513,7 @@ router.post('/:id/generate-audio', async (req, res) => {
 });
 
 // Generate (or regenerate) summaries. Articles/texts summarize their body (+ comments);
-// podcast episodes summarize their transcript. Runs independently of audio generation —
+// podcast episodes summarize their transcript. Runs independently of audio generation,
 // uses its own `summary_status` field so both can be in progress at the same time.
 // For podcasts WITHOUT a transcript: pass `generate_transcript: true` to first run Whisper
 // and then summarize (the frontend shows a confirmation before doing this); without the
@@ -1591,7 +1591,7 @@ router.post('/:id/generate-summary', async (req, res) => {
       });
       transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt)
         .then(async (result) => {
-          console.log(`Transcription complete for ${id} (${result.words.length} words) — starting summary`);
+          console.log(`Transcription complete for ${id} (${result.words.length} words), starting summary`);
           await query(
             'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
             [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]

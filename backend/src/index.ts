@@ -61,7 +61,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
   try {
     const range = req.headers.range;
 
-    // Step 0: Cheap metadata check — type + audio_url only, no blob access.
+    // Step 0: Cheap metadata check, type + audio_url only, no blob access.
     // Podcast episodes have an external audio_url and no audio_data in the DB,
     // so they need to be proxied. Articles/texts have audio_data and go through
     // the optimised DB path below.
@@ -77,10 +77,10 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     const { type, audio_url: audioUrl } = metaResult.rows[0];
 
     // -------------------------------------------------------------------------
-    // PATH A: podcast episode — proxy external CDN URL through our server.
+    // PATH A: podcast episode. Proxy external CDN URL through our server.
     // This sidesteps CORS issues (e.g. api.substack.com blocks cross-origin
     // range requests from the browser). We forward the Range header so only
-    // the requested bytes are fetched upstream — never the full file.
+    // the requested bytes are fetched upstream, never the full file.
     // -------------------------------------------------------------------------
     if (type === 'podcast_episode' && audioUrl) {
       const upstreamHeaders: Record<string, string> = {
@@ -107,7 +107,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
       if (!upstreamRes.body) return res.end();
 
-      // node-fetch body is a Node.js ReadableStream — pipe it directly to the
+      // node-fetch body is a Node.js ReadableStream, pipe it directly to the
       // Express response. Same pattern used by transcription.ts for podcast audio.
       // Never buffers the full file: each chunk flows through as it arrives.
       upstreamRes.body.pipe(res);
@@ -133,7 +133,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
       if (range) {
         const parts = range.replace(/bytes=/, '').split('-');
         const start = parseInt(parts[0], 10);
-        const maxChunk = 2 * 1024 * 1024; // 2MB — same as the DB path, for fast start
+        const maxChunk = 2 * 1024 * 1024; // 2MB, same as the DB path, for fast start
         const end = parts[1]
           ? Math.min(parseInt(parts[1], 10), diskSize - 1)
           : Math.min(start + maxChunk - 1, diskSize - 1);
@@ -158,7 +158,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     }
 
     // -------------------------------------------------------------------------
-    // PATH C (fallback): article/text — serve audio_data from the database.
+    // PATH C (fallback): article/text. Serve audio_data from the database.
     // Uses PostgreSQL substring() for range requests so only the needed bytes
     // are read from the TOAST store (no full-blob loads = fast seeking).
     // -------------------------------------------------------------------------
@@ -274,7 +274,7 @@ async function logStorageStats() {
     console.log(`📦 [Storage] content_items table total:  ${mb(t.table_bytes)} (incl. indexes/overhead)`);
     console.log(`📦 [Storage] Whole database on disk:     ${mb(t.db_bytes)}`);
 
-    // Postgres memory settings — so you can SEE whether POSTGRES_CONFIG (or any tuning)
+    // Postgres memory settings so you can SEE whether POSTGRES_CONFIG (or any tuning)
     // actually took effect. If shared_buffers is small (e.g. 64-128MB) the low preset is
     // live; if it's the stock default the variable isn't being read by your DB image.
     const cfg = await query(
@@ -347,15 +347,15 @@ async function start() {
       logStorageStats().catch(() => {});
 
       // Migrate audio blobs out of Postgres onto the volume (fire-and-forget, never blocks
-      // startup). COPY is non-destructive and idempotent — safe to run every boot. The
+      // startup). COPY is non-destructive and idempotent, safe to run every boot. The
       // destructive CLEAR (NULL the blobs to actually free the DB) only runs when you set
       // CLEAR_AUDIO_BLOBS=true, and only for items already verified on disk.
       (async () => {
         try {
           if (isPersistentVolume()) {
-            console.log('🎵 [AudioMigration] ✅ Persistent volume detected at /data — audio files survive redeploys.');
+            console.log('🎵 [AudioMigration] ✅ Persistent volume detected at /data. Audio files survive redeploys.');
           } else {
-            console.warn('🎵 [AudioMigration] ⚠️ NO VOLUME AT /data — audio files are being written to the container\'s EPHEMERAL disk and will NOT survive a redeploy. Check the volume\'s mount path in Railway (must be exactly /data). DB blobs are kept, so nothing is lost — but the migration is not effective until the volume is mounted.');
+            console.warn('🎵 [AudioMigration] ⚠️ NO VOLUME AT /data. Audio files are being written to the container\'s EPHEMERAL disk and will NOT survive a redeploy. Check the volume\'s mount path in Railway (must be exactly /data). DB blobs are kept, so nothing is lost, but the migration is not effective until the volume is mounted.');
           }
           const copy = await migrateAudioBlobsToDisk();
           if (copy.migrated > 0 || copy.failed > 0) {

@@ -275,7 +275,7 @@ export class ImageAltTextService {
       if (img.width < 100 && img.height < 100) return true;
     }
 
-    // 2. Filename patterns (skip for data: URIs — base64 can randomly match patterns)
+    // 2. Filename patterns (skip for data: URIs, base64 can randomly match patterns)
     const url = img.url.toLowerCase();
     if (!url.startsWith('data:')) {
       const decorativePatterns = [

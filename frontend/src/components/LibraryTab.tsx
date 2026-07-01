@@ -51,7 +51,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Track recently completed items (show "Completed" for 5 seconds)
   const [recentlyCompleted, setRecentlyCompleted] = useState<Map<number, number>>(new Map());
   const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
-  // Podcasts need a transcript before a summary can be generated — this modal asks first.
+  // Podcasts need a transcript before a summary can be generated, so this modal asks first.
   // readyIds = items that can summarize right away; podcastIds = need transcript first.
   const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
@@ -117,7 +117,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   }, [bulkMenuOpen]);
 
   // Debounce the search input into the store (the store filters on every change).
-  // Also drops the selection — a select-all from a previous search shouldn't
+  // Also drops the selection, so a select-all from a previous search shouldn't
   // keep acting on now-hidden items.
   useEffect(() => {
     const t = setTimeout(() => {
@@ -169,7 +169,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     if (generatingItems.length === 0) return;
 
     // Poll every 2 seconds for active generation.
-    // ONE batch request for all generating items — returns only the small status fields
+    // ONE batch request for all generating items. Returns only the small status fields
     // (a few hundred bytes), NOT the full item. Previously this looped getById per item,
     // which shipped the entire transcript + 9k word timestamps + alignment every tick
     // (~0.5MB per transcribed podcast). The full item is still fetched ONCE, at
@@ -275,7 +275,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Refetching (instead of optimistic updates) keeps us in sync with server
   // side effects like archive wiping audio or delete propagating to Wallabag.
   const runInstantBulk = async (action: BulkAction, confirmMsg?: string) => {
-    // Intersect with the visible list — defensive, selection should already
+    // Intersect with the visible list. Defensive, selection should already
     // only contain visible items
     const ids = content.filter(item => selectedItems.has(item.id)).map(item => item.id);
     if (ids.length === 0) return;
@@ -336,7 +336,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       alert('No selected items are eligible (needs to be an article/text without audio).');
       return;
     }
-    const skipNote = skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments — generate those individually.` : '';
+    const skipNote = skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments. Generate those individually.` : '';
     if (!confirm(`Generate audio for ${eligible.length} item(s)? This uses your TTS API credits.${skipNote}`)) return;
     await runSequentialBulk('Starting audio generation', eligible.map(i => i.id), id => contentAPI.generateAudio(id, false));
   };
@@ -353,7 +353,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       alert('No selected items are eligible (no summary yet).');
       return;
     }
-    // Podcasts without a transcript need Whisper first — ask via the modal instead
+    // Podcasts without a transcript need Whisper first, so ask via the modal instead
     // of silently spending transcription credits
     const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
     const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
@@ -375,7 +375,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
     if (!confirm(`Refetch ${eligible.length} article(s) from the web?`)) return;
     await runSequentialBulk('Refetching', eligible.map(i => i.id), id => contentAPI.refetch(id));
-    // Refetch is fire-and-forget on the backend — refresh after delays to pick
+    // Refetch is fire-and-forget on the backend, so refresh after delays to pick
     // up updated data (bulk analogue of the 3s/8s per-item refreshes)
     setTimeout(() => fetchContent(), 4000);
     setTimeout(() => fetchContent(), 10000);
@@ -423,7 +423,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleGenerateSummary = async (id: number, regenerate: boolean = false) => {
     setOpenDropdown(null);
-    // Podcasts summarize their TRANSCRIPT (not the episode description) — if there's no
+    // Podcasts summarize their TRANSCRIPT (not the episode description). If there's no
     // transcript yet, ask before kicking off Whisper + summary
     const item = allItems.find(c => c.id === id);
     if (item && item.type === 'podcast_episode' && !item.transcript_words) {
@@ -486,7 +486,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     try {
       setOpenDropdown(null);
       await contentAPI.refetch(id);
-      // Refetch is async on the backend — refresh after delay to pick up updated data.
+      // Refetch is async on the backend, so refresh after delay to pick up updated data.
       // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
       setTimeout(() => refreshItem(id), 3000);
       setTimeout(() => refreshItem(id), 8000);
@@ -654,8 +654,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
             <button onClick={deselectAll}>None</button>
-            {/* Smart toggles (Gmail-style): star/archive act on the whole selection —
-                mixed selections get starred/archived; uniform ones get the inverse */}
+            {/* Smart toggles (Gmail-style): star/archive act on the whole selection.
+                Mixed selections get starred/archived, and uniform ones get the inverse. */}
             <button
               onClick={() => runInstantBulk(allSelectedStarred ? 'unstar' : 'star')}
               title={allSelectedStarred ? 'Unstar selected' : 'Star selected'}

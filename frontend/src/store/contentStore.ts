@@ -112,7 +112,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     error: null,
     allCount: 0,
 
-    // Client-side filtering — no API call needed, instant switch
+    // Client-side filtering, no API call needed, instant switch
     setTypeFilter: (typeFilter) => {
       set({ typeFilter });
       commit(get().allItems);
@@ -132,7 +132,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
       set({ loading: true, error: null });
 
       try {
-        // Step 1: Fetch non-archived items first (fast — typically ~20 items)
+        // Step 1: Fetch non-archived items first (fast, typically ~20 items)
         const activeResponse = await contentAPI.getAll({ archived: false });
         const activeItems = activeResponse.data;
 
