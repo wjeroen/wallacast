@@ -25,7 +25,7 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
-  // Podcast summaries need a transcript first — confirm before running Whisper + summary
+  // Podcast summaries need a transcript first. Confirm before running Whisper + summary
   const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
   // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts
   const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
@@ -188,7 +188,7 @@ function App() {
 
   // Called from LibraryTab when the user clicks a library item. Captures the
   // current filter as a "play context" (Spotify-style) so the non-manual
-  // auto-queue can be derived from it. Does NOT bump autoPlayToken — first
+  // auto-queue can be derived from it. Does NOT bump autoPlayToken, as first
   // click should load the track, not play it automatically.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const { typeFilter, statusFilter, searchQuery } = useContentStore.getState();
@@ -200,7 +200,7 @@ function App() {
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
   // either a manual QueueItem or a derived non-manual ContentItem. Items
   // without audio trigger the generate-or-skip prompt (only manuals can be
-  // in this state — non-manual stream filters audio-less items out).
+  // in this state, non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
     if (item.audio_url) {
       try {
@@ -214,7 +214,7 @@ function App() {
     }
     const qs = useQueueStore.getState();
     const queueRow = qs.manualItems.find(m => m.id === item.id);
-    if (!queueRow) return; // defensive — should not happen
+    if (!queueRow) return; // defensive, should not happen
     const proceed = confirm(
       `"${item.title}" has no audio yet. Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
@@ -237,10 +237,10 @@ function App() {
   // autoplay is on). When we hit a manual item with no audio, prompt the user
   // to generate-or-skip, then continue looking for a playable next item.
   //
-  // `mode` = 'auto'  — track ended naturally or user hit skip-next. We always
-  //                    clear the current manual item (it's been played/skipped).
-  // `mode` = 'ended' — respects autoplay gating via getNextItem.
-  // `mode` = 'skip'  — ignores autoplay gating via peekNextItem.
+  // `mode` = 'auto': track ended naturally or user hit skip-next. We always
+  //                   clear the current manual item (it's been played/skipped).
+  // `mode` = 'ended': respects autoplay gating via getNextItem.
+  // `mode` = 'skip': ignores autoplay gating via peekNextItem.
   const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
     const currentId = currentContent?.id ?? null;
 
@@ -268,7 +268,7 @@ function App() {
         setAutoPlayToken(t => t + 1);
         return;
       }
-      // Manual item without audio — prompt user
+      // Manual item without audio, prompt user
       const queueRow = qs.manualItems.find(m => m.id === nextItem.id);
       if (!queueRow) {
         // Defensive: non-manual stream already filters out audio-less items.
@@ -289,7 +289,7 @@ function App() {
       } else {
         qs.removeFromQueue(queueRow.queue_id);
       }
-      // Loop — try the new "next" after mutation
+      // Loop, try the new "next" after mutation
     }
   };
 
@@ -323,7 +323,7 @@ function App() {
   };
 
   // Derived: is there a next/prev track from where we are right now?
-  // Both use the "peek" variants — the UI buttons always enable as long
+  // Both use the "peek" variants. The UI buttons always enable as long
   // as there's somewhere to go, regardless of autoplay gating.
   const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
   const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
@@ -417,7 +417,7 @@ function App() {
 
   const handleGenerateSummary = async (regenerate: boolean) => {
     if (!currentContent) return;
-    // Podcast summaries are made from the TRANSCRIPT — if there is none yet, confirm
+    // Podcast summaries are made from the TRANSCRIPT. If there is none yet, confirm
     // before running Whisper + summary back to back
     if (currentContent.type === 'podcast_episode' && !(currentContent.transcript || '').trim()) {
       setSummaryTranscriptWarning(true);
@@ -538,7 +538,7 @@ function App() {
     setShowUserMenu(false);
 
     // No comment cutoff for summaries. Eligible = articles/texts/podcasts without a
-    // summary and not already generating one. Podcasts summarize their transcript —
+    // summary and not already generating one. Podcasts summarize their transcript,
     // episodes without one get the transcript-first warning below.
     const eligibleItems = allContent.filter(
       item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&

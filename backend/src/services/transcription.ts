@@ -85,12 +85,12 @@ type ChunkResult = { text: string; words: Array<{ word: string; start: number; e
 // condition_on_previous_text=false is the headline fix: it stops Whisper from re-reading its own
 // (possibly repetitive) output for the previous 30s window and snowballing into "even. even. even."
 // loops. The threshold params are Whisper defaults (only bite if DeepInfra runs the temperature
-// fallback loop; harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
-// yet — they're staged follow-ups so we can measure each knob's effect independently.
+// fallback loop, harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
+// yet, they're staged follow-ups so we can measure each knob's effect independently.
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
   // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false and
-  // chunk_level=segment, which returns segment-level text only (no per-word timing) — that broke
-  // read-along. chunk_level=word is the switch that emits word-level output; word_timestamps=true
+  // chunk_level=segment, which returns segment-level text only (no per-word timing). That broke
+  // read-along. chunk_level=word is the switch that emits word-level output, word_timestamps=true
   // asks each word to carry start/end. The response can put words at the top level OR nested inside
   // segments[].words, so extractDeepInfraWords() below reads both.
   chunk_level: 'word',
@@ -125,7 +125,7 @@ function extractDeepInfraWords(json: any): ChunkResult['words'] {
 // Fallback: if the native response ever lacks per-word timestamps, spread each segment's words
 // evenly across the segment's [start, end] span so read-along still works (approximately) instead
 // of breaking entirely. This is timing interpolation WITHIN a known segment, not content-transcript
-// matching — so it does not violate the "no fuzzy alignment" rule.
+// matching, so it does not violate the "no fuzzy alignment" rule.
 function wordsFromSegments(segments: any[]): ChunkResult['words'] {
   const out: ChunkResult['words'] = [];
   for (const seg of segments) {
@@ -239,11 +239,11 @@ export async function transcribeWithTimestamps(
     const audioPath = path.join(tempDir, audioFilename);
 
     if (Buffer.isBuffer(audioSource)) {
-      // Audio buffer passed directly — write to temp file (avoids HTTP round-trip)
+      // Audio buffer passed directly, write to temp file (avoids HTTP round-trip)
       console.log(`[Transcription] Writing audio buffer (${(audioSource.length / 1024 / 1024).toFixed(1)} MB) to temp file...`);
       await fs.writeFile(audioPath, audioSource);
     } else {
-      // URL passed — download it (legacy path, used for podcast transcription)
+      // URL passed, download it (legacy path, used for podcast transcription)
       console.log(`[Transcription] Downloading audio from ${audioSource}...`);
       const response = await fetch(audioSource);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
@@ -281,7 +281,7 @@ export async function transcribeWithTimestamps(
         // IMPORTANT: the continuation prompt must ALWAYS be bounded. previousTranscript
         // holds the FULL text of the previous chunk (often >10k chars for a 15-min chunk);
         // sending it unbounded made DeepInfra's Whisper endpoint reject chunk 2+ with a
-        // bare 400 whenever initialPrompt was empty — which it always is since
+        // bare 400 whenever initialPrompt was empty, which it always is since
         // whisper-prompt.ts started returning '' (OpenAI silently truncates instead).
         // OpenAI-shaped path keeps the hybrid continuity prompt; the DeepInfra native path sends
         // NO prompt (condition_on_previous_text=false handles continuity, and feeding the previous

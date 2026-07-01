@@ -239,7 +239,7 @@ export async function initializeDatabase() {
       SET generation_status = 'failed',
           generation_error = CASE
             WHEN current_operation IN ('transcribing', 'aligning_content')
-              THEN 'Server restarted during transcript generation. Audio may be intact — try regenerating the transcript.'
+              THEN 'Server restarted during transcript generation. Audio may be intact, try regenerating the transcript.'
             ELSE 'Server restarted during audio generation'
           END,
           generation_progress = 0,
@@ -252,9 +252,9 @@ export async function initializeDatabase() {
     }
 
     // Reset any stuck summary statuses (server restart during summary generation).
-    // Mark them 'failed' (not 'idle') so they surface a "Summary failed — Retry" banner,
-    // consistent with how interrupted audio/transcript generation is handled above —
-    // a restart shouldn't make an in-flight summary silently disappear.
+    // Mark them 'failed' (not 'idle') so they surface a "Summary failed: Retry" banner,
+    // consistent with how interrupted audio/transcript generation is handled above.
+    // A restart shouldn't make an in-flight summary silently disappear.
     // Wrapped in try/catch: the summary_status/summary_error columns are created by
     // migrations just above, but guard anyway so a missing column can never crash
     // initialization (CLAUDE.md rule).
@@ -269,7 +269,7 @@ export async function initializeDatabase() {
         console.log(`Reset ${summaryResetResult.rowCount} stuck summary task(s) to failed`);
       }
     } catch (e) {
-      // Column might not exist yet on a very old/odd schema — safe to skip
+      // Column might not exist yet on a very old/odd schema, safe to skip
     }
 
     // Update table statistics so PostgreSQL's query planner picks optimal plans.
@@ -282,12 +282,12 @@ export async function initializeDatabase() {
       try {
         await client.query(`ANALYZE ${table}`);
       } catch (e) {
-        // Table might not exist yet — that's fine, skip it
+        // Table might not exist yet, that's fine, skip it
       }
     }
 
     // Encrypt any existing plaintext secret values (one-time migration)
-    // Only runs if ENCRYPTION_KEY is set. Safe to run every startup — already-encrypted
+    // Only runs if ENCRYPTION_KEY is set. Safe to run every startup: already-encrypted
     // values are detected by the 'enc:' prefix and skipped.
     if (process.env.ENCRYPTION_KEY) {
       try {
@@ -309,7 +309,7 @@ export async function initializeDatabase() {
           console.log(`✓ Encrypted ${encryptedCount} existing plaintext secret value(s)`);
         }
       } catch (e) {
-        // Don't crash startup if this fails — user_settings table might not exist yet
+        // Don't crash startup if this fails, user_settings table might not exist yet
         console.warn('Could not run secret encryption migration:', e);
       }
     }

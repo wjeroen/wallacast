@@ -299,7 +299,7 @@ function parseSubstackPreloads(html: string): any | null {
     const after = html.substring(idx + needle.length, idx + needle.length + 200);
     const firstNonSpace = after.match(/^\s*(.)/);
     if (firstNonSpace && firstNonSpace[1] === '=') {
-      // This is an assignment — use it
+      // This is an assignment. Use it.
       preloadsIdx = idx;
       afterPreloads = after;
       break;
@@ -399,7 +399,7 @@ function parseSubstackPreloads(html: string): any | null {
     return null;
   }
 
-  // Unknown format — log what we see for debugging
+  // Unknown format. Log what we see for debugging.
   console.log(`[Fetcher] _preloads: unknown format after "window._preloads": ${afterPreloads.substring(0, 80)}`);
   return null;
 }
@@ -412,7 +412,7 @@ function mapSubstackComment(raw: any): Comment {
   // body can be plain text or HTML. Wrap plain text in <p> tags for consistency.
   let content = raw.body || '';
   if (content && !content.includes('<')) {
-    // Plain text — convert newlines to paragraphs
+    // Plain text. Convert newlines to paragraphs.
     content = content.split(/\n\n+/).map((p: string) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
   }
 
@@ -505,7 +505,7 @@ function extractSubstackCommentsFromHtml(html: string, source: string): Comment[
  * Fetch and extract comments from a Substack article.
  * Always fetches the /comments page first (it has ALL comments).
  * Falls back to article page HTML if /comments fails.
- * Uses window._preloads JSON — stable structured data, not fragile CSS selectors.
+ * Uses window._preloads JSON (stable structured data, not fragile CSS selectors).
  */
 async function fetchSubstackComments(articleUrl: string, articleHtml: string): Promise<Comment[]> {
   // First: always fetch the /comments page (has the full comment thread)
@@ -544,13 +544,13 @@ function countCommentsRecursive(comments: Comment[]): number {
 
 /**
  * Apply Substack-specific HTML cleanup using stable selectors.
- * Uses data-component-name, data-testid, and generic patterns — NOT hashed class names.
+ * Uses data-component-name, data-testid, and generic patterns. NOT hashed class names.
  */
 function cleanSubstackContent(contentEl: Element): void {
   // Remove subscribe widgets (data-component-name is stable, semantic attribute)
   contentEl.querySelectorAll('[data-component-name="SubscribeWidget"]').forEach(el => el.remove());
 
-  // Remove "Subscribe now" CTA buttons — only if they link to /subscribe
+  // Remove "Subscribe now" CTA buttons (only if they link to /subscribe)
   contentEl.querySelectorAll('[data-component-name="ButtonCreateButton"]').forEach(el => {
     const link = el.querySelector('a');
     if (link && (link.getAttribute('href') || '').includes('/subscribe')) {
@@ -697,7 +697,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // Smart content selection
     let contentEl;
 
-    // Substack-specific selectors (more precise) — works on custom domains too
+    // Substack-specific selectors (more precise). Works on custom domains too.
     if (isSubstack) {
       console.log('[Fetcher] Using Substack-specific content selectors');
       contentEl = doc.querySelector('.available-content .body.markup') ||
@@ -779,7 +779,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (ogDescription) {
         const normalizeText = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
         const normalizedDesc = normalizeText(ogDescription);
-        // Search all paragraphs — the dek might be anywhere in the lede wrapper
+        // Search all paragraphs. The dek might be anywhere in the lede wrapper.
         contentEl.querySelectorAll('p').forEach(p => {
           const pText = p.textContent?.trim() || '';
           if (normalizeText(pText) === normalizedDesc) {
@@ -829,7 +829,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         }
       });
 
-      // Remove <aside> elements (membership pitches, supplementary content — never article body)
+      // Remove <aside> elements (membership pitches, supplementary content, never article body)
       contentEl.querySelectorAll('aside').forEach(el => el.remove());
 
       // Remove sidebar rails (Vox "Most Popular", ad slots, etc.)
@@ -852,7 +852,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       // Remove "See More" / category tag sections at end of articles
       contentEl.querySelectorAll('[class*="see-more"], [class*="tag-list"]').forEach(el => el.remove());
 
-      // Remove all remaining forms (membership, donation, etc.) — we already extracted email forms above
+      // Remove all remaining forms (membership, donation, etc.). We already extracted email forms above.
       contentEl.querySelectorAll('form').forEach(el => el.remove());
 
       // Apply Substack-specific cleanup (subscribe widgets, navbar, footer, etc.)

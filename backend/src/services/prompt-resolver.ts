@@ -15,7 +15,7 @@ import { getUserSetting } from './ai-providers.js';
  */
 
 // Replace every `{token}` in `tpl` with the provided value. Tokens with no provided value are
-// left as-is (harmless — e.g. a single-paragraph summary prompt simply never mentions {maxTweets}).
+// left as-is (harmless, e.g. a single-paragraph summary prompt simply never mentions {maxTweets}).
 export function fillPrompt(tpl: string, vars: Record<string, string | number> = {}): string {
   let out = tpl;
   for (const [key, value] of Object.entries(vars)) {
