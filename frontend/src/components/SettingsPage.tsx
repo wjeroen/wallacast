@@ -108,6 +108,13 @@ const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }
   { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
   { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. openai/whisper-1' },
 ];
+// Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else;
+// this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
+// less than turbo (4 layers) on long podcasts, for ~2x the (still tiny) cost.
+const DEEPINFRA_WHISPER_PRESETS: Array<{ id: string; label: string }> = [
+  { id: 'openai/whisper-large-v3-turbo', label: 'Whisper large-v3-turbo — fastest & cheapest ($0.012/hr)' },
+  { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full) — fewer hallucinations, recommended ($0.027/hr)' },
+];
 const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
@@ -1054,6 +1061,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
               </div>
+              {formData.transcription_provider === 'deepinfra' && (
+                <div className="ai-field">
+                  <span className="ai-field-label">Preset</span>
+                  <select
+                    value={DEEPINFRA_WHISPER_PRESETS.some(p => p.id === formData.transcription_model) ? formData.transcription_model : ''}
+                    onChange={(e) => { if (e.target.value) handleChange('transcription_model', e.target.value); }}
+                  >
+                    <option value="">Custom…</option>
+                    {DEEPINFRA_WHISPER_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="ai-field">
                 <span className="ai-field-label">Model</span>
                 <input

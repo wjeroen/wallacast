@@ -62,32 +62,41 @@ export async function getTTSClientForUser(userId: number, modelId?: string): Pro
  * If the user has a DeepInfra key, we prefer DeepInfra for transcription (cheaper).
  * Unless they explicitly requested OpenAI (logic can be adjusted).
  */
-export async function getTranscriptionClientForUser(userId: number): Promise<{ client: OpenAI, model: string } | null> {
+// Transcription config is a discriminated union so the caller knows HOW to call the model:
+//   - 'deepinfra': call DeepInfra's NATIVE inference endpoint (raw multipart POST). Only this
+//     endpoint accepts Whisper's anti-hallucination params (condition_on_previous_text, vad, ...).
+//   - 'openai': call via the OpenAI SDK (used for OpenAI and OpenRouter, whose endpoints are
+//     OpenAI-shaped and do NOT accept those extra params).
+export type TranscriptionConfig =
+    | { kind: 'deepinfra'; apiKey: string; model: string }
+    | { kind: 'openai'; client: OpenAI; model: string };
+
+export async function getTranscriptionClientForUser(userId: number): Promise<TranscriptionConfig | null> {
     // Explicit per-user choice (Settings → Transcription): provider 'deepinfra' | 'openai' + model.
     const provider = await getUserSetting(userId, 'transcription_provider');
     const chosenModel = await getUserSetting(userId, 'transcription_model');
 
     if (provider === 'openai') {
         const k = await getUserSetting(userId, 'openai_api_key');
-        if (k) return { client: new OpenAI({ apiKey: k }), model: chosenModel || 'whisper-1' };
+        if (k) return { kind: 'openai', client: new OpenAI({ apiKey: k }), model: chosenModel || 'whisper-1' };
     }
     if (provider === 'deepinfra') {
         const k = await getUserSetting(userId, 'deepinfra_api_key');
-        if (k) return { client: new OpenAI({ apiKey: k, baseURL: 'https://api.deepinfra.com/v1/openai' }), model: chosenModel || 'openai/whisper-large-v3-turbo' };
+        if (k) return { kind: 'deepinfra', apiKey: k, model: chosenModel || 'openai/whisper-large-v3-turbo' };
     }
     if (provider === 'openrouter') {
         const k = await getUserSetting(userId, 'openrouter_api_key');
-        if (k) return { client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: chosenModel || 'openai/whisper-1' };
+        if (k) return { kind: 'openai', client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: chosenModel || 'openai/whisper-1' };
     }
 
     // Fallback (unset, or chosen provider has no key): legacy auto-routing — prefer DeepInfra (cheaper).
     const deepInfraKey = await getUserSetting(userId, 'deepinfra_api_key');
     if (deepInfraKey) {
-        return { client: new OpenAI({ apiKey: deepInfraKey, baseURL: 'https://api.deepinfra.com/v1/openai' }), model: 'openai/whisper-large-v3-turbo' };
+        return { kind: 'deepinfra', apiKey: deepInfraKey, model: 'openai/whisper-large-v3-turbo' };
     }
     const openAIKey = await getUserSetting(userId, 'openai_api_key');
     if (openAIKey) {
-        return { client: new OpenAI({ apiKey: openAIKey }), model: 'whisper-1' };
+        return { kind: 'openai', client: new OpenAI({ apiKey: openAIKey }), model: 'whisper-1' };
     }
     return null;
 }

@@ -34,7 +34,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 | Database | PostgreSQL |
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
-| Transcription | Whisper (openai/whisper-large-v3-turbo) via DeepInfra, fallback to OpenAI whisper-1 (per-user API keys) |
+| Transcription | Whisper via DeepInfra native endpoint (turbo default, full large-v3 selectable in Settings) with anti-hallucination params, fallback to OpenAI whisper-1 (per-user API keys) |
 | TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
 | Image Descriptions | Google Gemini for alt-text narrations (model configurable in Settings, default gemini-3-flash-preview; per-user API key, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), Substack comment extraction (via _preloads JSON), standard scraper for other sites |
@@ -109,6 +109,7 @@ Wallacast supports multiple users with complete data isolation:
 | Tweet embeds show giant profile picture | `frontend/src/App.css` - `.article-content blockquote.twitter-tweet img` rule (should be 24x24, not 100% width) |
 | Horizontal scroll / content wider than screen (long URLs in comments or article body, wide tables) | `frontend/src/App.css` - `.comment-content` / `.article-content` need `overflow-wrap: anywhere; word-break: break-word;` so long unbreakable strings wrap; `table` needs `display: block; overflow-x: auto`. Images already capped via `img { max-width: 100% }`, code via `pre { overflow-x: auto }` |
 | Podcast transcription issues | `backend/src/services/transcription.ts` - Whisper integration and chunking |
+| Transcript repetition/looping ("even. even. even.") or skipped speech | `backend/src/services/transcription.ts` - DeepInfra path sends `condition_on_previous_text=false` + defaults via the **native** endpoint. If loops persist: try full `whisper-large-v3` in Settings (turbo's pruned decoder loops more), then stage-add `vad: true` / `no_repeat_ngram_size: 3` to `DEEPINFRA_WHISPER_PARAMS` |
 | Wallabag sync not working | `backend/src/services/wallabag-service.ts` - OAuth and API client, `backend/src/services/wallabag-sync.ts` - Sync logic, `backend/src/routes/wallabag.ts` - Endpoints |
 | Cost / API usage too high | Check: (1) `backend/src/services/openai-tts.ts` for LLM content extraction, (2) Auto-generation in `backend/src/routes/content.ts` POST endpoint |
 
@@ -254,7 +255,7 @@ Wallacast supports multiple users with complete data isolation:
   - `getChatClientForJob(userId, job)`: per-job model selection — `job` = `'narration'` (prepares text for TTS) | `'alignment'` (read-along) | `'summary'`. Each job has its own `{provider, model, reasoning_effort}` setting; read-along & summaries can defer to narration ("use same model as narration"). Returns `{ client, model, extraParams }` where `extraParams` carries the reasoning_effort param (empty = provider default, so behavior is unchanged unless set). **Read-time fallback**: if a job isn't configured yet, it derives from the legacy `narration_llm` routing, so existing users keep working and the Settings fields pre-fill with the model actually in use.
   - `getChatClientForUser(userId)`: back-compat wrapper (narration job, no reasoning extraParams).
   - `getTTSClientForUser(userId, modelId)`: Intelligent router returning `{ client, model }` — DeepInfra for Kokoro models; for OpenAI-family models, OpenAI directly OR via OpenRouter when `openai_tts_provider === 'openrouter'` (same voices, but the model id is namespaced to `openai/…` for OpenRouter). Callers use the returned `model` for the API call.
-  - `getTranscriptionClientForUser(userId)`: Whisper client from explicit `transcription_provider` (`deepinfra` | `openai` | `openrouter`) + `transcription_model` settings, with legacy auto-routing (DeepInfra preferred) as the fallback when unset
+  - `getTranscriptionClientForUser(userId)`: returns a `TranscriptionConfig` discriminated union — `{ kind: 'deepinfra', apiKey, model }` (native endpoint, anti-hallucination params) or `{ kind: 'openai', client, model }` (OpenAI SDK, used for both OpenAI and OpenRouter). Built from explicit `transcription_provider` (`deepinfra` | `openai` | `openrouter`) + `transcription_model` settings, with legacy auto-routing (DeepInfra preferred) as the fallback when unset
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
   - No global API keys - each user must configure their own (OpenAI and/or DeepInfra, or both)
@@ -302,11 +303,12 @@ Wallacast supports multiple users with complete data isolation:
   - `buildWhisperPrompt(item)`: Builds a prompt string from content metadata (title, author, date, podcast show name, comments) so Whisper recognizes key phrases like "Comments section:", commenter names, and dates
   - Used in all three transcription paths: POST / (auto-transcribe), PATCH /:id (regenerate), and transcription route
 
-- **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI API key)
+- **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI/DeepInfra API key)
   - `transcribeWithTimestamps(audioUrl, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint to improve recognition of key phrases like "Comments section:" and comment headers
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
-  - Hybrid prompt strategy: chunk 1 uses full prompt (up to 1000 chars), chunk 2+ combines metadata (first 600 chars) with continuity (last 200 chars of previous transcript)
+  - **Two transports (branch on `TranscriptionConfig.kind`)**: **DeepInfra** uses the **native** inference endpoint (`POST /v1/inference/{model}`, raw multipart via `globalThis.fetch`) because only the native endpoint honors Whisper's anti-hallucination params — we send `condition_on_previous_text=false` (the headline fix: stops the 30s-window repetition loops like "even. even. even."), `temperature=0`, and the Whisper default thresholds (`vad` / `no_repeat_ngram_size` are intentionally NOT set yet — staged follow-ups). Native returns words as `{start, end, text}`, remapped to `{word, start, end}`. **OpenAI/OpenRouter** stay on the OpenAI SDK (`client.audio.transcriptions.create`, OpenAI-shaped endpoint, no such params).
+  - **Prompt strategy**: OpenAI-shaped path keeps the hybrid prompt (chunk 1 = full prompt up to 1000 chars, chunk 2+ = metadata first 600 chars + last 200 chars of previous transcript). The DeepInfra path sends **no prompt** — feeding the previous chunk's tail is exactly what seeds cross-chunk loops, and `condition_on_previous_text=false` covers continuity.
 
 - **`services/llm-alignment.ts`**: LLM-based content-to-transcript alignment for read-along tab (replaces Needleman-Wunsch approach)
   - `generateLLMAlignment(contentId, userId, words)`: Main entry point — extracts HTML content elements, builds timed transcript from Whisper words, sends both to the user's configured narration LLM, parses timestamps
