@@ -13,6 +13,7 @@ import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
+import { isEAForumUrl } from './article-fetcher.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
 // turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
@@ -935,7 +936,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
               const isLessWrong = content.comment_source === 'lesswrong' || (content.url ? content.url.includes('lesswrong.com') : false);
-              const isEAForum = content.comment_source === 'ea_forum' || (content.url ? content.url.includes('forum.effectivealtruism.org') : false);
+              const isEAForum = content.comment_source === 'ea_forum' || isEAForumUrl(content.url);
               const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
               // Check user setting for whether to narrate comments

@@ -2,6 +2,33 @@ import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 
+// --- EA Forum domain handling ---
+// The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
+// added EA Forum links (from the Add tab or RSS) to this host so they point at the mirror.
+// NOTE: "forum-bots.effectivealtruism.org" does NOT contain the substring
+// "forum.effectivealtruism.org" (the "-bots" breaks it), so EA-Forum detection must check
+// for BOTH hosts. Always detect with isEAForumUrl() rather than a bare .includes() check.
+const EA_FORUM_HOST = 'forum.effectivealtruism.org';
+const EA_FORUM_BOTS_HOST = 'forum-bots.effectivealtruism.org';
+
+/** True for both the main EA Forum host and its bot-friendly mirror. */
+export function isEAForumUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return url.includes(EA_FORUM_HOST) || url.includes(EA_FORUM_BOTS_HOST);
+}
+
+/**
+ * Rewrite an EA Forum link so it points at the bot-friendly mirror
+ * (forum.effectivealtruism.org -> forum-bots.effectivealtruism.org).
+ * Leaves non-EA-Forum links and already-rewritten links untouched.
+ */
+export function normalizeEAForumUrl<T extends string | null | undefined>(url: T): T {
+  if (!url) return url;
+  // Single replace: the main host appears once, and an already-rewritten forum-bots link
+  // does not contain the main host, so this is safe to call more than once.
+  return url.replace(EA_FORUM_HOST, EA_FORUM_BOTS_HOST) as T;
+}
+
 export interface Comment {
   id: string;
   username: string;
@@ -98,6 +125,10 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   const postId = idMatch[1];
   const baseUrl = isEAForum ? 'https://forum.effectivealtruism.org' : 'https://www.lesswrong.com';
   const apiEndpoint = `${baseUrl}/graphql`;
+  // Keep the Referer on the same host as Origin/apiEndpoint. The stored link may be the
+  // forum-bots mirror, but the GraphQL API lives on the main host, so send a main-host
+  // Referer to preserve the same-origin request shape the API expects.
+  const refererUrl = `${baseUrl}${idMatch[0]}`;
 
   // Randomized wait between 1.5 and 4 seconds
   await sleep(1500 + Math.random() * 2500);
@@ -147,7 +178,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
     },
     headers: {
       'Origin': baseUrl,
-      'Referer': url,
+      'Referer': refererUrl,
       'Accept': '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
       'Sec-Fetch-Dest': 'empty',
@@ -583,7 +614,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
   const isLessWrong = url.includes('lesswrong.com');
-  const isEAForum = url.includes('forum.effectivealtruism.org');
+  const isEAForum = isEAForumUrl(url);
 
   // Use GraphQL for EA Forum/LessWrong
   if (isLessWrong || isEAForum) {
