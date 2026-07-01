@@ -1,6 +1,6 @@
 import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
-import { fetchArticleContent } from './article-fetcher.js';
+import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
 
 /**
  * Wallabag Sync Service
@@ -318,7 +318,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             // Wallabag can't handle SPAs well — it misses comments, author, date,
             // and proper formatting. Wallacast's article-fetcher does much better.
             const entryUrl = entry.url || '';
-            const isEAForum = entryUrl.includes('forum.effectivealtruism.org');
+            const isEAForum = isEAForumUrl(entryUrl);
             const isLessWrong = entryUrl.includes('lesswrong.com');
             if ((isEAForum || isLessWrong) && insertResult.rows[0]?.id) {
               const newId = insertResult.rows[0].id;

@@ -20,6 +20,7 @@ import { JSDOM } from 'jsdom';
 import { getChatClientForJob, getUserSetting } from './ai-providers.js';
 import { query } from '../database/db.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
+import { isEAForumUrl } from './article-fetcher.js';
 
 // Default read-along alignment rules/examples block (user-editable via Settings -> prompt-registry.ts).
 // This is the stable instruction portion of the alignment prompt; the element list and transcript are
@@ -224,7 +225,7 @@ function extractContentElements(
   }
 
   // Karma for EA Forum/LW
-  const isEAForumOrLW = url && (url.includes('forum.effectivealtruism.org') || url.includes('lesswrong.com'));
+  const isEAForumOrLW = isEAForumUrl(url) || (url && url.includes('lesswrong.com'));
   if (isEAForumOrLW && karma !== undefined && karma !== null) {
     elements.push({
       type: 'meta',
@@ -615,7 +616,7 @@ export async function generateLLMAlignment(
   // text that doesn't exist in the transcript and produce bad timestamps).
   let commentElements: ContentElement[] = [];
   const isLessWrong = content.comment_source === 'lesswrong' || (content.url && content.url.includes('lesswrong.com'));
-  const isEAForum = content.comment_source === 'ea_forum' || (content.url && content.url.includes('forum.effectivealtruism.org'));
+  const isEAForum = content.comment_source === 'ea_forum' || isEAForumUrl(content.url);
   const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
   let commentsNarrated = true;
