@@ -88,8 +88,12 @@ type ChunkResult = { text: string; words: Array<{ word: string; start: number; e
 // fallback loop; harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
 // yet — they're staged follow-ups so we can measure each knob's effect independently.
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
-  // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false
-  // (and chunk_level=segment), so WITHOUT this it returns text only and read-along breaks.
+  // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false and
+  // chunk_level=segment, which returns segment-level text only (no per-word timing) — that broke
+  // read-along. chunk_level=word is the switch that emits word-level output; word_timestamps=true
+  // asks each word to carry start/end. The response can put words at the top level OR nested inside
+  // segments[].words, so extractDeepInfraWords() below reads both.
+  chunk_level: 'word',
   word_timestamps: 'true',
   condition_on_previous_text: 'false',
   temperature: '0',
@@ -97,6 +101,26 @@ const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
   logprob_threshold: '-1',
   no_speech_threshold: '0.6',
 };
+
+// Pull per-word timestamps out of a DeepInfra native response, wherever they live:
+// (1) a top-level `words` array, or (2) nested under each `segments[].words`. Word objects may use
+// `word` or `text` for the token. Returns [] if the response carries no real per-word timing.
+function extractDeepInfraWords(json: any): ChunkResult['words'] {
+  const norm = (w: any) => ({ word: w.word ?? w.text ?? '', start: Number(w.start), end: Number(w.end) });
+  const valid = (w: { start: number; end: number }) => Number.isFinite(w.start) && Number.isFinite(w.end);
+
+  if (Array.isArray(json?.words) && json.words.length > 0) {
+    return json.words.map(norm).filter(valid);
+  }
+  if (Array.isArray(json?.segments)) {
+    const nested: any[] = [];
+    for (const seg of json.segments) {
+      if (Array.isArray(seg?.words) && seg.words.length > 0) nested.push(...seg.words);
+    }
+    if (nested.length > 0) return nested.map(norm).filter(valid);
+  }
+  return [];
+}
 
 // Fallback: if the native response ever lacks per-word timestamps, spread each segment's words
 // evenly across the segment's [start, end] span so read-along still works (approximately) instead
@@ -140,15 +164,23 @@ async function transcribeFileDeepInfra(filePath: string, apiKey: string, model: 
   }
 
   const json: any = await res.json();
-  const rawWords: any[] = Array.isArray(json.words) ? json.words : [];
-  let words = rawWords.map((w) => ({ word: w.text ?? w.word ?? '', start: w.start, end: w.end }));
+  let words = extractDeepInfraWords(json);
 
   if (words.length === 0) {
-    // With word_timestamps=true this shouldn't happen, but if it ever does, degrade to
-    // segment-interpolated timings so read-along still (approximately) works.
     const segments: any[] = Array.isArray(json.segments) ? json.segments : [];
+    // Diagnostic: log the ACTUAL response shape so we can see exactly where (if anywhere) the
+    // per-word data is, instead of guessing. This fires only when real words weren't found.
+    const seg0 = segments[0];
+    console.warn(
+      `[Transcription] No per-word timestamps found. shape: ` +
+      `topWords=${Array.isArray(json.words) ? json.words.length : 'none'}, ` +
+      `segments=${segments.length}, ` +
+      `seg0keys=${seg0 ? Object.keys(seg0).join('|') : '-'}, ` +
+      `seg0words=${Array.isArray(seg0?.words) ? seg0.words.length : 'none'}`
+    );
     if (segments.length > 0) {
-      console.warn('[Transcription] DeepInfra returned no word timestamps; synthesizing from segments (read-along timing approximate).');
+      // Last-resort: interpolate word timings from segment spans so read-along is at least roughly synced.
+      console.warn('[Transcription] Synthesizing word timings from segments (read-along timing approximate).');
       words = wordsFromSegments(segments);
     } else {
       console.warn('[Transcription] WARNING: DeepInfra native endpoint returned neither words nor segments.');
