@@ -4,7 +4,7 @@ import { getSearchSnippet } from '../store/contentStore';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl } from '../format';
 import type { ContentItem } from '../types';
 
-// The library content card — thumbnail, title, metadata badges, generation
+// The library content card: thumbnail, title, metadata badges, generation
 // status, star/archive/delete buttons and the per-item dropdown menu. Extracted
 // from LibraryTab so the markup lives in one place; all state and handlers stay
 // in the parent and come in as props.
@@ -62,7 +62,7 @@ export function ContentCard({
   onDownloadZip,
 }: ContentCardProps) {
   // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
-  // rest inline on the card (article summary only — never the comment summary)
+  // rest inline on the card (article summary only, never the comment summary)
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const generationStatusDisplay = () => {
     if (!item.generation_status || item.generation_status === 'idle') {
@@ -353,7 +353,7 @@ export function ContentCard({
           </div>
         )}
       </div>
-      {/* Star/archive stay visible in bulk mode — they show each item's state
+      {/* Star/archive stay visible in bulk mode. They show each item's state
           (filled star, highlighted archive) and still work as toggles.
           Delete and the dropdown are hidden to keep selection taps safe. */}
       <div className="content-actions" onClick={(e) => e.stopPropagation()}>
@@ -455,7 +455,7 @@ export function ContentCard({
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}
                   >
-                    {/* transcript_words, not transcript — the list endpoint doesn't send
+                    {/* transcript_words, not transcript. The list endpoint doesn't send
                         the (large) transcript column, so checking it always said "Generate" */}
                     {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>

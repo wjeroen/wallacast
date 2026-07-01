@@ -2,7 +2,7 @@
 --
 -- Keeps a snapshot of the body (html_content + content + comments) BEFORE every overwrite
 -- (edit, refetch, restore) so a bad edit or a poor refetch can be rolled back. Audio is
--- deliberately NOT versioned (too large — see TODO.md).
+-- deliberately NOT versioned (too large, see TODO.md).
 --
 -- Snapshots are tiny (HTML is ~50-100KB), so this is cheap. The app keeps the most recent
 -- N per item (pruned in application code on insert).

@@ -9,13 +9,13 @@ import { query } from '../database/db.js';
  *
  * WHY THIS EXISTS: audio used to live inside Postgres as a BYTEA blob (`audio_data`),
  * 10-50MB per item. Postgres pulled those blobs into its RAM cache and held the memory
- * for days — Railway bills RAM at ~$10/GB/month vs. ~$0.15-0.25/GB/month for volume disk.
+ * for days. Railway bills RAM at ~$10/GB/month vs. ~$0.15-0.25/GB/month for volume disk.
  * Generated audio now lives as plain .mp3 files on the Railway volume (mounted at /data,
  * see config/storage.ts), so Postgres never touches it.
  *
  * BACKWARD COMPATIBILITY: items generated before the migration still have their bytes in
  * the `audio_data` column. Serving checks the disk file FIRST and falls back to the DB blob,
- * so nothing breaks during/after migration. Podcast episodes are unaffected — their audio is
+ * so nothing breaks during/after migration. Podcast episodes are unaffected. Their audio is
  * an external `audio_url`, never stored here.
  */
 
@@ -54,7 +54,7 @@ export async function deleteAudioFile(contentId: number | string): Promise<void>
   try {
     await fs.unlink(getAudioFilePath(contentId));
   } catch {
-    // file already gone — nothing to do
+    // file already gone, nothing to do
   }
 }
 
@@ -75,7 +75,7 @@ export function createAudioReadStream(
 
 /**
  * ONE-TIME (idempotent) migration: copy every item's `audio_data` blob to a disk file.
- * Non-destructive — the DB blob is KEPT. Reads ONE blob at a time so RAM stays low even
+ * Non-destructive: the DB blob is KEPT. Reads ONE blob at a time so RAM stays low even
  * for a large library. Items already on disk are skipped (so re-running is cheap). Run
  * automatically at startup; safe to run on every boot.
  */
@@ -101,8 +101,8 @@ export async function migrateAudioBlobsToDisk(): Promise<{ migrated: number; ski
  */
 export async function clearMigratedAudioBlobs(): Promise<{ cleared: number; kept: number }> {
   // HARD SAFETY GUARD: only clear blobs when the disk files live on the persistent
-  // volume. On the local/ephemeral fallback the files vanish on the next redeploy —
-  // clearing the DB blobs in that state would permanently lose all generated audio.
+  // volume. On the local/ephemeral fallback the files vanish on the next redeploy.
+  // Clearing the DB blobs in that state would permanently lose all generated audio.
   if (!isPersistentVolume()) {
     throw new Error(
       'Refusing to clear audio blobs: storage is NOT the persistent volume (/data). ' +
@@ -117,7 +117,7 @@ export async function clearMigratedAudioBlobs(): Promise<{ cleared: number; kept
       await query('UPDATE content_items SET audio_data = NULL WHERE id = $1', [id]);
       cleared++;
     } else {
-      kept++; // no disk file — leave the blob alone
+      kept++; // no disk file, leave the blob alone
     }
   }
   return { cleared, kept };

@@ -71,7 +71,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         }
         data.url = url;
       } else if (contentType === 'text') {
-        // Markdown is the friendly default — convert it to the HTML we store/display.
+        // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
         data.content = textFormat === 'markdown' ? markdownToHtml(text) : text;
       } else if (contentType === 'upload') {
@@ -200,8 +200,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
               </div>
               <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
                 {textFormat === 'markdown'
-                  ? 'Write in Markdown (works great with Obsidian) — it’s converted to formatted text automatically.'
-                  : 'Paste raw HTML — stored as-is (scripts/styles are stripped).'}
+                  ? 'Write in Markdown (works great with Obsidian). It is converted to formatted text automatically.'
+                  : 'Paste raw HTML. Stored as-is (scripts/styles are stripped).'}
               </p>
             </div>
             <div className="form-group">

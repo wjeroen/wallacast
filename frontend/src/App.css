@@ -763,7 +763,7 @@
 }
 
 /* The type chips live in their own strip so only THEY scroll on small
-   screens — the search/funnel buttons stay put, and the funnel's dropdown
+   screens. The search/funnel buttons stay put, and the funnel's dropdown
    isn't clipped by an overflowing container */
 .filter-chips-scroll {
   display: flex;
@@ -1014,7 +1014,7 @@
   color: var(--t2);
 }
 
-/* Content-type pill — filled like the capability badges so the type reads as
+/* Content-type pill. Filled like the capability badges so the type reads as
    strongly as Audio/Transcript/Summary. Each type keeps its colour family
    (article=blue, text=green, podcast=purple, pdf=neutral). */
 .type-pill {
@@ -1030,7 +1030,7 @@
 }
 .type-pill svg { flex-shrink: 0; }
 /* Each type keeps its original (vivid) icon colour, now as a filled pill background
-   so it reads as strongly as the capability badges — and stays distinct from them
+   so it reads as strongly as the capability badges, and stays distinct from them
    (e.g. article blue #3b82f6 vs the muted transcript-badge navy). Same in both themes. */
 .type-article { background: #3b82f6; color: #fff; }
 .type-text { background: #10b981; color: #fff; }
@@ -1120,7 +1120,7 @@
 /* Dropdown items must look the same no matter which container the menu is
    mounted in. Containers like .filter-buttons and .bulk-actions style their
    own buttons (flex centering, colored hover borders) and those rules would
-   otherwise bleed into the menu items — hence the explicit resets below.
+   otherwise bleed into the menu items. Hence the explicit resets below.
    When adding a new dropdown anywhere: just use .dropdown-container +
    .dropdown-menu and you get this styling for free. */
 .dropdown-menu button {
@@ -1146,7 +1146,7 @@
 
 .dropdown-menu button:hover:not(:disabled) {
   background: var(--bg-raised);
-  border-color: var(--bg-raised); /* keep the divider neutral — no colored hover edges */
+  border-color: var(--bg-raised); /* keep the divider neutral, no colored hover edges */
   color: #60a5fa;
 }
 
@@ -1857,7 +1857,7 @@
     flex-wrap: nowrap;
   }
 
-  /* Only the type-chip strip scrolls — never the row that hosts the funnel
+  /* Only the type-chip strip scrolls. Never the row that hosts the funnel
      dropdown (an overflow container would clip the menu) */
   .filter-chips-scroll {
     overflow-x: auto;
@@ -2280,7 +2280,7 @@
   border: 1px solid var(--bg-raised);
 }
 
-/* AI "job" card — provider/model selection blocks (narration, alignment, summaries,
+/* AI "job" card. Provider/model selection blocks (narration, alignment, summaries,
    transcription, image descriptions) read as one cohesive group. */
 .settings-section .form-group.ai-job {
   padding: 0.75rem 0.85rem;
@@ -2438,7 +2438,7 @@
   margin-left: 0.25rem;
 }
 
-/* Shown in place of "(configured)" when a key isn't set yet — a blue bracketed
+/* Shown in place of "(configured)" when a key isn't set yet, a blue bracketed
    "(get a key)" link to the provider's key page. */
 .settings-section .get-key-link {
   font-weight: normal;
@@ -2996,7 +2996,7 @@
   object-fit: contain;
 }
 
-/* Footnotes — inline reference markers + the definition section at the end (clickable). */
+/* Footnotes. Inline reference markers + the definition section at the end (clickable). */
 .article-content sup.footnote-ref a {
   color: var(--accent, #60a5fa);
   text-decoration: none;
@@ -3025,7 +3025,7 @@
   cursor: pointer;
 }
 
-/* Stretch images to the column width by default — but ONLY when no explicit width is set.
+/* Stretch images to the column width by default, but ONLY when no explicit width is set.
    Images with their own width (e.g. ![alt|200] stored as a width attribute, or an inline
    style width) keep their real size instead of ballooning. `max-width: 100% !important`
    above still caps every image to the column, so this can never cause horizontal scroll. */
@@ -3033,7 +3033,7 @@
   width: 100% !important;
 }
 
-/* Twitter/X embed styling — override full-width img for tweet profile pics */
+/* Twitter/X embed styling. Override full-width img for tweet profile pics */
 .article-content blockquote.twitter-tweet {
   border: 1px solid var(--bg-raised);
   border-left: 4px solid #1d9bf0;
@@ -3126,7 +3126,7 @@
   position: relative;
 }
 
-/* In read-along, each paragraph is its own element — reduce vertical margin */
+/* In read-along, each paragraph is its own element. Reduce vertical margin */
 .read-along-element .llm-content-block {
   font-family: Georgia, 'Times New Roman', serif;
   border-left: 4px solid #8b5cf6;
@@ -3135,7 +3135,7 @@
   position: relative;
 }
 
-/* CSS-only model badge — works in raw HTML views (Content tab) via data attribute */
+/* CSS-only model badge. Works in raw HTML views (Content tab) via data attribute */
 .article-content .llm-content-block[data-model-name]::before,
 .read-along-element .llm-content-block[data-model-name]::before {
   content: attr(data-model-name);
@@ -3920,7 +3920,7 @@
   color: #9a3412;
 }
 
-/* Summary tab — each paragraph reads like a tweet */
+/* Summary tab. Each paragraph reads like a tweet */
 .summary-thread {
   display: flex;
   flex-direction: column;
@@ -4051,7 +4051,7 @@
 
 /* Library "Twitter feed" mode: article summary in place of the description.
    Each paragraph IS a `.description` box (bg-raised, rounded, no border), so it matches the
-   podcast/description box exactly — no nested boxes. The flex gap controls the spacing. */
+   podcast/description box exactly, no nested boxes. The flex gap controls the spacing. */
 .library-summary {
   display: flex;
   flex-direction: column;

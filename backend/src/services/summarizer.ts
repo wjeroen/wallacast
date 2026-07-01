@@ -6,7 +6,7 @@ import { getChatClientForJob, getUserSetting } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 
 // Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
-// "Premature close" / ECONNRESET on a reused keep-alive socket — see Node #63989) and
+// "Premature close" / ECONNRESET on a reused keep-alive socket, see Node #63989) and
 // 429/5xx are transient and almost always succeed on a fresh attempt. 4xx (bad request /
 // auth) are NOT retried. Summaries previously had no retry, so these surfaced as failures
 // while TTS/transcription (which already retry) silently recovered.
@@ -38,8 +38,8 @@ async function chatCreateWithRetry(
  * Article + comment summaries ("Twitter thread" style).
  *
  * Two separate summaries are produced:
- *   1. Article body summary — the LLM only sees the article.
- *   2. Comment discussion summary — the LLM sees the article as CONTEXT, then the comments.
+ *   1. Article body summary, the LLM only sees the article.
+ *   2. Comment discussion summary, the LLM sees the article as CONTEXT, then the comments.
  *
  * IMPORTANT (see CLAUDE.md / task spec): we NEVER ask the model to count characters.
  * We count the text length in code, look up the matching tier to get `maxTweets`, and
@@ -51,7 +51,7 @@ export interface SummaryTier {
   maxTweets: number;
 }
 
-// Default tiers — users can edit these in Settings (stored as JSON under `summary_tiers`).
+// Default tiers. Users can edit these in Settings (stored as JSON under `summary_tiers`).
 export const DEFAULT_SUMMARY_TIERS: SummaryTier[] = [
   { maxChars: 1500, maxTweets: 1 },
   { maxChars: 3500, maxTweets: 2 },
@@ -64,7 +64,7 @@ export const DEFAULT_SUMMARY_TIERS: SummaryTier[] = [
 
 /**
  * Parse the stored `summary_tiers` JSON. Infinity is not valid JSON, so the unbounded
- * tier is stored with `maxChars: null` — we map it back to Infinity here.
+ * tier is stored with `maxChars: null`. We map it back to Infinity here.
  * Returns DEFAULT_SUMMARY_TIERS on any problem so a bad setting can never break generation.
  */
 export function parseTiers(raw: string | null): SummaryTier[] {
@@ -148,7 +148,7 @@ function logTweetLengths(label: string, text: string | null, limit: number): voi
   if (paras.length === 0) return;
   const counts = paras.map(p => p.split(/\s+/).filter(Boolean).length);
   const over = counts.filter(c => c > limit).length;
-  console.log(`[Summary] ${label}: ${paras.length} paragraph(s), words=[${counts.join(', ')}]${over ? ` — ${over} OVER ${limit}` : ''}`);
+  console.log(`[Summary] ${label}: ${paras.length} paragraph(s), words=[${counts.join(', ')}]${over ? `, ${over} OVER ${limit}` : ''}`);
 }
 
 // Default per-paragraph length target, in WORDS, used when the user hasn't set
@@ -313,9 +313,9 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const userContent = isPodcast
       ? metaHeader +
         (descriptionContext
-          ? `EPISODE DESCRIPTION (context only — do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
+          ? `EPISODE DESCRIPTION (context only, do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
           : '') +
-        `TRANSCRIPT (auto-generated — may contain transcription mistakes, especially in names):\n${articleText.slice(0, ARTICLE_INPUT_CAP)}`
+        `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${articleText.slice(0, ARTICLE_INPUT_CAP)}`
       : metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP);
 
     const articleResponse = await chatCreateWithRetry(chat.client, {
@@ -332,7 +332,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
     logTweetLengths('article', summary, maxWords);
 
-    // 5. Comment summary (optional) — only if enabled AND the item has comments
+    // 5. Comment summary (optional), only if enabled AND the item has comments
     let commentSummary: string | null = null;
     const summarizeComments = (await getUserSetting(userId, 'summarize_comments')) !== 'false'; // default ON
     let comments: CommentLike[] = [];
@@ -354,7 +354,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
               role: 'user',
               content:
                 metaHeader +
-                `ARTICLE (context only — do not summarize this):\n${articleText.slice(0, ARTICLE_CONTEXT_CAP)}\n\n` +
+                `ARTICLE (context only, do not summarize this):\n${articleText.slice(0, ARTICLE_CONTEXT_CAP)}\n\n` +
                 `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, COMMENTS_INPUT_CAP)}`,
             },
           ],

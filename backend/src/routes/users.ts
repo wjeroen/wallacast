@@ -19,7 +19,7 @@ const VALID_SETTING_KEYS = [
   'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
   'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
   'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
-  'tts_voices',            // JSON array of { model, voice } — rotate randomly between these
+  'tts_voices',            // JSON array of { model, voice }, rotate randomly between these
   'anthropic_api_key',
   'anthropic_model',
   'google_api_key',
@@ -42,7 +42,7 @@ const VALID_SETTING_KEYS = [
   'narration_llm',           // LEGACY routing ('auto'|'deepseek'|'openai'|'openai-mini'); read-time fallback only
   // Per-job model config (provider + free-text model + optional reasoning effort).
   // Provider ids: 'openai' | 'deepinfra' | 'openrouter' | 'anthropic' | 'gemini'.
-  // Empty reasoning_effort = provider default (no param sent — preserves current behavior).
+  // Empty reasoning_effort = provider default (no param sent, preserves current behavior).
   'narration_provider', 'narration_model', 'narration_reasoning_effort',
   'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
   'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
@@ -58,7 +58,7 @@ const VALID_SETTING_KEYS = [
   'summarize_comments',         // Also generate a summary of the comment discussion (default: true)
   'summary_tiers',              // JSON: sorted list of { maxChars, maxTweets } tiers (Infinity stored as null)
   'summary_max_words',          // Max words per summary paragraph ("tweet"); default 40
-  // Custom prompt overrides (prompt_<id>) for every editable prompt — see services/prompt-registry.ts.
+  // Custom prompt overrides (prompt_<id>) for every editable prompt, see services/prompt-registry.ts.
   // Blank/whitespace = use the built-in default. Spread so the list stays in sync with the registry.
   ...PROMPT_SETTING_KEYS,
   'library_show_summary',       // Show the article summary (not the description) on library cards

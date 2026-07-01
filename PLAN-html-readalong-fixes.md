@@ -2,10 +2,10 @@
 
 ## Context
 Five issues with the Wallacast read-along tab and content system need fixing:
-- (0) The PDF tab in AddTab is broken/unused — replace with HTML file upload
+- (0) The PDF tab in AddTab is broken/unused. Replace with HTML file upload.
 - (1) Embedded tweets display as giant profile pictures instead of readable content
 - (2) Undescribed images steal the read-along highlight from the paragraph being spoken
-- (3) Long elements (bullet lists, big comments) make autoscroll unusable — can't see start/end
+- (3) Long elements (bullet lists, big comments) make autoscroll unusable, can't see start/end
 - (4) Plain text items without HTML tags produce zero visible content in read-along
 
 ---
@@ -84,7 +84,7 @@ const [uploadedFileName, setUploadedFileName] = useState<string>('');
 )}
 ```
 
-**Step 5:** In the `handleSubmit` function (around line ~25-44), find where form data is built. Add a case for `html_upload`. The submit function builds a `data` object — add this logic:
+**Step 5:** In the `handleSubmit` function (around line ~25-44), find where form data is built. Add a case for `html_upload`. The submit function builds a `data` object. Add this logic:
 
 ```typescript
 if (contentType === 'html_upload') {
@@ -110,7 +110,7 @@ if (type === 'text' && processedContent) {
   htmlContent = processedContent;
 }
 ```
-This means uploaded HTML will automatically be stored in `html_content` — **no backend changes needed**. The HTML file content comes in as `data.content`, gets stored in both columns, and the read-along system picks it up from `html_content`.
+This means uploaded HTML will automatically be stored in `html_content`, so **no backend changes needed**. The HTML file content comes in as `data.content`, gets stored in both columns, and the read-along system picks it up from `html_content`.
 
 ### Reset state when switching tabs
 
@@ -229,7 +229,7 @@ In `extractContentElements()`, find the end of the for-loop that processes `topL
       // Append image HTML to previous element
       const prev = mergedElements[mergedElements.length - 1];
       prev.html = prev.html + '\n' + el.html;
-      // Don't modify prev.text — the image adds nothing to spoken content
+      // Don't modify prev.text, the image adds nothing to spoken content
     } else {
       mergedElements.push(el);
     }
@@ -238,7 +238,7 @@ In `extractContentElements()`, find the end of the for-loop that processes `topL
   return mergedElements;
 ```
 
-**IMPORTANT:** Change the existing `return elements;` (line ~246) to `return mergedElements;` — or more precisely, replace it entirely with the code above that ends with `return mergedElements;`.
+**IMPORTANT:** Change the existing `return elements;` (line ~246) to `return mergedElements;`, or more precisely, replace it entirely with the code above that ends with `return mergedElements;`.
 
 ### What this does
 - An undescribed image (`[Image]`) gets its `<img>` HTML appended to the previous element (e.g., a paragraph)
@@ -338,7 +338,7 @@ const scrollToActive = useCallback(() => {
 
 ### Step 2: Verify dependency arrays
 
-The `scrollToActive` callback already has `currentTime` in its dependency array. The effect that calls it (around line 305-309) already fires on `currentTime` changes. So progressive scrolling will happen automatically — no new effects needed.
+The `scrollToActive` callback already has `currentTime` in its dependency array. The effect that calls it (around line 305-309) already fires on `currentTime` changes. So progressive scrolling will happen automatically. No new effects are needed.
 
 ### Step 3: Verify the container class name
 
@@ -384,7 +384,7 @@ This goes between line ~185 and line ~187 in the current code. If `topLevelBlock
 
 After implementing all changes:
 
-1. **Issue 0 (HTML upload):** In the Add tab, select "HTML", upload a `.html` file, give it a title, and submit. Verify it appears in the library as a text item. Open it — the HTML should render in the read-along tab with formatting (headings, images, etc.). Generate audio and verify read-along alignment works.
+1. **Issue 0 (HTML upload):** In the Add tab, select "HTML", upload a `.html` file, give it a title, and submit. Verify it appears in the library as a text item. Open it. The HTML should render in the read-along tab with formatting (headings, images, etc.). Generate audio and verify read-along alignment works.
 
 2. **Issue 1 (tweets):** Find or create an article with an embedded tweet. Open it in the read-along tab. The tweet should appear as a styled card with a small (24px) circular profile picture, not a giant full-width image. The tweet text should be readable.
 
@@ -392,7 +392,7 @@ After implementing all changes:
 
 4. **Issue 3 (autoscroll):** Open an article with a long bullet list or long comment. Enable autoscroll. When the audio reaches that element, the view should progressively scroll through it (top visible at start, bottom visible at end). Short elements should still snap to center as before.
 
-5. **Issue 4 (plain text):** Create a new text item with just plain text (no paragraphs, no HTML tags). Generate audio. Open the read-along tab — the text should be visible (wrapped in a single paragraph) and aligned with audio.
+5. **Issue 4 (plain text):** Create a new text item with just plain text (no paragraphs, no HTML tags). Generate audio. Open the read-along tab. The text should be visible (wrapped in a single paragraph) and aligned with audio.
 
 ## Files Modified Summary
 
@@ -402,13 +402,13 @@ After implementing all changes:
 | `frontend/src/App.css` | 1 |
 | `backend/src/services/llm-alignment.ts` | 2, 4 |
 | `frontend/src/components/FullscreenPlayer.tsx` | 3 |
-| `backend/src/routes/content.ts` | (none — text type already handles html_content) |
+| `backend/src/routes/content.ts` | (none, text type already handles html_content) |
 | `README.md` | Update after changes |
 | `TODO.md` | Mark tasks done, add new items |
 
 ## Implementation Order
-1. Issue 4 (plain text fix) — smallest, one location
-2. Issue 2 (image merge) — same file as issue 4, backend only
-3. Issue 1 (tweet CSS) — CSS only, zero risk
-4. Issue 0 (HTML upload) — frontend changes
-5. Issue 3 (progressive scroll) — most complex logic
+1. Issue 4 (plain text fix), smallest, one location
+2. Issue 2 (image merge), same file as issue 4, backend only
+3. Issue 1 (tweet CSS), CSS only, zero risk
+4. Issue 0 (HTML upload), frontend changes
+5. Issue 3 (progressive scroll), most complex logic

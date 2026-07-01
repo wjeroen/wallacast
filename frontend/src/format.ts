@@ -43,7 +43,7 @@ export function getDomainFromUrl(url: string): string {
 // (forum-bots.effectivealtruism.org) so fetching is reliable, but we show humans the normal
 // forum.effectivealtruism.org link. This is display-only: it rewrites the mirror host back to
 // the human host for the visible domain text and the clickable href. The stored URL is untouched
-// (and the backend never fetches through this value — GraphQL uses the main host directly).
+// (and the backend never fetches through this value, GraphQL uses the main host directly).
 export function displayUrl(url: string): string {
   if (!url) return url;
   return url.replace('forum-bots.effectivealtruism.org', 'forum.effectivealtruism.org');
@@ -60,5 +60,5 @@ export function toTweets(text: string): string[] {
 }
 
 // NOTE: htmlToMarkdown moved to ./markdown.ts (now turndown-based, with full inline
-// formatting, images, links, tables, and LLM-block/tweet callouts) — and is paired
+// formatting, images, links, tables, and LLM-block/tweet callouts) and is paired
 // there with markdownToHtml for the editor. Import it from '../markdown'.
