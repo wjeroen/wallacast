@@ -39,6 +39,16 @@ export function getDomainFromUrl(url: string): string {
   }
 }
 
+// EA Forum links are STORED pointing at the bot-friendly mirror
+// (forum-bots.effectivealtruism.org) so fetching is reliable, but we show humans the normal
+// forum.effectivealtruism.org link. This is display-only: it rewrites the mirror host back to
+// the human host for the visible domain text and the clickable href. The stored URL is untouched
+// (and the backend never fetches through this value — GraphQL uses the main host directly).
+export function displayUrl(url: string): string {
+  if (!url) return url;
+  return url.replace('forum-bots.effectivealtruism.org', 'forum.effectivealtruism.org');
+}
+
 // Split a summary into tweet paragraphs. Prefers blank-line separation (what the summarizer is
 // asked for), falling back to single newlines.
 export function toTweets(text: string): string[] {

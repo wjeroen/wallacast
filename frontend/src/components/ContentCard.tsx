@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card — thumbnail, title, metadata badges, generation
@@ -258,8 +258,8 @@ export function ContentCard({
         {/* Only show domain URL for articles (not podcasts/texts) */}
         {item.url && item.type === 'article' && (
           <p className="content-source-link">
-            <a href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-              {getDomainFromUrl(item.url)}
+            <a href={displayUrl(item.url)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+              {getDomainFromUrl(displayUrl(item.url))}
               <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
             </a>
           </p>
