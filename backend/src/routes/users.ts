@@ -12,11 +12,9 @@ router.use(requireAuth);
 // Known setting keys for validation
 const VALID_SETTING_KEYS = [
   // AI Provider settings
-  'ai_provider',           // 'openai' (now acts as hybrid provider)
   'openai_api_key',
   'deepinfra_api_key',     // NEW: DeepInfra key for cheaper audio
   'openrouter_api_key',    // NEW: OpenRouter key (one key → Claude, Gemini, Llama, ...)
-  'openai_model',          // 'gpt-4o-mini', 'gpt-4', etc.
   'openai_tts_model',      // 'gpt-4o-mini-tts', 'hexgrad/Kokoro-82M'
   'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
   'tts_voices',            // JSON array of { model, voice }, rotate randomly between these
