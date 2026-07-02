@@ -100,8 +100,8 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 // (CHAT_DEFAULT_MODELS in backend ai-providers.ts, keep the two lists in sync).
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'openai', label: 'OpenAI', hint: 'default = gpt-5-mini' },
-  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = deepseek-ai/DeepSeek-V3.2' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'default = anthropic/claude-haiku-4-5' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/gpt-oss-120b' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-5-mini' },
   { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'default = claude-haiku-4-5' },
   { id: 'gemini', label: 'Google Gemini', hint: 'default = gemini-3-flash-preview' },
 ];
@@ -128,8 +128,8 @@ const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
 // Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
 const CHAT_MODEL_DEFAULTS: Record<string, string> = {
   openai: 'gpt-5-mini',
-  deepinfra: 'deepseek-ai/DeepSeek-V3.2',
-  openrouter: 'anthropic/claude-haiku-4-5',
+  deepinfra: 'openai/gpt-oss-120b',
+  openrouter: 'openai/gpt-5-mini',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
 };
@@ -265,7 +265,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const hasDeepInfraKey = !!loaded.deepinfra_api_key; // masked dots or real value are both truthy
       const deriveLegacy = (llm: string) => {
         if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_MODEL_DEFAULTS.openai };
-        if (llm === 'deepseek') return { provider: 'deepinfra', model: CHAT_MODEL_DEFAULTS.deepinfra };
+        if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
         // 'auto': first provider with a configured key, in recommendation order (GPT-5 Mini first).
         const keyByProvider: Array<[string, unknown]> = [
           ['openai', loaded.openai_api_key], ['deepinfra', loaded.deepinfra_api_key],
@@ -285,7 +285,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // timestamps, which read-along needs), so map any old saved value to a working one.
       const savedTransProvider = loaded.transcription_provider === 'openrouter' ? '' : loaded.transcription_provider;
       const transProvider = savedTransProvider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
-      const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
       // Image provider default is key-aware (mirror of defaultImageProvider() in image-alt-text.ts).
       const defaultImageProvider = loaded.gemini_api_key ? 'gemini'
         : loaded.deepinfra_api_key ? 'deepinfra'
@@ -304,27 +303,28 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         narration_llm: loaded.narration_llm || 'auto',
 
-        // Per-job config: pre-fill from the legacy narration_llm routing if not yet saved,
-        // so the fields show the model you're actually using today.
+        // Providers pre-fill so the dropdowns have a sensible value. Model fields stay blank
+        // unless explicitly saved: blank = the live default (the placeholder shows which),
+        // so defaults are never pinned into user settings just by hitting Save.
         narration_provider: loaded.narration_provider || legacyNarration.provider,
-        narration_model: loaded.narration_model || legacyNarration.model,
+        narration_model: loaded.narration_model || '',
         narration_reasoning_effort: loaded.narration_reasoning_effort || '',
         alignment_same_as_narration: boolDefault(loaded.alignment_same_as_narration, 'true'),
         alignment_provider: loaded.alignment_provider || legacyNarration.provider,
-        alignment_model: loaded.alignment_model || legacyNarration.model,
+        alignment_model: loaded.alignment_model || '',
         alignment_reasoning_effort: loaded.alignment_reasoning_effort || '',
         summary_same_as_narration: boolDefault(loaded.summary_same_as_narration, 'true'),
         summary_provider: loaded.summary_provider || legacyNarration.provider,
-        summary_model: loaded.summary_model || legacyNarration.model,
+        summary_model: loaded.summary_model || '',
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
-        transcription_model: loaded.transcription_model || transDefaultModel,
+        transcription_model: loaded.transcription_model || '',
         kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
         image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
-        image_alt_text_model: loaded.image_alt_text_model || IMAGE_MODEL_DEFAULTS[loaded.image_alt_text_provider || defaultImageProvider] || 'gemini-3-flash-preview',
+        image_alt_text_model: loaded.image_alt_text_model || '',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
@@ -399,7 +399,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 type="text"
                 value={fd[`${job}_reasoning_effort`] || ''}
                 onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-                placeholder={provider === 'openai' ? 'default = medium' : 'blank = model default'}
+                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'default = high' : 'blank = model default'}
               />
             </div>
           </div>
@@ -917,19 +917,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
-                value={formData.deepinfra_api_key}
-                onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
-                placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
-                {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
+                  value={formData.deepinfra_api_key}
+                  onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
+                  placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
+                  {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {isSecretSet('deepinfra_api_key') && (
-                <button type="button" onClick={() => removeApiKey('deepinfra_api_key', 'DeepInfra API key')} className="toggle-visibility" title="Remove this key">
-                  <Trash2 size={18} />
+                <button type="button" onClick={() => removeApiKey('deepinfra_api_key', 'DeepInfra API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -943,19 +945,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openai_api_key'] ? 'text' : 'password'}
-                value={formData.openai_api_key}
-                onChange={(e) => handleChange('openai_api_key', e.target.value)}
-                placeholder={isSecretSet('openai_api_key') ? '••••••••' : 'sk-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openai_api_key')} className="toggle-visibility">
-                {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['openai_api_key'] ? 'text' : 'password'}
+                  value={formData.openai_api_key}
+                  onChange={(e) => handleChange('openai_api_key', e.target.value)}
+                  placeholder={isSecretSet('openai_api_key') ? '••••••••' : 'sk-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('openai_api_key')} className="toggle-visibility">
+                  {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {isSecretSet('openai_api_key') && (
-                <button type="button" onClick={() => removeApiKey('openai_api_key', 'OpenAI API key')} className="toggle-visibility" title="Remove this key">
-                  <Trash2 size={18} />
+                <button type="button" onClick={() => removeApiKey('openai_api_key', 'OpenAI API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -969,19 +973,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
-                value={formData.openrouter_api_key}
-                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
-                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
-                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
+                  value={formData.openrouter_api_key}
+                  onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
+                  placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
+                  {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {isSecretSet('openrouter_api_key') && (
-                <button type="button" onClick={() => removeApiKey('openrouter_api_key', 'OpenRouter API key')} className="toggle-visibility" title="Remove this key">
-                  <Trash2 size={18} />
+                <button type="button" onClick={() => removeApiKey('openrouter_api_key', 'OpenRouter API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -995,19 +1001,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['anthropic_api_key'] ? 'text' : 'password'}
-                value={formData.anthropic_api_key}
-                onChange={(e) => handleChange('anthropic_api_key', e.target.value)}
-                placeholder={isSecretSet('anthropic_api_key') ? '••••••••' : 'sk-ant-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
-                {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['anthropic_api_key'] ? 'text' : 'password'}
+                  value={formData.anthropic_api_key}
+                  onChange={(e) => handleChange('anthropic_api_key', e.target.value)}
+                  placeholder={isSecretSet('anthropic_api_key') ? '••••••••' : 'sk-ant-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
+                  {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {isSecretSet('anthropic_api_key') && (
-                <button type="button" onClick={() => removeApiKey('anthropic_api_key', 'Anthropic API key')} className="toggle-visibility" title="Remove this key">
-                  <Trash2 size={18} />
+                <button type="button" onClick={() => removeApiKey('anthropic_api_key', 'Anthropic API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -1021,19 +1029,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
             </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
-                value={formData.gemini_api_key}
-                onChange={(e) => handleChange('gemini_api_key', e.target.value)}
-                placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
-                {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
+                  value={formData.gemini_api_key}
+                  onChange={(e) => handleChange('gemini_api_key', e.target.value)}
+                  placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
+                  {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {isSecretSet('gemini_api_key') && (
-                <button type="button" onClick={() => removeApiKey('gemini_api_key', 'Gemini API key')} className="toggle-visibility" title="Remove this key">
-                  <Trash2 size={18} />
+                <button type="button" onClick={() => removeApiKey('gemini_api_key', 'Gemini API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -1146,11 +1156,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     onChange={(e) => {
                       const p = e.target.value;
                       handleChange('image_alt_text_provider', p);
-                      // If the model box is empty or still holds another provider's default,
-                      // swap it to the new provider's default so an invalid id never gets saved.
+                      // If the model box holds another provider's default, clear it so the new
+                      // provider's own default applies (blank = default, never pinned).
                       const m = formData.image_alt_text_model;
-                      if (!m || Object.values(IMAGE_MODEL_DEFAULTS).includes(m)) {
-                        handleChange('image_alt_text_model', IMAGE_MODEL_DEFAULTS[p] || '');
+                      if (m && Object.values(IMAGE_MODEL_DEFAULTS).includes(m)) {
+                        handleChange('image_alt_text_model', '');
                       }
                     }}
                   >
