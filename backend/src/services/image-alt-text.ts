@@ -498,7 +498,7 @@ export class ImageAltTextService {
   }
 
   // OpenRouter path: OpenAI-compatible vision via chat.completions with a base64 data URL.
-  // Tested with Gemini Flash models (e.g. google/gemini-3-flash); other vision models may vary.
+  // Tested with Gemini Flash models (e.g. google/gemini-3-flash-preview). Other vision models may vary.
   private async describeViaOpenRouter(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
     const apiKey = await getUserSetting(this.userId, 'openrouter_api_key');
     if (!apiKey) {
