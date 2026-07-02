@@ -66,6 +66,16 @@ export class ImageAltTextService {
     return this.cachedModel;
   }
 
+  // Key-aware provider default: the first provider whose key is configured. Gemini keeps
+  // precedence as the long-tested path.
+  private async defaultImageProvider(): Promise<string> {
+    if (await getUserSetting(this.userId, 'gemini_api_key')) return 'gemini';
+    if (await getUserSetting(this.userId, 'deepinfra_api_key')) return 'deepinfra';
+    if (await getUserSetting(this.userId, 'openai_api_key')) return 'openai';
+    if (await getUserSetting(this.userId, 'openrouter_api_key')) return 'openrouter';
+    return 'gemini';
+  }
+
   /**
    * Get Gemini client using user's API key
    */
@@ -437,7 +447,7 @@ export class ImageAltTextService {
   try {
     // Provider: 'gemini' (native SDK, default), 'deepinfra' (Gemma 4), 'openai' (GPT-5 Mini),
     // or 'openrouter'. All non-Gemini paths are OpenAI-compatible vision.
-    const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || 'gemini';
+    const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || (await this.defaultImageProvider());
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
 
     const raw = provider === 'openrouter'

@@ -35,23 +35,34 @@ export async function getDeepInfraClientForUser(userId: number): Promise<OpenAI 
  * - OpenAI-family models → always OpenAI directly. OpenRouter does not carry the
  *   OpenAI TTS models (verified live 2026-07-02), so there is no alternate route.
  */
-export async function getTTSClientForUser(userId: number, modelId?: string): Promise<{ client: OpenAI; model: string } | null> {
-    const model = modelId || await getUserSetting(userId, 'openai_tts_model') || 'gpt-4o-mini-tts';
+// Key-aware TTS default: Kokoro's Puck voice whenever a Kokoro-capable key (DeepInfra or
+// OpenRouter) is configured, else OpenAI's gpt-4o-mini-tts with coral.
+async function defaultTTSChoice(userId: number): Promise<{ model: string; voice: string }> {
+    const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
+    const hasOpenRouter = !!(await getUserSetting(userId, 'openrouter_api_key'));
+    if (hasDeepInfra || hasOpenRouter) return { model: 'hexgrad/Kokoro-82M', voice: 'am_puck' };
+    return { model: 'gpt-4o-mini-tts', voice: 'coral' };
+}
 
-    // Kokoro: DeepInfra (default) or OpenRouter, per the kokoro_tts_provider setting.
+export async function getTTSClientForUser(userId: number, modelId?: string): Promise<{ client: OpenAI; model: string } | null> {
+    const model = modelId || await getUserSetting(userId, 'openai_tts_model') || (await defaultTTSChoice(userId)).model;
+
+    // Kokoro: DeepInfra (default) or OpenRouter, per the kokoro_tts_provider setting. Falls
+    // back to whichever of the two keys exists so Kokoro works for OpenRouter-only users.
     if (model.includes('Kokoro') || model.startsWith('hexgrad/')) {
         const kokoroProvider = (await getUserSetting(userId, 'kokoro_tts_provider')) || 'deepinfra';
-        if (kokoroProvider === 'openrouter') {
-            const k = await getUserSetting(userId, 'openrouter_api_key');
-            if (k) {
-                // OpenRouter's /audio/speech endpoint is OpenAI-compatible but lists Kokoro
-                // under the lowercase id.
-                return { client: new OpenAI({ apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }), model: model.toLowerCase() };
-            }
-            // No OpenRouter key configured → fall through to DeepInfra.
+        const orKey = await getUserSetting(userId, 'openrouter_api_key');
+        // OpenRouter's /audio/speech endpoint is OpenAI-compatible but lists Kokoro under
+        // the lowercase id.
+        if (kokoroProvider === 'openrouter' && orKey) {
+            return { client: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1' }), model: model.toLowerCase() };
         }
         const client = await getDeepInfraClientForUser(userId);
-        return client ? { client, model } : null;
+        if (client) return { client, model };
+        if (orKey) {
+            return { client: new OpenAI({ apiKey: orKey, baseURL: 'https://openrouter.ai/api/v1' }), model: model.toLowerCase() };
+        }
+        return null;
     }
 
     // OpenAI-family model: OpenAI only.
@@ -140,17 +151,20 @@ export interface ChatClientConfig {
   extraParams: Record<string, any>; // reasoning params (empty unless a reasoning effort is set)
 }
 
-// Legacy `narration_llm` routing → concrete {provider, model}. Used as a read-time fallback
-// so existing users keep working (and the Settings fields pre-fill correctly) before they save
-// the new per-job config.
+// Legacy `narration_llm` routing → concrete {provider, model}. Doubles as the key-aware
+// default for unconfigured accounts: 'auto' picks the first provider with a configured key
+// in recommendation order, with GPT-5 Mini (OpenAI) first.
+const CHAT_PROVIDER_PRIORITY = ['openai', 'deepinfra', 'anthropic', 'gemini', 'openrouter'];
 async function legacyNarrationConfig(userId: number): Promise<{ provider: string; model: string }> {
   const llm = (await getUserSetting(userId, 'narration_llm')) || 'auto';
-  if (llm === 'openai-mini') return { provider: 'openai', model: 'gpt-5-mini' };
-  if (llm === 'openai') return { provider: 'openai', model: 'gpt-5-nano' };
-  if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-  // 'auto': prefer DeepInfra (cheaper) if its key is set, else OpenAI.
-  if (await getUserSetting(userId, 'deepinfra_api_key')) return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-  return { provider: 'openai', model: 'gpt-5-nano' };
+  if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_DEFAULT_MODELS.openai };
+  if (llm === 'deepseek') return { provider: 'deepinfra', model: CHAT_DEFAULT_MODELS.deepinfra };
+  for (const provider of CHAT_PROVIDER_PRIORITY) {
+    if (await getUserSetting(userId, CHAT_PROVIDERS[provider].keySetting)) {
+      return { provider, model: CHAT_DEFAULT_MODELS[provider] };
+    }
+  }
+  return { provider: 'openai', model: CHAT_DEFAULT_MODELS.openai };
 }
 
 // Default chat model per provider, used when a job's provider is set but its model field
@@ -227,8 +241,14 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
 }
 
 export async function getTTSOptionsForUser(userId: number): Promise<{ voice: string; model: string }> {
-  const voice = await getUserSetting(userId, 'openai_tts_voice') || 'coral';
-  const model = await getUserSetting(userId, 'openai_tts_model') || 'gpt-4o-mini-tts';
+  const savedVoice = await getUserSetting(userId, 'openai_tts_voice');
+  const savedModel = await getUserSetting(userId, 'openai_tts_model');
+  const fallback = await defaultTTSChoice(userId);
+  const model = savedModel || fallback.model;
+  // The voice default follows the model family, so a Kokoro model never gets an OpenAI
+  // voice name (and vice versa).
+  const isKokoro = model.includes('Kokoro') || model.startsWith('hexgrad/');
+  const voice = savedVoice || (isKokoro ? 'am_puck' : 'coral');
   return { voice, model };
 }
 
