@@ -175,9 +175,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // Form state
   const [formData, setFormData] = useState({
     // AI Settings
-    ai_provider: 'openai',
     openai_api_key: '',
-    openai_model: 'gpt-5-nano',
 
     // DeepInfra Settings
     deepinfra_api_key: '',
@@ -293,9 +291,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       setFormData(prev => ({
         ...prev,
-        ai_provider: loaded.ai_provider || 'openai',
         openai_api_key: loaded.openai_api_key === '••••••••' ? '' : (loaded.openai_api_key || ''),
-        openai_model: loaded.openai_model || 'gpt-5-nano',
 
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
         openrouter_api_key: loaded.openrouter_api_key === '••••••••' ? '' : (loaded.openrouter_api_key || ''),
