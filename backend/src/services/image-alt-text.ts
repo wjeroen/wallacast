@@ -55,11 +55,13 @@ export class ImageAltTextService {
     this.userId = userId;
   }
 
-  // Model for image descriptions (Settings → free-text; defaults to the long-tested
-  // gemini-3-flash-preview). Used by both the Gemini-native and OpenRouter paths.
-  private async getModelName(): Promise<string> {
+  // Model for image descriptions (Settings → free-text). The effective default depends on
+  // the provider: the long-tested gemini-3-flash-preview on Gemini, its namespaced twin on
+  // OpenRouter, and Gemma 4 26B A4B on DeepInfra (Gemini's open sibling, matched Gemini
+  // Flash quality in live tests 2026-07-02).
+  private async getModelName(defaultModel = 'gemini-3-flash-preview'): Promise<string> {
     if (this.cachedModel === null) {
-      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || 'gemini-3-flash-preview';
+      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || defaultModel;
     }
     return this.cachedModel;
   }
@@ -433,13 +435,16 @@ export class ImageAltTextService {
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 
   try {
-    // Provider: 'gemini' (native SDK, default) or 'openrouter' (OpenAI-compatible vision).
+    // Provider: 'gemini' (native SDK, default), 'deepinfra' (recommended, Gemma 4), or
+    // 'openrouter'. The latter two are OpenAI-compatible vision.
     const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || 'gemini';
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
 
     const raw = provider === 'openrouter'
       ? await this.describeViaOpenRouter(prompt, imageData)
-      : await this.describeViaGemini(prompt, imageData);
+      : provider === 'deepinfra'
+        ? await this.describeViaDeepInfra(prompt, imageData)
+        : await this.describeViaGemini(prompt, imageData);
 
     const description = (raw || '').trim();
 
@@ -507,7 +512,7 @@ export class ImageAltTextService {
     const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
     const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
     const response = await client.chat.completions.create({
-      model: await this.getModelName(),
+      model: await this.getModelName('google/gemini-3-flash-preview'),
       temperature: 0.3,
       messages: [
         {
@@ -521,7 +526,33 @@ export class ImageAltTextService {
     });
     return response.choices[0]?.message?.content || '';
   }
-  
+
+  // DeepInfra path: same OpenAI-compatible vision call. Default model is Gemma 4 26B A4B,
+  // Gemini's open-weight sibling, which matched Gemini Flash's description quality in live
+  // tests (2026-07-02) at roughly 1/20th the cost.
+  private async describeViaDeepInfra(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const apiKey = await getUserSetting(this.userId, 'deepinfra_api_key');
+    if (!apiKey) {
+      throw new Error('No DeepInfra API key configured. Please add your key in Settings.');
+    }
+    const client = new OpenAI({ apiKey, baseURL: 'https://api.deepinfra.com/v1/openai' });
+    const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
+    const response = await client.chat.completions.create({
+      model: await this.getModelName('google/gemma-4-26B-A4B-it'),
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ] as any,
+        },
+      ],
+    });
+    return response.choices[0]?.message?.content || '';
+  }
+
   /**
    * Normalize URL for comparison (remove query params, fragments)
    */

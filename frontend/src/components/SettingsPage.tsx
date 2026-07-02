@@ -115,6 +115,13 @@ const DEEPINFRA_WHISPER_PRESETS: Array<{ id: string; label: string }> = [
   { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full)' },
 ];
 const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
+// Effective default model per image-description provider. Used to pre-fill the model field and
+// to swap it when the provider changes, so a Gemini id never gets sent to DeepInfra.
+const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
+  gemini: 'gemini-3-flash-preview',
+  deepinfra: 'google/gemma-4-26B-A4B-it',
+  openrouter: 'google/gemini-3-flash-preview',
+};
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
@@ -298,7 +305,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
         image_alt_text_provider: loaded.image_alt_text_provider || 'gemini',
-        image_alt_text_model: loaded.image_alt_text_model || 'gemini-3-flash-preview',
+        image_alt_text_model: loaded.image_alt_text_model || IMAGE_MODEL_DEFAULTS[loaded.image_alt_text_provider || 'gemini'] || 'gemini-3-flash-preview',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
@@ -841,9 +848,31 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <h3><Key size={20} /> API keys</h3>
           <p className="section-description">
             Add a key for each service you want to use. Each one lists the jobs it can power.
+            <strong> Recommended: DeepInfra. One cheap key powers every job in the app.</strong>
             {' '}
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> DeepInfra API Key (recommended)
+              {isSecretSet('deepinfra_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
+                value={formData.deepinfra_api_key}
+                onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
+                placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
+                {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, Kokoro TTS voices, transcription, image descriptions. One key covers every job.</small>
+          </div>
 
           <div className="form-group">
             <label>
@@ -864,27 +893,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, Kokoro TTS voices, image descriptions.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> DeepInfra API Key
-              {isSecretSet('deepinfra_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
-                value={formData.deepinfra_api_key}
-                onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
-                placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
-                {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
           </div>
 
           <div className="form-group">
@@ -1040,7 +1048,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
           <div className="form-group ai-job">
             <label>Image descriptions</label>
-            <small className="settings-hint">Describes article images so they can be read aloud. Needs a Gemini or OpenRouter key.</small>
+            <small className="settings-hint">Describes article images so they can be read aloud. Needs a DeepInfra, Gemini, or OpenRouter key.</small>
             <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: formData.image_alt_text_enabled === 'true' ? '0.5rem' : 0 }}>
               <input
                 type="checkbox"
@@ -1053,7 +1061,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <div className="ai-job-fields">
                 <div className="ai-field">
                   <span className="ai-field-label">Provider</span>
-                  <select value={formData.image_alt_text_provider} onChange={(e) => handleChange('image_alt_text_provider', e.target.value)}>
+                  <select
+                    value={formData.image_alt_text_provider}
+                    onChange={(e) => {
+                      const p = e.target.value;
+                      handleChange('image_alt_text_provider', p);
+                      // If the model box is empty or still holds another provider's default,
+                      // swap it to the new provider's default so an invalid id never gets saved.
+                      const m = formData.image_alt_text_model;
+                      if (!m || Object.values(IMAGE_MODEL_DEFAULTS).includes(m)) {
+                        handleChange('image_alt_text_model', IMAGE_MODEL_DEFAULTS[p] || '');
+                      }
+                    }}
+                  >
+                    <option value="deepinfra">DeepInfra (recommended)</option>
                     <option value="gemini">Google Gemini</option>
                     <option value="openrouter">OpenRouter</option>
                   </select>
@@ -1064,9 +1085,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     type="text"
                     value={formData.image_alt_text_model}
                     onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                    placeholder={formData.image_alt_text_provider === 'openrouter' ? 'e.g. google/gemini-3-flash-preview' : 'e.g. gemini-3-flash-preview'}
+                    placeholder={'e.g. ' + (IMAGE_MODEL_DEFAULTS[formData.image_alt_text_provider] || 'gemini-3-flash-preview')}
                   />
-                  <small className="settings-hint">Only tested with Gemini Flash 3.</small>
+                  <small className="settings-hint">Tested with Gemini Flash 3 and Gemma 4 (DeepInfra).</small>
                 </div>
               </div>
             )}
