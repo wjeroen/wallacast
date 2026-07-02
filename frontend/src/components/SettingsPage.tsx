@@ -67,7 +67,7 @@ const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'de
     ],
   },
   {
-    group: 'Kokoro-82M (DeepInfra)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
+    group: 'Kokoro-82M (DeepInfra or OpenRouter)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
     note: 'AF/AM = American female/male, BF/BM = British female/male',
     voices: [
       { id: 'af_heart', label: 'Heart (AF)' }, { id: 'af_bella', label: 'Bella (AF)' }, { id: 'af_nicole', label: 'Nicole (AF)' },
@@ -99,14 +99,13 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'openai', label: 'OpenAI', hint: 'e.g. gpt-5-mini, gpt-5-nano' },
   { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. deepseek-ai/DeepSeek-V3.2, meta-llama/Llama-3.3-70B-Instruct' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash-preview' },
   { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'e.g. claude-haiku-4-5, claude-sonnet-4-6' },
   { id: 'gemini', label: 'Google Gemini', hint: 'e.g. gemini-3-flash, gemini-2.5-pro' },
 ];
 const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. openai/whisper-large-v3-turbo' },
   { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. openai/whisper-1' },
 ];
 // Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else,
 // this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
@@ -178,8 +177,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
     // Transcription (Whisper): provider deepinfra | openai | openrouter
     transcription_provider: 'deepinfra', transcription_model: '',
-    // Route OpenAI TTS voices via OpenAI directly or via OpenRouter (same voices).
-    openai_tts_provider: 'openai',
+    // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
+    kokoro_tts_provider: 'deepinfra',
 
     // Image alt-text: provider gemini | openrouter
     gemini_api_key: '',
@@ -259,7 +258,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Pre-fill transcription/image model fields with the effective default (the model the
       // backend actually uses when the field is blank), so they show the model in use, just as
       // the narration fields pre-fill from the legacy routing.
-      const transProvider = loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
+      // 'openrouter' was removed as a transcription provider (its endpoint returns no word
+      // timestamps, which read-along needs), so map any old saved value to a working one.
+      const savedTransProvider = loaded.transcription_provider === 'openrouter' ? '' : loaded.transcription_provider;
+      const transProvider = savedTransProvider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
       const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
 
       setFormData(prev => ({
@@ -291,7 +293,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
         transcription_model: loaded.transcription_model || transDefaultModel,
-        openai_tts_provider: loaded.openai_tts_provider || 'openai',
+        kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
@@ -442,7 +444,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-        'transcription_provider', 'transcription_model', 'openai_tts_provider',
+        'transcription_provider', 'transcription_model', 'kokoro_tts_provider',
         'image_alt_text_provider', 'image_alt_text_model',
       ]);
 
@@ -566,11 +568,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
   const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
   const hasOpenRouterKey = isSecretSet('openrouter_api_key') || !!formData.openrouter_api_key.trim();
-  // OpenAI voices are usable with either an OpenAI key or an OpenRouter key (the "OpenAI voices
-  // via" toggle just picks which one synthesizes them), so flipping the toggle never hides them.
-  const canUseOpenAIVoices = hasOpenAIKey || hasOpenRouterKey;
+  // OpenAI voices need an OpenAI key (OpenRouter does not carry the OpenAI TTS models).
+  // Kokoro voices are usable with either a DeepInfra key or an OpenRouter key (the "Kokoro
+  // voices via" toggle just picks which one synthesizes them), so flipping it never hides them.
+  const canUseKokoroVoices = hasDeepInfraKey || hasOpenRouterKey;
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
-    g.requiresKey === 'openai' ? canUseOpenAIVoices : hasDeepInfraKey
+    g.requiresKey === 'openai' ? hasOpenAIKey : canUseKokoroVoices
   );
 
   return (
@@ -813,98 +816,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         </section>
 
-        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category */}
-        <section className="settings-section">
-          <h3>Custom prompts (advanced)</h3>
-          <p className="section-description">
-            Edit any LLM prompt the app uses (summaries, narration, read-along, image descriptions).
-            Leave a box at its default to keep the built-in prompt. Placeholders like <code>{'{maxWords}'}</code>{' '}
-            are filled in automatically at generation time. A custom prompt is used as-is until you reset it.
-          </p>
-
-          <button
-            type="button"
-            className="settings-collapse-toggle"
-            onClick={() => setShowCustomPrompts(v => !v)}
-            aria-expanded={showCustomPrompts}
-          >
-            {showCustomPrompts ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            <span>Show prompt editor</span>
-          </button>
-
-          {showCustomPrompts && (
-            <div className="settings-collapse-body">
-              {prompts.length === 0 && (
-                <small className="settings-hint">Could not load the prompt list. Try reloading the page.</small>
-              )}
-              {[...new Set(prompts.map(p => p.category))].map(cat => {
-                const catPrompts = prompts.filter(p => p.category === cat);
-                const open = openPromptCats[cat] ?? false;
-                const customCount = catPrompts.filter(p => {
-                  const v = (promptValues[promptKey(p.id)] || '').trim();
-                  return v && v !== (p.default || '').trim();
-                }).length;
-                return (
-                  <div key={cat} style={{ marginBottom: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="settings-collapse-toggle"
-                      onClick={() => setOpenPromptCats(s => ({ ...s, [cat]: !open }))}
-                      aria-expanded={open}
-                    >
-                      {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                      <span>{cat}{customCount > 0 ? ` (${customCount} customized)` : ''}</span>
-                    </button>
-
-                    {open && (
-                      <div className="settings-collapse-body">
-                        {catPrompts.map(p => {
-                          const key = promptKey(p.id);
-                          const value = promptValues[key] ?? '';
-                          const isDefault = value.trim() === (p.default || '').trim();
-                          return (
-                            <div className="form-group" key={p.id}>
-                              <label>
-                                {p.label}
-                                {!isDefault && (
-                                  <>
-                                    {' '}
-                                    <button
-                                      type="button"
-                                      className="settings-badge-custom settings-reset-link"
-                                      onClick={() => { setPromptValues(s => ({ ...s, [key]: p.default })); setSaved(false); }}
-                                      title="Reset this prompt to its built-in default"
-                                    >
-                                      (customized, reset to default)
-                                    </button>
-                                  </>
-                                )}
-                              </label>
-                              <small className="settings-hint">{p.description}</small>
-                              {p.vars.length > 0 && (
-                                <small className="settings-hint">
-                                  Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.
-                                </small>
-                              )}
-                              <textarea
-                                value={value}
-                                onChange={(e) => { setPromptValues(s => ({ ...s, [key]: e.target.value })); setSaved(false); }}
-                                rows={10}
-                                spellCheck={false}
-                                style={{ width: '100%', marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
         {/* Playback / Queue Settings */}
         <section className="settings-section">
           <h3>Playback</h3>
@@ -929,7 +840,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><Key size={20} /> API keys</h3>
           <p className="section-description">
-            Add a key for each service you want to use; each one lists the jobs it can power.
+            Add a key for each service you want to use. Each one lists the jobs it can power.
             {' '}
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
@@ -952,7 +863,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, Kokoro TTS voices, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -1092,12 +1003,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
             </small>
             <div className="ai-field" style={{ marginTop: '0.5rem' }}>
-              <span className="ai-field-label">OpenAI voices via</span>
-              <select value={formData.openai_tts_provider} onChange={(e) => handleChange('openai_tts_provider', e.target.value)}>
-                <option value="openai">OpenAI</option>
+              <span className="ai-field-label">Kokoro voices via</span>
+              <select value={formData.kokoro_tts_provider} onChange={(e) => handleChange('kokoro_tts_provider', e.target.value)}>
+                <option value="deepinfra">DeepInfra</option>
                 <option value="openrouter">OpenRouter</option>
               </select>
-              <small className="settings-hint">Same voices either way. Kokoro voices always use DeepInfra.</small>
+              <small className="settings-hint">Same voices either way. OpenAI voices always use your OpenAI key (OpenRouter does not offer them).</small>
             </div>
             {availableVoiceGroups.length === 0 ? (
               <p className="no-content" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
@@ -1153,13 +1064,106 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     type="text"
                     value={formData.image_alt_text_model}
                     onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                    placeholder={formData.image_alt_text_provider === 'openrouter' ? 'e.g. google/gemini-3-flash' : 'e.g. gemini-3-flash'}
+                    placeholder={formData.image_alt_text_provider === 'openrouter' ? 'e.g. google/gemini-3-flash-preview' : 'e.g. gemini-3-flash-preview'}
                   />
                   <small className="settings-hint">Only tested with Gemini Flash 3.</small>
                 </div>
               </div>
             )}
           </div>
+        </section>
+
+        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category.
+            Placed below Models so the model pickers stay front and center. */}
+        <section className="settings-section">
+          <h3>Custom prompts (advanced)</h3>
+          <p className="section-description">
+            Edit any LLM prompt the app uses (summaries, narration, read-along, image descriptions).
+            Leave a box at its default to keep the built-in prompt. Placeholders like <code>{'{maxWords}'}</code>{' '}
+            are filled in automatically at generation time. A custom prompt is used as-is until you reset it.
+          </p>
+
+          <button
+            type="button"
+            className="settings-collapse-toggle"
+            onClick={() => setShowCustomPrompts(v => !v)}
+            aria-expanded={showCustomPrompts}
+          >
+            {showCustomPrompts ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <span>Show prompt editor</span>
+          </button>
+
+          {showCustomPrompts && (
+            <div className="settings-collapse-body">
+              {prompts.length === 0 && (
+                <small className="settings-hint">Could not load the prompt list. Try reloading the page.</small>
+              )}
+              {[...new Set(prompts.map(p => p.category))].map(cat => {
+                const catPrompts = prompts.filter(p => p.category === cat);
+                const open = openPromptCats[cat] ?? false;
+                const customCount = catPrompts.filter(p => {
+                  const v = (promptValues[promptKey(p.id)] || '').trim();
+                  return v && v !== (p.default || '').trim();
+                }).length;
+                return (
+                  <div key={cat} style={{ marginBottom: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="settings-collapse-toggle"
+                      onClick={() => setOpenPromptCats(s => ({ ...s, [cat]: !open }))}
+                      aria-expanded={open}
+                    >
+                      {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <span>{cat}{customCount > 0 ? ` (${customCount} customized)` : ''}</span>
+                    </button>
+
+                    {open && (
+                      <div className="settings-collapse-body">
+                        {catPrompts.map(p => {
+                          const key = promptKey(p.id);
+                          const value = promptValues[key] ?? '';
+                          const isDefault = value.trim() === (p.default || '').trim();
+                          return (
+                            <div className="form-group" key={p.id}>
+                              <label>
+                                {p.label}
+                                {!isDefault && (
+                                  <>
+                                    {' '}
+                                    <button
+                                      type="button"
+                                      className="settings-badge-custom settings-reset-link"
+                                      onClick={() => { setPromptValues(s => ({ ...s, [key]: p.default })); setSaved(false); }}
+                                      title="Reset this prompt to its built-in default"
+                                    >
+                                      (customized, reset to default)
+                                    </button>
+                                  </>
+                                )}
+                              </label>
+                              <small className="settings-hint">{p.description}</small>
+                              {p.vars.length > 0 && (
+                                <small className="settings-hint">
+                                  Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.
+                                </small>
+                              )}
+                              <textarea
+                                value={value}
+                                onChange={(e) => { setPromptValues(s => ({ ...s, [key]: e.target.value })); setSaved(false); }}
+                                rows={10}
+                                spellCheck={false}
+                                style={{ width: '100%', marginTop: '0.5rem', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Wallabag Settings (Restored) */}
