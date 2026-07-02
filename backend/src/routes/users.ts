@@ -46,9 +46,10 @@ const VALID_SETTING_KEYS = [
   'narration_provider', 'narration_model', 'narration_reasoning_effort',
   'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
   'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-  // Transcription (Whisper): provider 'deepinfra' | 'openai' | 'openrouter' (no auto-routing)
+  // Transcription (Whisper): provider 'deepinfra' | 'openai'. OpenRouter was removed: its
+  // endpoint returns no word timestamps, which read-along requires (verified 2026-07-02).
   'transcription_provider', 'transcription_model',
-  'openai_tts_provider',     // route OpenAI TTS voices via 'openai' (default) or 'openrouter'
+  'kokoro_tts_provider',     // route Kokoro TTS voices via 'deepinfra' (default) or 'openrouter'
   'image_alt_text_provider', // image descriptions via 'gemini' (default) or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_archive_after_listen',
