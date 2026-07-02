@@ -125,6 +125,14 @@ const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
   openai: 'gpt-5-mini',
   openrouter: 'google/gemini-3-flash-preview',
 };
+// Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
+const CHAT_MODEL_DEFAULTS: Record<string, string> = {
+  openai: 'gpt-5-mini',
+  deepinfra: 'deepseek-ai/DeepSeek-V3.2',
+  openrouter: 'anthropic/claude-haiku-4-5',
+  anthropic: 'claude-haiku-4-5',
+  gemini: 'gemini-3-flash-preview',
+};
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
@@ -170,8 +178,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     ai_provider: 'openai',
     openai_api_key: '',
     openai_model: 'gpt-5-nano',
-    openai_tts_model: 'gpt-4o-mini-tts',
-    openai_tts_voice: 'coral',
 
     // DeepInfra Settings
     deepinfra_api_key: '',
@@ -258,10 +264,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Derive the per-job defaults from the legacy narration_llm routing (pre-fill).
       const hasDeepInfraKey = !!loaded.deepinfra_api_key; // masked dots or real value are both truthy
       const deriveLegacy = (llm: string) => {
-        if (llm === 'openai-mini') return { provider: 'openai', model: 'gpt-5-mini' };
-        if (llm === 'openai') return { provider: 'openai', model: 'gpt-5-nano' };
-        if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-        return hasDeepInfraKey ? { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' } : { provider: 'openai', model: 'gpt-5-nano' };
+        if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_MODEL_DEFAULTS.openai };
+        if (llm === 'deepseek') return { provider: 'deepinfra', model: CHAT_MODEL_DEFAULTS.deepinfra };
+        // 'auto': first provider with a configured key, in recommendation order (GPT-5 Mini first).
+        const keyByProvider: Array<[string, unknown]> = [
+          ['openai', loaded.openai_api_key], ['deepinfra', loaded.deepinfra_api_key],
+          ['anthropic', loaded.anthropic_api_key], ['gemini', loaded.gemini_api_key],
+          ['openrouter', loaded.openrouter_api_key],
+        ];
+        const found = keyByProvider.find(([, key]) => !!key)?.[0] || 'openai';
+        return { provider: found, model: CHAT_MODEL_DEFAULTS[found] };
       };
       const legacyNarration = deriveLegacy(loaded.narration_llm || 'auto');
       const boolDefault = (v: string | null | undefined, d: string) => (v !== undefined && v !== null ? v : d);
@@ -274,14 +286,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const savedTransProvider = loaded.transcription_provider === 'openrouter' ? '' : loaded.transcription_provider;
       const transProvider = savedTransProvider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
       const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
+      // Image provider default is key-aware (mirror of defaultImageProvider() in image-alt-text.ts).
+      const defaultImageProvider = loaded.gemini_api_key ? 'gemini'
+        : loaded.deepinfra_api_key ? 'deepinfra'
+        : loaded.openai_api_key ? 'openai'
+        : loaded.openrouter_api_key ? 'openrouter' : 'gemini';
 
       setFormData(prev => ({
         ...prev,
         ai_provider: loaded.ai_provider || 'openai',
         openai_api_key: loaded.openai_api_key === '••••••••' ? '' : (loaded.openai_api_key || ''),
         openai_model: loaded.openai_model || 'gpt-5-nano',
-        openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
-        openai_tts_voice: loaded.openai_tts_voice || 'coral',
 
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
         openrouter_api_key: loaded.openrouter_api_key === '••••••••' ? '' : (loaded.openrouter_api_key || ''),
@@ -308,8 +323,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
-        image_alt_text_provider: loaded.image_alt_text_provider || 'gemini',
-        image_alt_text_model: loaded.image_alt_text_model || IMAGE_MODEL_DEFAULTS[loaded.image_alt_text_provider || 'gemini'] || 'gemini-3-flash-preview',
+        image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
+        image_alt_text_model: loaded.image_alt_text_model || IMAGE_MODEL_DEFAULTS[loaded.image_alt_text_provider || defaultImageProvider] || 'gemini-3-flash-preview',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
