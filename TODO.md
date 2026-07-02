@@ -38,10 +38,12 @@
 - [ ] **[P4]** Implement import functionality (export done via "Download data (zip)" button, import still needed)
 
 ### Bug Fixes
+- [ ] **[P2]** OpenRouter TTS and OpenRouter transcription options cannot work (discovered via live smoke tests, 2026-07-02). OpenRouter's catalog contains no TTS models and no Whisper models: `/audio/speech` returns "Model openai/gpt-4o-mini-tts does not exist" and `/audio/transcriptions` rejects multipart uploads outright ("invalid content-type"). So the Settings "OpenAI voices via OpenRouter" toggle and the OpenRouter transcription provider silently fail for any user who picks them. Decide: remove both options, or keep them with a "not supported by OpenRouter" warning. Code: `getTTSClientForUser()` and `getTranscriptionClientForUser()` in `ai-providers.ts`, plus `TRANSCRIPTION_PROVIDERS` and the TTS toggle in `SettingsPage.tsx`.
+- [ ] **[P3]** Settings placeholder hints suggest `google/gemini-3-flash` for OpenRouter, but that model ID does not exist there. The valid ID is `google/gemini-3-flash-preview` (verified working via a live vision test, 2026-07-02). Fix both hints in `SettingsPage.tsx` (the chat-provider hint, ~line 102, and the image-description placeholder, ~line 1156).
 - [x] **[P1]** Fix Whisper transcript repetition loops + skipped speech (2026-07-01, v1). Long podcasts were producing runaway loops ("even. even. even.", "mhm, mhm, mhm") and dropping real speech. Root cause: Whisper's turbo model + default `condition_on_previous_text=true` (each internal 30s window re-reads its own output and snowballs), made worse by our code feeding the previous chunk's tail as a prompt. Fix: switched the **DeepInfra** path to its **native** endpoint (only place the safety params work) and send `condition_on_previous_text=false` + `temperature=0` + Whisper default thresholds, dropped the raw-tail continuity prompt on that path. Added a Settings **preset dropdown** (turbo vs full large-v3, which loops less). OpenAI/OpenRouter unchanged. `transcription.ts`, `ai-providers.ts` (`TranscriptionConfig` union), `SettingsPage.tsx`. **Staged follow-ups if loops persist**: enable `vad: true` and/or `no_repeat_ngram_size: 3` in `DEEPINFRA_WHISPER_PARAMS` (held back so each knob's effect is measurable, VAD needs a timestamp-accuracy check). **Follow-up fix (same day):** the native endpoint defaults `word_timestamps=false`, so the first run produced an accurate transcript but empty word timestamps → broken read-along, fixed by sending `word_timestamps=true`, plus a `wordsFromSegments()` fallback that interpolates per-word timings from segments if words are ever missing again.
 - [x] **[P2]** Fix horizontal scroll from long links in comments (2026-07-01). A bare long URL in a comment (worse in narrower nested replies) forced a page-wide horizontal scrollbar because `.comment-content` had no word-break rule, so the unbreakable string set a large min-width. Added `overflow-wrap: anywhere; word-break: break-word;` to `.comment-content` AND `.article-content` (article body had the same latent bug), plus `table { display:block; overflow-x:auto }` for both so wide tables scroll internally. Images (`max-width:100%`) and code blocks (`pre { overflow-x:auto }`) were already safe. `frontend/src/App.css`.
 - [ ] **[P3]** Newsletter/digest summaries only cover the lead story. The default article prompt (`summarizer.ts` `ARTICLE_SUMMARY_TEMPLATE`) tells the model to "develop a single central thesis / single line of reasoning", so multi-section newsletters (e.g. Transformer) get summarized down to only THE BIG STORY. Removed the "...rather than trying to cover them all" clause from the roundup line (2026-06-27) as a first nudge, and the single-thesis framing remains the main suspect. Custom-prompt boxes exist in Settings to test further. Decide on a fuller default-prompt rewrite (essay-vs-digest shape detector) before applying. Also verify the full newsletter text actually lands in `html_content` (extraction could be dropping sections).
-- [x] **[P2]** Fix embedded tweets showing giant profile pictures instead of readable content. CSS-only fix (see PLAN-html-readalong-fixes.md, Issue 1)
+- [x] **[P2]** Fix embedded tweets showing giant profile pictures instead of readable content. CSS-only fix, tweet-card rules in `App.css` (~line 3037). The plan doc it referenced (PLAN-html-readalong-fixes.md) was deleted 2026-07-02, recoverable from git history.
 - [x] **[P2]** Fix undescribed images stealing read-along highlight from paragraphs. Merge undescribed images into previous element (2026-03-06)
 - [x] **[P2]** Fix plain text items (no HTML tags) showing zero content in read-along. Wrap body text in `<p>` fallback (2026-03-06)
 - [x] **[P2]** Progressive autoscroll for long elements (bullet lists, comments). Intra-element scrolling instead of center snap (2026-03-06)
@@ -82,11 +84,7 @@
 - [ ] **[P3]** Remove the shadowed dead audio-serving route in `routes/content.ts` (`GET /:id/audio`, ~line 257). The live one is in `index.ts`. Left in place for now to avoid touching serving during the migration.
 - [ ] ~~Drop `transcript_words` from the main list endpoint~~ **DECIDED: keep it** (2026-06-12). The full word-timestamp array is shipped in the library list on purpose. It lets the read-along view open instantly without a follow-up fetch. Removing it caused read-along load problems in the past. It's only ~7.3 MB total across the whole library, so it is NOT a meaningful RAM/bandwidth cost. Leave as-is.
 - [ ] **[P2]** `POSTGRES_CONFIG=low`: the `feliperosenek/postgres-any-version-railway` template DOES support it (presets: low ~100-200MB / normal / high). BUT Railway's default Postgres image ignores it. Check the `🧠 [Postgres]` startup log. If `shared_buffers` is still the stock default, your DB isn't reading the var, so either redeploy Postgres from that template or use `ALTER SYSTEM SET shared_buffers=...`. Complements the volume migration.
-- [ ] **[P2]** Audio optimization:
-  - Convert to mono (saves ~50% size, fine for speech)
-  - Use 96k bitrate
-  - Location: backend/src/services/openai-tts.ts in concatenateAudioFiles
-  - FFmpeg options: `-c:a libmp3lame -b:a 96k -ac 1`
+- [ ] **[P3]** Audio file-size optimization, remaining part (consolidated from two duplicate items, 2026-07-02): convert TTS output to mono (`-ac 1`, saves ~50% size, fine for speech) and consider dropping the bitrate from 96k toward 64k. TEST QUALITY FIRST before deploying. The 96k bitrate + 24kHz sample rate halves are already live in `openai-tts.ts` (~lines 170 and 654). Location: `concatenateAudioFiles()` in `backend/src/services/openai-tts.ts`.
 - [ ] **[P4]** Implement batch audio generation (queue multiple articles) - NOTE: Gemini attempted generation queuing on 2026-01-29 but completely fucked it up, abandoned after multiple attempts (see commits "Fuck queuing", "Gave up on queue"). Still want this feature eventually, just needs proper implementation.
 - [ ] **[P4]** Add compression for stored audio (consider Opus codec)
 
@@ -103,7 +101,7 @@
 
 ## Audio Player and Content Overhaul
 
-> See PLAYEROVERHAUL.md for detailed implementation instructions
+> The original plan doc (PLAYEROVERHAUL.md) was fully implemented or superseded, so it was deleted on 2026-07-02. It's recoverable from git history if ever needed.
 
 ### Core Player Changes
 - [x] **[P1]** Audio player should be smaller by default (with just the player control buttons), positioned above the tab bar, and should remain there while visiting other tabs (2026-01-24)
@@ -113,16 +111,7 @@
 #### Whisper Timestamps & Audio (P2-P3)
 - [x] **[P2]** Fix Whisper timestamp seeking - clicking words now works correctly (2026-01-29). Read-along auto-scroll implemented (2026-01-27), transcript drift fixed (2026-01-27)
 - [ ] **[P2]** Fix podcast content provenance - shows "fetched by wallabag" incorrectly
-- [ ] **[P2]** Add HTTP caching headers to /api/content/:id/audio endpoint:
-  - Set Cache-Control: public, max-age=31536000, immutable
-  - Prevents re-downloading same files
-  - Location: backend/src/index.ts
-- [ ] **[P3]** Audio optimization (TEST QUALITY FIRST before deploying!):
-  - Convert to mono (saves ~50% size)
-  - Use 64k bitrate (might sound compressed, standard is 64-128k)
-  - Location: backend/src/services/openai-tts.ts in concatenateAudioFiles
-  - FFmpeg options: `-c:a libmp3lame -b:a 64k -ac 1`
-
+- [x] **[P2]** Add HTTP caching headers to audio serving (2026-07-02, verified it was already implemented at some point): `Cache-Control: public, max-age=31536000` is set on the audio routes in `backend/src/index.ts` and `routes/content.ts`. Only the optional `immutable` flag from the original plan is missing, which just saves a few revalidation requests. Add it only if audio ever feels slow on refresh.
 ### Fullscreen Player Tabs
 In fullscreen mode, there should be two to four tabs (depending on the type of item): Content (texts and articles only), Comments (EA Forum and LessWrong articles only), Read-along, and Queue
 - [x] **[P1]** Create fullscreen player with these tabs despite features not being fully implemented yet (ex. queue tab can say "Work in progress") (2026-01-24)
@@ -192,6 +181,10 @@ In fullscreen mode, there should be two to four tabs (depending on the type of i
 - [x] **[P6]** If item is not manually added but from list, just skip items without audio (2026-04-16)
 
 ## Completed Recently ✅
+
+- [x] **Provider keys smoke-tested end to end** (2026-07-02): tiny live calls confirmed the OpenAI key works (gpt-5-nano), the Anthropic key works via Anthropic's OpenAI-compatible endpoint (claude-haiku-4-5, the same path the app's chat jobs use), OpenRouter chat works (anthropic/claude-haiku-4-5), and OpenRouter vision image descriptions work (google/gemini-3-flash-preview correctly described a test image). OpenRouter TTS and transcription turned out to be impossible on OpenRouter's side, logged under Bug Fixes. DeepInfra and Gemini keys not exercised yet. Total test spend under $0.001.
+
+- [x] **Housekeeping: stale docs cleanup** (2026-07-02): rewrote `backend/.env.example`, removing the dead `OPENAI_API_KEY`/`ELEVENLABS_*` entries (provider keys live per-account in the database since the multi-user auth change, the backend never reads them from env vars) and adding the real infrastructure vars (`ENCRYPTION_KEY`, `JWT_SECRET`, `DATABASE_URL` option) with plain-language comments. Deleted `PLAYEROVERHAUL.md` and `PLAN-html-readalong-fixes.md` (both verified fully implemented or superseded, recoverable from git history). Also consolidated the two duplicate audio-optimization items into one, after discovering the 96k bitrate half was already live in `openai-tts.ts`, only mono conversion remains open.
 
 - [x] **EA Forum links use the bot-friendly mirror** (2026-07-01): whenever an EA Forum post is added (Add tab OR RSS "add to library"), its link is rewritten from `forum.effectivealtruism.org` to `forum-bots.effectivealtruism.org` before it's stored. Both add paths flow through `POST /api/content`, so the rewrite lives there (`normalizeEAForumUrl()` in `article-fetcher.ts`). Because `forum-bots.effectivealtruism.org` does NOT contain the substring `forum.effectivealtruism.org`, every EA-Forum detection now goes through the shared `isEAForumUrl()` helper (matches both hosts) instead of a bare `.includes()`, updated in `article-fetcher.ts`, `llm-alignment.ts` (×2), `openai-tts.ts`, and `wallabag-sync.ts`. The GraphQL fetch still calls the main host's `/graphql` (and now sends a main-host `Referer` to keep the request same-origin), so fetching/comments/karma/read-along are unaffected. **Display**: the stored link stays on the mirror, but the UI shows humans the normal `forum.effectivealtruism.org` link via a display-only `displayUrl()` helper (`frontend/src/format.ts`), applied to the fullscreen player's header source link, the library card source link, and the "copy content" URL line. The database value is never changed by display.
 
