@@ -2494,6 +2494,33 @@
   color: var(--t1);
 }
 
+/* API key input + remove button side by side (the trash sits OUTSIDE the input field) */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.input-row .input-with-toggle {
+  flex: 1;
+}
+.key-remove-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem;
+  background: var(--bg-surface);
+  border: 1px solid rgba(220, 38, 38, 0.4);
+  border-radius: 0.375rem;
+  color: #f87171;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  flex-shrink: 0;
+}
+.key-remove-button:hover {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.1);
+}
+
 .checkbox-group label {
   flex-direction: row;
   cursor: pointer;

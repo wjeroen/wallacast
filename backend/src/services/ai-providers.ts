@@ -139,7 +139,9 @@ interface ChatProviderDef {
 
 export const CHAT_PROVIDERS: Record<string, ChatProviderDef> = {
   openai: { keySetting: 'openai_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
-  deepinfra: { baseURL: 'https://api.deepinfra.com/v1/openai', keySetting: 'deepinfra_api_key', reasoningParams: () => ({}) },
+  // DeepInfra accepts OpenAI-style reasoning_effort for reasoning models like gpt-oss
+  // (validated live 2026-07-02); non-reasoning models simply ignore it.
+  deepinfra: { baseURL: 'https://api.deepinfra.com/v1/openai', keySetting: 'deepinfra_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
   openrouter: { baseURL: 'https://openrouter.ai/api/v1', keySetting: 'openrouter_api_key', reasoningParams: (e) => ({ reasoning: { effort: e } }) },
   anthropic: { baseURL: 'https://api.anthropic.com/v1/', keySetting: 'anthropic_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
   gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', keySetting: 'gemini_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
@@ -158,7 +160,8 @@ const CHAT_PROVIDER_PRIORITY = ['openai', 'deepinfra', 'anthropic', 'gemini', 'o
 async function legacyNarrationConfig(userId: number): Promise<{ provider: string; model: string }> {
   const llm = (await getUserSetting(userId, 'narration_llm')) || 'auto';
   if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_DEFAULT_MODELS.openai };
-  if (llm === 'deepseek') return { provider: 'deepinfra', model: CHAT_DEFAULT_MODELS.deepinfra };
+  // 'deepseek' was an explicit user choice, keep it literal (the deepinfra DEFAULT moved on).
+  if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
   for (const provider of CHAT_PROVIDER_PRIORITY) {
     if (await getUserSetting(userId, CHAT_PROVIDERS[provider].keySetting)) {
       return { provider, model: CHAT_DEFAULT_MODELS[provider] };
@@ -172,10 +175,19 @@ async function legacyNarrationConfig(userId: number): Promise<{ provider: string
 // CHAT_PROVIDERS in SettingsPage.tsx).
 export const CHAT_DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-5-mini',
-  deepinfra: 'deepseek-ai/DeepSeek-V3.2',
-  openrouter: 'anthropic/claude-haiku-4-5',
+  // gpt-oss-120b over DeepSeek V3.2: DeepInfra serves DeepSeek at ~20 tok/s (measured
+  // 2026-07-02), while gpt-oss runs ~46 tok/s, costs less, and supports reasoning effort.
+  deepinfra: 'openai/gpt-oss-120b',
+  openrouter: 'openai/gpt-5-mini',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
+};
+
+// Default reasoning effort per provider when the user leaves the effort field blank.
+// Haiku degrades badly without extended thinking, so Anthropic jobs think by default
+// (validated 2026-07-02: the OpenAI-compat endpoint accepts reasoning_effort for Haiku).
+export const CHAT_DEFAULT_EFFORT: Record<string, string> = {
+  anthropic: 'high',
 };
 
 // Resolve a job's effective {provider, model, effort}, honoring "use same model as narration".
@@ -216,17 +228,19 @@ export async function getChatClientForJob(userId: number, job: ChatJob): Promise
   if (def) {
     const apiKey = await getUserSetting(userId, def.keySetting);
     if (apiKey) {
-      return { client: buildChatClient(apiKey, def), model, extraParams: effort ? def.reasoningParams(effort) : {} };
+      const effectiveEffort = effort || CHAT_DEFAULT_EFFORT[provider] || '';
+      return { client: buildChatClient(apiKey, def), model, extraParams: effectiveEffort ? def.reasoningParams(effectiveEffort) : {} };
     }
     console.warn(`[AI] ${job}: provider '${provider}' has no API key, falling back`);
   }
 
-  // Fallback: legacy narration mapping (picks DeepInfra/OpenAI by whichever key exists).
+  // Fallback: legacy narration mapping (picks the first key-bearing provider).
   const legacy = await legacyNarrationConfig(userId);
   const legacyDef = CHAT_PROVIDERS[legacy.provider];
   const legacyKey = await getUserSetting(userId, legacyDef.keySetting);
   if (legacyKey) {
-    return { client: buildChatClient(legacyKey, legacyDef), model: legacy.model, extraParams: effort ? legacyDef.reasoningParams(effort) : {} };
+    const effectiveEffort = effort || CHAT_DEFAULT_EFFORT[legacy.provider] || '';
+    return { client: buildChatClient(legacyKey, legacyDef), model: legacy.model, extraParams: effectiveEffort ? legacyDef.reasoningParams(effectiveEffort) : {} };
   }
   return null;
 }
