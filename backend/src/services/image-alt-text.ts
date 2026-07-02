@@ -435,8 +435,8 @@ export class ImageAltTextService {
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 
   try {
-    // Provider: 'gemini' (native SDK, default), 'deepinfra' (recommended, Gemma 4), or
-    // 'openrouter'. The latter two are OpenAI-compatible vision.
+    // Provider: 'gemini' (native SDK, default), 'deepinfra' (Gemma 4), 'openai' (GPT-5 Mini),
+    // or 'openrouter'. All non-Gemini paths are OpenAI-compatible vision.
     const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || 'gemini';
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
 
@@ -444,7 +444,9 @@ export class ImageAltTextService {
       ? await this.describeViaOpenRouter(prompt, imageData)
       : provider === 'deepinfra'
         ? await this.describeViaDeepInfra(prompt, imageData)
-        : await this.describeViaGemini(prompt, imageData);
+        : provider === 'openai'
+          ? await this.describeViaOpenAI(prompt, imageData)
+          : await this.describeViaGemini(prompt, imageData);
 
     const description = (raw || '').trim();
 
@@ -540,6 +542,31 @@ export class ImageAltTextService {
     const response = await client.chat.completions.create({
       model: await this.getModelName('google/gemma-4-26B-A4B-it'),
       temperature: 0.3,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ] as any,
+        },
+      ],
+    });
+    return response.choices[0]?.message?.content || '';
+  }
+
+  // OpenAI path: same OpenAI-compatible vision call against api.openai.com. Default model is
+  // GPT-5 Mini (vision-capable, verified 2026-07-02). No temperature param: the GPT-5 family
+  // rejects non-default temperatures.
+  private async describeViaOpenAI(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const apiKey = await getUserSetting(this.userId, 'openai_api_key');
+    if (!apiKey) {
+      throw new Error('No OpenAI API key configured. Please add your key in Settings.');
+    }
+    const client = new OpenAI({ apiKey });
+    const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
+    const response = await client.chat.completions.create({
+      model: await this.getModelName('gpt-5-mini'),
       messages: [
         {
           role: 'user',

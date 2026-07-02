@@ -122,6 +122,7 @@ const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === prov
 const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-3-flash-preview',
   deepinfra: 'google/gemma-4-26B-A4B-it',
+  openai: 'gpt-5-mini',
   openrouter: 'google/gemini-3-flash-preview',
 };
 
@@ -190,7 +191,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
     kokoro_tts_provider: 'deepinfra',
 
-    // Image alt-text: provider gemini | deepinfra | openrouter
+    // Image alt-text: provider gemini | deepinfra | openai | openrouter
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
@@ -501,6 +502,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     return settings[key] === '••••••••';
   };
 
+  // Clear a stored API key. The backend stores '' which it treats as unset everywhere.
+  const removeApiKey = async (key: string, label: string) => {
+    if (!confirm(`Remove your ${label}?`)) return;
+    try {
+      await userSettingsAPI.setBulk({ [key]: '' });
+      await loadSettings();
+    } catch (err) {
+      setError('Failed to remove the key');
+      console.error(err);
+    }
+  };
+
   const handleTestConnection = async () => {
     setTestingConnection(true);
     setConnectionStatus('untested');
@@ -592,7 +605,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     { name: 'Narration scripts, read-along alignment and summaries', ok: hasOpenAIKey || hasDeepInfraKey || hasOpenRouterKey || hasAnthropicKey || hasGeminiKey, needs: 'any API key' },
     { name: 'Audio narration (TTS voices)', ok: hasOpenAIKey || canUseKokoroVoices, needs: 'an OpenAI, DeepInfra, or OpenRouter key' },
     { name: 'Podcast transcription', ok: hasDeepInfraKey || hasOpenAIKey, needs: 'a DeepInfra or OpenAI key' },
-    { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey, needs: 'a DeepInfra, Gemini, or OpenRouter key' },
+    { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey || hasOpenAIKey, needs: 'a DeepInfra, OpenAI, Gemini, or OpenRouter key' },
   ];
   const allFeaturesAvailable = featureAccess.every(f => f.ok);
 
@@ -877,7 +890,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <p className="section-description">
             Add a key for each service you want to use. Each one lists the features it can power.
             <br />
-            You can do everything with just a DeepInfra API key, but OpenAI's GPT-5-mini is recommended for narration prep and read-along alignment.
+            Recommended: GPT-5 Mini (OpenAI) for narration and read-along, DeepInfra for transcription and TTS.
             <br />
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
@@ -899,6 +912,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
                 {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+              {isSecretSet('deepinfra_api_key') && (
+                <button type="button" onClick={() => removeApiKey('deepinfra_api_key', 'DeepInfra API key')} className="toggle-visibility" title="Remove this key">
+                  <Trash2 size={18} />
+                </button>
+              )}
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
           </div>
@@ -920,8 +938,13 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <button type="button" onClick={() => toggleShowSecret('openai_api_key')} className="toggle-visibility">
                 {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+              {isSecretSet('openai_api_key') && (
+                <button type="button" onClick={() => removeApiKey('openai_api_key', 'OpenAI API key')} className="toggle-visibility" title="Remove this key">
+                  <Trash2 size={18} />
+                </button>
+              )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -941,6 +964,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
                 {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+              {isSecretSet('openrouter_api_key') && (
+                <button type="button" onClick={() => removeApiKey('openrouter_api_key', 'OpenRouter API key')} className="toggle-visibility" title="Remove this key">
+                  <Trash2 size={18} />
+                </button>
+              )}
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, image descriptions.</small>
           </div>
@@ -962,6 +990,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
                 {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+              {isSecretSet('anthropic_api_key') && (
+                <button type="button" onClick={() => removeApiKey('anthropic_api_key', 'Anthropic API key')} className="toggle-visibility" title="Remove this key">
+                  <Trash2 size={18} />
+                </button>
+              )}
             </div>
             <small className="settings-hint">Narration, read-along, summaries.</small>
           </div>
@@ -983,6 +1016,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
                 {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
+              {isSecretSet('gemini_api_key') && (
+                <button type="button" onClick={() => removeApiKey('gemini_api_key', 'Gemini API key')} className="toggle-visibility" title="Remove this key">
+                  <Trash2 size={18} />
+                </button>
+              )}
             </div>
             <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
           </div>
@@ -1103,6 +1141,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   >
                     <option value="deepinfra">DeepInfra</option>
                     <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI</option>
                     <option value="openrouter">OpenRouter</option>
                   </select>
                 </div>
