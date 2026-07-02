@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 
@@ -96,16 +96,18 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 }
 
 // Chat-LLM providers (all spoken to via the OpenAI-compatible API). Model is free text.
+// Hints show the app's default model per provider. A blank model field uses that default
+// (CHAT_DEFAULT_MODELS in backend ai-providers.ts, keep the two lists in sync).
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'openai', label: 'OpenAI', hint: 'e.g. gpt-5-mini, gpt-5-nano' },
-  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. deepseek-ai/DeepSeek-V3.2, meta-llama/Llama-3.3-70B-Instruct' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash-preview' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'e.g. claude-haiku-4-5, claude-sonnet-4-6' },
-  { id: 'gemini', label: 'Google Gemini', hint: 'e.g. gemini-3-flash, gemini-2.5-pro' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-5-mini' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = deepseek-ai/DeepSeek-V3.2' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'default = anthropic/claude-haiku-4-5' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'default = claude-haiku-4-5' },
+  { id: 'gemini', label: 'Google Gemini', hint: 'default = gemini-3-flash-preview' },
 ];
 const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. openai/whisper-large-v3-turbo' },
-  { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/whisper-large-v3-turbo' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = whisper-1' },
 ];
 // Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else,
 // this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
@@ -135,6 +137,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // Summary length tiers (editable, sorted list). Infinity tier is always last.
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
   const [showLengthSettings, setShowLengthSettings] = useState(false);
+  const [showWallabagHelp, setShowWallabagHelp] = useState(false);
 
   // Custom prompts (advanced). The backend registry lists every editable LLM prompt with its
   // built-in default; `promptValues` holds the current textarea content keyed by setting key
@@ -187,7 +190,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
     kokoro_tts_provider: 'deepinfra',
 
-    // Image alt-text: provider gemini | openrouter
+    // Image alt-text: provider gemini | deepinfra | openrouter
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
@@ -350,7 +353,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     return (
       <div className="form-group ai-job" key={job}>
         <label>{title}</label>
-        {description && <small className="settings-hint">{description}</small>}
+        {description && <small className="settings-hint" style={base ? { marginBottom: '0.5rem' } : undefined}>{description}</small>}
         {!base && (
           <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: usingSame ? 0 : '0.5rem' }}>
             <input type="checkbox" checked={fd[sameKey] === 'true'} onChange={(e) => handleChange(sameKey, e.target.checked ? 'true' : 'false')} />
@@ -380,9 +383,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 type="text"
                 value={fd[`${job}_reasoning_effort`] || ''}
                 onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-                placeholder="e.g. minimal, low, medium, high"
+                placeholder={provider === 'openai' ? 'default = medium' : 'blank = model default'}
               />
-              <small className="settings-hint">Blank = provider default.</small>
             </div>
           </div>
         )}
@@ -441,7 +443,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       setSaving(true);
       setError(null);
-      
+
       // Per-job config + the "same as narration" toggles must save even when empty/false
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
@@ -582,6 +584,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
     g.requiresKey === 'openai' ? hasOpenAIKey : canUseKokoroVoices
   );
+  const hasAnthropicKey = isSecretSet('anthropic_api_key') || !!formData.anthropic_api_key.trim();
+  const hasGeminiKey = isSecretSet('gemini_api_key') || !!formData.gemini_api_key.trim();
+  // Feature availability by configured keys, shown in the Account section so new users see
+  // what already works and which key unlocks the rest.
+  const featureAccess = [
+    { name: 'Narration scripts, read-along alignment and summaries', ok: hasOpenAIKey || hasDeepInfraKey || hasOpenRouterKey || hasAnthropicKey || hasGeminiKey, needs: 'any API key' },
+    { name: 'Audio narration (TTS voices)', ok: hasOpenAIKey || canUseKokoroVoices, needs: 'an OpenAI, DeepInfra, or OpenRouter key' },
+    { name: 'Podcast transcription', ok: hasDeepInfraKey || hasOpenAIKey, needs: 'a DeepInfra or OpenAI key' },
+    { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey, needs: 'a DeepInfra, Gemini, or OpenRouter key' },
+  ];
+  const allFeaturesAvailable = featureAccess.every(f => f.ok);
 
   return (
     <div className="settings-page">
@@ -623,15 +636,33 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Sign Out
             </button>
           </div>
+          {allFeaturesAvailable ? (
+            <div className="feature-access-all">
+              <Check size={16} /> All features available
+            </div>
+          ) : (
+            <div className="feature-access">
+              {featureAccess.map(f => (
+                <div key={f.name} className={`feature-access-row ${f.ok ? 'ok' : 'missing'}`}>
+                  {f.ok ? <Check size={16} /> : <X size={16} />}
+                  <span>{f.name}{!f.ok && <> (needs {f.needs})</>}</span>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="feature-access-link"
+                onClick={() => document.getElementById('api-keys-section')?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                Add keys in the API keys section
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Audio Generation Section: what gets turned into audio automatically.
             Model/voice choices live in the Models section further down. */}
         <section className="settings-section">
            <h3><Mic size={20} /> Audio generation</h3>
-           <p className="section-description">
-             What gets turned into audio automatically. Pick which models do the work in the Models section below.
-           </p>
 
            <div className="form-group checkbox-group">
               <label>
@@ -701,9 +732,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         {/* Summaries Section */}
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
-          <p className="section-description">
-            Short "Twitter thread" summaries. Generated separately from audio, so both can run at once.
-          </p>
 
           <div className="form-group checkbox-group">
             <label>
@@ -726,7 +754,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Also summarize comments
             </label>
             <small className="settings-hint indent">
-              Adds a separate comment-discussion summary below the article summary (when the item has comments).
+              Adds a separate comment-discussion summary below the article summary.
             </small>
           </div>
 
@@ -737,10 +765,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 checked={formData.library_show_summary === 'true'}
                 onChange={(e) => handleChange('library_show_summary', e.target.checked ? 'true' : 'false')}
               />
-              Show summaries on library cards (Twitter-feed mode)
+              Show summaries on library cards
             </label>
             <small className="settings-hint indent">
-              Replaces each library card's description with its full article summary (comment summaries excluded). Falls back to the description when no summary exists.
+              Replaces each library card's description with its article summary. Falls back to the description when no summary exists.
             </small>
           </div>
 
@@ -767,15 +795,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   style={{ width: '7rem' }}
                 />
                 <small className="settings-hint">
-                  Max number of words in each "tweet" paragraph. Default 40.
+                  Max number of words in each paragraph.
                 </small>
               </div>
 
               <div className="form-group">
                 <label>Summary length tiers</label>
                 <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>
-                  Longer content gets more paragraphs. The character count is measured automatically; the matching
-                  tier sets the maximum number of paragraphs ("tweets").
+                  Longer content gets more paragraphs. The character count is measured automatically, the matching
+                  tier sets the maximum number of paragraphs.
                 </small>
                 <div className="summary-tiers-editor">
                   <div className="summary-tier-row summary-tier-header">
@@ -837,25 +865,26 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Manually queued items always autoplay
             </label>
             <small className="settings-hint indent">
-              When on (default), items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
+              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
               Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
             </small>
           </div>
         </section>
 
         {/* API Keys Section */}
-        <section className="settings-section">
+        <section className="settings-section" id="api-keys-section">
           <h3><Key size={20} /> API keys</h3>
           <p className="section-description">
-            Add a key for each service you want to use. Each one lists the jobs it can power.
-            <strong> Recommended: DeepInfra. One cheap key powers every job in the app.</strong>
-            {' '}
+            Add a key for each service you want to use. Each one lists the features it can power.
+            <br />
+            You can do everything with just a DeepInfra API key, but OpenAI's GPT-5-mini is recommended for narration prep and read-along alignment.
+            <br />
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
 
           <div className="form-group">
             <label>
-              <Key size={16} /> DeepInfra API Key (recommended)
+              <Key size={16} /> DeepInfra API Key
               {isSecretSet('deepinfra_api_key')
                 ? <span className="secret-set">(configured)</span>
                 : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
@@ -871,28 +900,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, Kokoro TTS voices, transcription, image descriptions. One key covers every job.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> OpenRouter API Key
-              {isSecretSet('openrouter_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
-                value={formData.openrouter_api_key}
-                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
-                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
-                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, Kokoro TTS voices, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -914,6 +922,27 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </button>
             </div>
             <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> OpenRouter API Key
+              {isSecretSet('openrouter_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-with-toggle">
+              <input
+                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
+                value={formData.openrouter_api_key}
+                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
+                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
+              />
+              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
+                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -963,16 +992,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3><Mic size={20} /> Models</h3>
           <p className="section-description">
-            Which AI model handles each job. Leave a model blank to use the provider's default.
+            Which AI model handles each feature. Leave a model blank to use our recommended default.
           </p>
 
-          {renderChatJob('narration', 'Narration', 'Rewrites article text into a clean script for speech.', true)}
+          {renderChatJob('narration', 'Narration', 'Prepares articles in the background for audio narration.', true)}
           {renderChatJob('alignment', 'Read-along alignment', 'Syncs the script to audio timestamps for the read-along view.')}
           {renderChatJob('summary', 'Summaries', 'Writes the tweet-thread summaries.')}
 
           <div className="form-group ai-job">
             <label>Transcription</label>
-            <small className="settings-hint">Turns podcast audio into text (Whisper).</small>
+            <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>Turns podcast audio into text (Whisper).</small>
             <div className="ai-job-fields">
               <div className="ai-field">
                 <span className="ai-field-label">Provider</span>
@@ -1005,10 +1034,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
 
           <div className="form-group ai-job">
-            <label>TTS voices</label>
+            <label>TTS voices{ttsVoices.length > 0 ? ` (${ttsVoices.length} selected)` : ''}</label>
             <small className="settings-hint">
               Pick one voice for a consistent sound, or several to rotate between (each new audio picks one at random).
-              {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
             </small>
             <div className="ai-field" style={{ marginTop: '0.5rem' }}>
               <span className="ai-field-label">Kokoro voices via</span>
@@ -1016,7 +1044,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <option value="deepinfra">DeepInfra</option>
                 <option value="openrouter">OpenRouter</option>
               </select>
-              <small className="settings-hint">Same voices either way. OpenAI voices always use your OpenAI key (OpenRouter does not offer them).</small>
             </div>
             {availableVoiceGroups.length === 0 ? (
               <p className="no-content" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
@@ -1048,7 +1075,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
           <div className="form-group ai-job">
             <label>Image descriptions</label>
-            <small className="settings-hint">Describes article images so they can be read aloud. Needs a DeepInfra, Gemini, or OpenRouter key.</small>
+            <small className="settings-hint">Describes article images so they can be read aloud.</small>
             <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: formData.image_alt_text_enabled === 'true' ? '0.5rem' : 0 }}>
               <input
                 type="checkbox"
@@ -1074,7 +1101,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                       }
                     }}
                   >
-                    <option value="deepinfra">DeepInfra (recommended)</option>
+                    <option value="deepinfra">DeepInfra</option>
                     <option value="gemini">Google Gemini</option>
                     <option value="openrouter">OpenRouter</option>
                   </select>
@@ -1085,17 +1112,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     type="text"
                     value={formData.image_alt_text_model}
                     onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                    placeholder={'e.g. ' + (IMAGE_MODEL_DEFAULTS[formData.image_alt_text_provider] || 'gemini-3-flash-preview')}
+                    placeholder={'default = ' + (IMAGE_MODEL_DEFAULTS[formData.image_alt_text_provider] || 'gemini-3-flash-preview')}
                   />
-                  <small className="settings-hint">Tested with Gemini Flash 3 and Gemma 4 (DeepInfra).</small>
                 </div>
               </div>
             )}
           </div>
         </section>
 
-        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category.
-            Placed below Models so the model pickers stay front and center. */}
+        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category. */}
         <section className="settings-section">
           <h3>Custom prompts (advanced)</h3>
           <p className="section-description">
@@ -1187,11 +1212,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           )}
         </section>
 
-        {/* Wallabag Settings (Restored) */}
+        {/* Wallabag Settings */}
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag sync
+            Wallabag sync (currently partially broken)
           </h3>
 
           <div style={{
@@ -1202,9 +1227,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             lineHeight: '1.5',
             marginBottom: '1rem',
             border: '1px solid #2563eb',
-            color: '#fff' 
+            color: '#fff'
           }}>
-            <strong>How to connect:</strong>
+            <button
+              type="button"
+              className="settings-collapse-toggle"
+              style={{ color: '#fff', padding: 0 }}
+              onClick={() => setShowWallabagHelp(v => !v)}
+              aria-expanded={showWallabagHelp}
+            >
+              {showWallabagHelp ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <strong>How to connect</strong>
+            </button>
+            {showWallabagHelp && (<>
             <ol style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
               <li>Log into your Wallabag instance</li>
               <li>Go to <strong>Settings → API clients management</strong></li>
@@ -1215,6 +1250,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <ol style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
             Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
             </ol>
+            </>)}
           </div>
 
           <div className="form-group checkbox-group">
@@ -1308,6 +1344,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   disabled={testingConnection || !formData.wallabag_url || !formData.wallabag_client_id}
                   className="test-connection-button"
                 >
+                  <Globe size={16} />
                   {testingConnection ? 'Testing...' : 'Test Connection'}
                 </button>
 
@@ -1316,21 +1353,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   onClick={handleFullRefresh}
                   disabled={syncing}
                   className="test-connection-button"
-                  style={{ background: '#0891b2' }}
                   title="Fetch ALL items from Wallabag (ignores last sync timestamp)"
                 >
-                  🔄 Full Refresh
+                  <RefreshCw size={16} />
+                  Full Refresh
                 </button>
 
                 <button
                   type="button"
                   onClick={handleCleanup}
                   disabled={syncing}
-                  className="test-connection-button"
-                  style={{ background: '#dc2626' }}
+                  className="test-connection-button danger"
                   title="Delete recently synced items (last 2 hours)"
                 >
-                  🗑️ Cleanup
+                  <Trash2 size={16} />
+                  Cleanup
                 </button>
 
                 {connectionStatus === 'success' && (
