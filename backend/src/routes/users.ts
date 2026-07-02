@@ -50,7 +50,7 @@ const VALID_SETTING_KEYS = [
   // endpoint returns no word timestamps, which read-along requires (verified 2026-07-02).
   'transcription_provider', 'transcription_model',
   'kokoro_tts_provider',     // route Kokoro TTS voices via 'deepinfra' (default) or 'openrouter'
-  'image_alt_text_provider', // image descriptions via 'gemini' (default) or 'openrouter'
+  'image_alt_text_provider', // image descriptions via 'gemini' (default), 'deepinfra' (recommended), or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_archive_after_listen',
   'auto_transcribe_podcasts',
