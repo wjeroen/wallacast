@@ -153,6 +153,17 @@ async function legacyNarrationConfig(userId: number): Promise<{ provider: string
   return { provider: 'openai', model: 'gpt-5-nano' };
 }
 
+// Default chat model per provider, used when a job's provider is set but its model field
+// is left blank. The Settings hints advertise these as "default = ..." (keep in sync with
+// CHAT_PROVIDERS in SettingsPage.tsx).
+export const CHAT_DEFAULT_MODELS: Record<string, string> = {
+  openai: 'gpt-5-mini',
+  deepinfra: 'deepseek-ai/DeepSeek-V3.2',
+  openrouter: 'anthropic/claude-haiku-4-5',
+  anthropic: 'claude-haiku-4-5',
+  gemini: 'gemini-3-flash-preview',
+};
+
 // Resolve a job's effective {provider, model, effort}, honoring "use same model as narration".
 async function resolveJobConfig(userId: number, job: ChatJob): Promise<{ provider: string; model: string; effort: string }> {
   if (job !== 'narration') {
@@ -168,7 +179,9 @@ async function resolveJobConfig(userId: number, job: ChatJob): Promise<{ provide
   const provider = await getUserSetting(userId, `${job}_provider`);
   const model = await getUserSetting(userId, `${job}_model`);
   const effort = (await getUserSetting(userId, `${job}_reasoning_effort`)) || '';
-  if (provider && model) return { provider, model, effort };
+  // A set provider with a blank model uses that provider's default model.
+  const effectiveModel = model || (provider ? CHAT_DEFAULT_MODELS[provider] : '');
+  if (provider && effectiveModel) return { provider, model: effectiveModel, effort };
   // Not configured yet → legacy narration mapping (covers all three chat jobs pre-migration).
   const legacy = await legacyNarrationConfig(userId);
   return { provider: legacy.provider, model: legacy.model, effort };
