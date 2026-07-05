@@ -1,38 +1,7 @@
-import type OpenAI from 'openai';
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
-import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getChatClientForJob, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting, chatCreateWithRetry } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
-
-// Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
-// "Premature close" / ECONNRESET on a reused keep-alive socket, see Node #63989) and
-// 429/5xx are transient and almost always succeed on a fresh attempt. 4xx (bad request /
-// auth) are NOT retried. Summaries previously had no retry, so these surfaced as failures
-// while TTS/transcription (which already retry) silently recovered.
-async function chatCreateWithRetry(
-  client: OpenAI,
-  params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-  label: string
-): Promise<OpenAI.Chat.Completions.ChatCompletion> {
-  const { maxAttempts, baseDelayMs, maxDelayMs } = PROCESSING_CONFIG.retry;
-  let lastErr: any;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await client.chat.completions.create(params);
-    } catch (err: any) {
-      lastErr = err;
-      const status: number | undefined = err?.status;
-      // Retry connection errors (no status) and 429/5xx; give up on 4xx.
-      const retryable = status === undefined || status === 429 || (status >= 500 && status < 600);
-      if (!retryable || attempt === maxAttempts) throw err;
-      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
-      console.warn(`[Summary] ${label} attempt ${attempt}/${maxAttempts} failed (${status ?? 'conn'}): ${err?.message}. Retrying in ${delay}ms`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw lastErr;
-}
 
 /**
  * Article + comment summaries ("Twitter thread" style).
@@ -328,7 +297,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
         },
         { role: 'user', content: userContent },
       ],
-    }, 'article');
+    }, '[Summary] article');
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
     logTweetLengths('article', summary, maxWords);
 
@@ -337,7 +306,14 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const summarizeComments = (await getUserSetting(userId, 'summarize_comments')) !== 'false'; // default ON
     let comments: CommentLike[] = [];
     if (item.comments) {
-      comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
+      try {
+        comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
+      } catch (e) {
+        // Malformed comments JSON should not fail the whole summary. Proceed as if there
+        // were no comments, so the article summary still gets produced.
+        console.warn(`[Summary] Failed to parse comments for content ${contentId}, skipping comment summary:`, e);
+        comments = [];
+      }
     }
     if (summarizeComments && Array.isArray(comments) && comments.length > 0) {
       const commentsText = commentsToText(comments).trim();
@@ -358,7 +334,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
                 `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, COMMENTS_INPUT_CAP)}`,
             },
           ],
-        }, 'comments');
+        }, '[Summary] comments');
         commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
         logTweetLengths('comments', commentSummary, maxWords);
       }

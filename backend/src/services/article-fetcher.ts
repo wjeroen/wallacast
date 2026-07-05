@@ -199,7 +199,12 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
   }
 
   const post = json.data.post.result;
-  const rawComments = json.data.comments?.results || []; 
+  const rawComments = json.data.comments?.results || [];
+  // The query caps at limit: 500. If exactly 500 come back, there are probably more that we
+  // are silently dropping, so warn (visible in Railway logs) instead of failing quietly.
+  if (rawComments.length === 500) {
+    console.warn('[Fetcher] Got exactly 500 comments (the query limit). The comment list may be truncated.');
+  }
   const postReactions = parseExtendedScore(post.extendedScore);
   const commentMap = new Map<string, Comment>();
   const rootComments: Comment[] = [];
@@ -513,7 +518,13 @@ async function fetchSubstackComments(articleUrl: string, articleHtml: string): P
   console.log(`[Fetcher] Fetching Substack comments from: ${commentsUrl}`);
 
   try {
-    const response = await fetch(commentsUrl);
+    // Send a browser User-Agent so Substack doesn't serve a bot/challenge page. The GraphQL
+    // feed fetch above generates one via got-scraping; a bare fetch() sends none.
+    const response = await fetch(commentsUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
     if (response.ok) {
       const html = await response.text();
       console.log(`[Fetcher] Comments page: ${html.length} bytes`);

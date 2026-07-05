@@ -83,6 +83,14 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         data.type = 'text';
         data.title = title;
         data.content = uploadedContent;
+      } else if (contentType === 'podcast_episode') {
+        if (!url) {
+          setMessage('Audio URL is required for podcasts');
+          setLoading(false);
+          return;
+        }
+        // Backend stores the episode's source media under audio_url (see content.ts POST handler).
+        data.audio_url = url;
       }
 
       const response = await contentAPI.create(data);

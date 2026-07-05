@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForJob, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting, chatCreateWithRetry } from './ai-providers.js';
 import { query } from '../database/db.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { isEAForumUrl } from './article-fetcher.js';
@@ -202,9 +202,12 @@ function extractContentElements(
     if (publishedAt) {
       try {
         const date = new Date(publishedAt);
-        const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        metaText += ` Published on ${formatted}.`;
-        metaHtml += ` · ${escapeHtml(formatted)}`;
+        // Skip the date on an invalid input so we never emit "Invalid Date" in the meta line.
+        if (!isNaN(date.getTime())) {
+          const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+          metaText += ` Published on ${formatted}.`;
+          metaHtml += ` · ${escapeHtml(formatted)}`;
+        }
       } catch { /* ignore */ }
     }
     elements.push({
@@ -215,12 +218,15 @@ function extractContentElements(
   } else if (publishedAt) {
     try {
       const date = new Date(publishedAt);
-      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      elements.push({
-        type: 'meta',
-        html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
-        text: `Published on ${formatted}.`,
-      });
+      // Skip the date element entirely on an invalid input so we never emit "Invalid Date".
+      if (!isNaN(date.getTime())) {
+        const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+        elements.push({
+          type: 'meta',
+          html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
+          text: `Published on ${formatted}.`,
+        });
+      }
     } catch { /* ignore */ }
   }
 
@@ -425,6 +431,9 @@ function extractContentElements(
 function formatDateForLLM(dateString: string): string {
   try {
     const date = new Date(dateString);
+    // new Date(bad) never throws, it yields an Invalid Date. Guard so we never emit
+    // "NaNth of Invalid Date NaN"; fall back to the raw input string instead.
+    if (isNaN(date.getTime())) return dateString;
     const day = date.getDate();
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
@@ -804,12 +813,26 @@ ${closingInstruction}`;
   ): Promise<Map<number, number>> {
     console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
 
-    const response = await chatConfig.client.chat.completions.create({
-      model: chatConfig.model,
-      ...(chatConfig.extraParams || {}),
-      messages: [{ role: 'user', content: prompt }],
-      max_completion_tokens: 128000,
-    });
+    let response;
+    try {
+      response = await chatCreateWithRetry(
+        chatConfig.client,
+        {
+          model: chatConfig.model,
+          ...(chatConfig.extraParams || {}),
+          messages: [{ role: 'user', content: prompt }],
+          // Alignment output is small (one timestamp line per element) but reasoning models
+          // need headroom. 32000 fits every supported provider's output cap (Anthropic Haiku
+          // and Gemini Flash top out around 64k, so the old 128000 request was rejected).
+          max_completion_tokens: 32000,
+        },
+        `[LLM-Align] ${label}`
+      );
+    } catch (err: any) {
+      // Tag so the outer fallback can tell an LLM-call failure apart from a parsing failure.
+      if (err && typeof err === 'object') err.__llmCallFailed = true;
+      throw err;
+    }
 
     const responseText = response.choices[0]?.message?.content || '';
     console.log(`[LLM-Align] ${label}: response ${responseText.length} chars`);
@@ -1050,9 +1073,14 @@ ${closingInstruction}`;
       }
     }
 
-  } catch (parseError) {
+  } catch (parseError: any) {
     usedFallback = true;
-    console.error('[LLM-Align] Failed during LLM alignment, using FALLBACK even distribution:', parseError);
+    const underlying = parseError?.message || parseError;
+    if (parseError?.__llmCallFailed) {
+      console.error(`[LLM-Align] LLM call failed after retries, using FALLBACK even distribution: ${underlying}`);
+    } else {
+      console.error(`[LLM-Align] LLM responded but parsing failed, using FALLBACK even distribution: ${underlying}`);
+    }
     // Fallback: distribute timestamps evenly across the audio duration
     const totalDuration = transcriptWords.length > 0
       ? transcriptWords[transcriptWords.length - 1].end

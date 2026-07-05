@@ -20,6 +20,20 @@ export function cleanHtml(text: string): string {
   return cleaned;
 }
 
+// Format a playback time as m:ss (or h:mm:ss past an hour). Used by the audio players.
+export function formatTime(seconds: number): string {
+  if (!seconds || !isFinite(seconds)) return '0:00';
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
 export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -27,7 +41,18 @@ export function formatDuration(seconds: number): string {
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
+  if (minutes < 1) {
+    return `${Math.floor(seconds)}s`;
+  }
   return `${minutes}m`;
+}
+
+// Cut text to a maximum length, appending '...' only when something was actually
+// removed. Avoids the "New host...." look where an ellipsis is glued onto text
+// that already fit.
+export function truncate(text: string, max: number): string {
+  if (!text || text.length <= max) return text;
+  return text.slice(0, max) + '...';
 }
 
 export function getDomainFromUrl(url: string): string {

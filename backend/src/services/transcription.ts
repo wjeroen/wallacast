@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import { getAudioDuration } from './audio-utils.js';
 import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
+import { getTempDir } from '../config/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -232,7 +234,7 @@ export async function transcribeWithTimestamps(
 
     const model = config.model;
 
-    const tempDir = path.join(process.cwd(), 'temp');
+    const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
 
     const audioFilename = `audio_transcribe_${Date.now()}.mp3`;
@@ -262,9 +264,9 @@ export async function transcribeWithTimestamps(
     // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
     let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
 
-    if (fileSizeMB > 25) {
-      console.log(`File exceeds 25 MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
-      const chunkFiles = await splitAudioIntoChunks(audioPath, 15);
+    if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
+      console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
+      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
       tempFiles.push(...chunkFiles);
 
       let timeOffset = 0;
@@ -316,7 +318,7 @@ export async function transcribeWithTimestamps(
       }
     } else {
       let fileToTranscribe = audioPath;
-      if (fileSizeMB > 20) {
+      if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
         console.log('Compressing large file...');
         const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
         await compressAudio(audioPath, compressedPath);

@@ -3,12 +3,22 @@ import { query } from '../database/db.js';
 
 const router = express.Router();
 
-// Get queue (manual items only). Aliases queue_items columns so they don't
-// collide with content_items.id/position joined via c.*
+// Get queue (manual items only). Aliases queue_items columns so they don't collide
+// with content_items. Uses the SAME lean column list as GET /api/content (never c.*),
+// so it never ships audio_data (BYTEA), transcript, html_content, comments, or
+// content_alignment. Selecting c.* shipped all of those per queued item (multi-MB each),
+// the same class of bug as the 80GB data-transfer incident.
 router.get('/', async (req, res) => {
   try {
     const result = await query(
-      `SELECT q.id AS queue_id, q.position AS queue_position, q.added_at AS queue_added_at, c.*
+      `SELECT q.id AS queue_id, q.position AS queue_position, q.added_at AS queue_added_at,
+              c.id, c.type, c.title, c.url, c.content, c.author, c.description, c.preview_picture,
+              c.audio_url, c.duration, c.file_size, c.podcast_id, c.podcast_show_name, c.episode_number,
+              c.published_at, c.is_starred, c.is_archived, c.tags, c.playback_position, c.playback_speed,
+              c.last_played_at, c.created_at, c.updated_at, c.generation_status, c.generation_progress,
+              c.generation_error, c.current_operation, c.tts_chunks, c.transcript_words, c.karma,
+              c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
+              c.summary_error, COALESCE(c.comment_count_total, 0) AS comment_count
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id
        WHERE q.user_id = $1

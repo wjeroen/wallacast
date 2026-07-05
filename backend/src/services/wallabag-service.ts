@@ -1,4 +1,5 @@
 import { query } from '../database/db.js';
+import { decrypt, encrypt } from './encryption.js';
 
 /**
  * Wallabag API Service
@@ -504,20 +505,30 @@ export class WallabagService {
       'SELECT setting_value FROM user_settings WHERE user_id = $1 AND setting_key = $2',
       [this.userId, key]
     );
-    return result.rows[0]?.setting_value || null;
+    const value = result.rows[0]?.setting_value;
+    if (!value) return null;
+    // Credentials are stored encrypted (routes/users.ts and the db.ts startup migration both
+    // encrypt them when ENCRYPTION_KEY is set). Decrypt transparently, otherwise we would send
+    // the raw 'enc:...' string as a credential and every sync/test would fail. decrypt() is a
+    // no-op on plaintext, so this is safe whether or not encryption is enabled.
+    return decrypt(value);
   }
 
   /**
    * Set a user setting in the database
    */
   private async setUserSetting(key: string, value: string, isSecret: boolean): Promise<void> {
+    // Encrypt secret values before storing, mirroring routes/users.ts, so tokens saved here
+    // (e.g. refreshed OAuth tokens) match the encrypted-at-rest format the rest of the app reads.
+    // encrypt() is a no-op when ENCRYPTION_KEY is not set.
+    const storedValue = isSecret && value ? encrypt(value) : value;
     await query(
       `INSERT INTO user_settings (user_id, setting_key, setting_value, is_secret)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_id, setting_key) DO UPDATE SET
          setting_value = EXCLUDED.setting_value,
          updated_at = NOW()`,
-      [this.userId, key, value, isSecret]
+      [this.userId, key, storedValue, isSecret]
     );
   }
 

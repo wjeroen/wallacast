@@ -140,9 +140,29 @@ export const useContentStore = create<ContentStore>((set, get) => {
         commit(activeItems, { loading: false });
 
         // Step 2: Fetch archived items in the background (could be hundreds)
-        // so the Archived/Favorites filters work instantly when clicked
+        // so the Archived/Favorites filters work instantly when clicked.
+        // Merge against the CURRENT state, not the step-1 array captured before this
+        // await. Otherwise any mutation that landed in between (e.g. a just-added item)
+        // gets clobbered and vanishes from the UI.
         const archivedResponse = await contentAPI.getAll({ archived: true });
-        commit([...activeItems, ...archivedResponse.data]);
+        const fetched = [...activeItems, ...archivedResponse.data];
+        const fetchedById = new Map(fetched.map(i => [i.id, i]));
+        const current = get().allItems;
+        const seen = new Set<number>();
+        // Update existing entries with fresh server data, preserving current ordering.
+        const merged = current.map(i => {
+          seen.add(i.id);
+          return fetchedById.get(i.id) ?? i;
+        });
+        // Append fetched items that aren't already present (e.g. archived items on
+        // first load), keeping their fetch order.
+        for (const i of fetched) {
+          if (!seen.has(i.id)) {
+            seen.add(i.id);
+            merged.push(i);
+          }
+        }
+        commit(merged);
       } catch (error) {
         console.error('Failed to fetch content:', error);
         set({ error: 'Failed to fetch content', loading: false });

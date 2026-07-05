@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
-import { displayUrl } from '../format';
+import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, ContentVersion, Comment } from '../types';
@@ -103,6 +103,7 @@ function versionSourceLabel(source: ContentVersion['source']): string {
     case 'refetch': return 'Before refetch';
     case 'restore': return 'Before restore';
     case 'fetch': return 'Original fetch';
+    case 'sync': return 'Before Wallabag sync';
     default: return source;
   }
 }
@@ -118,32 +119,6 @@ function getStoredFontScale(): number {
   return 1;
 }
 
-function cleanHtml(text: string): string {
-  if (!text) return '';
-  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  cleaned = cleaned
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  return cleaned;
-}
-
-function getDomainFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-
-
 /**
  * Count total comments including all nested replies.
  * parsedComments only gives top-level count; this recurses into replies.
@@ -157,19 +132,6 @@ function countAllComments(comments: Comment[]): number {
     }
   }
   return count;
-}
-
-function formatTime(seconds: number): string {
-  if (!seconds || !isFinite(seconds)) return '0:00';
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
 
 /**
@@ -203,6 +165,53 @@ function buildCommentMetadata(
   }
 
   return parts.join(' \u00B7 ');
+}
+
+// Recursively render a parsed comment with its replies. Hoisted to module scope so its
+// function identity is stable. Previously it was defined INSIDE FullscreenPlayer's render,
+// so its identity changed every render and React unmounted/remounted the whole comment tree
+// on every timeupdate (~4x/sec during playback). Platform flags come in as props (derived
+// from the URL by the parent) and it uses the shared buildCommentMetadata helper, so the
+// "N basescore" leak from the old inline metadata is gone.
+interface CommentComponentProps {
+  comment: Comment;
+  depth?: number;
+  isLessWrong: boolean;
+  isSubstack: boolean;
+}
+function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: CommentComponentProps) {
+  const metaStr = buildCommentMetadata(
+    { username: comment.username, date: comment.date, karma: comment.karma, extendedScore: comment.extendedScore, depth },
+    isLessWrong,
+    isSubstack
+  );
+
+  return (
+    <div className="comment">
+      <div className="comment-header">
+        <span className="comment-username">{comment.username}</span>
+        {comment.date && (
+          <span className="comment-date">
+            {' \u00B7 '}
+            {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
+          </span>
+        )}
+      </div>
+      {metaStr && (
+        <div className="comment-metadata">
+          <span className="comment-votes">{metaStr}</span>
+        </div>
+      )}
+      <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="comment-replies">
+          {comment.replies.map((reply, idx) => (
+            <CommentComponent key={idx} comment={reply} depth={depth + 1} isLessWrong={isLessWrong} isSubstack={isSubstack} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface QueueRowProps {
@@ -670,54 +679,14 @@ export function FullscreenPlayer({
     userSettingsAPI.set('reader_font_scale', String(newScale)).catch(() => {});
   };
 
-  // Recursive component to render comments with replies (for Comments tab)
-  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const metadataParts: string[] = [];
-    const isSS = content.url ? content.url.includes('substack.com') : false;
-    if (comment.karma !== undefined && comment.karma !== null) {
-      const karmaLabel = isSS ? (comment.karma !== 1 ? 'likes' : 'like') : (comment.karma !== 1 ? 'upvotes' : 'upvote');
-      metadataParts.push(`${comment.karma} ${karmaLabel}`);
-    }
-    if (comment.extendedScore) {
-      const isLW = content.url ? content.url.includes('lesswrong.com') : false;
-      if (isLW) {
-        if (typeof comment.extendedScore.agreement === 'number') {
-          metadataParts.push(`${comment.extendedScore.agreement} agreement`);
-        }
-      } else {
-        Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
-          metadataParts.push(`${count} ${reactionType.toLowerCase()}`);
-        });
-      }
-    }
-
-    return (
-      <div className="comment">
-        <div className="comment-header">
-          <span className="comment-username">{comment.username}</span>
-          {comment.date && (
-            <span className="comment-date">
-              {' \u00B7 '}
-              {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
-            </span>
-          )}
-        </div>
-        {metadataParts.length > 0 && (
-          <div className="comment-metadata">
-            <span className="comment-votes">{metadataParts.join(' \u00B7 ')}</span>
-          </div>
-        )}
-        <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
-        {comment.replies && comment.replies.length > 0 && (
-          <div className="comment-replies">
-            {comment.replies.map((reply, idx) => (
-              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  // Platform detection for comment metadata labels (upvotes vs likes, agreement handling).
+  // Prefer the authoritative comment_source column (GET /:id, migration 017). Older items
+  // fetched before that column existed have it null/undefined, so fall back to URL detection.
+  // Passed into the module-scope CommentComponent so it can stay render-stable.
+  const isLessWrongUrl = content.comment_source === 'lesswrong'
+    || (!content.comment_source && !!content.url && content.url.includes('lesswrong.com'));
+  const isSubstackUrl = content.comment_source === 'substack'
+    || (!content.comment_source && !!content.url && content.url.includes('substack.com'));
 
   // --------------------------------------------------------------------------
   // Download data as zip (backend generates zip, frontend triggers download)
@@ -1033,7 +1002,7 @@ export function FullscreenPlayer({
                 </div>
                 <div className="comments-list">
                   {parsedComments.map((comment, index) => (
-                    <CommentComponent key={index} comment={comment} depth={0} />
+                    <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                   ))}
                 </div>
               </>
@@ -1242,7 +1211,7 @@ export function FullscreenPlayer({
                     </div>
                     <div className="comments-list">
                       {parsedComments.map((comment, index) => (
-                        <CommentComponent key={index} comment={comment} depth={0} />
+                        <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                       ))}
                     </div>
                   </div>
@@ -1282,7 +1251,7 @@ export function FullscreenPlayer({
             {parsedComments.length > 0 ? (
               <div className="comments-list">
                 {parsedComments.map((comment, index) => (
-                  <CommentComponent key={index} comment={comment} depth={0} />
+                  <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                 ))}
               </div>
             ) : (
@@ -1423,7 +1392,7 @@ export function FullscreenPlayer({
                   </div>
                   <div className="comments-list">
                     {parsedComments.map((comment, index) => (
-                      <CommentComponent key={index} comment={comment} depth={0} />
+                      <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                     ))}
                   </div>
                 </div>
@@ -1707,9 +1676,18 @@ export function FullscreenPlayer({
                   {content.is_starred ? 'Unstar' : 'Star'}
                 </button>
                 <button
-                  onClick={() => {
-                    toggleArchived(content.id);
-                    onContentUpdated?.({ ...content, is_archived: !content.is_archived });
+                  onClick={async () => {
+                    // toggleArchived does the optimistic store update + the server PATCH.
+                    // Archiving an article wipes its audio server-side, so the old optimistic
+                    // spread left the player holding a stale audio_url. Await the PATCH, then
+                    // fetch the fresh item once and hand THAT to the player.
+                    await toggleArchived(content.id);
+                    try {
+                      const fresh = await contentAPI.getById(content.id);
+                      onContentUpdated?.(fresh.data);
+                    } catch (err) {
+                      console.error('Failed to refresh player after archive:', err);
+                    }
                   }}
                   style={content.is_archived ? { color: '#3b82f6' } : undefined}
                 >

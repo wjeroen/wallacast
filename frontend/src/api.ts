@@ -61,9 +61,9 @@ api.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return api(originalRequest);
       } catch (refreshError) {
-        // Refresh failed, clear tokens
+        // Refresh failed, clear tokens. The login page renders at '/', there is no /login route.
         clearTokens();
-        window.location.href = '/login';
+        window.location.href = '/';
         return Promise.reject(refreshError);
       }
     }
@@ -234,8 +234,6 @@ export const userSettingsAPI = {
   setBulk: (settings: Record<string, string>) => api.put('/users/settings', { settings }),
 
   delete: (key: string) => api.delete(`/users/settings/${key}`),
-
-  getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
 
   // The full registry of editable LLM prompts (grouped by category) with their built-in defaults.
   getPrompts: () => api.get<{ prompts: PromptDef[] }>('/users/prompts'),

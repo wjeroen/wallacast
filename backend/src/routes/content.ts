@@ -13,50 +13,9 @@ import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
+import { snapshotContentVersion } from '../services/content-versions.js';
 
 const router = express.Router();
-
-// Keep at most this many version snapshots per item (HTML is tiny, but don't grow forever).
-const MAX_VERSIONS_PER_ITEM = 25;
-
-// Snapshot an item's CURRENT body into content_versions BEFORE it gets overwritten by an
-// edit / refetch / restore, so the change can be rolled back. Audio is never versioned.
-// Best-effort: a snapshot failure must never block the actual edit, so callers swallow errors.
-async function snapshotContentVersion(
-  contentItemId: number | string,
-  userId: number,
-  row: { title?: string | null; html_content?: string | null; content?: string | null; comments?: any },
-  source: 'fetch' | 'refetch' | 'edit' | 'restore'
-): Promise<void> {
-  // Nothing worth keeping if there's no body at all.
-  if (!row || (!row.html_content && !row.content)) return;
-
-  const commentsValue =
-    row.comments == null
-      ? null
-      : typeof row.comments === 'string'
-        ? row.comments
-        : JSON.stringify(row.comments);
-
-  await query(
-    `INSERT INTO content_versions (content_item_id, user_id, source, title, html_content, content, comments)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [contentItemId, userId, source, row.title ?? null, row.html_content ?? null, row.content ?? null, commentsValue]
-  );
-
-  // Prune anything beyond the most recent MAX_VERSIONS_PER_ITEM.
-  await query(
-    `DELETE FROM content_versions
-     WHERE content_item_id = $1
-       AND id NOT IN (
-         SELECT id FROM content_versions
-         WHERE content_item_id = $1
-         ORDER BY created_at DESC
-         LIMIT $2
-       )`,
-    [contentItemId, MAX_VERSIONS_PER_ITEM]
-  );
-}
 
 // Strip <script>/<style> (and javascript: URLs) from edited HTML before storing it.
 // The frontend's markdownToHtml already strips these; this is defense-in-depth because
@@ -270,10 +229,12 @@ router.post('/bulk', async (req, res) => {
         [userId, ids]
       );
       const r = await query(
-        `DELETE FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+        `DELETE FROM content_items WHERE user_id = $1 AND id = ANY($2::int[]) RETURNING id`,
         [userId, ids]
       );
       affected = r.rowCount ?? 0;
+      // Delete each item's on-disk audio file too, otherwise the mp3s orphan on the /data volume.
+      for (const row of r.rows) await deleteAudioFile(row.id);
       if (wb.rows.length > 0) {
         const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
         for (const row of wb.rows) {
@@ -296,7 +257,7 @@ router.post('/bulk', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -313,115 +274,6 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching content item:', error);
     res.status(500).json({ error: 'Failed to fetch content item' });
-  }
-});
-
-// Serve audio (PUBLIC - no auth required for HTML5 audio player compatibility)
-// For articles/texts: serves audio_data stored in the database with byte-range support.
-// For podcast episodes: proxies the external CDN URL, forwarding the browser's Range
-// header so only the requested bytes are fetched from upstream, never the whole file.
-router.get('/:id/audio', async (req, res) => {
-  try {
-    // Note: No user_id filter - audio URLs are public but content IDs are private
-    const result = await query(
-      'SELECT audio_data, audio_url, type FROM content_items WHERE id = $1',
-      [req.params.id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Audio not found' });
-    }
-
-    const { audio_data: audioData, audio_url: audioUrl, type } = result.rows[0];
-
-    // -------------------------------------------------------------------------
-    // PATH A: podcast episode. Proxy the external CDN URL
-    // Range requests are forwarded byte-for-byte so we only pull what the
-    // browser actually needs. This sidesteps CORS issues (e.g. api.substack.com
-    // blocking cross-origin range requests from the browser).
-    // -------------------------------------------------------------------------
-    if (!audioData && audioUrl && type === 'podcast_episode') {
-      const upstreamHeaders: Record<string, string> = {
-        // Identify as a normal browser so CDNs don't block the request
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      };
-      // Forward the browser's Range header so we only fetch what it needs
-      if (req.headers.range) {
-        upstreamHeaders['Range'] = req.headers.range;
-      }
-
-      console.log(`[AudioProxy] ${req.headers.range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
-
-      const upstreamRes = await fetch(audioUrl, { headers: upstreamHeaders });
-
-      if (!upstreamRes.ok && upstreamRes.status !== 206) {
-        console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
-        return res.status(502).json({ error: 'Upstream audio unavailable' });
-      }
-
-      res.status(upstreamRes.status);
-
-      // Forward the headers that matter for audio streaming/seeking
-      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-        const val = upstreamRes.headers.get(header);
-        if (val) res.setHeader(header, val);
-      }
-
-      if (!upstreamRes.body) {
-        return res.end();
-      }
-
-      // Stream chunk by chunk. Readable.fromWeb bridges the Web ReadableStream
-      // to a Node.js stream that can be piped to the Express response.
-      // This ensures we never buffer the full audio file in memory.
-      const { Readable } = await import('stream');
-      const nodeStream = Readable.fromWeb(upstreamRes.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
-      nodeStream.pipe(res);
-      nodeStream.on('error', (err) => {
-        console.error('[AudioProxy] Stream error:', err.message);
-        if (!res.writableEnded) res.end();
-      });
-      return;
-    }
-
-    // -------------------------------------------------------------------------
-    // PATH B: article/text. Serve audio_data stored in the database
-    // -------------------------------------------------------------------------
-    if (!audioData) {
-      return res.status(404).json({ error: 'Audio not found' });
-    }
-
-    const fileSize = audioData.length;
-
-    // Handle range requests for seeking/streaming
-    const range = req.headers.range;
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunkSize = end - start + 1;
-
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=31536000',
-      });
-
-      res.end(audioData.slice(start, end + 1));
-    } else {
-      // No range request - send full file
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Length', fileSize);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'public, max-age=31536000');
-
-      res.send(audioData);
-    }
-  } catch (error) {
-    console.error('Error serving audio:', error);
-    res.status(500).json({ error: 'Failed to serve audio' });
   }
 });
 
@@ -793,9 +645,13 @@ router.patch('/:id', async (req, res) => {
           updates.transcript = null;
           updates.transcript_words = null;
           updates.tts_chunks = null;
-          updates.generation_status = null;
-          updates.generation_progress = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress');
+          // Match the bulk remove_audio field list: reset to idle and clear any prior
+          // failure, otherwise a previously-failed item keeps its red error box after removal.
+          updates.generation_status = 'idle';
+          updates.generation_progress = 0;
+          updates.generation_error = null;
+          updates.current_operation = null;
+          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress', 'generation_error', 'current_operation');
           await deleteAudioFile(id); // audio now lives on disk, delete the file too
         }
       }
@@ -825,97 +681,6 @@ router.patch('/:id', async (req, res) => {
       updates.summary_error = null;
       allowedFields.push('summary_status', 'summary_error');
       delete updates.dismiss_summary_error;
-    }
-
-    if (updates.regenerate_content === true) {
-      const contentResult = await query(
-        'SELECT type, url, preview_picture FROM content_items WHERE id = $1 AND user_id = $2',
-        [id, req.user!.userId]
-      );
-
-      if (contentResult.rows.length > 0) {
-        const { type, url, preview_picture } = contentResult.rows[0];
-
-        if (type === 'article' && url) {
-          console.log(`Regenerating content for article ${id} from URL:`, url);
-
-          (async () => {
-            try {
-              await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
-                ['fetching', 10, 'fetching_article', id]
-              );
-
-              // Snapshot the current body before the refetch overwrites it (undoable)
-              const before = await query(
-                'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
-                [id, req.user!.userId]
-              );
-              if (before.rows.length > 0) {
-                await snapshotContentVersion(id, req.user!.userId, before.rows[0], 'refetch').catch((err) =>
-                  console.error('Failed to snapshot version before refetch:', err)
-                );
-              }
-
-              const articleData = await fetchArticleContent(url);
-
-              const commentsJson = articleData.comments && articleData.comments.length > 0
-                ? JSON.stringify(articleData.comments)
-                : null;
-
-              // FIX 4: Update preview_picture when regenerating content
-              await query(
-                `UPDATE content_items SET
-                  html_content = $1,
-                  content = $2,
-                  author = COALESCE($3, author),
-                  published_at = COALESCE($4, published_at),
-                  karma = $5,
-                  agree_votes = $6,
-                  disagree_votes = $7,
-                  comments = $8,
-                  preview_picture = COALESCE($9, preview_picture),
-                  comment_source = $10,
-                  comment_count_total = $11,
-                  content_source = 'wallacast',
-                  generation_status = 'completed',
-                  generation_progress = 100,
-                  current_operation = NULL,
-                  updated_at = NOW()
-                WHERE id = $12`,
-                [
-                  articleData.cleaned_html,
-                  articleData.content,
-                  articleData.author || articleData.byline,
-                  articleData.published_date,
-                  articleData.karma,
-                  articleData.agree_votes,
-                  articleData.disagree_votes,
-                  commentsJson,
-                  articleData.lead_image_url || null,
-                  articleData.comment_source || null,
-                  articleData.comment_count_total || 0,
-                  id
-                ]
-              );
-
-              console.log(`Content refetched successfully for article ${id} (no LLM)`);
-            } catch (error) {
-              console.error('Content refetch error:', error);
-              await query(
-                // Mark the failed step so the card's Retry re-runs a refetch (not audio gen)
-                "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
-                ['failed', (error as Error).message || 'Failed to regenerate content', 0, id]
-              );
-            }
-          })();
-
-          updates.generation_status = 'extracting_content';
-          updates.generation_progress = 0;
-          allowedFields.push('generation_status', 'generation_progress');
-          delete updates.regenerate_content;
-        }
-      }
     }
 
     if (updates.regenerate_transcript === true) {
@@ -999,13 +764,15 @@ router.patch('/:id', async (req, res) => {
     }
 
     if (updates.is_archived === true) {
+      // Only read whether a blob exists and its stored size, never the blob itself.
+      // Loading audio_data (BYTEA, tens of MB) into RAM just to check existence was wasteful.
       const contentResult = await query(
-        'SELECT audio_data, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT audio_data IS NOT NULL AS has_blob, pg_column_size(audio_data) AS blob_bytes, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
       if (contentResult.rows.length > 0) {
-        const { audio_data, type, is_starred: dbStarred } = contentResult.rows[0];
+        const { has_blob, blob_bytes, type, is_starred: dbStarred } = contentResult.rows[0];
 
         // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
         // If updates.is_starred is present, use it. Otherwise use DB value.
@@ -1014,11 +781,11 @@ router.patch('/:id', async (req, res) => {
         // Audio may be in the DB blob (legacy) OR on the disk volume (new). Check both, so
         // archiving still frees space after the migration (when audio_data is NULL).
         const diskBytes = await getAudioFileSize(id);
-        const hasAudio = !!audio_data || diskBytes !== null;
+        const hasAudio = has_blob || diskBytes !== null;
 
         // Only delete audio for articles (not podcasts) and only if not favorited
         if (hasAudio && (type === 'article' || type === 'text') && !effectiveStarred) {
-          const sizeMB = ((audio_data?.length ?? diskBytes ?? 0) / 1024 / 1024).toFixed(2);
+          const sizeMB = ((blob_bytes ?? diskBytes ?? 0) / 1024 / 1024).toFixed(2);
           console.log(`Archived: Deleting ${sizeMB} MB of audio to save space`);
           updates.audio_data = null;
           updates.audio_url = null;
@@ -1298,6 +1065,12 @@ router.post('/:id/refetch', async (req, res) => {
       try {
         console.log(`Refetching metadata and comments for article ${id} from:`, url);
 
+        // Mark an in-progress status so the card shows a spinner and so a failure is visible.
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+          ['fetching', 10, 'fetching_article', id]
+        );
+
         // Snapshot the current body before the refetch overwrites it (undoable via version history)
         const before = await query(
           'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
@@ -1330,6 +1103,9 @@ router.post('/:id/refetch', async (req, res) => {
             comment_source = $10,
             comment_count_total = $11,
             content_source = 'wallacast',
+            generation_status = 'completed',
+            generation_progress = 100,
+            current_operation = NULL,
             updated_at = NOW(),
             content_fetched_at = NOW()
           WHERE id = $12`,
@@ -1352,6 +1128,11 @@ router.post('/:id/refetch', async (req, res) => {
         console.log(`Refetch completed for article ${id}`);
       } catch (error) {
         console.error(`Refetch error for article ${id}:`, error);
+        // Mark the failed step so the card's Retry re-runs a refetch (not audio gen).
+        await query(
+          "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
+          ['failed', (error as Error).message || 'Failed to refetch content', 0, id]
+        ).catch(() => { /* swallow */ });
       }
     })();
 
@@ -1470,7 +1251,14 @@ router.post('/:id/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'TTS only available for articles and text' });
     }
 
-    if (!regenerate && contentItem.generation_status === 'generating_audio') {
+    // Any non-terminal (in-flight) status means a pipeline is already running. Auto-generation
+    // sets 'starting' first, so guarding only on 'generating_audio' let a click in that window
+    // double-start TTS (double spend). Guard on the full in-flight set instead.
+    const IN_FLIGHT_STATUSES = [
+      'starting', 'fetching', 'extracting_content', 'content_ready',
+      'generating_audio', 'generating_transcript', 'ready',
+    ];
+    if (!regenerate && IN_FLIGHT_STATUSES.includes(contentItem.generation_status)) {
       return res.status(409).json({
         error: 'Audio generation already in progress',
         generation_status: contentItem.generation_status,

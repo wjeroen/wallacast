@@ -84,7 +84,7 @@ export const NARRATION_SCRIPT_RETRY_DEFAULT = `
 The previous output dropped {inputImageCount} image descriptions.
 
 YOU MUST PRESERVE ALL TEXT that matches this pattern:
-"An image shows [description]. End of the image description."
+"An image is displayed showing [description]. End of the image description."
 
 DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
 Copy them VERBATIM from input to output.
@@ -195,6 +195,9 @@ function countAllComments(comments: any[]): number {
 function formatDateForNarration(dateString: string): string {
   try {
     const date = new Date(dateString);
+    // new Date(bad) never throws, it yields an Invalid Date. Guard so we never narrate
+    // "NaNth of Invalid Date NaN"; fall back to the raw input string instead.
+    if (isNaN(date.getTime())) return dateString;
     const day = date.getDate();
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
@@ -508,9 +511,8 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
         },
         {
           role: 'user',
-          // UPDATED: Increased slice limit to 400k characters (approx 100k tokens)
-          // Safe for gpt-5-nano's 400k context window
-          content: cleanHtml.slice(0, 1000000)
+          // 400k chars (~100k tokens) fits every supported chat model's context.
+          content: cleanHtml.slice(0, 400000)
         }
       ],
     });
@@ -544,7 +546,6 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
           { role: 'system', content: retrySystemPrompt },
           { role: 'user', content: cleanHtml.slice(0, 400000) }
         ],
-        max_completion_tokens: 16000
       });
 
       const retryBody = retryResponse.choices[0]?.message?.content || '';
@@ -588,7 +589,7 @@ export async function generateArticleAudio(
   try {
     const userSettings = await getTTSOptionsForUser(userId);
     let targetModel = userSettings.model || 'gpt-4o-mini-tts';
-    let targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+    let targetVoice = options.voice || userSettings.voice;
 
     // Voice variety: if the user selected multiple voices, pick one at random for this
     // generation (can span TTS models, the picked model also overrides the client routing).
@@ -793,9 +794,15 @@ export async function generateArticleAudio(
       for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(console.error);
       throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error generating audio:', error);
-    throw new Error('Failed to generate audio. Please check your API keys.');
+    const message = error?.message || String(error);
+    // A user cancellation ("Generation cancelled by user") must pass through unchanged so the
+    // caller can tell it apart from a real API-key failure and not show a misleading error.
+    if (message.includes('cancelled')) {
+      throw error;
+    }
+    throw new Error('Failed to generate audio: ' + message);
   }
 }
 
@@ -840,8 +847,6 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
         imageAltTextData = await imageService.smartRegenerate(
           sourceContent,
           imageAltTextData, // existing data or null
-          content.url || '',
-          { articleTitle: content.title, articleAuthor: content.author },
           // Progress callback
           async (current, total) => {
             console.log(`[TTS] Image progress callback triggered: ${current}/${total}`);

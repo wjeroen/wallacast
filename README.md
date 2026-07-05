@@ -35,7 +35,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 | Authentication | JWT tokens (access + refresh), bcrypt password hashing |
 | TTS | Kokoro (hexgrad/Kokoro-82M) via DeepInfra, fallback to OpenAI gpt-4o-mini-tts (per-user API keys) |
 | Transcription | Whisper via DeepInfra native endpoint (turbo default, full large-v3 selectable in Settings) with anti-hallucination params, fallback to OpenAI whisper-1 (per-user API keys) |
-| TTS Preparation | OpenAI or DeepSeek models. Auto-routes based on available API keys. |
+| Narration / alignment / summary LLMs | Per-feature provider + model selection (OpenAI, DeepInfra, OpenRouter, Anthropic, Gemini) with key-aware defaults |
 | Image Descriptions | Gemini (default), DeepInfra (Gemma 4), OpenAI (GPT-5 Mini), or OpenRouter vision models for alt-text narrations (provider + model configurable in Settings, per-user API key, optional) |
 | Article Fetching | GraphQL APIs for EA Forum/LessWrong (via got-scraping), Substack comment extraction (via _preloads JSON), standard scraper for other sites |
 | Audio Processing | FFmpeg (24kHz, 96kbps MP3 - optimized for speech) |
@@ -48,14 +48,14 @@ Wallacast supports multiple users with complete data isolation:
 
 - **User Registration**: Users create accounts via `/api/auth/register`
 - **Per-User API Keys**: Each user stores their own OpenAI API key in Settings (encrypted in `user_settings` table)
-- **JWT Authentication**: Access tokens (15min) + refresh tokens (7 days) with automatic renewal
+- **JWT Authentication**: Access tokens (15min) + refresh tokens (30 days) with automatic renewal
 - **Data Isolation**: All queries filter by `user_id` - users only see their own content
 - **Public Audio URLs**: Audio endpoints (`/api/content/:id/audio`) are public for HTML5 player compatibility, but content IDs remain private
 - **Byte-Range Support**: Audio streaming supports HTTP range requests for seeking without re-downloading
 
 **Security Model:**
 - Content IDs are not enumerable (UUIDs would be better for production)
-- Audio data stored in database with proper user isolation
+- Generated audio is stored as files on the backend volume (`/data/audio/{id}.mp3`), with a DB fallback for legacy in-database blobs. Access still goes through the public audio endpoint (`/api/content/:id/audio`)
 - No global OpenAI API key - each user must set their own
 - Orphaned content (created before multi-user) is auto-assigned to first user on startup
 
@@ -73,7 +73,6 @@ Wallacast supports multiple users with complete data isolation:
 | Image descriptions | `backend/src/services/image-alt-text.ts` |
 | Transcription | `backend/src/services/transcription.ts`, `backend/src/services/whisper-prompt.ts` |
 | Content-transcript alignment (LLM) | `backend/src/services/llm-alignment.ts` |
-| Content-transcript alignment (legacy) | `backend/src/services/content-alignment.ts` |
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
@@ -122,11 +121,12 @@ Wallacast supports multiple users with complete data isolation:
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                │
                                ▼
-                    ┌─────────────────────┐
-                    │    OpenAI APIs      │
-                    │  (TTS, Whisper,     │
-                    │   GPT-5-Nano)       │
-                    └─────────────────────┘
+                    ┌────────────────────────────────────┐
+                    │          AI provider APIs          │
+                    │  (OpenAI, DeepInfra, OpenRouter,   │
+                    │   Anthropic, Gemini)               │
+                    │  (TTS, Whisper, chat LLMs)         │
+                    └────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -183,7 +183,6 @@ Wallacast supports multiple users with complete data isolation:
   - `PUT /api/users/settings/:key` - Set specific setting
   - `PUT /api/users/settings` - Bulk update settings
   - `DELETE /api/users/settings/:key` - Delete setting
-  - `GET /api/users/ai-providers` - Get available AI provider config
   - `GET /api/users/prompts` - The editable-prompt registry (every LLM prompt: id, category, label, description, placeholder vars, default text, optional warning) for the Settings "Custom prompts" editor
 
 - **`routes/content.ts`**: CRUD for content items (requires JWT auth). **All queries filter by `user_id`** for data isolation. Handles article URL fetching, auto-triggers audio generation for articles and transcription for podcasts. Notable endpoints:
@@ -197,13 +196,13 @@ Wallacast supports multiple users with complete data isolation:
     - `audio_data: null, audio_url: null` removes audio from articles/texts
     - `summary: null` removes the article + comment summaries from articles/texts
     - `dismiss_generation_error: true` / `dismiss_summary_error: true` reset a `failed` generation/summary status to `idle` and clear the stored error (the card's red error box is dismissed via its X button)
-    - `regenerate_content: true` re-extracts article content through the narration LLM
     - `regenerate_transcript: true` re-transcribes podcast audio through Whisper
     - `is_edit: true` (with `html_content` + `content`). Manual Markdown/HTML edit of an article/text body. Snapshots the current body into `content_versions` first, sanitizes the HTML (strips `<script>`/`<style>`/`javascript:`), sets `content_fetched_at = now`, and leaves audio + read-along untouched (so the provenance shows content is newer than the narration). The frontend converts Markdown→HTML before sending.
   - `POST /:id/generate-audio` - Manually trigger audio generation. Body: `{ regenerate?: boolean, exclude_comments?: boolean }`. When `exclude_comments` is true, comments are omitted from the TTS narration script.
   - `POST /:id/generate-summary` - Manually trigger summary generation. Articles/texts: body + comments. Podcast episodes: the Whisper TRANSCRIPT (podcast-specific prompt). Body: `{ regenerate?: boolean, generate_transcript?: boolean }`. For podcasts without a transcript, `generate_transcript: true` runs Whisper first and chains the summary after; without it the request returns 400 with `code: 'no_transcript'` so the UI can warn. Uses the independent `summary_status` field, so it can run alongside audio generation.
+  - `POST /:id/refetch` - Re-fetches the article from the web (articles with a URL only). Snapshots the current body to version history first, sets `generation_status` to `'fetching'` (with `current_operation` `'fetching_article'`) while it runs, and on error sets `'failed'` with `current_operation` `'failed_refetch'` (so the card's Retry re-runs a refetch, not audio generation).
   - `POST /bulk` - Bulk actions on many items in one request (used by the library's Select mode). Body: `{ action, ids }` (max 500 ids). Actions: `star`, `unstar`, `archive`, `unarchive`, `delete`, `remove_audio`, `remove_summary`. `archive` mirrors the single-item PATCH: wipes generated audio + read-along data for non-starred articles/texts (podcasts and starred items keep everything). `unarchive` deliberately does NOT auto-regenerate audio (use bulk Generate audio afterwards). `remove_audio` only touches articles/texts (podcast audio_url is source media). `delete` also fires Wallabag deletions for synced items. Returns `{ affected }`.
-  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. This is required for HTML5 `<audio>` elements which can't send JWT tokens. **Serving order**: (A) podcast episodes proxy the external `audio_url`; (B) **preferred** - generated article/text audio is streamed from the disk file on the volume (`audio-storage.ts`) with 2MB-capped range requests; (C) **fallback** - if there's no disk file yet, the legacy in-DB `audio_data` blob is served via PostgreSQL `substring()` (reads only the needed bytes, never the whole blob). The live handler is the one in `index.ts`; the near-identical one in `content.ts` is shadowed dead code (TODO: remove).
+  - `GET /:id/audio` - **PUBLIC** endpoint (no auth) for streaming audio with byte-range support. Registered in `index.ts` before protected routes. This is required for HTML5 `<audio>` elements which can't send JWT tokens. **Serving order**: (A) podcast episodes proxy the external `audio_url`; (B) **preferred** - generated article/text audio is streamed from the disk file on the volume (`audio-storage.ts`) with 2MB-capped range requests; (C) **fallback** - if there's no disk file yet, the legacy in-DB `audio_data` blob is served via PostgreSQL `substring()` (reads only the needed bytes, never the whole blob). The handler lives in `index.ts`, registered before the protected routes.
   - `GET /:id/export` - Export all database fields for the item (except `audio_data`) as a zip file. Accepts JWT via `?token=` query param for direct browser download via `window.open()`. Used by the "Download data (zip)" button for debugging.
   - `GET /:id/original-html` - Fetch raw HTML from source URL (no cleaning, for debugging). Returns the page exactly as the web server sends it.
   - `GET /:id/versions` - List version-history snapshots (lean metadata only: `id`, `source`, `title`, `created_at`, `html_bytes`, `has_comments`; no bodies).
@@ -234,13 +233,12 @@ Wallacast supports multiple users with complete data isolation:
   - `POST /content/:id` - Trigger transcription for podcast episode
 
 - **`routes/wallabag.ts`**: Wallabag synchronization endpoints (requires JWT auth, all queries filter by `user_id`)
-  - `POST /test` - Test connection with configured Wallabag instance
-  - `GET /status` - Get sync status (pending changes count)
-  - `POST /sync/pull` - Pull articles from Wallabag to Wallacast
-  - `POST /sync/push` - Push Wallacast articles to Wallabag
-  - `POST /sync/full` - Bidirectional sync (pull then push)
-  - `POST /sync/cleanup` - Remove orphaned Wallabag mappings
-  - `POST /full-refresh` - Nuclear option: delete all Wallabag-synced items and re-pull
+  - `POST /test` - Test connection with the configured Wallabag instance
+  - `GET /status` - Get sync status (enabled flag, last sync time, pending-changes count)
+  - `POST /sync` - Full bidirectional sync (pull then push)
+  - `POST /pull` - Pull changes from Wallabag into Wallacast. `?full=true` forces a full refresh (clears the last-sync timestamp so everything is re-pulled)
+  - `POST /push` - Push Wallacast changes to Wallabag
+  - `POST /cleanup` - Emergency cleanup: delete recently synced, non-starred, audio-less items and reset the last-sync timestamp
 
 #### Services
 
@@ -254,7 +252,7 @@ Wallacast supports multiple users with complete data isolation:
   - **Provider registry (`CHAT_PROVIDERS`)**: OpenAI, DeepInfra, OpenRouter, Anthropic, Google Gemini. All are spoken to via the **OpenAI SDK** (just a different `baseURL` + key), so one client handles every provider. OpenRouter is the easy on-ramp for Claude/Gemini/etc. (`provider/model` ids).
   - `getChatClientForJob(userId, job)`: per-job model selection. The `job` parameter is `'narration'` (prepares text for TTS) | `'alignment'` (read-along) | `'summary'`. Each job has its own `{provider, model, reasoning_effort}` setting; read-along & summaries can defer to narration ("use same model as narration"). Returns `{ client, model, extraParams }` where `extraParams` carries the reasoning_effort param (empty = provider default, so behavior is unchanged unless set). **Read-time fallback**: if a job isn't configured yet, it derives from the legacy `narration_llm` routing, so existing users keep working and the Settings fields pre-fill with the model actually in use.
   - `getChatClientForUser(userId)`: back-compat wrapper (narration job, no reasoning extraParams).
-  - `getTTSClientForUser(userId, modelId)`: Intelligent router returning `{ client, model }`. DeepInfra is used for Kokoro models; for OpenAI-family models, OpenAI directly OR via OpenRouter when `openai_tts_provider === 'openrouter'` (same voices, but the model id is namespaced to `openai/…` for OpenRouter). Callers use the returned `model` for the API call.
+  - `getTTSClientForUser(userId, modelId)`: Intelligent router returning `{ client, model }`. Kokoro voices route via DeepInfra (the default) or OpenRouter, per the `kokoro_tts_provider` setting, with OpenRouter used as a fallback when no DeepInfra key exists (same voices either way, OpenRouter lists Kokoro under the lowercase model id). OpenAI-family voices always go through the OpenAI key (OpenRouter carries no OpenAI TTS models). Callers use the returned `model` for the API call.
   - `getTranscriptionClientForUser(userId)`: returns a `TranscriptionConfig` discriminated union. It can be `{ kind: 'deepinfra', apiKey, model }` (native endpoint, anti-hallucination params) or `{ kind: 'openai', client, model }` (OpenAI SDK, used for both OpenAI and OpenRouter). Built from explicit `transcription_provider` (`deepinfra` | `openai` | `openrouter`) + `transcription_model` settings, with legacy auto-routing (DeepInfra preferred) as the fallback when unset
   - `getDeepInfraClientForUser(userId)`, `getOpenAIClientForUser(userId)`: Provider-specific clients
   - `getUserSetting(userId, key)`: Fetches setting from `user_settings` table
@@ -304,7 +302,7 @@ Wallacast supports multiple users with complete data isolation:
   - Used in all three transcription paths: POST / (auto-transcribe), PATCH /:id (regenerate), and transcription route
 
 - **`services/transcription.ts`**: Podcast transcription using Whisper (requires per-user OpenAI/DeepInfra API key)
-  - `transcribeWithTimestamps(audioUrl, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint to improve recognition of key phrases like "Comments section:" and comment headers
+  - `transcribeWithTimestamps(audioSource: string | Buffer, userId, initialPrompt?)`: Returns word-level timestamps for sync. Accepts optional Whisper prompt hint to improve recognition of key phrases like "Comments section:" and comment headers
   - Uses centralized config from `processing.ts` for file size limits, chunk duration, compression thresholds
   - Handles large files by splitting into chunks (uses actual ffprobe duration for chunk time offsets), compresses audio before transcription if needed
   - **Two transports (branch on `TranscriptionConfig.kind`)**: **DeepInfra** uses the **native** inference endpoint (`POST /v1/inference/{model}`, raw multipart via `globalThis.fetch`) because only the native endpoint honors Whisper's anti-hallucination params. We send `chunk_level=word` + `word_timestamps=true` (**required**, the native endpoint defaults `chunk_level=segment`/`word_timestamps=false`, which returns segment text only and breaks read-along; `extractDeepInfraWords()` then reads the per-word data whether it lands in the top-level `words` array or nested in `segments[].words`), `condition_on_previous_text=false` (the headline fix: stops the 30s-window repetition loops like "even. even. even."), `temperature=0`, and the Whisper default thresholds (`vad` / `no_repeat_ngram_size` are intentionally NOT set yet. These are staged follow-ups). Native returns words as `{start, end, text}`, remapped to `{word, start, end}`; if words are ever missing, `wordsFromSegments()` interpolates timings from the segment spans so read-along degrades gracefully instead of breaking. **OpenAI/OpenRouter** stay on the OpenAI SDK (`client.audio.transcriptions.create`, OpenAI-shaped endpoint, no such params).
@@ -322,8 +320,6 @@ Wallacast supports multiple users with complete data isolation:
   - Post-processing: fixes comment-divider placement and searches for body text in raw Whisper words when headers are dropped (applies to ALL comments, not just the first)
   - Prompt includes explicit rules for images (spoken as "An image shows...") and footnotes (not spoken, inherit previous timestamp)
   - Stored in `content_alignment` JSONB column (same column as old Needleman-Wunsch data)
-
-- **`services/content-alignment.ts`**: Legacy Needleman-Wunsch content alignment (no longer used for new alignments, kept for backward compatibility with existing data)
 
 - **`services/podcast-service.ts`**: RSS feed parsing (podcasts, newsletters, blogs) with database caching
   - `searchPodcasts()`: Search iTunes podcast directory (returns podcast feeds only)
@@ -449,7 +445,7 @@ The matching CSS (`App.css`) caps every image at the column width (`max-width: 1
   - **Dropdown menu** (three-dot icon, left of minimize button): Same options as library item dropdown, including generate/regenerate audio, remove audio, regenerate transcript, refetch from web, "Copy content" (copies title/author/date/link/body/nested comments to the clipboard as Markdown via `htmlToMarkdown()` in `markdown.ts`, now preserving images, links, and inline formatting identical to what the editor shows), and "Download data (zip)"
 
 #### Other Files
-- **`api.ts`**: Axios-based API client with credential support for HTTP Basic Auth
+- **`api.ts`**: Axios-based API client. A request interceptor injects the JWT access token as a `Bearer` header, and a response interceptor auto-refreshes the token on a 401 (retrying the original request once, or clearing tokens and redirecting to login when the refresh itself fails)
 - **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings (field names aligned with Wallabag API)
 - **`App.css`**: All styles (single CSS file, no modules)
 - **`index.css`**: Base styles from Vite template
@@ -500,7 +496,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `id`: Primary key
 - `user_id`: FK to users table
 - `refresh_token_hash`: bcrypt hashed refresh token
-- `expires_at`: Token expiration (7 days)
+- `expires_at`: Token expiration (30 days)
 - `revoked_at`: Manual revocation timestamp
 - `created_at`
 
@@ -540,7 +536,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
 - `playback_position`, `playback_speed` (deprecated - speed now stored globally in user settings + localStorage), `last_played_at`
-- `generation_status`: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed'
+- `generation_status`: 'idle' | 'starting' | 'fetching' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'ready' | 'completed' | 'failed'
 - `generation_progress`, `generation_error`, `current_operation`
 - `summary`: Article-body summary (Twitter-thread style, paragraphs separated by blank lines)
 - `comment_summary`: Comment-discussion summary (nullable)
@@ -554,7 +550,7 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `title`, `author`, `description`
 - `feed_url`, `website_url`, `preview_picture`
 - `category`, `language`
-- `type`: `'podcast' | 'newsletter' | 'blog'` - Auto-detected based on feed content (audio enclosures vs text articles)
+- `type`: `'podcast' | 'newsletter' | 'blog'` - Auto-detected based on feed content (audio enclosures vs text articles). The column allows `'blog'`, but `detectFeedType()` currently only ever assigns `'podcast'` or `'newsletter'`.
 - `is_subscribed`, `last_fetched_at`, `last_refreshed_at`
 - **Unique constraint**: `(feed_url, user_id)` - Multiple users can subscribe to the same feed
 
@@ -594,6 +590,8 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 
 ## Deployment (Railway)
 
+For a step-by-step beginner walkthrough, see **`RAILWAY_DEPLOYMENT.md`**.
+
 The app deploys as 3 separate Railway services from the same repo:
 
 1. **PostgreSQL Database**: Provisioned via Railway's database service
@@ -626,7 +624,7 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 - Backend has a Dockerfile that installs FFmpeg (required for audio processing)
 - JWT authentication protects all `/api/*` routes except `/api/auth/*` and `/api/content/:id/audio`
 - Each user must set their own OpenAI API key in Settings (no global API key)
-- Audio data stored in database (PostgreSQL BYTEA column), not filesystem
+- Generated audio lives on the Railway volume at `/data/audio/{id}.mp3`, not in Postgres. Legacy in-database blobs are auto-migrated to disk at startup (see the audio-storage migration note above)
 - Audio endpoint is public for HTML5 player compatibility, supports byte-range requests for seeking
 - CORS is configured for single frontend URL only
 - If JWT_SECRET not set, sessions won't persist across server restarts (uses random secret)
@@ -634,18 +632,17 @@ VITE_API_URL=https://your-backend.up.railway.app/api
 ## Content Processing Flows
 
 ### Article Flow
-1. User submits URL via AddTab
-2. Backend fetches HTML (`article-fetcher.ts`)
-3. GPT-4o-mini extracts readable content (`openai-tts.ts`)
-4. Content is chunked (max 3500 chars per chunk)
-5. Each chunk is converted to audio via gpt-4o-mini-tts
-6. Chunks are concatenated via FFmpeg
-7. Final audio URL saved to DB
+1. User submits a URL via AddTab
+2. Backend fetches and cleans the HTML (`article-fetcher.ts`), no LLM involved
+3. Audio generation (automatic only if the auto-generate-audio setting is on, otherwise triggered manually): the scriptwriter LLM (the per-job configured chat model) prepares the narration script (`openai-tts.ts`)
+4. TTS with the key-aware default voice (Kokoro Puck via DeepInfra or OpenRouter when such a key exists, else OpenAI `gpt-4o-mini-tts`), chunked at 3500 chars and concatenated with FFmpeg
+5. Whisper transcription with word timestamps (`transcription.ts`)
+6. LLM alignment maps content elements to timestamps for the read-along view (`llm-alignment.ts`)
 
 ### Podcast Flow
 1. User subscribes to RSS feed
 2. Episodes are parsed and saved
-3. When user adds episode to library, transcription starts automatically
+3. Transcription runs automatically only when the auto-transcribe-podcasts setting is enabled (default off), otherwise it is triggered via the Generate transcript action
 4. Whisper transcribes with word timestamps
 5. Transcript saved for display and seeking
 

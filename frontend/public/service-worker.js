@@ -79,13 +79,17 @@ self.addEventListener('fetch', (event) => {
             const responseToCache = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseToCache);
+              // Also store under a stable '/index.html' key so the offline
+              // fallback below can always find a shell to serve, regardless of
+              // which SPA route the user first visited.
+              cache.put('/index.html', response.clone());
             });
           }
           return response;
         })
         .catch(() => {
-          // Offline fallback only
-          return caches.match('/index.html');
+          // Offline fallback: try the exact route first, then the shared shell.
+          return caches.match(request).then((cached) => cached || caches.match('/index.html'));
         })
     );
     return;

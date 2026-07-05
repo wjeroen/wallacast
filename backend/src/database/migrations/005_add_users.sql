@@ -1,6 +1,6 @@
 -- Migration: Add users and user settings tables
 -- With authentication support (password hashes)
--- No hardcoded users - first user created from AUTH_USERNAME/AUTH_PASSWORD env vars
+-- No hardcoded users - the first user registers via POST /api/auth/register
 
 -- Users table with auth support
 CREATE TABLE IF NOT EXISTS users (
@@ -82,5 +82,5 @@ CREATE INDEX IF NOT EXISTS idx_content_items_user_id ON content_items(user_id);
 CREATE INDEX IF NOT EXISTS idx_podcasts_user_id ON podcasts(user_id);
 CREATE INDEX IF NOT EXISTS idx_queue_items_user_id ON queue_items(user_id);
 
--- Note: First user is created by the application from AUTH_USERNAME/AUTH_PASSWORD env vars
+-- Note: The first user registers via POST /api/auth/register
 -- All existing content (user_id IS NULL) will be assigned to that first user

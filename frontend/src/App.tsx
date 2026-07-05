@@ -16,6 +16,11 @@ import './App.css';
 type Tab = 'feed' | 'add' | 'library';
 type Page = 'main' | 'settings';
 
+// generation_status values that mean "still working". Anything else
+// ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
+// by pollOperationThenRefresh. 'fetching' is the status a refetch sets while it runs.
+const GENERATION_IN_PROGRESS = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'];
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
@@ -105,12 +110,20 @@ function App() {
       if (qs.pendingRequeue.size === 0) return;
       for (const id of Array.from(qs.pendingRequeue)) {
         try {
-          const res = await contentAPI.getById(id);
-          if (res.data.generation_status === 'completed' && res.data.audio_url) {
-            await qs.addToFront(id);
+          // Poll the LEAN status endpoint, not getById (which ships the whole item every
+          // 5s per pending id). Only fetch the full item once, when audio generation is done.
+          const statuses = await contentAPI.getStatuses([id]);
+          const status = statuses.data[0];
+          if (!status) continue;
+          if (status.generation_status === 'completed') {
+            const res = await contentAPI.getById(id);
+            if (res.data.audio_url) {
+              await qs.addToFront(id);
+              refreshItem(id);
+            }
+            // 'completed' is terminal, so stop polling this id either way.
             qs.clearPendingRequeue(id);
-            refreshItem(id);
-          } else if (res.data.generation_status === 'failed') {
+          } else if (status.generation_status === 'failed') {
             qs.clearPendingRequeue(id);
           }
         } catch (err) {
@@ -237,10 +250,10 @@ function App() {
   // autoplay is on). When we hit a manual item with no audio, prompt the user
   // to generate-or-skip, then continue looking for a playable next item.
   //
-  // `mode` = 'auto': track ended naturally or user hit skip-next. We always
-  //                   clear the current manual item (it's been played/skipped).
-  // `mode` = 'ended': respects autoplay gating via getNextItem.
-  // `mode` = 'skip': ignores autoplay gating via peekNextItem.
+  // Regardless of mode, the current manual item is cleared first (it's been
+  // played or skipped).
+  // `mode` = 'ended': track ended naturally. Respects autoplay gating via getNextItem.
+  // `mode` = 'skip': user hit skip-next. Ignores autoplay gating via peekNextItem.
   const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
     const currentId = currentContent?.id ?? null;
 
@@ -328,16 +341,46 @@ function App() {
   const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
   const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
+  // Shared "fire an operation, then refresh once it finishes" helper. Polls the LEAN
+  // status endpoint every 2s (getStatuses, a few hundred bytes) until the watched status
+  // leaves its in-progress state, THEN fetches the full item exactly once via getById and
+  // applies it to BOTH the open player (if still on that item) and the library store (so
+  // cards stop going stale). Replaces the old one-shot 1s setTimeout reloads that always
+  // lost the race (refetch takes >1s, transcription takes minutes) and never touched the store.
+  // Refetch now sets generation_status 'fetching' while it runs (then 'completed'/'failed'), so
+  // a 'generation' watcher correctly waits it out just like audio/transcript generation.
+  const pollOperationThenRefresh = (id: number, watch: 'generation' | 'summary') => {
+    let tries = 0;
+    const maxTries = 300; // ~10 minutes at 2s intervals
+    const poll = async () => {
+      tries++;
+      try {
+        const statuses = await contentAPI.getStatuses([id]);
+        const status = statuses.data[0];
+        const inProgress = !!status && (watch === 'summary'
+          ? status.summary_status === 'generating'
+          : GENERATION_IN_PROGRESS.includes(status.generation_status || ''));
+        if (inProgress && tries < maxTries) {
+          setTimeout(poll, 2000);
+          return;
+        }
+        // Done (or gave up): fetch the full item once, apply to player + store.
+        const response = await contentAPI.getById(id);
+        setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+        useContentStore.getState().updateItem(id, response.data);
+      } catch (err) {
+        console.error('pollOperationThenRefresh failed:', err);
+      }
+    };
+    setTimeout(poll, 2000);
+  };
+
   const handleRefetchContent = async () => {
     if (!currentContent) return;
 
     try {
       await contentAPI.refetch(currentContent.id);
-      // Wait a bit for the backend to process, then reload
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id, 'generation');
     } catch (error) {
       console.error('Failed to refetch content:', error);
     }
@@ -347,10 +390,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id, 'generation');
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       alert(error?.response?.data?.error || 'Failed to generate audio');
@@ -396,13 +436,22 @@ function App() {
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
       let tries = 0;
       const maxTries = generateTranscript ? 200 : 30; // transcription first can take many minutes
+      // Poll the LEAN status endpoint (a few hundred bytes) instead of getById (which
+      // ships the full transcript + word timestamps + alignment every tick). Only when
+      // summary_status leaves 'generating' do we fetch the full item once.
       const poll = async () => {
         tries++;
         try {
-          const response = await contentAPI.getById(id);
-          setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
-          if (response.data.summary_status === 'generating' && tries < maxTries) {
+          const statuses = await contentAPI.getStatuses([id]);
+          const status = statuses.data[0];
+          if (status && status.summary_status === 'generating' && tries < maxTries) {
+            // Reflect the cheap status fields so the UI keeps animating, keep polling.
+            setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
             setTimeout(poll, 3000);
+          } else {
+            // Summary finished (or we hit the try cap). Fetch the full item once.
+            const response = await contentAPI.getById(id);
+            setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
           }
         } catch {
           /* stop polling on error */
@@ -443,10 +492,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id, 'generation');
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
       alert('Failed to regenerate transcript');

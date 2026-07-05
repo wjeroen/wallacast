@@ -1,5 +1,5 @@
 import { Podcast, Newspaper, SquareArrowOutUpRight } from 'lucide-react';
-import { cleanHtml, formatDuration, getDomainFromUrl } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, truncate } from '../format';
 import type { Podcast as PodcastType } from '../types';
 
 // Shape of a feed item (episode or article) as used by the Feed tab. The API
@@ -65,7 +65,7 @@ export function FeedCard({ feed, variant, onClick, actionButton }: {
         <h3>{feed.title}</h3>
         <p className="author">{feed.author}</p>
         {variant === 'search-result' && feed.description && (
-          <p className="description">{cleanHtml(feed.description).slice(0, 280)}...</p>
+          <p className="description">{truncate(cleanHtml(feed.description), 280)}</p>
         )}
         {variant === 'expanded' && feed.description && (
           <p className="description selected-podcast-description">
@@ -121,7 +121,7 @@ export function FeedEpisodeCard({ episode, showShowName = false, actionButton }:
           </p>
         )}
         {episode.description && (
-          <p className="description">{cleanHtml(episode.description).slice(0, 280)}...</p>
+          <p className="description">{truncate(cleanHtml(episode.description), 280)}</p>
         )}
         <div className="metadata">
           <span className="type">

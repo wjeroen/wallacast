@@ -1,6 +1,8 @@
 import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
 import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
+import { deleteAudioFile } from './audio-storage.js';
+import { snapshotContentVersion } from './content-versions.js';
 
 /**
  * Wallabag Sync Service
@@ -151,6 +153,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
           if (existing.rows.length > 0) {
              console.log('[Wallabag Sync] Removing local item', existing.rows[0].id, 'because it now has nosync tag');
              await query('DELETE FROM content_items WHERE id = $1', [existing.rows[0].id]);
+             // Delete the on-disk audio file too, otherwise the mp3 orphans on the /data volume.
+             await deleteAudioFile(existing.rows[0].id);
           }
           
           continue; // Skip processing this entry
@@ -228,7 +232,18 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 ]
               );
             } else {
-              // Articles and texts
+              // Articles and texts. Snapshot the CURRENT body first (like edit/refetch/restore
+              // do) so a bad Wallabag re-parse is recoverable from the History tab. Best-effort:
+              // a snapshot failure must never block the sync overwrite.
+              const before = await query(
+                'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+                [existing.rows[0].id, userId]
+              );
+              if (before.rows.length > 0) {
+                await snapshotContentVersion(existing.rows[0].id, userId, before.rows[0], 'sync').catch((err) =>
+                  console.error('[Wallabag Sync] Failed to snapshot version before overwrite:', err)
+                );
+              }
               await query(
                 `UPDATE content_items SET
                   title = $1,
@@ -580,7 +595,6 @@ export async function fullSync(userId: number): Promise<FullSyncResult> {
 
 /**
  * Delete a specific entry from Wallabag (called when deleting locally)
- * TODO: Implement in Phase 5
  */
 export async function deleteFromWallabag(
   userId: number,

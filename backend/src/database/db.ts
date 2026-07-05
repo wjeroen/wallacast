@@ -89,6 +89,9 @@ export async function initializeDatabase() {
         AND state != 'idle'
         AND query LIKE '%content_items%'
         AND backend_start < NOW() - INTERVAL '30 seconds'
+        AND query NOT ILIKE '%vacuum%'
+        AND query NOT ILIKE '%analyze%'
+        AND query NOT ILIKE '%pg_dump%'
       `);
       if (stuckResult.rowCount && stuckResult.rowCount > 0) {
         console.log(`Terminated ${stuckResult.rowCount} stuck session(s) from previous crashes`);
@@ -180,7 +183,7 @@ export async function initializeDatabase() {
     // Run migration to add podcast_show_name column
     const podcastShowNameMigrationPath = path.join(__dirname, 'migrations', '010_add_podcast_show_name.sql');
     const podcastShowNameMigration = await fs.readFile(podcastShowNameMigrationPath, 'utf-8');
-    await poolInstance.query(podcastShowNameMigration);
+    await client.query(podcastShowNameMigration);
 
     // Run migration to add feed type column to podcasts table
     const feedTypeMigrationPath = path.join(__dirname, 'migrations', '012_add_feed_type.sql');

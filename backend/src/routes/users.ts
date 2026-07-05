@@ -19,9 +19,6 @@ const VALID_SETTING_KEYS = [
   'openai_tts_voice',      // 'alloy', 'af_heart', etc. (single fallback voice)
   'tts_voices',            // JSON array of { model, voice }, rotate randomly between these
   'anthropic_api_key',
-  'anthropic_model',
-  'google_api_key',
-  'google_model',
   'gemini_api_key',        // NEW: For image alt-text generation
   // Wallabag settings
   'wallabag_url',
@@ -35,7 +32,6 @@ const VALID_SETTING_KEYS = [
   'wallabag_last_sync',
   'wallabag_sync_enabled',
   // App preferences
-  'theme',
   'playback_speed',
   'narration_llm',           // LEGACY routing ('auto'|'deepseek'|'openai'|'openai-mini'); read-time fallback only
   // Per-job model config (provider + free-text model + optional reasoning effort).
@@ -50,7 +46,6 @@ const VALID_SETTING_KEYS = [
   'kokoro_tts_provider',     // route Kokoro TTS voices via 'deepinfra' (default) or 'openrouter'
   'image_alt_text_provider', // image descriptions via 'gemini' (default), 'deepinfra', 'openai', or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
-  'auto_archive_after_listen',
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
   'auto_generate_summary',      // Auto-generate a summary when an article/text is added
@@ -68,6 +63,7 @@ const VALID_SETTING_KEYS = [
   'reader_font_scale',          // Font scale for read-along/description/transcript content (default: 1)
   'queue_autoplay',             // Auto-continue into non-manual (library) items when queue empties (default: false)
   'manual_queue_always_autoplay', // When 'false', manual queue items only auto-advance if queue_autoplay is on. Default: 'true' (manual items always autoplay).
+  'queue_shuffle',              // Persisted shuffle preference for the queue (frontend queueStore)
 ];
 
 // Secret keys that should be masked in responses
@@ -76,7 +72,6 @@ const SECRET_KEYS = [
   'deepinfra_api_key',     // NEW: Mask this key
   'openrouter_api_key',    // NEW: Mask OpenRouter key
   'anthropic_api_key',
-  'google_api_key',
   'gemini_api_key',        // NEW: Mask Gemini key
   'wallabag_client_secret',
   'wallabag_password',
@@ -225,48 +220,6 @@ router.delete('/settings/:key', async (req, res) => {
     console.error('Error deleting setting:', error);
     res.status(500).json({ error: 'Failed to delete setting' });
   }
-});
-
-// GET /api/users/ai-providers - Get available AI providers and their config
-router.get('/ai-providers', async (_req, res) => {
-  const providers = {
-    openai: {
-      name: 'OpenAI (Hybrid)',
-      models: {
-        chat: ['gpt-5-nano', 'gpt-5-mini', 'gpt-4o-mini', 'gpt-4o'],
-        // Added Kokoro to the list so it appears in dropdowns if the frontend uses this
-        tts: ['gpt-4o-mini-tts', 'tts-1', 'hexgrad/Kokoro-82M'],
-      },
-      voices: [
-        // OpenAI Voices
-        'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'coral',
-        // Kokoro Voices (DeepInfra)
-        'af_heart', 'af_bella', 'af_nicole', 'am_adam', 'am_michael', 'am_puck'
-      ],
-      requiredSettings: ['openai_api_key'], // DeepInfra is optional but recommended
-      description: 'OpenAI for Chat. DeepInfra supported for cheaper Audio/TTS.',
-    },
-    anthropic: {
-      name: 'Anthropic',
-      models: {
-        chat: ['claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'],
-      },
-      requiredSettings: ['anthropic_api_key'],
-      description: 'Claude models for text processing (no TTS)',
-      comingSoon: true,
-    },
-    google: {
-      name: 'Google AI',
-      models: {
-        chat: ['gemini-pro', 'gemini-pro-vision'],
-      },
-      requiredSettings: ['google_api_key'],
-      description: 'Google Gemini models (no TTS)',
-      comingSoon: true,
-    },
-  };
-
-  res.json({ providers });
 });
 
 // GET /api/users/prompts - The full prompt registry (every editable LLM prompt: id, category,

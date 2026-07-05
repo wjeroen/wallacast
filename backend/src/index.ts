@@ -37,7 +37,6 @@ app.use(express.json({ limit: '50mb' }));
 
 // Serve static files (audio, images, etc.) from persistent storage
 app.use('/audio', express.static(getAudioDir()));
-app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
 
 // Public routes (no auth required)
 app.get('/', (req, res) => {
@@ -54,6 +53,47 @@ app.get('/health', (req, res) => {
 
 // Auth routes (no JWT auth required, but requires database)
 app.use('/api/auth', requireDatabaseReady, authRouter);
+
+// Parse a single HTTP Range header against a known total size.
+// Supports "bytes=START-", "bytes=START-END", and the suffix form "bytes=-N" (last N bytes).
+// Open-ended ranges are capped to maxChunk bytes so playback starts fast (the browser then
+// asks for more). Returns null when the header is malformed or the range cannot be satisfied,
+// so the caller can answer 416 with "Content-Range: bytes */<size>" instead of emitting a NaN
+// Content-Length.
+function parseAudioRange(
+  rangeHeader: string,
+  totalSize: number,
+  maxChunk: number
+): { start: number; end: number } | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!m) return null;
+  const startStr = m[1];
+  const endStr = m[2];
+  if (startStr === '' && endStr === '') return null; // "bytes=-" is meaningless
+
+  let start: number;
+  let end: number;
+  if (startStr === '') {
+    // Suffix form: the last N bytes of the file.
+    const suffixLen = parseInt(endStr, 10);
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return null;
+    start = Math.max(0, totalSize - suffixLen);
+    end = totalSize - 1;
+  } else {
+    start = parseInt(startStr, 10);
+    if (!Number.isFinite(start) || start >= totalSize) return null; // unsatisfiable
+    if (endStr === '') {
+      // Open-ended (bytes=START-): cap the span for a fast start.
+      end = Math.min(start + maxChunk - 1, totalSize - 1);
+    } else {
+      const reqEnd = parseInt(endStr, 10);
+      if (!Number.isFinite(reqEnd)) return null;
+      end = Math.min(reqEnd, totalSize - 1);
+    }
+  }
+  if (end < start) return null;
+  return { start, end };
+}
 
 // Public audio endpoint (no auth - HTML5 audio player can't send JWT tokens)
 // Must be registered before protected /api/content routes to match first
@@ -131,12 +171,13 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         if (!res.writableEnded) res.end();
       };
       if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
         const maxChunk = 2 * 1024 * 1024; // 2MB, same as the DB path, for fast start
-        const end = parts[1]
-          ? Math.min(parseInt(parts[1], 10), diskSize - 1)
-          : Math.min(start + maxChunk - 1, diskSize - 1);
+        const parsed = parseAudioRange(range, diskSize, maxChunk);
+        if (!parsed) {
+          res.setHeader('Content-Range', `bytes */${diskSize}`);
+          return res.status(416).end();
+        }
+        const { start, end } = parsed;
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${diskSize}`,
           'Accept-Ranges': 'bytes',
@@ -177,15 +218,16 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         return res.status(404).json({ error: 'Audio not found' });
       }
 
-      const fileSize = sizeResult.rows[0].total_size;
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
+      const fileSize = Number(sizeResult.rows[0].total_size);
       // For open-ended ranges (bytes=0-), cap at 2MB chunks so initial playback
       // starts fast. The browser will automatically request more as needed.
       const maxChunk = 2 * 1024 * 1024; // 2MB
-      const end = parts[1]
-        ? Math.min(parseInt(parts[1], 10), fileSize - 1)
-        : Math.min(start + maxChunk - 1, fileSize - 1);
+      const parsed = parseAudioRange(range, fileSize, maxChunk);
+      if (!parsed) {
+        res.setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.status(416).end();
+      }
+      const { start, end } = parsed;
       const chunkSize = end - start + 1;
 
       // Read only the needed bytes (PostgreSQL substring is 1-based)
@@ -337,7 +379,7 @@ async function start() {
       await initializeDatabase();
       console.log('✅ Database connection established');
 
-      // Bootstrap first user from AUTH_USERNAME/AUTH_PASSWORD env vars
+      // Assign any orphaned pre-multi-user content to the first registered user
       await bootstrapFirstUser();
 
       // Initialize storage directories

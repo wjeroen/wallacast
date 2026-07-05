@@ -7,11 +7,13 @@ import { FullscreenPlayer } from './FullscreenPlayer';
 const VALID_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
 
 function getStoredSpeed(): number {
-  const stored = localStorage.getItem('playbackSpeed');
-  if (stored) {
-    const parsed = parseFloat(stored);
-    if (VALID_SPEEDS.includes(parsed)) return parsed;
-  }
+  try {
+    const stored = localStorage.getItem('playbackSpeed');
+    if (stored) {
+      const parsed = parseFloat(stored);
+      if (VALID_SPEEDS.includes(parsed)) return parsed;
+    }
+  } catch { /* private-mode Safari throws on localStorage access */ }
   return 1;
 }
 
@@ -260,6 +262,14 @@ export function AudioPlayer({
     // metadata refreshes, star/archive toggles, etc.). Without this, every
     // one of those resets audio.src and interrupts playback.
     if (audioSrc === lastAudioSrcRef.current) {
+      // Same track already loaded. Tapping the currently-loaded item in the Queue
+      // tab bumps autoPlayToken but leaves the src unchanged, so honor the explicit
+      // autoplay request here before bailing, otherwise the tap does nothing.
+      if (shouldAutoPlay) {
+        userPausedRef.current = false;
+        appPlayRef.current = true;
+        audio.play().catch(() => { appPlayRef.current = false; });
+      }
       return;
     }
     lastAudioSrcRef.current = audioSrc;

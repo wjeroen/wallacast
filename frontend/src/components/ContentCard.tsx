@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -293,7 +293,7 @@ export function ContentCard({
             </div>
           );
         })() : item.description ? (
-          <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
+          <p className="description">{truncate(cleanHtml(item.description), 280)}</p>
         ) : null}
         {searchQuery.trim() && (() => {
           const snippet = getSearchSnippet(item, searchQuery);

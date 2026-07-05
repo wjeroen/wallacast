@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { query } from '../database/db.js';
 import { decrypt } from './encryption.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
 
 // Get user setting from database (decrypts encrypted values transparently)
 export async function getUserSetting(userId: number, key: string): Promise<string | null> {
@@ -254,6 +255,35 @@ export async function getChatClientForUser(userId: number): Promise<{ client: Op
   return cfg ? { client: cfg.client, model: cfg.model } : null;
 }
 
+// Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
+// "Premature close" / ECONNRESET on a reused keep-alive socket, see Node #63989) and
+// 429/5xx are transient and almost always succeed on a fresh attempt. 4xx (bad request /
+// auth) are NOT retried. Summaries previously had no retry, so these surfaced as failures
+// while TTS/transcription (which already retry) silently recovered.
+export async function chatCreateWithRetry(
+  client: OpenAI,
+  params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+  label: string
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const { maxAttempts, baseDelayMs, maxDelayMs } = PROCESSING_CONFIG.retry;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await client.chat.completions.create(params);
+    } catch (err: any) {
+      lastErr = err;
+      const status: number | undefined = err?.status;
+      // Retry connection errors (no status) and 429/5xx; give up on 4xx.
+      const retryable = status === undefined || status === 429 || (status >= 500 && status < 600);
+      if (!retryable || attempt === maxAttempts) throw err;
+      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+      console.warn(`${label} attempt ${attempt}/${maxAttempts} failed (${status ?? 'conn'}): ${err?.message}. Retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export async function getTTSOptionsForUser(userId: number): Promise<{ voice: string; model: string }> {
   const savedVoice = await getUserSetting(userId, 'openai_tts_voice');
   const savedModel = await getUserSetting(userId, 'openai_tts_model');
@@ -295,11 +325,12 @@ export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice
 
   const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
   const hasOpenAI = !!(await getUserSetting(userId, 'openai_api_key'));
-  // Kokoro voices are usable with a DeepInfra key, or via OpenRouter when the user routes
-  // Kokoro TTS through it (same voices). OpenAI voices always need an OpenAI key.
-  const kokoroProvider = (await getUserSetting(userId, 'kokoro_tts_provider')) || 'deepinfra';
+  // Kokoro voices are usable with a DeepInfra key OR an OpenRouter key (same voices).
+  // getTTSClientForUser serves Kokoro via OpenRouter as a fallback even when
+  // kokoro_tts_provider is unset, so an OpenRouter-only user can still synthesize them.
+  // OpenAI voices always need an OpenAI key.
   const hasOpenRouter = !!(await getUserSetting(userId, 'openrouter_api_key'));
-  const canKokoroVoices = hasDeepInfra || (kokoroProvider === 'openrouter' && hasOpenRouter);
+  const canKokoroVoices = hasDeepInfra || hasOpenRouter;
   voices = voices.filter(v => {
     const isKokoro = v.model.includes('Kokoro') || v.model.startsWith('hexgrad/');
     return isKokoro ? canKokoroVoices : hasOpenAI;
@@ -307,10 +338,4 @@ export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice
   if (voices.length === 0) return null;
 
   return voices[Math.floor(Math.random() * voices.length)];
-}
-
-export async function hasUserConfiguredAPIKey(userId: number): Promise<boolean> {
-    const openaiKey = await getUserSetting(userId, 'openai_api_key');
-    const diKey = await getUserSetting(userId, 'deepinfra_api_key');
-    return !!openaiKey || !!diKey;
 }

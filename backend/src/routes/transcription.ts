@@ -27,11 +27,19 @@ router.post('/content/:id', async (req, res) => {
       return res.status(400).json({ error: 'Content has no audio URL' });
     }
 
-    // If already has transcript and not regenerating, return it
+    // If already has transcript and not regenerating, return it.
+    // transcript_words is a JSONB column, so pg usually returns it already parsed (an object).
+    // Only JSON.parse when it actually comes back as a string, otherwise JSON.parse(object)
+    // would throw and 500 the whole cached-transcript path.
     if (content.transcript && !regenerate) {
+      const words = content.transcript_words == null
+        ? null
+        : typeof content.transcript_words === 'string'
+          ? JSON.parse(content.transcript_words)
+          : content.transcript_words;
       return res.json({
         transcript: content.transcript,
-        words: content.transcript_words ? JSON.parse(content.transcript_words) : null
+        words
       });
     }
 

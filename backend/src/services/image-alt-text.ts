@@ -95,8 +95,6 @@ export class ImageAltTextService {
   async smartRegenerate(
     currentHtml: string,
     existingData: ImageAltTextData | null,
-    articleUrl: string,
-    context?: { articleTitle?: string; articleAuthor?: string },
     onProgress?: (current: number, total: number) => Promise<void>,
     forceRegenerate: boolean = false
   ): Promise<ImageAltTextData> {
@@ -137,7 +135,7 @@ export class ImageAltTextService {
     }
 
     // Filter decorative images before sending to Gemini
-    const informativeImages = this.filterDecorativeImages(newImages, currentHtml);
+    const informativeImages = this.filterDecorativeImages(newImages);
     console.log(`[ImageAltText] ${informativeImages.length} informative images after filtering`);
 
     let newDescriptions: ImageDescriptions = {};
@@ -159,10 +157,7 @@ export class ImageAltTextService {
         }
 
         try {
-          const analysis = await this.analyzeImageWithRetry(
-            img.url,
-            { title: context?.articleTitle || '', url: articleUrl }
-          );
+          const analysis = await this.analyzeImageWithRetry(img.url);
 
           if (!analysis.isDecorative && analysis.description) {
             const normalized = this.normalizeUrl(analysis.url);
@@ -210,36 +205,6 @@ export class ImageAltTextService {
   }
 
   /**
-   * Apply descriptions to HTML in memory (for TTS processing)
-   * This modifies the HTML to add alt attributes with Gemini descriptions
-   */
-  applyDescriptionsToHtml(html: string, descriptions: ImageDescriptions): string {
-    try {
-      const dom = new JSDOM(html);
-      const doc = dom.window.document;
-      const images = Array.from(doc.querySelectorAll('img'));
-
-      images.forEach(img => {
-        const src = img.getAttribute('src');
-        if (!src) return;
-
-        const normalized = this.normalizeUrl(src);
-
-        // Check if we have a Gemini description for this image
-        if (descriptions[normalized]) {
-          // REPLACE existing alt attribute with Gemini's description
-          img.setAttribute('alt', descriptions[normalized]);
-        }
-      });
-
-      return doc.body.innerHTML;
-    } catch (e) {
-      console.error('[ImageAltText] Failed to apply descriptions to HTML:', e);
-      return html;
-    }
-  }
-
-  /**
    * Extract all image URLs from HTML
    */
   private extractImageUrls(html: string): ImageElement[] {
@@ -273,7 +238,7 @@ export class ImageAltTextService {
   /**
    * Filter out decorative images using heuristics
    */
-  private filterDecorativeImages(images: ImageElement[], html: string): ImageElement[] {
+  private filterDecorativeImages(images: ImageElement[]): ImageElement[] {
     return images.filter(img => !this.isLikelyDecorativeImage(img));
   }
 
@@ -318,7 +283,6 @@ export class ImageAltTextService {
    */
   private async analyzeImageWithRetry(
     imageUrl: string,
-    articleContext: { title: string; url: string },
     attempt: number = 1
   ): Promise<ImageAnalysisResult> {
     try {
@@ -342,7 +306,7 @@ export class ImageAltTextService {
       console.log(`[ImageAltText] Retry attempt ${attempt + 1}/${PROCESSING_CONFIG.retry.maxAttempts} after ${delay}ms (API overloaded)`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      return this.analyzeImageWithRetry(imageUrl, articleContext, attempt + 1);
+      return this.analyzeImageWithRetry(imageUrl, attempt + 1);
     }
   }
 

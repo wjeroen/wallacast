@@ -48,9 +48,16 @@ export function decrypt(value: string): string {
   const ciphertext = Buffer.from(ciphertextHex, 'hex');
   const tag = Buffer.from(tagHex, 'hex');
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(tag);
-  return decipher.update(ciphertext) + decipher.final('utf8');
+  try {
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(ciphertext) + decipher.final('utf8');
+  } catch {
+    // Auth-tag mismatch (rotated/wrong ENCRYPTION_KEY) throws here. Degrade gracefully like
+    // the other paths above instead of 500-ing every settings read.
+    console.error('[Encryption] Failed to decrypt value (wrong ENCRYPTION_KEY?)');
+    return value;
+  }
 }
 
 export function isEncrypted(value: string): boolean {

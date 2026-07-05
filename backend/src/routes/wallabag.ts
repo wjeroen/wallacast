@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { query } from '../database/db.js';
 import { WallabagService } from '../services/wallabag-service.js';
 import { fullSync, syncFromWallabag, syncToWallabag } from '../services/wallabag-sync.js';
+import { deleteAudioFile } from '../services/audio-storage.js';
 
 const router = Router();
 
@@ -145,7 +146,8 @@ router.post('/cleanup', async (req, res) => {
        AND wallabag_id IS NOT NULL
        AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
        AND is_starred = FALSE
-       AND audio_data IS NULL`,
+       AND audio_data IS NULL
+       AND audio_url IS NULL`,
       [req.user!.userId]
     );
     const count = parseInt(countResult.rows[0].count, 10);
@@ -161,10 +163,13 @@ router.post('/cleanup', async (req, res) => {
          AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
          AND is_starred = FALSE
          AND audio_data IS NULL
+         AND audio_url IS NULL
          RETURNING id`,
         [req.user!.userId]
       );
       deletedCount = deleteResult.rows.length;
+      // Delete any on-disk audio file for each removed row, otherwise the mp3s orphan on /data.
+      for (const row of deleteResult.rows) await deleteAudioFile(row.id);
       console.log('[Wallabag] Cleanup deleted', deletedCount, 'items');
     } else {
       console.log('[Wallabag] No items to delete');
