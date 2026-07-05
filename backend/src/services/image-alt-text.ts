@@ -55,13 +55,25 @@ export class ImageAltTextService {
     this.userId = userId;
   }
 
-  // Model for image descriptions (Settings → free-text; defaults to the long-tested
-  // gemini-3-flash-preview). Used by both the Gemini-native and OpenRouter paths.
-  private async getModelName(): Promise<string> {
+  // Model for image descriptions (Settings → free-text). The effective default depends on
+  // the provider: the long-tested gemini-3-flash-preview on Gemini, its namespaced twin on
+  // OpenRouter, and Gemma 4 26B A4B on DeepInfra (Gemini's open sibling, matched Gemini
+  // Flash quality in live tests 2026-07-02).
+  private async getModelName(defaultModel = 'gemini-3-flash-preview'): Promise<string> {
     if (this.cachedModel === null) {
-      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || 'gemini-3-flash-preview';
+      this.cachedModel = (await getUserSetting(this.userId, 'image_alt_text_model')) || defaultModel;
     }
     return this.cachedModel;
+  }
+
+  // Key-aware provider default: the first provider whose key is configured. Gemini keeps
+  // precedence as the long-tested path.
+  private async defaultImageProvider(): Promise<string> {
+    if (await getUserSetting(this.userId, 'gemini_api_key')) return 'gemini';
+    if (await getUserSetting(this.userId, 'deepinfra_api_key')) return 'deepinfra';
+    if (await getUserSetting(this.userId, 'openai_api_key')) return 'openai';
+    if (await getUserSetting(this.userId, 'openrouter_api_key')) return 'openrouter';
+    return 'gemini';
   }
 
   /**
@@ -275,7 +287,7 @@ export class ImageAltTextService {
       if (img.width < 100 && img.height < 100) return true;
     }
 
-    // 2. Filename patterns (skip for data: URIs — base64 can randomly match patterns)
+    // 2. Filename patterns (skip for data: URIs, base64 can randomly match patterns)
     const url = img.url.toLowerCase();
     if (!url.startsWith('data:')) {
       const decorativePatterns = [
@@ -433,13 +445,18 @@ export class ImageAltTextService {
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 
   try {
-    // Provider: 'gemini' (native SDK, default) or 'openrouter' (OpenAI-compatible vision).
-    const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || 'gemini';
+    // Provider: 'gemini' (native SDK, default), 'deepinfra' (Gemma 4), 'openai' (GPT-5 Mini),
+    // or 'openrouter'. All non-Gemini paths are OpenAI-compatible vision.
+    const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || (await this.defaultImageProvider());
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
 
     const raw = provider === 'openrouter'
       ? await this.describeViaOpenRouter(prompt, imageData)
-      : await this.describeViaGemini(prompt, imageData);
+      : provider === 'deepinfra'
+        ? await this.describeViaDeepInfra(prompt, imageData)
+        : provider === 'openai'
+          ? await this.describeViaOpenAI(prompt, imageData)
+          : await this.describeViaGemini(prompt, imageData);
 
     const description = (raw || '').trim();
 
@@ -498,7 +515,7 @@ export class ImageAltTextService {
   }
 
   // OpenRouter path: OpenAI-compatible vision via chat.completions with a base64 data URL.
-  // Tested with Gemini Flash models (e.g. google/gemini-3-flash); other vision models may vary.
+  // Tested with Gemini Flash models (e.g. google/gemini-3-flash-preview). Other vision models may vary.
   private async describeViaOpenRouter(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
     const apiKey = await getUserSetting(this.userId, 'openrouter_api_key');
     if (!apiKey) {
@@ -507,7 +524,7 @@ export class ImageAltTextService {
     const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
     const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
     const response = await client.chat.completions.create({
-      model: await this.getModelName(),
+      model: await this.getModelName('google/gemini-3-flash-preview'),
       temperature: 0.3,
       messages: [
         {
@@ -521,7 +538,58 @@ export class ImageAltTextService {
     });
     return response.choices[0]?.message?.content || '';
   }
-  
+
+  // DeepInfra path: same OpenAI-compatible vision call. Default model is Gemma 4 26B A4B,
+  // Gemini's open-weight sibling, which matched Gemini Flash's description quality in live
+  // tests (2026-07-02) at roughly 1/20th the cost.
+  private async describeViaDeepInfra(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const apiKey = await getUserSetting(this.userId, 'deepinfra_api_key');
+    if (!apiKey) {
+      throw new Error('No DeepInfra API key configured. Please add your key in Settings.');
+    }
+    const client = new OpenAI({ apiKey, baseURL: 'https://api.deepinfra.com/v1/openai' });
+    const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
+    const response = await client.chat.completions.create({
+      model: await this.getModelName('google/gemma-4-26B-A4B-it'),
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ] as any,
+        },
+      ],
+    });
+    return response.choices[0]?.message?.content || '';
+  }
+
+  // OpenAI path: same OpenAI-compatible vision call against api.openai.com. Default model is
+  // GPT-5 Mini (vision-capable, verified 2026-07-02). No temperature param: the GPT-5 family
+  // rejects non-default temperatures.
+  private async describeViaOpenAI(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
+    const apiKey = await getUserSetting(this.userId, 'openai_api_key');
+    if (!apiKey) {
+      throw new Error('No OpenAI API key configured. Please add your key in Settings.');
+    }
+    const client = new OpenAI({ apiKey });
+    const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
+    const response = await client.chat.completions.create({
+      model: await this.getModelName('gpt-5-mini'),
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ] as any,
+        },
+      ],
+    });
+    return response.choices[0]?.message?.content || '';
+  }
+
   /**
    * Normalize URL for comparison (remove query params, fragments)
    */

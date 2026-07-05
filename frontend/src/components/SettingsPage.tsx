@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 
@@ -67,7 +67,7 @@ const VOICE_CATALOG: { group: string; model: string; requiresKey: 'openai' | 'de
     ],
   },
   {
-    group: 'Kokoro-82M (DeepInfra)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
+    group: 'Kokoro-82M (DeepInfra or OpenRouter)', model: 'hexgrad/Kokoro-82M', requiresKey: 'deepinfra',
     note: 'AF/AM = American female/male, BF/BM = British female/male',
     voices: [
       { id: 'af_heart', label: 'Heart (AF)' }, { id: 'af_bella', label: 'Bella (AF)' }, { id: 'af_nicole', label: 'Nicole (AF)' },
@@ -96,19 +96,43 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 }
 
 // Chat-LLM providers (all spoken to via the OpenAI-compatible API). Model is free text.
+// Hints show the app's default model per provider. A blank model field uses that default
+// (CHAT_DEFAULT_MODELS in backend ai-providers.ts, keep the two lists in sync).
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'openai', label: 'OpenAI', hint: 'e.g. gpt-5-mini, gpt-5-nano' },
-  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. deepseek-ai/DeepSeek-V3.2, meta-llama/Llama-3.3-70B-Instruct' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. anthropic/claude-haiku-4-5, google/gemini-3-flash' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'e.g. claude-haiku-4-5, claude-sonnet-4-6' },
-  { id: 'gemini', label: 'Google Gemini', hint: 'e.g. gemini-3-flash, gemini-2.5-pro' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-5-mini' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/gpt-oss-120b' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-5-mini' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'default = claude-haiku-4-5' },
+  { id: 'gemini', label: 'Google Gemini', hint: 'default = gemini-3-flash-preview' },
 ];
 const TRANSCRIPTION_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'deepinfra', label: 'DeepInfra', hint: 'e.g. openai/whisper-large-v3-turbo' },
-  { id: 'openai', label: 'OpenAI', hint: 'e.g. whisper-1' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'e.g. openai/whisper-1' },
+  { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/whisper-large-v3-turbo' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = whisper-1' },
+];
+// Quick-pick Whisper models on DeepInfra. The Model field stays free-text for anything else,
+// this dropdown just fills it in. large-v3 (full 32-layer decoder) hallucinates/loops noticeably
+// less than turbo (4 layers) on long podcasts, for about 2x the (still tiny) cost.
+const DEEPINFRA_WHISPER_PRESETS: Array<{ id: string; label: string }> = [
+  { id: 'openai/whisper-large-v3-turbo', label: 'Whisper large-v3-turbo (cheaper)' },
+  { id: 'openai/whisper-large-v3', label: 'Whisper large-v3 (full)' },
 ];
 const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === provider)?.hint || 'model name';
+// Effective default model per image-description provider. Used to pre-fill the model field and
+// to swap it when the provider changes, so a Gemini id never gets sent to DeepInfra.
+const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
+  gemini: 'gemini-3-flash-preview',
+  deepinfra: 'google/gemma-4-26B-A4B-it',
+  openai: 'gpt-5-mini',
+  openrouter: 'google/gemini-3-flash-preview',
+};
+// Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
+const CHAT_MODEL_DEFAULTS: Record<string, string> = {
+  openai: 'gpt-5-mini',
+  deepinfra: 'openai/gpt-oss-120b',
+  openrouter: 'openai/gpt-5-mini',
+  anthropic: 'claude-haiku-4-5',
+  gemini: 'gemini-3-flash-preview',
+};
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
@@ -122,6 +146,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // Summary length tiers (editable, sorted list). Infinity tier is always last.
   const [summaryTiers, setSummaryTiers] = useState<SummaryTier[]>(DEFAULT_SUMMARY_TIERS);
   const [showLengthSettings, setShowLengthSettings] = useState(false);
+  const [showWallabagHelp, setShowWallabagHelp] = useState(false);
 
   // Custom prompts (advanced). The backend registry lists every editable LLM prompt with its
   // built-in default; `promptValues` holds the current textarea content keyed by setting key
@@ -150,11 +175,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // Form state
   const [formData, setFormData] = useState({
     // AI Settings
-    ai_provider: 'openai',
     openai_api_key: '',
-    openai_model: 'gpt-5-nano',
-    openai_tts_model: 'gpt-4o-mini-tts',
-    openai_tts_voice: 'coral',
 
     // DeepInfra Settings
     deepinfra_api_key: '',
@@ -171,10 +192,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
     // Transcription (Whisper): provider deepinfra | openai | openrouter
     transcription_provider: 'deepinfra', transcription_model: '',
-    // Route OpenAI TTS voices via OpenAI directly or via OpenRouter (same voices).
-    openai_tts_provider: 'openai',
+    // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
+    kokoro_tts_provider: 'deepinfra',
 
-    // Image alt-text: provider gemini | openrouter
+    // Image alt-text: provider gemini | deepinfra | openai | openrouter
     gemini_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
@@ -241,27 +262,36 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Derive the per-job defaults from the legacy narration_llm routing (pre-fill).
       const hasDeepInfraKey = !!loaded.deepinfra_api_key; // masked dots or real value are both truthy
       const deriveLegacy = (llm: string) => {
-        if (llm === 'openai-mini') return { provider: 'openai', model: 'gpt-5-mini' };
-        if (llm === 'openai') return { provider: 'openai', model: 'gpt-5-nano' };
+        if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_MODEL_DEFAULTS.openai };
         if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-        return hasDeepInfraKey ? { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' } : { provider: 'openai', model: 'gpt-5-nano' };
+        // 'auto': first provider with a configured key, in recommendation order (GPT-5 Mini first).
+        const keyByProvider: Array<[string, unknown]> = [
+          ['openai', loaded.openai_api_key], ['deepinfra', loaded.deepinfra_api_key],
+          ['anthropic', loaded.anthropic_api_key], ['gemini', loaded.gemini_api_key],
+          ['openrouter', loaded.openrouter_api_key],
+        ];
+        const found = keyByProvider.find(([, key]) => !!key)?.[0] || 'openai';
+        return { provider: found, model: CHAT_MODEL_DEFAULTS[found] };
       };
       const legacyNarration = deriveLegacy(loaded.narration_llm || 'auto');
       const boolDefault = (v: string | null | undefined, d: string) => (v !== undefined && v !== null ? v : d);
 
       // Pre-fill transcription/image model fields with the effective default (the model the
-      // backend actually uses when the field is blank), so they show the model in use — same
-      // as the narration fields pre-fill from the legacy routing.
-      const transProvider = loaded.transcription_provider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
-      const transDefaultModel = transProvider === 'openai' ? 'whisper-1' : 'openai/whisper-large-v3-turbo';
+      // backend actually uses when the field is blank), so they show the model in use, just as
+      // the narration fields pre-fill from the legacy routing.
+      // 'openrouter' was removed as a transcription provider (its endpoint returns no word
+      // timestamps, which read-along needs), so map any old saved value to a working one.
+      const savedTransProvider = loaded.transcription_provider === 'openrouter' ? '' : loaded.transcription_provider;
+      const transProvider = savedTransProvider || (hasDeepInfraKey ? 'deepinfra' : 'openai');
+      // Image provider default is key-aware (mirror of defaultImageProvider() in image-alt-text.ts).
+      const defaultImageProvider = loaded.gemini_api_key ? 'gemini'
+        : loaded.deepinfra_api_key ? 'deepinfra'
+        : loaded.openai_api_key ? 'openai'
+        : loaded.openrouter_api_key ? 'openrouter' : 'gemini';
 
       setFormData(prev => ({
         ...prev,
-        ai_provider: loaded.ai_provider || 'openai',
         openai_api_key: loaded.openai_api_key === '••••••••' ? '' : (loaded.openai_api_key || ''),
-        openai_model: loaded.openai_model || 'gpt-5-nano',
-        openai_tts_model: loaded.openai_tts_model || 'gpt-4o-mini-tts',
-        openai_tts_voice: loaded.openai_tts_voice || 'coral',
 
         deepinfra_api_key: loaded.deepinfra_api_key === '••••••••' ? '' : (loaded.deepinfra_api_key || ''),
         openrouter_api_key: loaded.openrouter_api_key === '••••••••' ? '' : (loaded.openrouter_api_key || ''),
@@ -269,27 +299,28 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         narration_llm: loaded.narration_llm || 'auto',
 
-        // Per-job config: pre-fill from the legacy narration_llm routing if not yet saved,
-        // so the fields show the model you're actually using today.
+        // Providers pre-fill so the dropdowns have a sensible value. Model fields stay blank
+        // unless explicitly saved: blank = the live default (the placeholder shows which),
+        // so defaults are never pinned into user settings just by hitting Save.
         narration_provider: loaded.narration_provider || legacyNarration.provider,
-        narration_model: loaded.narration_model || legacyNarration.model,
+        narration_model: loaded.narration_model || '',
         narration_reasoning_effort: loaded.narration_reasoning_effort || '',
         alignment_same_as_narration: boolDefault(loaded.alignment_same_as_narration, 'true'),
         alignment_provider: loaded.alignment_provider || legacyNarration.provider,
-        alignment_model: loaded.alignment_model || legacyNarration.model,
+        alignment_model: loaded.alignment_model || '',
         alignment_reasoning_effort: loaded.alignment_reasoning_effort || '',
         summary_same_as_narration: boolDefault(loaded.summary_same_as_narration, 'true'),
         summary_provider: loaded.summary_provider || legacyNarration.provider,
-        summary_model: loaded.summary_model || legacyNarration.model,
+        summary_model: loaded.summary_model || '',
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
-        transcription_model: loaded.transcription_model || transDefaultModel,
-        openai_tts_provider: loaded.openai_tts_provider || 'openai',
+        transcription_model: loaded.transcription_model || '',
+        kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
-        image_alt_text_provider: loaded.image_alt_text_provider || 'gemini',
-        image_alt_text_model: loaded.image_alt_text_model || 'gemini-3-flash-preview',
+        image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
+        image_alt_text_model: loaded.image_alt_text_model || '',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
@@ -334,7 +365,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     return (
       <div className="form-group ai-job" key={job}>
         <label>{title}</label>
-        {description && <small className="settings-hint">{description}</small>}
+        {description && <small className="settings-hint" style={base ? { marginBottom: '0.5rem' } : undefined}>{description}</small>}
         {!base && (
           <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: usingSame ? 0 : '0.5rem' }}>
             <input type="checkbox" checked={fd[sameKey] === 'true'} onChange={(e) => handleChange(sameKey, e.target.checked ? 'true' : 'false')} />
@@ -364,9 +395,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 type="text"
                 value={fd[`${job}_reasoning_effort`] || ''}
                 onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-                placeholder="e.g. minimal, low, medium, high"
+                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'default = high' : 'blank = model default'}
               />
-              <small className="settings-hint">Blank = provider default.</small>
             </div>
           </div>
         )}
@@ -425,7 +455,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       setSaving(true);
       setError(null);
-      
+
       // Per-job config + the "same as narration" toggles must save even when empty/false
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
@@ -435,7 +465,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-        'transcription_provider', 'transcription_model', 'openai_tts_provider',
+        'transcription_provider', 'transcription_model', 'kokoro_tts_provider',
         'image_alt_text_provider', 'image_alt_text_model',
       ]);
 
@@ -448,7 +478,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         }
       }
 
-      // Summary tiers are managed in their own state — serialize (Infinity -> null) on save.
+      // Summary tiers are managed in their own state, and we serialize (Infinity -> null) on save.
       toSave.summary_tiers = serializeTiers(summaryTiers);
 
       // Custom prompts: store empty when blank OR identical to the built-in default, so we never
@@ -481,6 +511,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   const isSecretSet = (key: string) => {
     return settings[key] === '••••••••';
+  };
+
+  // Clear a stored API key. The backend stores '' which it treats as unset everywhere.
+  const removeApiKey = async (key: string, label: string) => {
+    if (!confirm(`Remove your ${label}?`)) return;
+    try {
+      await userSettingsAPI.setBulk({ [key]: '' });
+      await loadSettings();
+    } catch (err) {
+      setError('Failed to remove the key');
+      console.error(err);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -559,12 +601,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const hasOpenAIKey = isSecretSet('openai_api_key') || !!formData.openai_api_key.trim();
   const hasDeepInfraKey = isSecretSet('deepinfra_api_key') || !!formData.deepinfra_api_key.trim();
   const hasOpenRouterKey = isSecretSet('openrouter_api_key') || !!formData.openrouter_api_key.trim();
-  // OpenAI voices are usable with either an OpenAI key or an OpenRouter key (the "OpenAI voices
-  // via" toggle just picks which one synthesizes them) — so flipping the toggle never hides them.
-  const canUseOpenAIVoices = hasOpenAIKey || hasOpenRouterKey;
+  // OpenAI voices need an OpenAI key (OpenRouter does not carry the OpenAI TTS models).
+  // Kokoro voices are usable with either a DeepInfra key or an OpenRouter key (the "Kokoro
+  // voices via" toggle just picks which one synthesizes them), so flipping it never hides them.
+  const canUseKokoroVoices = hasDeepInfraKey || hasOpenRouterKey;
   const availableVoiceGroups = VOICE_CATALOG.filter(g =>
-    g.requiresKey === 'openai' ? canUseOpenAIVoices : hasDeepInfraKey
+    g.requiresKey === 'openai' ? hasOpenAIKey : canUseKokoroVoices
   );
+  const hasAnthropicKey = isSecretSet('anthropic_api_key') || !!formData.anthropic_api_key.trim();
+  const hasGeminiKey = isSecretSet('gemini_api_key') || !!formData.gemini_api_key.trim();
+  // Feature availability by configured keys, shown in the Account section so new users see
+  // what already works and which key unlocks the rest.
+  const featureAccess = [
+    { name: 'Narration scripts, read-along alignment and summaries', ok: hasOpenAIKey || hasDeepInfraKey || hasOpenRouterKey || hasAnthropicKey || hasGeminiKey, needs: 'any API key' },
+    { name: 'Audio narration (TTS voices)', ok: hasOpenAIKey || canUseKokoroVoices, needs: 'an OpenAI, DeepInfra, or OpenRouter key' },
+    { name: 'Podcast transcription', ok: hasDeepInfraKey || hasOpenAIKey, needs: 'a DeepInfra or OpenAI key' },
+    { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey || hasOpenAIKey, needs: 'a DeepInfra, OpenAI, Gemini, or OpenRouter key' },
+  ];
+  const allFeaturesAvailable = featureAccess.every(f => f.ok);
 
   return (
     <div className="settings-page">
@@ -606,15 +660,33 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Sign Out
             </button>
           </div>
+          {allFeaturesAvailable ? (
+            <div className="feature-access-all">
+              <Check size={16} /> All features available
+            </div>
+          ) : (
+            <div className="feature-access">
+              {featureAccess.map(f => (
+                <div key={f.name} className={`feature-access-row ${f.ok ? 'ok' : 'missing'}`}>
+                  {f.ok ? <Check size={16} /> : <X size={16} />}
+                  <span>{f.name}{!f.ok && <> (needs {f.needs})</>}</span>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="feature-access-link"
+                onClick={() => document.getElementById('api-keys-section')?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                Add keys in the API keys section
+              </button>
+            </div>
+          )}
         </section>
 
-        {/* Audio Generation Section — what gets turned into audio automatically.
+        {/* Audio Generation Section: what gets turned into audio automatically.
             Model/voice choices live in the Models section further down. */}
         <section className="settings-section">
            <h3><Mic size={20} /> Audio generation</h3>
-           <p className="section-description">
-             What gets turned into audio automatically. Pick which models do the work in the Models section below.
-           </p>
 
            <div className="form-group checkbox-group">
               <label>
@@ -684,9 +756,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         {/* Summaries Section */}
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
-          <p className="section-description">
-            Short "Twitter thread" summaries. Generated separately from audio, so both can run at once.
-          </p>
 
           <div className="form-group checkbox-group">
             <label>
@@ -709,7 +778,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Also summarize comments
             </label>
             <small className="settings-hint indent">
-              Adds a separate comment-discussion summary below the article summary (when the item has comments).
+              Adds a separate comment-discussion summary below the article summary.
             </small>
           </div>
 
@@ -720,10 +789,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 checked={formData.library_show_summary === 'true'}
                 onChange={(e) => handleChange('library_show_summary', e.target.checked ? 'true' : 'false')}
               />
-              Show summaries on library cards (Twitter-feed mode)
+              Show summaries on library cards
             </label>
             <small className="settings-hint indent">
-              Replaces each library card's description with its full article summary (comment summaries excluded). Falls back to the description when no summary exists.
+              Replaces each library card's description with its article summary. Falls back to the description when no summary exists.
             </small>
           </div>
 
@@ -750,15 +819,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   style={{ width: '7rem' }}
                 />
                 <small className="settings-hint">
-                  Max number of words in each "tweet" paragraph. Default 40.
+                  Max number of words in each paragraph.
                 </small>
               </div>
 
               <div className="form-group">
                 <label>Summary length tiers</label>
                 <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>
-                  Longer content gets more paragraphs. The character count is measured automatically; the matching
-                  tier sets the maximum number of paragraphs ("tweets").
+                  Longer content gets more paragraphs. The character count is measured automatically, the matching
+                  tier sets the maximum number of paragraphs.
                 </small>
                 <div className="summary-tiers-editor">
                   <div className="summary-tier-row summary-tier-header">
@@ -806,7 +875,312 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         </section>
 
-        {/* Custom prompts (advanced) — registry-driven editor for every LLM prompt, grouped by category */}
+        {/* Playback / Queue Settings */}
+        <section className="settings-section">
+          <h3>Playback</h3>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.manual_queue_always_autoplay === 'true'}
+                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
+              />
+              Manually queued items always autoplay
+            </label>
+            <small className="settings-hint indent">
+              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
+              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+            </small>
+          </div>
+        </section>
+
+        {/* API Keys Section */}
+        <section className="settings-section" id="api-keys-section">
+          <h3><Key size={20} /> API keys</h3>
+          <p className="section-description">
+            Add a key for each service you want to use. Each one lists the features it can power.
+            <br />
+            Recommended: GPT-5 Mini (OpenAI) for narration and read-along, DeepInfra for transcription and TTS.
+            <br />
+            <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
+          </p>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> DeepInfra API Key
+              {isSecretSet('deepinfra_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
+                  value={formData.deepinfra_api_key}
+                  onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
+                  placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
+                  {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('deepinfra_api_key') && (
+                <button type="button" onClick={() => removeApiKey('deepinfra_api_key', 'DeepInfra API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> OpenAI API Key
+              {isSecretSet('openai_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['openai_api_key'] ? 'text' : 'password'}
+                  value={formData.openai_api_key}
+                  onChange={(e) => handleChange('openai_api_key', e.target.value)}
+                  placeholder={isSecretSet('openai_api_key') ? '••••••••' : 'sk-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('openai_api_key')} className="toggle-visibility">
+                  {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('openai_api_key') && (
+                <button type="button" onClick={() => removeApiKey('openai_api_key', 'OpenAI API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> OpenRouter API Key
+              {isSecretSet('openrouter_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
+                  value={formData.openrouter_api_key}
+                  onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
+                  placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
+                  {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('openrouter_api_key') && (
+                <button type="button" onClick={() => removeApiKey('openrouter_api_key', 'OpenRouter API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, image descriptions.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> Anthropic API Key
+              {isSecretSet('anthropic_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['anthropic_api_key'] ? 'text' : 'password'}
+                  value={formData.anthropic_api_key}
+                  onChange={(e) => handleChange('anthropic_api_key', e.target.value)}
+                  placeholder={isSecretSet('anthropic_api_key') ? '••••••••' : 'sk-ant-...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
+                  {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('anthropic_api_key') && (
+                <button type="button" onClick={() => removeApiKey('anthropic_api_key', 'Anthropic API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> Gemini API Key
+              {isSecretSet('gemini_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
+                  value={formData.gemini_api_key}
+                  onChange={(e) => handleChange('gemini_api_key', e.target.value)}
+                  placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
+                  {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('gemini_api_key') && (
+                <button type="button" onClick={() => removeApiKey('gemini_api_key', 'Gemini API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
+          </div>
+        </section>
+
+        {/* Models Section: which provider/model handles each AI job. */}
+        <section className="settings-section">
+          <h3><Mic size={20} /> Models</h3>
+          <p className="section-description">
+            Which AI model handles each feature. Leave a model blank to use our recommended default.
+          </p>
+
+          {renderChatJob('narration', 'Narration', 'Prepares articles in the background for audio narration.', true)}
+          {renderChatJob('alignment', 'Read-along alignment', 'Syncs the script to audio timestamps for the read-along view.')}
+          {renderChatJob('summary', 'Summaries', 'Writes the tweet-thread summaries.')}
+
+          <div className="form-group ai-job">
+            <label>Transcription</label>
+            <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>Turns podcast audio into text (Whisper).</small>
+            <div className="ai-job-fields">
+              <div className="ai-field">
+                <span className="ai-field-label">Provider</span>
+                <select value={formData.transcription_provider} onChange={(e) => handleChange('transcription_provider', e.target.value)}>
+                  {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </div>
+              {formData.transcription_provider === 'deepinfra' && (
+                <div className="ai-field">
+                  <span className="ai-field-label">Preset</span>
+                  <select
+                    value={DEEPINFRA_WHISPER_PRESETS.some(p => p.id === formData.transcription_model) ? formData.transcription_model : ''}
+                    onChange={(e) => { if (e.target.value) handleChange('transcription_model', e.target.value); }}
+                  >
+                    <option value="">Custom…</option>
+                    {DEEPINFRA_WHISPER_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="ai-field">
+                <span className="ai-field-label">Model</span>
+                <input
+                  type="text"
+                  value={formData.transcription_model}
+                  onChange={(e) => handleChange('transcription_model', e.target.value)}
+                  placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="form-group ai-job">
+            <label>TTS voices{ttsVoices.length > 0 ? ` (${ttsVoices.length} selected)` : ''}</label>
+            <small className="settings-hint">
+              Pick one voice for a consistent sound, or several to rotate between (each new audio picks one at random).
+            </small>
+            <div className="ai-field" style={{ marginTop: '0.5rem' }}>
+              <span className="ai-field-label">Kokoro voices via</span>
+              <select value={formData.kokoro_tts_provider} onChange={(e) => handleChange('kokoro_tts_provider', e.target.value)}>
+                <option value="deepinfra">DeepInfra</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            </div>
+            {availableVoiceGroups.length === 0 ? (
+              <p className="no-content" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
+                Add an OpenAI, OpenRouter, or DeepInfra key to choose voices.
+              </p>
+            ) : (
+              <div style={{ marginTop: '0.5rem' }}>
+                {availableVoiceGroups.map(group => (
+                  <div key={group.model} className="voice-group">
+                    <div className="voice-group-title">{group.group}</div>
+                    {group.note && <div className="voice-group-note">{group.note}</div>}
+                    <div className="voice-grid">
+                      {group.voices.map(v => (
+                        <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={isVoiceSelected(group.model, v.id)}
+                            onChange={() => toggleVoice(group.model, v.id)}
+                          />
+                          {v.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="form-group ai-job">
+            <label>Image descriptions</label>
+            <small className="settings-hint">Describes article images so they can be read aloud.</small>
+            <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: formData.image_alt_text_enabled === 'true' ? '0.5rem' : 0 }}>
+              <input
+                type="checkbox"
+                checked={formData.image_alt_text_enabled === 'true'}
+                onChange={(e) => handleChange('image_alt_text_enabled', e.target.checked ? 'true' : 'false')}
+              />
+              Enable image descriptions
+            </label>
+            {formData.image_alt_text_enabled === 'true' && (
+              <div className="ai-job-fields">
+                <div className="ai-field">
+                  <span className="ai-field-label">Provider</span>
+                  <select
+                    value={formData.image_alt_text_provider}
+                    onChange={(e) => {
+                      const p = e.target.value;
+                      handleChange('image_alt_text_provider', p);
+                      // If the model box holds another provider's default, clear it so the new
+                      // provider's own default applies (blank = default, never pinned).
+                      const m = formData.image_alt_text_model;
+                      if (m && Object.values(IMAGE_MODEL_DEFAULTS).includes(m)) {
+                        handleChange('image_alt_text_model', '');
+                      }
+                    }}
+                  >
+                    <option value="deepinfra">DeepInfra</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </div>
+                <div className="ai-field">
+                  <span className="ai-field-label">Model</span>
+                  <input
+                    type="text"
+                    value={formData.image_alt_text_model}
+                    onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
+                    placeholder={'default = ' + (IMAGE_MODEL_DEFAULTS[formData.image_alt_text_provider] || 'gemini-3-flash-preview')}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Custom prompts (advanced): registry-driven editor for every LLM prompt, grouped by category. */}
         <section className="settings-section">
           <h3>Custom prompts (advanced)</h3>
           <p className="section-description">
@@ -898,256 +1272,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           )}
         </section>
 
-        {/* Playback / Queue Settings */}
-        <section className="settings-section">
-          <h3>Playback</h3>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.manual_queue_always_autoplay === 'true'}
-                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
-              />
-              Manually queued items always autoplay
-            </label>
-            <small className="settings-hint indent">
-              When on (default), items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
-              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
-            </small>
-          </div>
-        </section>
-
-        {/* API Keys Section */}
-        <section className="settings-section">
-          <h3><Key size={20} /> API keys</h3>
-          <p className="section-description">
-            Add a key for each service you want to use; each one lists the jobs it can power.
-            {' '}
-            <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
-          </p>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> OpenRouter API Key
-              {isSecretSet('openrouter_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openrouter_api_key'] ? 'text' : 'password'}
-                value={formData.openrouter_api_key}
-                onChange={(e) => handleChange('openrouter_api_key', e.target.value)}
-                placeholder={isSecretSet('openrouter_api_key') ? '••••••••' : 'sk-or-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openrouter_api_key')} className="toggle-visibility">
-                {showSecrets['openrouter_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> DeepInfra API Key
-              {isSecretSet('deepinfra_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://deepinfra.com/dash/api_keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['deepinfra_api_key'] ? 'text' : 'password'}
-                value={formData.deepinfra_api_key}
-                onChange={(e) => handleChange('deepinfra_api_key', e.target.value)}
-                placeholder={isSecretSet('deepinfra_api_key') ? '••••••••' : 'DeepInfra Key...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('deepinfra_api_key')} className="toggle-visibility">
-                {showSecrets['deepinfra_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> OpenAI API Key
-              {isSecretSet('openai_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['openai_api_key'] ? 'text' : 'password'}
-                value={formData.openai_api_key}
-                onChange={(e) => handleChange('openai_api_key', e.target.value)}
-                placeholder={isSecretSet('openai_api_key') ? '••••••••' : 'sk-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('openai_api_key')} className="toggle-visibility">
-                {showSecrets['openai_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> Anthropic API Key
-              {isSecretSet('anthropic_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['anthropic_api_key'] ? 'text' : 'password'}
-                value={formData.anthropic_api_key}
-                onChange={(e) => handleChange('anthropic_api_key', e.target.value)}
-                placeholder={isSecretSet('anthropic_api_key') ? '••••••••' : 'sk-ant-...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('anthropic_api_key')} className="toggle-visibility">
-                {showSecrets['anthropic_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries.</small>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Key size={16} /> Gemini API Key
-              {isSecretSet('gemini_api_key')
-                ? <span className="secret-set">(configured)</span>
-                : <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
-            </label>
-            <div className="input-with-toggle">
-              <input
-                type={showSecrets['gemini_api_key'] ? 'text' : 'password'}
-                value={formData.gemini_api_key}
-                onChange={(e) => handleChange('gemini_api_key', e.target.value)}
-                placeholder={isSecretSet('gemini_api_key') ? '••••••••' : 'Gemini API Key...'}
-              />
-              <button type="button" onClick={() => toggleShowSecret('gemini_api_key')} className="toggle-visibility">
-                {showSecrets['gemini_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
-          </div>
-        </section>
-
-        {/* Models Section — which provider/model handles each AI job. */}
-        <section className="settings-section">
-          <h3><Mic size={20} /> Models</h3>
-          <p className="section-description">
-            Which AI model handles each job. Leave a model blank to use the provider's default.
-          </p>
-
-          {renderChatJob('narration', 'Narration', 'Rewrites article text into a clean script for speech.', true)}
-          {renderChatJob('alignment', 'Read-along alignment', 'Syncs the script to audio timestamps for the read-along view.')}
-          {renderChatJob('summary', 'Summaries', 'Writes the tweet-thread summaries.')}
-
-          <div className="form-group ai-job">
-            <label>Transcription</label>
-            <small className="settings-hint">Turns podcast audio into text (Whisper).</small>
-            <div className="ai-job-fields">
-              <div className="ai-field">
-                <span className="ai-field-label">Provider</span>
-                <select value={formData.transcription_provider} onChange={(e) => handleChange('transcription_provider', e.target.value)}>
-                  {TRANSCRIPTION_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                </select>
-              </div>
-              <div className="ai-field">
-                <span className="ai-field-label">Model</span>
-                <input
-                  type="text"
-                  value={formData.transcription_model}
-                  onChange={(e) => handleChange('transcription_model', e.target.value)}
-                  placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="form-group ai-job">
-            <label>TTS voices</label>
-            <small className="settings-hint">
-              Pick one voice for a consistent sound, or several to rotate between (each new audio picks one at random).
-              {ttsVoices.length > 0 && <strong> {ttsVoices.length} selected.</strong>}
-            </small>
-            <div className="ai-field" style={{ marginTop: '0.5rem' }}>
-              <span className="ai-field-label">OpenAI voices via</span>
-              <select value={formData.openai_tts_provider} onChange={(e) => handleChange('openai_tts_provider', e.target.value)}>
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-              <small className="settings-hint">Same voices either way. Kokoro voices always use DeepInfra.</small>
-            </div>
-            {availableVoiceGroups.length === 0 ? (
-              <p className="no-content" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
-                Add an OpenAI, OpenRouter, or DeepInfra key to choose voices.
-              </p>
-            ) : (
-              <div style={{ marginTop: '0.5rem' }}>
-                {availableVoiceGroups.map(group => (
-                  <div key={group.model} className="voice-group">
-                    <div className="voice-group-title">{group.group}</div>
-                    {group.note && <div className="voice-group-note">{group.note}</div>}
-                    <div className="voice-grid">
-                      {group.voices.map(v => (
-                        <label key={v.id} className={`voice-chip ${isVoiceSelected(group.model, v.id) ? 'selected' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={isVoiceSelected(group.model, v.id)}
-                            onChange={() => toggleVoice(group.model, v.id)}
-                          />
-                          {v.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="form-group ai-job">
-            <label>Image descriptions</label>
-            <small className="settings-hint">Describes article images so they can be read aloud. Needs a Gemini or OpenRouter key.</small>
-            <label className="checkbox-inline" style={{ marginTop: '0.5rem', marginBottom: formData.image_alt_text_enabled === 'true' ? '0.5rem' : 0 }}>
-              <input
-                type="checkbox"
-                checked={formData.image_alt_text_enabled === 'true'}
-                onChange={(e) => handleChange('image_alt_text_enabled', e.target.checked ? 'true' : 'false')}
-              />
-              Enable image descriptions
-            </label>
-            {formData.image_alt_text_enabled === 'true' && (
-              <div className="ai-job-fields">
-                <div className="ai-field">
-                  <span className="ai-field-label">Provider</span>
-                  <select value={formData.image_alt_text_provider} onChange={(e) => handleChange('image_alt_text_provider', e.target.value)}>
-                    <option value="gemini">Google Gemini</option>
-                    <option value="openrouter">OpenRouter</option>
-                  </select>
-                </div>
-                <div className="ai-field">
-                  <span className="ai-field-label">Model</span>
-                  <input
-                    type="text"
-                    value={formData.image_alt_text_model}
-                    onChange={(e) => handleChange('image_alt_text_model', e.target.value)}
-                    placeholder={formData.image_alt_text_provider === 'openrouter' ? 'e.g. google/gemini-3-flash' : 'e.g. gemini-3-flash'}
-                  />
-                  <small className="settings-hint">Only tested with Gemini Flash 3.</small>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Wallabag Settings (Restored) */}
+        {/* Wallabag Settings */}
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag sync
+            Wallabag sync (currently partially broken)
           </h3>
 
           <div style={{
@@ -1158,9 +1287,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             lineHeight: '1.5',
             marginBottom: '1rem',
             border: '1px solid #2563eb',
-            color: '#fff' 
+            color: '#fff'
           }}>
-            <strong>How to connect:</strong>
+            <button
+              type="button"
+              className="settings-collapse-toggle"
+              style={{ color: '#fff', padding: 0 }}
+              onClick={() => setShowWallabagHelp(v => !v)}
+              aria-expanded={showWallabagHelp}
+            >
+              {showWallabagHelp ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <strong>How to connect</strong>
+            </button>
+            {showWallabagHelp && (<>
             <ol style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
               <li>Log into your Wallabag instance</li>
               <li>Go to <strong>Settings → API clients management</strong></li>
@@ -1171,6 +1310,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <ol style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
             Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
             </ol>
+            </>)}
           </div>
 
           <div className="form-group checkbox-group">
@@ -1264,6 +1404,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   disabled={testingConnection || !formData.wallabag_url || !formData.wallabag_client_id}
                   className="test-connection-button"
                 >
+                  <Globe size={16} />
                   {testingConnection ? 'Testing...' : 'Test Connection'}
                 </button>
 
@@ -1272,21 +1413,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   onClick={handleFullRefresh}
                   disabled={syncing}
                   className="test-connection-button"
-                  style={{ background: '#0891b2' }}
                   title="Fetch ALL items from Wallabag (ignores last sync timestamp)"
                 >
-                  🔄 Full Refresh
+                  <RefreshCw size={16} />
+                  Full Refresh
                 </button>
 
                 <button
                   type="button"
                   onClick={handleCleanup}
                   disabled={syncing}
-                  className="test-connection-button"
-                  style={{ background: '#dc2626' }}
+                  className="test-connection-button danger"
                   title="Delete recently synced items (last 2 hours)"
                 >
-                  🗑️ Cleanup
+                  <Trash2 size={16} />
+                  Cleanup
                 </button>
 
                 {connectionStatus === 'success' && (

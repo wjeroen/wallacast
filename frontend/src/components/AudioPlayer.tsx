@@ -28,7 +28,7 @@ interface AudioPlayerProps {
   isDark: boolean;
   themeMode?: 'dark' | 'light' | 'system';
   onCycleTheme?: () => void;
-  // Queue integration — parent owns the queue store, player just calls up
+  // Queue integration, parent owns the queue store, player just calls up
   onTrackEnded?: () => void;
   onSkipNextTrack?: () => void;
   onSkipPrevTrack?: () => void;
@@ -66,7 +66,7 @@ export function AudioPlayer({
   // Tracks whether the user explicitly paused via the app UI. Used to block
   // OS-initiated plays (e.g. iOS re-routing audio to speaker on disconnect).
   const userPausedRef = useRef(false);
-  // Timestamp of the last pause event — used to debounce rogue play events
+  // Timestamp of the last pause event, used to debounce rogue play events
   // from Sony headphone wear sensors (PAUSE→PLAY flicker on removal, ~100ms).
   // Intentional hardware play (smartwatch tap, headphone button) takes >1s.
   const lastPauseTimeRef = useRef<number>(0);
@@ -76,7 +76,7 @@ export function AudioPlayer({
   // Mirrors the current content prop so permanent event handlers (with [] deps)
   // always see the up-to-date item without needing to be re-registered.
   const contentRef = useRef(content);
-  // Latest onTrackEnded callback — read by the audio 'ended' handler which is
+  // Latest onTrackEnded callback, read by the audio 'ended' handler which is
   // registered once with empty deps. Kept in a ref so prop changes are picked up.
   const onTrackEndedRef = useRef(onTrackEnded);
   const lastAutoPlayTokenRef = useRef(0);
@@ -107,7 +107,7 @@ export function AudioPlayer({
 
   // Hook up the OS MediaSession API so headset / lock-screen / bluetooth
   // controls can drive the player. Deliberately map *next/previous* to
-  // seek ±15s (podcast-style) rather than true track-nav — the user
+  // seek ±15s (podcast-style) rather than true track-nav, the user
   // preferred that for long-form audio. The dedicated seekbackward /
   // seekforward actions do the same thing so both UIs are covered.
   useEffect(() => {
@@ -277,13 +277,13 @@ export function AudioPlayer({
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
         // Only auto-correct upwards if the DB has no duration. Don't override
-        // an existing duration based on the browser reading — the backend now
+        // an existing duration based on the browser reading, the backend now
         // trims trailing silence post-Whisper, and the browser would happily
         // report the bogus pre-trim value, undoing that fix.
         if (!content.duration || content.duration === 0) {
           contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
         } else if (realDuration < content.duration - 2) {
-          // Browser says the file is SHORTER than DB — trust the browser
+          // Browser says the file is SHORTER than DB, trust the browser
           // (file probably truncated). Update DB so the timeline isn't too long.
           contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
         }
@@ -310,27 +310,27 @@ export function AudioPlayer({
     const handleLoadedMetadata = () => setDuration(audio.duration);
     const handleEnded = () => {
       setIsPlaying(false);
-      userPausedRef.current = false; // natural end — reset intent
+      userPausedRef.current = false; // natural end, reset intent
       savePlaybackPosition(0);
       // Defer the queue check so the state update lands before parent reloads content
       setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
     // Sync React state with actual DOM audio state.
     // Three guards run in order to decide whether to accept an incoming play:
-    //  1. appPlayRef — app-initiated plays (togglePlay) always pass immediately.
-    //  2. userPausedRef — explicit UI pause blocks OS-initiated resumes.
-    //  3. Debounce — blocks rogue play events that arrive within 800ms of a
+    //  1. appPlayRef, app-initiated plays (togglePlay) always pass immediately.
+    //  2. userPausedRef, explicit UI pause blocks OS-initiated resumes.
+    //  3. Debounce, blocks rogue play events that arrive within 800ms of a
     //     pause (Sony headphone wear-sensor flicker on removal: PAUSE→PLAY
     //     in ~100ms). Intentional hardware plays (smartwatch, headphone
     //     button) take >1s and pass through.
     const handlePlay = () => {
-      // App-initiated play (from togglePlay) — always allow immediately
+      // App-initiated play (from togglePlay), always allow immediately
       if (appPlayRef.current) {
         appPlayRef.current = false;
         setIsPlaying(true);
         return;
       }
-      // Explicit user pause via app UI — block OS-initiated resumes
+      // Explicit user pause via app UI, block OS-initiated resumes
       if (userPausedRef.current) {
         audio.pause();
         return;
@@ -348,7 +348,7 @@ export function AudioPlayer({
       lastPauseTimeRef.current = Date.now();
       setIsPlaying(false);
     };
-    // Audio load/playback error — reset icon and report to backend for Railway logging.
+    // Audio load/playback error, reset icon and report to backend for Railway logging.
     // We listen for 'error' because when a podcast stream fails (e.g. range request
     // rejected by CDN), the browser fires 'error', NOT 'pause'. Without this handler
     // the icon gets stuck showing "pause" even though nothing is playing.
@@ -433,12 +433,12 @@ export function AudioPlayer({
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
-      userPausedRef.current = true; // explicit user pause — block OS-initiated resumes
+      userPausedRef.current = true; // explicit user pause, block OS-initiated resumes
       savePlaybackPosition(audioRef.current.currentTime);
       audioRef.current.pause();
       // State update handled by the 'pause' DOM event listener
     } else {
-      userPausedRef.current = false; // explicit user play — allow plays again
+      userPausedRef.current = false; // explicit user play, allow plays again
       appPlayRef.current = true;     // mark as app-initiated so handlePlay skips debounce
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
@@ -617,7 +617,7 @@ export function AudioPlayer({
   if (!content) return null;
 
   // Entering an audio-less item must set fullscreen STATE, not just override the
-  // render below — otherwise a stale minimized state (from a previously played
+  // render below, otherwise a stale minimized state (from a previously played
   // audio item) kicks in the moment generated audio arrives, collapsing the view
   // to the mini player mid-read. Guarded setState during render converges in one
   // pass (React's sanctioned "adjusting state when props change" pattern).
@@ -626,7 +626,7 @@ export function AudioPlayer({
   return (
     <>
       <audio ref={audioRef} />
-      {/* Items without audio only exist in fullscreen — the mini player is pure
+      {/* Items without audio only exist in fullscreen, the mini player is pure
           playback chrome (timeline, play button) and would be dead UI for them */}
       {isExpanded || !content.audio_url ? (
         <FullscreenPlayer

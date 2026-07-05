@@ -1,6 +1,6 @@
 import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
-import { fetchArticleContent } from './article-fetcher.js';
+import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
 
 /**
  * Wallabag Sync Service
@@ -315,10 +315,10 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             );
 
             // Auto-refetch EA Forum and LessWrong articles from the web.
-            // Wallabag can't handle SPAs well — it misses comments, author, date,
+            // Wallabag can't handle SPAs well: it misses comments, author, date,
             // and proper formatting. Wallacast's article-fetcher does much better.
             const entryUrl = entry.url || '';
-            const isEAForum = entryUrl.includes('forum.effectivealtruism.org');
+            const isEAForum = isEAForumUrl(entryUrl);
             const isLessWrong = entryUrl.includes('lesswrong.com');
             if ((isEAForum || isLessWrong) && insertResult.rows[0]?.id) {
               const newId = insertResult.rows[0].id;
@@ -365,7 +365,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                   console.log(`[Wallabag Sync] ✅ Auto-refetch complete for ${siteName} article ${newId}`);
                 } catch (refetchError) {
                   console.error(`[Wallabag Sync] Auto-refetch failed for ${siteName} article ${newId}:`, refetchError);
-                  // Not critical — wallabag content is still available as fallback
+                  // Not critical. Wallabag content is still available as fallback.
                 }
               })();
             }

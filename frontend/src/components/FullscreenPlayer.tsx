@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
+import { displayUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, ContentVersion, Comment } from '../types';
@@ -527,7 +528,7 @@ export function FullscreenPlayer({
 
   // Determine which tabs are available.
   // Articles/texts get an editable "Content" tab (current text) plus a read-only
-  // "Read-along" tab (synced to the audio version) once audio/alignment exists — so the
+  // "Read-along" tab (synced to the audio version) once audio/alignment exists, so the
   // editable live text and the frozen synced view are cleanly separated. The Read-along
   // tab is the default when it exists; otherwise Content is the default.
   const availableTabs = useMemo(() => {
@@ -805,7 +806,7 @@ export function FullscreenPlayer({
 
   // Footnote / in-page anchor navigation for the Content tab. Intercepts clicks on `#...`
   // links (footnote markers and their back-links) and smoothly scrolls the target into view
-  // inside the player's scroll container — without changing the URL (which would upset the
+  // inside the player's scroll container, without changing the URL (which would upset the
   // router). Works on native LessWrong/EA/Substack anchors AND our canonical `fn-N` ones.
   const handleAnchorNav = useCallback((e: React.MouseEvent) => {
     const a = (e.target as HTMLElement).closest('a');
@@ -826,7 +827,7 @@ export function FullscreenPlayer({
   }, []);
 
   // Copy the readable content (title, link, author, date, body, comments) to
-  // the clipboard as Markdown — what Ctrl+A/Ctrl+C *should* give you, without
+  // the clipboard as Markdown. What Ctrl+A/Ctrl+C *should* give you without
   // the player chrome.
   const handleCopyContent = async () => {
     setShowDropdown(false);
@@ -838,7 +839,7 @@ export function FullscreenPlayer({
     if (content.published_at) meta.push(new Date(content.published_at).toLocaleDateString('en-GB'));
     if (content.karma !== undefined && content.karma !== null) meta.push(`${content.karma} upvotes`);
     if (meta.length > 0) lines.push(meta.join(' • '));
-    if (content.url) lines.push(content.url);
+    if (content.url) lines.push(displayUrl(content.url));
 
     const body = content.html_content
       ? htmlToMarkdown(content.html_content)
@@ -1005,7 +1006,7 @@ export function FullscreenPlayer({
                   id={`ra-el-${globalIndex}`}
                   className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                   onClick={(e) => {
-                    // Prevent image-wrapping links from navigating — clicking images should only seek audio
+                    // Prevent image-wrapping links from navigating, clicking images should only seek audio
                     const target = e.target as HTMLElement;
                     if (target.tagName === 'IMG') {
                       e.preventDefault();
@@ -1147,7 +1148,7 @@ export function FullscreenPlayer({
                     )}
                   </p>
                 )}
-                {/* URL removed — already shown in fullscreen player header */}
+                {/* URL removed, already shown in fullscreen player header */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
@@ -1222,7 +1223,7 @@ export function FullscreenPlayer({
                   />
                 )}
                 <p className="md-editor-hint">
-                  Markdown editor — works with Obsidian (copy/paste both ways). Saving does not
+                  Markdown editor, works with Obsidian (copy/paste both ways). Saving does not
                   regenerate audio; the read-along stays on the old version until you regenerate it.
                 </p>
               </div>
@@ -1592,7 +1593,7 @@ export function FullscreenPlayer({
                       <button
                         className={`queue-shuffle-btn ${autoplay ? 'active' : ''}`}
                         onClick={() => setAutoplay(!autoplay)}
-                        title={autoplay ? 'Autoplay on — will continue into library items after queue ends' : 'Autoplay off — stops after queue ends'}
+                        title={autoplay ? 'Autoplay on. Will continue into library items after queue ends' : 'Autoplay off. Stops after queue ends'}
                       >
                         <Repeat size={14} />
                       </button>
@@ -1606,7 +1607,7 @@ export function FullscreenPlayer({
                     </div>
                     {!autoplay && (
                       <p className="queue-hint">
-                        Autoplay is off — these items won't play automatically when the queue ends.
+                        Autoplay is off. These items won't play automatically when the queue ends.
                         Tap the loop icon above to turn it on.
                       </p>
                     )}
@@ -1652,8 +1653,8 @@ export function FullscreenPlayer({
             <h2 className="fullscreen-title">{content.title}</h2>
             {content.type === 'article' && content.url && (
               <p className="fullscreen-source-link">
-                <a href={content.url} target="_blank" rel="noopener noreferrer">
-                  {getDomainFromUrl(content.url)}
+                <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
+                  {getDomainFromUrl(displayUrl(content.url))}
                   <SquareArrowOutUpRight size={14} style={{ marginLeft: '0.25rem' }} />
                 </a>
               </p>
@@ -1745,7 +1746,7 @@ export function FullscreenPlayer({
                     )}
                   </>
                 )}
-                {/* Summary options (independent of audio — both can be generated at once).
+                {/* Summary options (independent of audio, both can be generated at once).
                     Podcasts summarize their transcript; App.tsx confirms + chains Whisper
                     first when no transcript exists yet. */}
                 {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
@@ -1794,7 +1795,7 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
-          {/* No minimize without audio — the mini player is playback chrome, so
+          {/* No minimize without audio. The mini player is playback chrome, so
               audio-less items live in fullscreen only (close is the way out) */}
           {content.audio_url && (
             <button onClick={onMinimize} className="header-button" title="Minimize">

@@ -34,7 +34,7 @@ export function decrypt(value: string): string {
   const key = getKey();
   if (!key) {
     console.error('[Encryption] Encrypted value found but ENCRYPTION_KEY is not set. Cannot decrypt.');
-    return value; // Return the raw enc: string — API calls will fail, but app won't crash
+    return value; // Return the raw enc: string, API calls will fail, but app won't crash
   }
 
   const parts = value.slice(PREFIX.length).split(':');

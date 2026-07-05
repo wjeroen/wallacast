@@ -38,7 +38,7 @@ export function MiniPlayer({
 }: MiniPlayerProps) {
   // Parse content alignment to get comments start time.
   // NOTE: hooks must run on every render in the same order (rules-of-hooks),
-  // so the `!content` bail-out lives BELOW them — hence the null-safe access.
+  // so the `!content` bail-out lives BELOW them, hence the null-safe access.
   const commentsStartTime = useMemo(() => {
     if (!content?.content_alignment) return null;
     try {

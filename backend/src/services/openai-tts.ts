@@ -13,11 +13,12 @@ import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
+import { isEAForumUrl } from './article-fetcher.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
 // turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
 // image descriptions. {inputImageCount} is filled at call time. WARNING: verbatim preservation is
-// critical here — a careless override can make audio summarize or drop content.
+// critical here, a careless override can make audio summarize or drop content.
 export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio narration service.
 
  Your goal is to rewrite the provided HTML article into a plain text script optimized for Text-to-Speech (TTS).
@@ -270,7 +271,7 @@ function htmlToNarrationText(html: string): string {
 
       let replacement: string;
       if (anchorIsUrl) {
-        // Anchor text IS a URL — just say "link to domain.com"
+        // Anchor text IS a URL: just say "link to domain.com"
         replacement = `link to ${domain || 'a website'}`;
       } else if (anchorText && domain && domain !== 'example.com') {
         replacement = `${anchorText}, link to ${domain}`;
@@ -590,7 +591,7 @@ export async function generateArticleAudio(
     let targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
 
     // Voice variety: if the user selected multiple voices, pick one at random for this
-    // generation (can span TTS models — the picked model also overrides the client routing).
+    // generation (can span TTS models, the picked model also overrides the client routing).
     // Skipped when an explicit voice was requested.
     if (!options.voice) {
       const picked = await pickRandomTTSVoice(userId);
@@ -608,7 +609,7 @@ export async function generateArticleAudio(
     }
     const openai = tts.client;
     // The router may rewrite the model id (e.g. 'openai/gpt-4o-mini-tts' when routed via
-    // OpenRouter) — use it for the API calls below.
+    // OpenRouter). Use it for the API calls below.
     targetModel = tts.model;
 
     const textChunks = splitTextIntoChunks(articleText, PROCESSING_CONFIG.tts.chunkSize);
@@ -811,7 +812,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
   try {
     // Explicit column list (never SELECT *): this runs at the START of every audio
     // (re)generation. SELECT * pulls audio_data (the old 10-50MB BYTEA blob) plus
-    // transcript_words / content_alignment into memory for nothing — on a regenerate
+    // transcript_words / content_alignment into memory for nothing, on a regenerate
     // that's tens of MB loaded just to be overwritten seconds later. Only these columns
     // are actually read below; if you use a new content field here, add it to this list.
     const contentResult = await query(
@@ -928,14 +929,14 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     fullScript += articleBodyScript;
 
     if (excludeComments) {
-      console.log(`[TTS] Skipping comment narration — excluded by user request`);
+      console.log(`[TTS] Skipping comment narration: excluded by user request`);
     } else if (content.comments) {
        try {
           const comments = typeof content.comments === 'string' ? JSON.parse(content.comments) : content.comments;
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
               const isLessWrong = content.comment_source === 'lesswrong' || (content.url ? content.url.includes('lesswrong.com') : false);
-              const isEAForum = content.comment_source === 'ea_forum' || (content.url ? content.url.includes('forum.effectivealtruism.org') : false);
+              const isEAForum = content.comment_source === 'ea_forum' || isEAForumUrl(content.url);
               const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
               // Check user setting for whether to narrate comments
@@ -952,7 +953,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
               } else {
-                console.log(`[TTS] Skipping comment narration (${totalCount} comments) — disabled by user setting`);
+                console.log(`[TTS] Skipping comment narration (${totalCount} comments): disabled by user setting`);
               }
           }
        } catch (e) {
@@ -999,7 +1000,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const audioUrl = `${backendUrl}/api/content/${contentId}/audio`;
 
     // Store audio on the volume as a file (cheap disk) instead of a Postgres BYTEA blob
-    // (expensive RAM — Postgres caches blobs for days). If the disk write fails for any
+    // (expensive RAM, Postgres caches blobs for days). If the disk write fails for any
     // reason, fall back to storing the blob in the DB so audio is never lost. Serving
     // (index.ts) checks the disk file first and falls back to the blob, so both work.
     const savedToDisk = await saveAudioFile(contentId, audioBuffer);
@@ -1026,7 +1027,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     // Whisper prompt: keep it minimal. Whisper's prompt only influences the first
     // ~30-60 seconds of audio, so adding metadata about comments (which appear at
-    // the end) does nothing. Just pass an empty string — for chunked transcription
+    // the end) does nothing. Just pass an empty string. For chunked transcription
     // the continuity strategy (previous chunk text) works better than static metadata.
     const whisperPrompt = '';
     console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
@@ -1038,7 +1039,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           // spoken opening). Inject a synthetic anchor word at 0.0s so the LLM
           // alignment can anchor the title element to the start of the audio.
           if (transcriptResult.words.length > 0 && transcriptResult.words[0].start > 3.0) {
-            console.log(`[TTS] Whisper dropped opening ${transcriptResult.words[0].start.toFixed(1)}s — injecting title anchor at 0.0s`);
+            console.log(`[TTS] Whisper dropped opening ${transcriptResult.words[0].start.toFixed(1)}s: injecting title anchor at 0.0s`);
             transcriptResult.words.unshift({
               word: content.title || 'Title',
               start: 0.0,

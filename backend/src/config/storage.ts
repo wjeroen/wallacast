@@ -11,7 +11,7 @@ let usingPersistentVolume = false;
  * Uses the Railway volume if one is mounted, otherwise falls back to local ./public.
  *
  * Detection: Railway injects RAILWAY_VOLUME_MOUNT_PATH into the service the volume is
- * attached to — prefer it, then fall back to the conventional /data. (Historic bug: this
+ * attached to. Prefer it, then fall back to the conventional /data. (Historic bug: this
  * used `require('fs')`, which throws in our ESM build, so the volume was NEVER detected and
  * storage always fell back to ephemeral ./public. Fixed by importing existsSync properly.)
  */
@@ -30,7 +30,7 @@ export function getStorageDir(): string {
         return candidate;
       }
     } catch {
-      // not accessible — try the next candidate
+      // not accessible, try the next candidate
     }
   }
 
@@ -44,7 +44,7 @@ export function getStorageDir(): string {
 
 /**
  * True when storage is a persistent Railway volume. False means the local ./public
- * fallback — fine for dev, but on Railway that's the container's EPHEMERAL disk: files
+ * fallback: fine for dev, but on Railway that's the container's EPHEMERAL disk. Files
  * written there vanish on every redeploy. Destructive migration steps (clearing DB audio
  * blobs) must NEVER run in that state.
  */

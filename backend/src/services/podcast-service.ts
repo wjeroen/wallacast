@@ -576,7 +576,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             feedId,
             item_type,
             // title and guid are VARCHAR(500); some feeds emit very long guids (full URLs)
-            // — truncate so one oversized item can't fail the whole insert.
+            // Truncate so one oversized item can't fail the whole insert.
             cleanHtmlEntities(title).slice(0, 500),
             truncatedDescription,
             url,
