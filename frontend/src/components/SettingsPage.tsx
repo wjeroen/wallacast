@@ -136,6 +136,9 @@ const CHAT_MODEL_DEFAULTS: Record<string, string> = {
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
+  // The shared demo account may look at every setting but change none. Inputs are
+  // disabled via a fieldset wrapper below, and the backend blocks writes regardless.
+  const isDemo = !!user?.demo;
   const [settings, setSettings] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -452,6 +455,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   };
 
   const handleSave = async () => {
+    if (isDemo) return;
     try {
       setSaving(true);
       setError(null);
@@ -630,12 +634,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <button
           onClick={handleSave}
           className={`save-button ${saved ? 'saved' : ''}`}
-          disabled={saving}
+          disabled={saving || isDemo}
+          title={isDemo ? 'Settings are read-only in the demo' : undefined}
         >
           {saved ? <Check size={18} /> : <Save size={18} />}
           <span>{saving ? 'Saving...' : saved ? 'Saved' : 'Save'}</span>
         </button>
       </header>
+
+      {isDemo && (
+        <p className="section-description" style={{ padding: '0 1rem', marginTop: '0.5rem' }}>
+          This is the read-only demo, so settings can be browsed but not changed.
+        </p>
+      )}
 
       {error && (
         <div className="settings-error">
@@ -682,6 +693,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </div>
           )}
         </section>
+
+        {/* Everything below the Account section goes inert for the read-only demo:
+            a disabled fieldset natively disables every input/select/button inside it.
+            The Account section stays outside so Sign Out keeps working. */}
+        <fieldset className="settings-demo-fieldset" disabled={isDemo}>
 
         {/* Audio Generation Section: what gets turned into audio automatically.
             Model/voice choices live in the Models section further down. */}
@@ -1250,7 +1266,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                               <small className="settings-hint">{p.description}</small>
                               {p.vars.length > 0 && (
                                 <small className="settings-hint">
-                                  Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.
+                                  {p.vars.map((v, i) => (
+                                    <span key={v.token}>
+                                      {i > 0 && ' · '}
+                                      <code>{`{${v.token}}`}</code> = {v.desc}
+                                    </span>
+                                  ))}
                                 </small>
                               )}
                               <textarea
@@ -1478,6 +1499,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </>
           )}
         </section>
+
+        </fieldset>
 
       </div>
     </div>

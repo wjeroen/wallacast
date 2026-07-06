@@ -55,6 +55,7 @@ Environment variables are just settings you type into each service's **Variables
 - `BACKEND_URL` - the backend's own public URL (for example `https://your-backend.up.railway.app`). It is used to build the links to your generated audio files.
 - `JWT_SECRET` - any long random string. It signs the login tokens. If you leave it blank, everyone gets logged out every time you redeploy, so set it once and keep it.
 - `ENCRYPTION_KEY` - a random key used to encrypt each user's AI provider API keys before they go into the database. It must be exactly 64 hex characters (32 bytes). Without it, stored keys fall back to plaintext, which you do not want in production.
+- `DEMO_USERNAME` (optional) - the username of the shared read-only demo account behind the home page's "Try the demo" button. Defaults to `demo`. IMPORTANT: register that username yourself before promoting the instance (running the seed script does it for you), otherwise a stranger could claim it and control what demo visitors see. Populate the demo library with `cd backend && BASE_URL=https://your-backend-url DEMO_PASSWORD=... OPENAI_API_KEY=... DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo` (the keys are used once for generation and then removed from the demo account).
 - `PORT` - set to `3001` (the port the backend listens on).
 
 Tip for generating the secrets: on any machine with Node installed you can run

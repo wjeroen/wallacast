@@ -4,7 +4,7 @@ import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
 import { AudioPlayer } from './components/AudioPlayer';
-import { LoginPage } from './components/LoginPage';
+import { HomePage } from './components/HomePage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
@@ -39,6 +39,23 @@ function App() {
   const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
   // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts
   const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
+
+  // Toast shown when the read-only demo account hits a blocked write (the api.ts
+  // interceptor broadcasts the event on any 403 with { demo: true }).
+  const [showDemoToast, setShowDemoToast] = useState(false);
+  const demoToastTimer = useRef<number | null>(null);
+  useEffect(() => {
+    const onBlocked = () => {
+      setShowDemoToast(true);
+      if (demoToastTimer.current) window.clearTimeout(demoToastTimer.current);
+      demoToastTimer.current = window.setTimeout(() => setShowDemoToast(false), 2500);
+    };
+    window.addEventListener('wallacast-demo-blocked', onBlocked);
+    return () => {
+      window.removeEventListener('wallacast-demo-blocked', onBlocked);
+      if (demoToastTimer.current) window.clearTimeout(demoToastTimer.current);
+    };
+  }, []);
 
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
@@ -645,9 +662,9 @@ function App() {
     );
   }
 
-  // Show login if not authenticated
+  // Logged out: the marketing home page (login lives in its top-right dropdown)
   if (!isAuthenticated) {
-    return <LoginPage />;
+    return <HomePage />;
   }
 
   // Show settings page
@@ -657,6 +674,13 @@ function App() {
 
   return (
     <div className="app">
+      {user?.demo && (
+        <div className="demo-banner">
+          <span>You are browsing the read-only demo.</span>
+          <button onClick={() => logout()}>Exit demo</button>
+        </div>
+      )}
+      {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}
       <header className="app-header">
         <div className="app-logo-container">
           <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />

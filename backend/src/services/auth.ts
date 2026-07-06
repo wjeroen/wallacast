@@ -25,17 +25,53 @@ export interface User {
   display_name: string | null;
   is_active: boolean;
   created_at: Date;
+  // True only for read-only demo SESSIONS (see the demo-session rules above isDemoUsername).
+  // Never stored in the DB.
+  demo?: boolean;
 }
 
 export interface TokenPayload {
   userId: number;
   username: string;
+  // Present and true only for read-only demo sessions. requireAuth reads this to block writes.
+  demo?: boolean;
 }
 
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
   user: User;
+}
+
+// The shared demo account is an ordinary users row named by DEMO_USERNAME (default 'demo').
+// "Demo-ness" is a property of the SESSION, not of the user row, and is never stored in the DB:
+//   - A session created by the passwordless POST /auth/demo endpoint is read-only (demo: true).
+//   - A PASSWORD login into the same account is a normal writable session. Knowing the password
+//     proves operator access, and the seed script (scripts/seed-demo.mjs) relies on this to
+//     populate the demo library through the ordinary API.
+//   - Token REFRESH re-locks any session on the demo username. A visitor's demo session can
+//     therefore never escape read-only, while the operator (who holds the password) simply logs
+//     in again when a writable token expires.
+function isDemoUsername(username: string): boolean {
+  const demoUsername = (process.env.DEMO_USERNAME || 'demo').toLowerCase();
+  return typeof username === 'string' && username.toLowerCase() === demoUsername;
+}
+
+// Map a raw users row to the User shape returned to the frontend, adding demo: true only when
+// the SESSION is a read-only demo session (the caller decides, see the rules above).
+function buildUserResponse(row: any, demoSession: boolean): User {
+  const user: User = {
+    id: row.id,
+    username: row.username,
+    email: row.email,
+    display_name: row.display_name,
+    is_active: row.is_active,
+    created_at: row.created_at,
+  };
+  if (demoSession) {
+    user.demo = true;
+  }
+  return user;
 }
 
 // Hash a password
@@ -48,12 +84,16 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-// Generate access token (short-lived)
-export function generateAccessToken(user: User): string {
+// Generate access token (short-lived). demoSession stamps the read-only demo claim, see the
+// demo-session rules above isDemoUsername for who gets it.
+export function generateAccessToken(user: User, demoSession: boolean = false): string {
   const payload: TokenPayload = {
     userId: user.id,
     username: user.username,
   };
+  if (demoSession) {
+    payload.demo = true;
+  }
   return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
@@ -103,11 +143,21 @@ export async function loginUser(username: string, password: string): Promise<Aut
     return null;
   }
 
+  // A password login is always a writable session, even for the demo account: knowing the
+  // password proves operator access (this is how the demo seed script writes content).
+  return issueSessionTokens(user, false);
+}
+
+// Shared internals of loginUser and demoLogin: record the login, mint the token pair, persist
+// the refresh session, and return the standard AuthTokens response. The caller is responsible
+// for authenticating the user first (password check for login, existence check for demo) and
+// decides whether this session is a read-only demo session.
+async function issueSessionTokens(user: any, demoSession: boolean): Promise<AuthTokens> {
   // Update last login
   await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
   // Generate tokens
-  const accessToken = generateAccessToken(user);
+  const accessToken = generateAccessToken(user, demoSession);
   const refreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(refreshToken);
 
@@ -126,15 +176,34 @@ export async function loginUser(username: string, password: string): Promise<Aut
   return {
     accessToken,
     refreshToken,
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      display_name: user.display_name,
-      is_active: user.is_active,
-      created_at: user.created_at,
-    },
+    user: buildUserResponse(user, demoSession),
   };
+}
+
+// Demo login: log in to the shared read-only demo account without a password. Returns null when
+// the demo account does not exist (or is disabled) so the route can respond 404. Issues the exact
+// same token pair and user response as loginUser by sharing issueSessionTokens.
+export async function demoLogin(): Promise<AuthTokens | null> {
+  const demoUsername = (process.env.DEMO_USERNAME || 'demo').toLowerCase();
+  // Case-insensitive lookup, matching isDemoUsername: a demo account registered with any
+  // capitalization must resolve to the same row the token flag is derived from.
+  const result = await query(
+    'SELECT id, username, email, display_name, is_active, created_at FROM users WHERE LOWER(username) = $1',
+    [demoUsername]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const user = result.rows[0];
+
+  if (!user.is_active) {
+    return null;
+  }
+
+  // Passwordless entry point, so this session is read-only.
+  return issueSessionTokens(user, true);
 }
 
 // Refresh access token using refresh token
@@ -154,20 +223,17 @@ export async function refreshAccessToken(refreshToken: string): Promise<{ access
   }
 
   const row = result.rows[0];
-  const user: User = {
-    id: row.id,
-    username: row.username,
-    email: row.email,
-    display_name: row.display_name,
-    is_active: row.is_active,
-    created_at: row.created_at,
-  };
+  // Refresh always RE-LOCKS sessions on the demo username: the refresh token alone does not
+  // prove operator access, so a visitor's demo session can never escape read-only this way.
+  // An operator whose writable password session expires simply logs in again.
+  const demoSession = isDemoUsername(row.username);
+  const user = buildUserResponse(row, demoSession);
 
   if (!user.is_active) {
     return null;
   }
 
-  const accessToken = generateAccessToken(user);
+  const accessToken = generateAccessToken(user, demoSession);
   return { accessToken, user };
 }
 
@@ -196,7 +262,9 @@ export async function getUserById(userId: number): Promise<User | null> {
     return null;
   }
 
-  return result.rows[0];
+  // Demo-ness is a session property, not a user property, so it is not stamped here. The /me
+  // route copies it from the verified token payload instead.
+  return buildUserResponse(result.rows[0], false);
 }
 
 // Register new user

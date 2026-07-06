@@ -10,6 +10,7 @@ When you finish a change, update the docs it affects:
 - **`ARCHITECTURE.md`**: the technical reference and codebase map. Update it whenever the backend/frontend structure, API endpoints, or database schema change.
 - **`TODO.md`**: the task list (mark items done, add newly discovered work).
 - **`RAILWAY_DEPLOYMENT.md`**: the step-by-step deploy guide.
+- **The public demo**: the read-only demo account (home page "Try the demo" button) is living documentation and must stay current with the app. When user-facing features, settings, or the recommended models change, update the onboarding guide in `backend/scripts/seed-demo-content.mjs` (especially its "What was generated, and by what" and settings/costs sections) and tell the user to re-run `npm run seed:demo` against the hosted instance so the demo library reflects reality.
 
 ## NEVER Use Fuzzy Matching or Algorithmic Alignment
 

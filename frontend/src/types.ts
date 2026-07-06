@@ -119,6 +119,9 @@ export interface User {
   display_name: string | null;
   is_active: boolean;
   created_at: string;
+  // True when this session is the shared read-only demo account (computed by the
+  // backend from DEMO_USERNAME, never stored in the users table).
+  demo?: boolean;
 }
 
 export interface AuthTokens {

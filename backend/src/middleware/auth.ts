@@ -38,6 +38,47 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 
   req.user = payload;
+
+  // Read-only demo enforcement.
+  //
+  // This deliberately lives in requireAuth, the single auth choke point that every protected
+  // route passes through. Putting it here (rather than in individual routes) means no current
+  // or future mutating endpoint can forget to enforce it. The shared demo account can read
+  // everything but must not change anything, so we block any non-GET/HEAD/OPTIONS request,
+  // with two narrow, harmless exceptions whitelisted below.
+  if (payload.demo) {
+    const method = req.method;
+    const isReadMethod = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+
+    if (!isReadMethod) {
+      // originalUrl includes the query string, strip it before matching the path.
+      const path = (req.originalUrl || '').split('?')[0];
+      // req.body may be undefined (no parsed body), guard against it.
+      const body = req.body || {};
+
+      // Exception a) the lean status poll the frontend uses to watch processing progress.
+      const isStatusPoll = method === 'POST' && path === '/api/content/status';
+
+      // Exception b) persisting playback position/speed on a single content item, so the shared
+      // demo account can remember where playback stopped. Only allowed when every body key is in
+      // this set and the body is non-empty, so edits/stars/regenerates stay blocked.
+      const PLAYBACK_KEYS = ['playback_position', 'playback_speed', 'last_played_at'];
+      const bodyKeys = Object.keys(body);
+      const isPlaybackUpdate =
+        method === 'PATCH' &&
+        /^\/api\/content\/\d+$/.test(path) &&
+        bodyKeys.length > 0 &&
+        bodyKeys.every((key) => PLAYBACK_KEYS.includes(key));
+
+      if (!isStatusPoll && !isPlaybackUpdate) {
+        return res.status(403).json({
+          error: 'This action is not available in the read-only demo.',
+          demo: true,
+        });
+      }
+    }
+  }
+
   next();
 }
 

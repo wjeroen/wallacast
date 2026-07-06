@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   loginUser,
+  demoLogin,
   registerUser,
   refreshAccessToken,
   logoutUser,
@@ -33,6 +34,28 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/auth/demo - Log in to the shared read-only demo account (no password required).
+// Returns the same token pair and user response shape as /login. Responds 404 when this instance
+// has no demo account configured, so the frontend can hide or disable the "Try the demo" button.
+router.post('/demo', async (req, res) => {
+  try {
+    const result = await demoLogin();
+
+    if (!result) {
+      return res.status(404).json({ error: 'Demo is not available on this instance' });
+    }
+
+    res.json({
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      user: result.user,
+    });
+  } catch (error) {
+    console.error('Demo login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -126,6 +149,12 @@ router.get('/me', requireAuth, async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Demo-ness is a session property: the verified token payload is the source of truth,
+    // so a read-only demo session keeps its flag across page reloads (checkAuth calls /me).
+    if (req.user!.demo) {
+      user.demo = true;
     }
 
     res.json({ user });

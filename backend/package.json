@@ -10,7 +10,8 @@
     "mock": "node mock-server.mjs",
     "build": "tsc && npm run copy-sql",
     "copy-sql": "copyfiles -u 1 \"src/database/**/*.sql\" dist/",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "seed:demo": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.39.0",

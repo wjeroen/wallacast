@@ -10,6 +10,7 @@ interface AuthStore {
 
   login: (username: string, password: string) => Promise<boolean>;
   register: (username: string, password: string, displayName?: string, email?: string) => Promise<boolean>;
+  demoLogin: () => Promise<boolean>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   clearError: () => void;
@@ -56,6 +57,25 @@ export const useAuthStore = create<AuthStore>((set) => ({
         return false;
       }
       const message = error.response?.data?.error || 'Registration failed';
+      set({ error: message, isLoading: false });
+      return false;
+    }
+  },
+
+  demoLogin: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await authAPI.demoLogin();
+      const { accessToken, refreshToken, user } = response.data;
+      setTokens(accessToken, refreshToken);
+      set({ user, isAuthenticated: true, isLoading: false });
+      return true;
+    } catch (error: any) {
+      if (error.response?.status === 503) {
+        set({ error: 'Service is starting up, please wait a moment and try again', isLoading: false });
+        return false;
+      }
+      const message = error.response?.data?.error || 'The demo is not available right now';
       set({ error: message, isLoading: false });
       return false;
     }

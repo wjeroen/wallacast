@@ -46,6 +46,13 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // The read-only demo account gets 403 { demo: true } on any blocked write.
+    // Broadcast it so App can show one shared "not available in the demo" toast
+    // instead of every caller needing its own handling.
+    if (error.response?.status === 403 && error.response?.data?.demo) {
+      window.dispatchEvent(new Event('wallacast-demo-blocked'));
+    }
+
     if (error.response?.status === 401 && !originalRequest._retry && refreshToken) {
       originalRequest._retry = true;
 
@@ -211,6 +218,10 @@ export const authAPI = {
 
   register: (username: string, password: string, displayName?: string, email?: string) =>
     api.post<AuthTokens>('/auth/register', { username, password, displayName, email }),
+
+  // Passwordless login into the shared read-only demo account (404 when no demo
+  // account exists on this instance).
+  demoLogin: () => api.post<AuthTokens>('/auth/demo'),
 
   logout: () => {
     const token = refreshToken;
