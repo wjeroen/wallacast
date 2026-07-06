@@ -148,8 +148,9 @@ router.post('/bulk', async (req, res) => {
     let affected = 0;
 
     if (action === 'star' || action === 'unstar') {
+      // Starred/archived state must reach Wallabag, so set the explicit push flag instead of relying on an updated_at vs wallabag_updated_at comparison (those columns run on different clocks).
       const r = await query(
-        `UPDATE content_items SET is_starred = $3, updated_at = NOW()
+        `UPDATE content_items SET is_starred = $3, updated_at = NOW(), wallabag_needs_push = TRUE
          WHERE user_id = $1 AND id = ANY($2::int[])`,
         [userId, ids, action === 'star']
       );
@@ -174,7 +175,7 @@ router.post('/bulk', async (req, res) => {
       );
       for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
       const r = await query(
-        `UPDATE content_items SET is_archived = true, updated_at = NOW()
+        `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
          WHERE user_id = $1 AND id = ANY($2::int[])`,
         [userId, ids]
       );
@@ -185,7 +186,7 @@ router.post('/bulk', async (req, res) => {
       // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio. Implicitly
       // kicking off dozens of TTS jobs would be a cost surprise. Use bulk "Generate audio".
       const r = await query(
-        `UPDATE content_items SET is_archived = false, updated_at = NOW()
+        `UPDATE content_items SET is_archived = false, updated_at = NOW(), wallabag_needs_push = TRUE
          WHERE user_id = $1 AND id = ANY($2::int[])`,
         [userId, ids]
       );
@@ -234,7 +235,9 @@ router.post('/bulk', async (req, res) => {
       );
       affected = r.rowCount ?? 0;
       // Delete each item's on-disk audio file too, otherwise the mp3s orphan on the /data volume.
-      for (const row of r.rows) await deleteAudioFile(row.id);
+      // Run the unlinks in parallel instead of one-at-a-time. allSettled so a single failed
+      // deletion never aborts the others or fails the request (deleteAudioFile is best-effort).
+      await Promise.allSettled(r.rows.map((row) => deleteAudioFile(row.id)));
       if (wb.rows.length > 0) {
         const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
         for (const row of wb.rows) {
@@ -709,38 +712,48 @@ router.patch('/:id', async (req, res) => {
               // CHANGED: Removed .slice(0, 1000) here; the service handles the slicing logic centrally.
               const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt);
 
+              // Decide up front whether LLM alignment will run (articles/texts that have a body).
+              // The frontend stops polling the instant generation_status turns terminal, so we must
+              // NOT report 'completed' here when alignment still has to run. Otherwise it refreshes
+              // while content_alignment is stale and shows the old read-along. Keep the status
+              // non-terminal ('generating_transcript' + 'aligning_content') until alignment ends.
+              const htmlRow = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
+              const hasHtmlContent = htmlRow.rows.length > 0 && !!htmlRow.rows[0].html_content;
+              const willAlign = (type === 'article' || type === 'text') && (hasHtmlContent || type === 'text');
+
               await query(
-                'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
-                [result.text, JSON.stringify(result.words), 'completed', 100, id]
+                'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = $5, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $6',
+                [
+                  result.text,
+                  JSON.stringify(result.words),
+                  willAlign ? 'generating_transcript' : 'completed',
+                  willAlign ? 97 : 100,
+                  willAlign ? 'aligning_content' : null,
+                  id,
+                ]
               );
 
-              // Run LLM alignment for articles and text items (not podcasts)
-              if (type === 'article' || type === 'text') {
-                const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
-                if (contentResult.rows.length > 0 && (contentResult.rows[0].html_content || type === 'text')) {
-                  console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
-                  await query(
-                    'UPDATE content_items SET generation_progress = $1, current_operation = $2 WHERE id = $3',
-                    [97, 'aligning_content', id]
+              // Run LLM alignment for articles and text items (not podcasts). The status set
+              // above stays non-terminal until this block writes the final 'completed'.
+              if (willAlign) {
+                console.log(`[LLM-Align] Running alignment for ${type} ${id}...`);
+                try {
+                  const alignment = await generateLLMAlignment(
+                    parseInt(id),
+                    req.user!.userId,
+                    result.words
                   );
-                  try {
-                    const alignment = await generateLLMAlignment(
-                      parseInt(id),
-                      req.user!.userId,
-                      result.words
-                    );
-                    await query(
-                      'UPDATE content_items SET content_alignment = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
-                      [JSON.stringify(alignment), 'completed', 100, id]
-                    );
-                    console.log(`[LLM-Align] Complete: ${alignment.elements.length} elements timestamped`);
-                  } catch (alignError) {
-                    console.error('[LLM-Align] Failed (non-fatal):', alignError);
-                    await query(
-                      'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                      ['completed', 100, id]
-                    );
-                  }
+                  await query(
+                    'UPDATE content_items SET content_alignment = $1, generation_status = $2, generation_progress = $3, current_operation = NULL WHERE id = $4',
+                    [JSON.stringify(alignment), 'completed', 100, id]
+                  );
+                  console.log(`[LLM-Align] Complete: ${alignment.elements.length} elements timestamped`);
+                } catch (alignError) {
+                  console.error('[LLM-Align] Failed (non-fatal):', alignError);
+                  await query(
+                    'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+                    ['completed', 100, id]
+                  );
                 }
               }
 
@@ -1107,6 +1120,7 @@ router.post('/:id/refetch', async (req, res) => {
             comment_source = $10,
             comment_count_total = $11,
             content_source = 'wallacast',
+            wallabag_needs_push = TRUE,
             generation_status = 'completed',
             generation_progress = 100,
             current_operation = NULL,
@@ -1220,7 +1234,8 @@ router.post('/:id/versions/:versionId/restore', async (req, res) => {
     await query(
       `UPDATE content_items SET
          html_content = $1, content = $2, comments = $3,
-         content_source = 'wallacast', content_fetched_at = NOW(), updated_at = NOW()
+         content_source = 'wallacast', content_fetched_at = NOW(), updated_at = NOW(),
+         wallabag_needs_push = TRUE
        WHERE id = $4 AND user_id = $5`,
       [version.html_content, version.content, commentsValue, id, req.user!.userId]
     );

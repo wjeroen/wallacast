@@ -478,8 +478,9 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 - `is_starred`, `is_archived` (Wallabag: starred/archived; archiving deletes audio unless starred)
 - `tags`: Comma-separated tags (Wallabag style)
 - `wallabag_id`, `wallabag_updated_at`: For Wallabag sync tracking
+- `wallabag_needs_push`: Explicit dirty flag for the push (migration 022). Set TRUE by every write that changes syncable data (single-item PATCH, bulk star/archive/unarchive, refetch, version restore, transcript writes), cleared only after a successful push. Replaces the old `updated_at > wallabag_updated_at` comparison, which was unreliable because those two columns run on different clocks. Items tagged `nosync` are never pushed and are excluded from the pending-changes count (shared `hasNosyncTag()` helper in wallabag-sync.ts)
 - `playback_position`, `playback_speed` (deprecated - speed now stored globally in user settings + localStorage), `last_played_at`
-- `generation_status`: 'idle' | 'starting' | 'fetching' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'ready' | 'completed' | 'failed'
+- `generation_status`: 'idle' | 'starting' | 'fetching' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'ready' | 'completed' | 'failed'. Note: 'ready' means the audio is saved but Whisper transcription and LLM alignment may still be running afterwards, so 'ready' only counts as still-working while `current_operation` is set (the frontend poll keys on both fields)
 - `generation_progress`, `generation_error`, `current_operation`
 - `summary`: Article-body summary (Twitter-thread style, paragraphs separated by blank lines)
 - `comment_summary`: Comment-discussion summary (nullable)

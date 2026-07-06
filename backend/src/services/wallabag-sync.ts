@@ -80,6 +80,21 @@ function shouldSkip(entry: WallabagEntry): boolean {
 }
 
 /**
+ * Check whether a content_items.tags value carries the nosync tag.
+ *
+ * The tags column is a comma-separated string (e.g. "article,nosync"). Exported so the
+ * push loop and the GET /status pending-changes count share ONE predicate and can never
+ * disagree about what counts as nosync.
+ */
+export function hasNosyncTag(tags: string | null | undefined): boolean {
+  if (!tags) return false;
+  return tags
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .some((t) => t === 'nosync' || t === '#nosync');
+}
+
+/**
  * Get a user setting from the database
  */
 async function getUserSetting(userId: number, key: string): Promise<string | null> {
@@ -154,10 +169,13 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
           );
           
           if (existing.rows.length > 0) {
-             console.log('[Wallabag Sync] Removing local item', existing.rows[0].id, 'because it now has nosync tag');
-             await query('DELETE FROM content_items WHERE id = $1', [existing.rows[0].id]);
-             // Delete the on-disk audio file too, otherwise the mp3 orphans on the /data volume.
-             await deleteAudioFile(existing.rows[0].id);
+             const ids = existing.rows.map((r: { id: number }) => r.id);
+             console.log('[Wallabag Sync] Removing local item(s)', ids.join(', '), 'because they now have the nosync tag');
+             await query('DELETE FROM content_items WHERE wallabag_id = $1 AND user_id = $2', [entry.id, userId]);
+             // Delete the on-disk audio files too, otherwise the mp3s orphan on the /data volume.
+             // Run in parallel. deleteAudioFile is best-effort (never throws), and allSettled
+             // makes sure one failed unlink cannot abort the rest.
+             await Promise.allSettled(ids.map((id: number) => deleteAudioFile(id)));
           }
           
           continue; // Skip processing this entry
@@ -481,7 +499,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
         // next pull treat it as a nosync entry and DELETE the local item (and its audio),
         // so we must never push it. Skip entirely and leave it dirty so it is re-evaluated
         // (and skipped again) on the next sync rather than silently marked pushed.
-        if (existingTags.some((t: string) => t.toLowerCase() === 'nosync' || t.toLowerCase() === '#nosync')) {
+        if (hasNosyncTag(item.tags)) {
           console.log(`[Wallabag Sync] skip id=${item.id} reason=nosync tag (never pushed)`);
           continue;
         }

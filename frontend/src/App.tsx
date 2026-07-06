@@ -19,6 +19,11 @@ type Page = 'main' | 'settings';
 // generation_status values that mean "still working". Anything else
 // ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
 // by pollOperationThenRefresh. 'fetching' is the status a refetch sets while it runs.
+// 'ready' is deliberately NOT in this list: it means the audio is saved, but Whisper
+// transcription and LLM alignment can still be running afterwards. A 'ready' item only
+// counts as still-working while current_operation is set (e.g. 'transcribing' or
+// 'aligning_content'). Once current_operation is NULL the item is at rest, even if a past
+// crash left it stuck on 'ready'. So pollOperationThenRefresh keys on BOTH fields for 'ready'.
 const GENERATION_IN_PROGRESS = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'];
 
 function App() {
@@ -347,14 +352,14 @@ function App() {
   const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
   // Shared "fire an operation, then refresh once it finishes" helper. Polls the LEAN
-  // status endpoint every 2s (getStatuses, a few hundred bytes) until the watched status
+  // status endpoint every 2s (getStatuses, a few hundred bytes) until generation
   // leaves its in-progress state, THEN fetches the full item exactly once via getById and
   // applies it to BOTH the open player (if still on that item) and the library store (so
   // cards stop going stale). Replaces the old one-shot 1s setTimeout reloads that always
   // lost the race (refetch takes >1s, transcription takes minutes) and never touched the store.
-  // Refetch now sets generation_status 'fetching' while it runs (then 'completed'/'failed'), so
-  // a 'generation' watcher correctly waits it out just like audio/transcript generation.
-  const pollOperationThenRefresh = (id: number, watch: 'generation' | 'summary') => {
+  // Refetch sets generation_status 'fetching' while it runs (then 'completed'/'failed'), so
+  // this correctly waits it out just like audio/transcript generation.
+  const pollOperationThenRefresh = (id: number) => {
     let tries = 0;
     const maxTries = 300; // ~10 minutes at 2s intervals
     const poll = async () => {
@@ -362,9 +367,11 @@ function App() {
       try {
         const statuses = await contentAPI.getStatuses([id]);
         const status = statuses.data[0];
-        const inProgress = !!status && (watch === 'summary'
-          ? status.summary_status === 'generating'
-          : GENERATION_IN_PROGRESS.includes(status.generation_status || ''));
+        // 'ready' means the audio landed, but transcription/alignment may still be running,
+        // so keep polling while current_operation is set (it goes NULL when the item rests).
+        const gs = status?.generation_status || '';
+        const inProgress = !!status && (GENERATION_IN_PROGRESS.includes(gs)
+          || (gs === 'ready' && !!status.current_operation));
         if (inProgress && tries < maxTries) {
           setTimeout(poll, 2000);
           return;
@@ -385,7 +392,7 @@ function App() {
 
     try {
       await contentAPI.refetch(currentContent.id);
-      pollOperationThenRefresh(currentContent.id, 'generation');
+      pollOperationThenRefresh(currentContent.id);
     } catch (error) {
       console.error('Failed to refetch content:', error);
     }
@@ -395,7 +402,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
-      pollOperationThenRefresh(currentContent.id, 'generation');
+      pollOperationThenRefresh(currentContent.id);
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       alert(error?.response?.data?.error || 'Failed to generate audio');
@@ -497,7 +504,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
-      pollOperationThenRefresh(currentContent.id, 'generation');
+      pollOperationThenRefresh(currentContent.id);
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
       alert('Failed to regenerate transcript');

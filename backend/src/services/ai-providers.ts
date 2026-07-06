@@ -145,20 +145,38 @@ interface ChatProviderDef {
 // error). Real graded effort only exists on the NATIVE /v1/messages API (verified live:
 // output_config.effort 'low' answered a test puzzle in 3 output tokens, 'max' used
 // 565-1058, and invalid values 400 with the valid list). So Anthropic chat goes through
-// AnthropicNativeChatClient below, and this mapping produces NATIVE params:
-//   - 'off' -> thinking disabled.
-//   - Haiku 4.5 / Sonnet 4.5 and older: no output_config.effort support, effort tier maps
-//     to a thinking budget instead.
-//   - Everything newer (Sonnet 5, 4.6-era, Opus 4.x, Fable): output_config.effort, the
-//     real thing (low | medium | high | xhigh | max).
+// AnthropicNativeChatClient below, and this mapping produces NATIVE params (routing
+// verified against Anthropic's model docs on 2026-07-06):
+//   - 'off' / 'none' / 'disabled' -> thinking disabled.
+//   - Claude 3 / 3.5 (but NOT 3.7): support neither extended thinking nor the effort
+//     parameter, so any effort setting is ignored (returns {}, warns once).
+//   - Claude 3.7, Haiku 4.5, Sonnet 4 / 4.5 (not 4.6), Opus 4 / 4.1 (not 4.5 and up): no
+//     output_config.effort support, so the effort tier maps to a thinking budget instead.
+//   - Everything newer (Sonnet 5, Sonnet 4.6, Opus 4.5 and up, Fable, future models):
+//     output_config.effort, the real thing (low | medium | high | xhigh | max).
 const ANTHROPIC_THINKING_BUDGETS: Record<string, number> = {
   low: 1024, medium: 4096, high: 8192, xhigh: 16384, max: 24576,
 };
 const ANTHROPIC_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Models we have already warned lack any thinking/effort support, keyed by the lowercased
+// model id, so the log is not spammed on every LLM call.
+const anthropicNoReasoningWarned = new Set<string>();
 function anthropicReasoningParams(effort: string, model: string): Record<string, any> {
   const e = effort.toLowerCase().trim();
+  const m = (model || '').toLowerCase().trim();
   if (e === 'off' || e === 'none' || e === 'disabled') return { thinking: { type: 'disabled' } };
-  if (/haiku|sonnet-4-5|claude-3/.test(model)) {
+  // Claude 3 / 3.5 (but NOT 3.7) support neither extended thinking nor output_config.effort,
+  // so the effort setting cannot be honored at all. Warn once per model, then ignore it.
+  if (/claude-3(?!-7)/.test(m)) {
+    if (!anthropicNoReasoningWarned.has(m)) {
+      anthropicNoReasoningWarned.add(m);
+      console.warn(`[AI] anthropic: model '${model}' has no thinking or effort support, ignoring effort '${effort}'`);
+    }
+    return {};
+  }
+  // Claude 3.7, Haiku 4.5, Sonnet 4 / 4.5 (not 4.6), Opus 4 / 4.1 (not 4.5 and up): no
+  // output_config.effort support, so map the effort tier to a thinking budget instead.
+  if (/claude-3-7|haiku|sonnet-4(?!-6)|opus-4(?!-[5-9])/.test(m)) {
     const budget = ANTHROPIC_THINKING_BUDGETS[e];
     if (!budget) {
       console.warn(`[AI] anthropic: unknown effort '${effort}' for ${model} (valid: off, low, medium, high, xhigh, max), thinking left at model default`);
@@ -166,11 +184,27 @@ function anthropicReasoningParams(effort: string, model: string): Record<string,
     }
     return { thinking: { type: 'enabled', budget_tokens: budget } };
   }
+  // Everything newer supports real graded effort via output_config.effort.
   if (!ANTHROPIC_EFFORT_VALUES.includes(e)) {
     console.warn(`[AI] anthropic: unknown effort '${effort}' (valid: off, low, medium, high, xhigh, max), using model default`);
     return {};
   }
   return { output_config: { effort: e } };
+}
+
+// Output-token ceiling for the native /v1/messages API, which REQUIRES max_tokens. Thinking
+// tokens count against this, so too low a cap makes long narration scripts hit stop_reason
+// 'max_tokens' and cut off. Values from Anthropic's models overview (verified 2026-07-06).
+// max_tokens is a ceiling, not a cost: only actual output tokens are billed, so defaulting
+// to the real model ceiling never overcharges.
+function anthropicMaxOutputTokens(model: string): number {
+  const m = (model || '').toLowerCase();
+  if (/claude-3-haiku|claude-3-opus/.test(m)) return 4096;
+  if (/claude-3-5/.test(m)) return 8192;
+  if (/claude-3-7/.test(m)) return 64000;
+  if (/opus-4(?!-[5-9])/.test(m)) return 32000;                 // opus 4 and 4.1
+  if (/sonnet-4(?!-6)|haiku|opus-4-5/.test(m)) return 64000;    // sonnet 4 and 4.5, haiku 4.5, opus 4.5
+  return 128000;                                                // sonnet-5, sonnet-4-6, opus 4.6/4.7/4.8, fable, unknown future models
 }
 
 // Speaks Anthropic's NATIVE /v1/messages API while exposing the same
@@ -187,8 +221,10 @@ export class AnthropicNativeChatClient {
         const system = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
         const body: Record<string, any> = {
           model: params.model,
-          // Native requires max_tokens. Thinking counts toward it, so leave headroom.
-          max_tokens: params.max_completion_tokens ?? params.max_tokens ?? 32000,
+          // Native requires max_tokens and thinking counts toward it, so default to the
+          // model's real output ceiling (see anthropicMaxOutputTokens) rather than a low
+          // fixed cap that would truncate long narration scripts.
+          max_tokens: params.max_completion_tokens ?? params.max_tokens ?? anthropicMaxOutputTokens(params.model),
           messages: msgs.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content })),
         };
         if (system) body.system = system;
@@ -405,6 +441,12 @@ export async function chatCreateWithRetry(
       // The response `model` field is ground truth for which model actually served the
       // call (the request-side config is logged by getChatClientForJob).
       console.log(`${label} done: served_by=${response.model} tokens_in=${response.usage?.prompt_tokens ?? '?'} tokens_out=${response.usage?.completion_tokens ?? '?'}`);
+      // finish_reason 'length' means the model hit its output-token ceiling and the result
+      // is cut off (works for every provider, the native Anthropic adapter maps stop_reason
+      // 'max_tokens' to 'length' too). Surface it so truncation is diagnosable in the logs.
+      if (response.choices[0]?.finish_reason === 'length') {
+        console.warn(`${label} TRUNCATED: ${response.model} hit its output token limit (finish_reason=length), the result is likely incomplete`);
+      }
       return response;
     } catch (err: any) {
       lastErr = err;

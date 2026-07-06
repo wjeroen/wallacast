@@ -16,6 +16,11 @@ function getKey(): Buffer | null {
 }
 
 export function encrypt(plaintext: string): string {
+  // Double-wrap guard: an already-encrypted value (starts with the 'enc:' prefix) is returned
+  // unchanged. A decrypt failure or a round-tripped Settings form must never cause an
+  // already-encrypted value to be wrapped a second time, which would permanently corrupt the secret.
+  if (plaintext.startsWith(PREFIX)) return plaintext;
+
   const key = getKey();
   if (!key) return plaintext; // No key = store as plaintext
 
@@ -31,16 +36,22 @@ export function encrypt(plaintext: string): string {
 export function decrypt(value: string): string {
   if (!value.startsWith(PREFIX)) return value; // Plaintext, return as-is
 
+  // On any failure below we return '' (empty string), NOT the raw stored value. The backend
+  // treats '' as "not configured" everywhere (the key-remove button also stores ''), so the
+  // affected feature degrades to cleanly unavailable and the Settings page still loads.
+  // Returning the raw 'enc:iv:ct:tag' string instead would be dangerous, callers would send it
+  // upstream as an API key or Wallabag password (confusing 401/403s), and if it were ever
+  // re-saved it would get encrypted a second time, permanently corrupting the secret.
   const key = getKey();
   if (!key) {
-    console.error('[Encryption] Encrypted value found but ENCRYPTION_KEY is not set. Cannot decrypt.');
-    return value; // Return the raw enc: string, API calls will fail, but app won't crash
+    console.error('[Encryption] Encrypted value found but ENCRYPTION_KEY is not set, cannot decrypt. This secret will appear unconfigured until it is re-entered in Settings.');
+    return '';
   }
 
   const parts = value.slice(PREFIX.length).split(':');
   if (parts.length !== 3) {
-    console.error('[Encryption] Malformed encrypted value, returning as-is');
-    return value;
+    console.error('[Encryption] Malformed encrypted value, cannot decrypt. This secret will appear unconfigured until it is re-entered in Settings.');
+    return '';
   }
 
   const [ivHex, ciphertextHex, tagHex] = parts;
@@ -53,10 +64,10 @@ export function decrypt(value: string): string {
     decipher.setAuthTag(tag);
     return decipher.update(ciphertext) + decipher.final('utf8');
   } catch {
-    // Auth-tag mismatch (rotated/wrong ENCRYPTION_KEY) throws here. Degrade gracefully like
-    // the other paths above instead of 500-ing every settings read.
-    console.error('[Encryption] Failed to decrypt value (wrong ENCRYPTION_KEY?)');
-    return value;
+    // Auth-tag mismatch throws here, which happens when the ENCRYPTION_KEY is wrong or was
+    // rotated. Degrade gracefully like the paths above instead of 500-ing every settings read.
+    console.error('[Encryption] Failed to decrypt value, the ENCRYPTION_KEY is wrong or was rotated. This secret will appear unconfigured until it is re-entered in Settings.');
+    return '';
   }
 }
 

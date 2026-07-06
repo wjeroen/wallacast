@@ -76,13 +76,18 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .then((response) => {
           if (response && response.status === 200) {
+            // Take BOTH clones now, synchronously, BEFORE returning the response to the
+            // browser. Cloning after the body has begun to be consumed (which happens once
+            // the browser reads the returned response) can throw, which would leave
+            // '/index.html' uncached and defeat the offline fallback below.
             const responseToCache = response.clone();
+            const indexShellCopy = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseToCache);
               // Also store under a stable '/index.html' key so the offline
               // fallback below can always find a shell to serve, regardless of
               // which SPA route the user first visited.
-              cache.put('/index.html', response.clone());
+              cache.put('/index.html', indexShellCopy);
             });
           }
           return response;
