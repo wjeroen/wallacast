@@ -395,7 +395,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 type="text"
                 value={fd[`${job}_reasoning_effort`] || ''}
                 onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'default = high' : 'blank = model default'}
+                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'off / low / medium / high / xhigh / max (default = high)' : 'blank = model default'}
               />
             </div>
           </div>

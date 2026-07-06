@@ -47,7 +47,7 @@ router.get('/status', async (req, res) => {
     const pendingResult = await query(
       `SELECT COUNT(*) as count FROM content_items
        WHERE user_id = $1
-       AND (wallabag_id IS NULL OR updated_at > COALESCE(wallabag_updated_at, '1970-01-01'::timestamp))`,
+       AND (wallabag_id IS NULL OR wallabag_needs_push = TRUE)`,
       [req.user!.userId]
     );
     const pendingChanges = parseInt(pendingResult.rows[0].count, 10);

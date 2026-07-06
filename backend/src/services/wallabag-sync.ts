@@ -135,8 +135,11 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
     console.log('[Wallabag Sync] Last sync:', lastSync || 'never');
 
     // Fetch entries modified since last sync (or all if first sync)
-    const entries = await wallabag.fetchEntries(lastSync || undefined);
+    const { entries, complete } = await wallabag.fetchEntries(lastSync || undefined);
     console.log('[Wallabag Sync] Fetched', entries.length, 'entries from Wallabag');
+
+    // Count items that were already current, logged once as a summary to avoid per-item spam.
+    let upToDateCount = 0;
 
     for (const entry of entries) {
       try {
@@ -189,12 +192,17 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             // Wallacast wins - skip content update, only update metadata
             console.log('[Wallabag Sync] Conflict detected for item', existing.rows[0].id, '- local changes take precedence');
 
+            // Keep the dirty flag on: local content won this conflict, so the following
+            // push phase must re-assert it to Wallabag (the "Wallacast wins" rule). If we
+            // did not, updating wallabag_updated_at here would mask the local edit and the
+            // push would never re-send it.
             await query(
               `UPDATE content_items SET
                 is_starred = $1,
                 is_archived = $2,
                 tags = $3,
-                wallabag_updated_at = $4
+                wallabag_updated_at = $4,
+                wallabag_needs_push = TRUE
               WHERE id = $5`,
               [
                 entry.is_starred === 1,
@@ -270,8 +278,9 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
               );
             }
           } else {
-            // Local is current, no update needed
-            console.log('[Wallabag Sync] Local item', existing.rows[0].id, 'is up to date, skipping');
+            // Local is current, no update needed. Counted and logged once after the loop
+            // (see upToDateCount) instead of one line per item, to avoid log spam.
+            upToDateCount++;
           }
         } else {
           // INSERT new item
@@ -395,8 +404,18 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
       }
     }
 
-    // Update last sync timestamp
-    await setUserSetting(userId, 'wallabag_last_sync', new Date().toISOString());
+    if (upToDateCount > 0) {
+      console.log(`[Wallabag Sync] ${upToDateCount} items already up to date`);
+    }
+
+    // Only advance the last-sync cursor when the pull retrieved every page. If a page
+    // fetch failed, advancing would permanently skip the entries we never pulled, so we
+    // leave the cursor where it is and re-pull the same window on the next sync.
+    if (complete) {
+      await setUserSetting(userId, 'wallabag_last_sync', new Date().toISOString());
+    } else {
+      console.warn('[Wallabag Sync] pull incomplete (page fetch failed), last_sync NOT advanced, will re-pull next sync');
+    }
     console.log('[Wallabag Sync] Pull complete:', count, 'items synced,', errors.length, 'errors');
 
     return { count, errors };
@@ -426,7 +445,10 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
   try {
     // Find items needing push:
     // 1. wallabag_id IS NULL (never synced)
-    // 2. updated_at > wallabag_updated_at (local changes since last sync)
+    // 2. wallabag_needs_push = TRUE (an explicit dirty flag, set on every local change)
+    // We use the dirty flag instead of comparing updated_at > wallabag_updated_at, because
+    // those two columns are on different clocks (wallabag_updated_at stores a foreign
+    // wall-clock time), so the comparison was unreliable.
     // Explicit column list (never SELECT *): this can match MANY items at once, and
     // SELECT * would load every matched item's audio_data blob (10-50MB each) into
     // memory just to push text to Wallabag. Only the fields the loop below reads.
@@ -438,7 +460,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
        WHERE user_id = $1
        AND (
          wallabag_id IS NULL
-         OR updated_at > COALESCE(wallabag_updated_at, '1970-01-01'::timestamp)
+         OR wallabag_needs_push = TRUE
        )`,
       [userId]
     );
@@ -454,6 +476,15 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
         const existingTags = item.tags
           ? item.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
           : [];
+
+        // Honor the nosync tag on push. Pushing a nosync-tagged item would make the very
+        // next pull treat it as a nosync entry and DELETE the local item (and its audio),
+        // so we must never push it. Skip entirely and leave it dirty so it is re-evaluated
+        // (and skipped again) on the next sync rather than silently marked pushed.
+        if (existingTags.some((t: string) => t.toLowerCase() === 'nosync' || t.toLowerCase() === '#nosync')) {
+          console.log(`[Wallabag Sync] skip id=${item.id} reason=nosync tag (never pushed)`);
+          continue;
+        }
 
         // Remove any existing type tags to avoid duplicates
         const typeTags = ['article', 'text', 'podcast'];
@@ -488,6 +519,15 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
           contentToSync = item.html_content || item.content || '';
         }
 
+        // Podcasts have no useful text until they are transcribed. Pushing an empty-content
+        // podcast makes Wallabag crawl the raw audio URL and store a "can't retrieve contents"
+        // placeholder. Skip it, leave wallabag_id NULL and the dirty flag untouched, so it
+        // retries automatically once the transcript exists.
+        if (item.type === 'podcast_episode' && !contentToSync.trim()) {
+          console.log(`[Wallabag Sync] skip id=${item.id} reason=no transcript yet (will push once transcribed)`);
+          continue;
+        }
+
         if (item.wallabag_id) {
           // UPDATE existing Wallabag entry
           console.log('[Wallabag Sync] Updating Wallabag entry:', item.wallabag_id);
@@ -500,9 +540,11 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
           });
 
           if (result) {
-            // Update local wallabag_updated_at to match
+            // Update local wallabag_updated_at to match, and clear the dirty flag now that
+            // this item has been successfully pushed. wallabag_updated_at is still written
+            // because the pull phase reads it.
             await query(
-              'UPDATE content_items SET wallabag_updated_at = $1 WHERE id = $2',
+              'UPDATE content_items SET wallabag_updated_at = $1, wallabag_needs_push = FALSE WHERE id = $2',
               [result.updated_at, item.id]
             );
             count++;
@@ -524,7 +566,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
 
               if (newEntry) {
                 await query(
-                  'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = $3 WHERE id = $4',
+                  'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = $3, wallabag_needs_push = FALSE WHERE id = $4',
                   [newEntry.id, newEntry.updated_at, url, item.id]
                 );
                 count++;
@@ -549,9 +591,10 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
           });
 
           if (result) {
-            // Store Wallabag ID and update URL if we generated a synthetic one
+            // Store Wallabag ID and update URL if we generated a synthetic one, and clear
+            // the dirty flag now that this item has been successfully pushed.
             await query(
-              'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = COALESCE(url, $3) WHERE id = $4',
+              'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = COALESCE(url, $3), wallabag_needs_push = FALSE WHERE id = $4',
               [result.id, result.updated_at, url, item.id]
             );
             count++;

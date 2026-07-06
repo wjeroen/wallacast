@@ -235,6 +235,11 @@ export async function initializeDatabase() {
     const summaryErrorMigration = await fs.readFile(summaryErrorMigrationPath, 'utf-8');
     await client.query(summaryErrorMigration);
 
+    // Run migration to add wallabag_needs_push flag (explicit dirty flag for the push)
+    const wallabagNeedsPushMigrationPath = path.join(__dirname, 'migrations', '022_add_wallabag_needs_push.sql');
+    const wallabagNeedsPushMigration = await fs.readFile(wallabagNeedsPushMigrationPath, 'utf-8');
+    await client.query(wallabagNeedsPushMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

@@ -8,7 +8,7 @@ import { getTempDir } from '../config/storage.js';
 import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice, chatInputCharCap } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
@@ -511,8 +511,9 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
         },
         {
           role: 'user',
-          // 400k chars (~100k tokens) fits every supported chat model's context.
-          content: cleanHtml.slice(0, 400000)
+          // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
+          // larger for big-context models (see chatInputCharCap).
+          content: cleanHtml.slice(0, chatInputCharCap(modelId))
         }
       ],
     });
@@ -544,7 +545,8 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
         ...extraParams,
         messages: [
           { role: 'system', content: retrySystemPrompt },
-          { role: 'user', content: cleanHtml.slice(0, 400000) }
+          // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
+          { role: 'user', content: cleanHtml.slice(0, chatInputCharCap(modelId)) }
         ],
       });
 
@@ -1071,12 +1073,12 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
           if (durationOverride !== null) {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5 WHERE id = $6',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $6',
               [transcriptResult.text, JSON.stringify(transcriptResult.words), durationOverride, 97, 'aligning_content', contentId]
             );
           } else {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
             );
           }

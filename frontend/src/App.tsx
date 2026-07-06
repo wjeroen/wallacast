@@ -178,11 +178,16 @@ function App() {
       // Reload status (pending changes should now be 0)
       await loadWallabagStatus();
 
-      if (response.data.errors.length > 0) {
-        console.warn('Sync completed with errors:', response.data.errors);
+      const { pulled, pushed, errors } = response.data;
+      let message = `Sync complete: ${pulled} pulled, ${pushed} pushed`;
+      if (errors.length > 0) {
+        console.warn('Sync completed with errors:', errors);
+        message += `, ${errors.length} error${errors.length !== 1 ? 's' : ''} (see server logs)`;
       }
+      alert(message);
     } catch (err) {
       console.error('Sync failed:', err);
+      alert('Sync failed. Check your connection and try again.');
     } finally {
       setSyncing(false);
     }

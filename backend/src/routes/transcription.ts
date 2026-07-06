@@ -74,7 +74,7 @@ router.post('/content/:id', async (req, res) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
         await query(
-          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5 AND user_id = $6',
           [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
         );
       })

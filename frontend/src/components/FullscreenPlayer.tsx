@@ -376,8 +376,6 @@ export function FullscreenPlayer({
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
-  // Toggle: show newest fetched html_content vs synced LLM alignment
-  const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
   // Dropdown menu state
   const [showDropdown, setShowDropdown] = useState(false);
   // Display panel state (font size)
@@ -443,11 +441,6 @@ export function FullscreenPlayer({
       }
     }).catch(() => {});
   }, []);
-
-  // Reset unsynced toggle when content changes
-  useEffect(() => {
-    setShowUnsyncedContent(false);
-  }, [content.id]);
 
   // Persist autoscroll preference
   useEffect(() => {
@@ -872,9 +865,8 @@ export function FullscreenPlayer({
     const isLW = content.url ? content.url.includes('lesswrong.com') : false;
     const isSub = content.url ? content.url.includes('substack.com') : false;
 
-    // Split elements into categories
-    const titleEl = elements.find(e => e.type === 'title');
-    const metaElements = elements.filter(e => e.type === 'meta');
+    // Split elements into categories. Title and author/date meta are intentionally not
+    // rendered here, the fullscreen player top header already shows them.
     const bodyElements = elements.filter(e =>
       ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
     );
@@ -883,31 +875,8 @@ export function FullscreenPlayer({
 
     return (
       <div className="tab-content-display">
-        {/* Header section (mirrors content tab header) */}
+        {/* Provenance only: title/author/date/karma/comments are in the fullscreen player top header. */}
         <div className="content-header" style={{ marginBottom: '1rem' }}>
-          {/* Title - timestamped */}
-          {titleEl && (
-            <div
-              id={`ra-el-${elements.indexOf(titleEl)}`}
-              className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(titleEl.startTime)}
-            >
-              <h2 style={{ margin: '0 0 0.5rem 0' }}>{content.title}</h2>
-            </div>
-          )}
-
-          {/* Author/date meta - timestamped */}
-          {metaElements.map((el, i) => (
-            <div
-              key={`meta-${i}`}
-              id={`ra-el-${elements.indexOf(el)}`}
-              className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(el.startTime)}
-            >
-              <div dangerouslySetInnerHTML={{ __html: el.html }} />
-            </div>
-          ))}
-
           {/* Content provenance: two lines for content version and audio/read-along version */}
           {(content.type === 'article' || content.type === 'text') && (
             <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
@@ -917,37 +886,11 @@ export function FullscreenPlayer({
                   ? `Content ${isContentNewer ? 'updated in' : 'fetched by'} ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
                   : `Content updated in wallacast on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`
                 }
-                {hasAlignment && (
-                  <>
-                    {' - '}
-                    {showUnsyncedContent ? (
-                      <span style={{ color: '#9ca3af' }}>Shown</span>
-                    ) : (
-                      <button
-                        onClick={() => setShowUnsyncedContent(true)}
-                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
-                      >
-                        Show{isContentNewer ? ' (newer)' : ''}
-                      </button>
-                    )}
-                  </>
-                )}
               </div>
               {/* Line 2: Audio & read-along version (only when alignment exists) */}
               {hasAlignment && content.audio_generated_at && (
                 <div>
                   Audio &amp; read-along generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}
-                  {' - '}
-                  {showUnsyncedContent ? (
-                    <button
-                      onClick={() => setShowUnsyncedContent(false)}
-                      style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
-                    >
-                      Show{isContentNewer ? ' (older)' : ''}
-                    </button>
-                  ) : (
-                    <span style={{ color: '#9ca3af' }}>Shown</span>
-                  )}
                 </div>
               )}
               {/* Fallback: just show audio date when no alignment (e.g. still generating) */}
@@ -958,57 +901,36 @@ export function FullscreenPlayer({
           )}
         </div>
 
-        {/* Article body (same .article-content CSS as content tab) */}
-        {showUnsyncedContent ? (
-          <div
-            className="article-content"
-            dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
-          />
-        ) : (
-          <div className="article-content">
-            {bodyElements.map((el, i) => {
-              const globalIndex = elements.indexOf(el);
-              const isActive = globalIndex === activeElementIndex;
-              return (
-                <div
-                  key={`body-${i}`}
-                  id={`ra-el-${globalIndex}`}
-                  className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                  onClick={(e) => {
-                    // Prevent image-wrapping links from navigating, clicking images should only seek audio
-                    const target = e.target as HTMLElement;
-                    if (target.tagName === 'IMG') {
-                      e.preventDefault();
-                    }
-                    onSeek(el.startTime);
-                  }}
-                >
-                  <div dangerouslySetInnerHTML={{ __html: el.html }} />
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
+        <div className="article-content">
+          {bodyElements.map((el, i) => {
+            const globalIndex = elements.indexOf(el);
+            const isActive = globalIndex === activeElementIndex;
+            return (
+              <div
+                key={`body-${i}`}
+                id={`ra-el-${globalIndex}`}
+                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                onClick={(e) => {
+                  // Prevent image-wrapping links from navigating, clicking images should only seek audio
+                  const target = e.target as HTMLElement;
+                  if (target.tagName === 'IMG') {
+                    e.preventDefault();
+                  }
+                  onSeek(el.startTime);
+                }}
+              >
+                <div dangerouslySetInnerHTML={{ __html: el.html }} />
+              </div>
+            );
+          })}
+        </div>
 
-        {/* Comments section */}
-        {(showUnsyncedContent ? parsedComments.length > 0 : commentElements.length > 0) && (
+        {/* Comments section: timestamped commentElements from the alignment */}
+        {commentElements.length > 0 && (
           <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
             <div className="read-along-comments-divider" />
-            {showUnsyncedContent ? (
-              // Newest fetch: show fresh parsedComments (no timestamps)
-              <>
-                <div className="comments-header">
-                  <h3>Comments ({totalCommentCount})</h3>
-                </div>
-                <div className="comments-list">
-                  {parsedComments.map((comment, index) => (
-                    <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
-                  ))}
-                </div>
-              </>
-            ) : (
-              // Synced view: show timestamped commentElements from alignment
-              (() => {
+            {(() => {
                 interface CommentNode {
                   element: LLMAlignmentElement;
                   globalIndex: number;
@@ -1087,8 +1009,7 @@ export function FullscreenPlayer({
                     </div>
                   </>
                 );
-              })()
-            )}
+              })()}
           </div>
         )}
       </div>
@@ -1102,22 +1023,7 @@ export function FullscreenPlayer({
           <div className="tab-content-display">
             <div className="content-header-with-button">
               <div className="content-header">
-                <h2>{content.title}</h2>
-                {content.author && (
-                  <p className="content-author">
-                    By {content.author}
-                    {content.published_at && (
-                      <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
-                    )}
-                    {content.karma !== undefined && content.karma !== null && (
-                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                    )}
-                    {totalCommentCount > 0 && (
-                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                    )}
-                  </p>
-                )}
-                {/* URL removed, already shown in fullscreen player header */}
+                {/* Title/author/date/karma/comments already shown in the fullscreen player top header. */}
                 {content.type === 'article' && content.content_source && (
                   <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                     Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
@@ -1347,24 +1253,18 @@ export function FullscreenPlayer({
             <div className="tab-content-display">
               <div className="content-header-with-button">
                 <div className="content-header">
-                  <h2>{content.title}</h2>
-                  {content.author && (
-                    <p className="content-author">
-                      By {content.author}
-                      {content.published_at && (
-                        <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
-                      )}
-                      {content.karma !== undefined && content.karma !== null && (
-                        <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                      )}
-                      {totalCommentCount > 0 && (
-                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                      )}
-                    </p>
-                  )}
+                  {/* Title/author/date/karma/comments already shown in the fullscreen player top header. */}
                   {content.type === 'article' && content.content_source && (
                     <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
                       Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
+                      {content.audio_generated_at && content.audio_url && (
+                        <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
+                      )}
+                    </p>
+                  )}
+                  {content.type === 'text' && (content.content_fetched_at || content.updated_at) && (
+                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
+                      Last edited on {new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB')}
                       {content.audio_generated_at && content.audio_url && (
                         <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
                       )}

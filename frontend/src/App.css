@@ -2722,18 +2722,6 @@
   margin-bottom: 0;
 }
 
-.content-header h2 {
-  color: var(--t0);
-  margin: 0 0 0.5rem 0;
-  font-size: calc(1.5rem * var(--reader-font-scale, 1));
-}
-
-.content-author {
-  color: var(--t3);
-  font-size: calc(0.875rem * var(--reader-font-scale, 1));
-  margin: 0.25rem 0;
-}
-
 .content-provenance {
   font-size: calc(0.75rem * var(--reader-font-scale, 1));
 }

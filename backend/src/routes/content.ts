@@ -80,7 +80,7 @@ router.get('/', async (req, res) => {
 // WHY THIS EXISTS: GET /:id returns the FULL item (transcript, 9,000+ word-level
 // timestamps, alignment, comments), roughly 0.5MB for a transcribed podcast. Polling
 // that per item every 2s is the same class of bug as the 80GB data incident (see
-// README "Critical Performance Fix"). The full item is still fetched once, at
+// ARCHITECTURE.md "Performance Optimizations"). The full item is still fetched once, at
 // completion, via GET /:id (the frontend's refreshItem). Keep this endpoint lean,
 // never add large columns (transcript_words, content_alignment, comments, html_content).
 //
@@ -568,7 +568,7 @@ router.post('/', async (req, res) => {
         transcribeWithTimestamps(audioUrlValue, req.user!.userId, whisperPrompt)
           .then(async (result) => {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
             );
           })
@@ -710,10 +710,10 @@ router.patch('/:id', async (req, res) => {
               const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt);
 
               await query(
-                'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL WHERE id = $5',
+                'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
                 [result.text, JSON.stringify(result.words), 'completed', 100, id]
               );
-              
+
               // Run LLM alignment for articles and text items (not podcasts)
               if (type === 'article' || type === 'text') {
                 const contentResult = await query('SELECT html_content FROM content_items WHERE id = $1', [id]);
@@ -865,6 +865,10 @@ router.patch('/:id', async (req, res) => {
 
     if (updatingContentFields) {
       setClause.push(`updated_at = CURRENT_TIMESTAMP`);
+      // Any non-playback change (star, archive, title, edit) must be re-pushed to Wallabag.
+      // We flag it explicitly instead of relying on an updated_at vs wallabag_updated_at
+      // comparison, which is unreliable because those two columns are on different clocks.
+      setClause.push(`wallabag_needs_push = TRUE`);
     }
 
     values.push(id);
@@ -1381,7 +1385,7 @@ router.post('/:id/generate-summary', async (req, res) => {
         .then(async (result) => {
           console.log(`Transcription complete for ${id} (${result.words.length} words), starting summary`);
           await query(
-            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+            'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5 AND user_id = $6',
             [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
           );
           await runSummary();

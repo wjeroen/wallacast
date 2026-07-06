@@ -402,12 +402,18 @@ export class WallabagService {
   }
 
   /**
-   * Fetch entries from Wallabag with pagination
+   * Fetch entries from Wallabag with pagination.
+   *
+   * Returns both the entries and a `complete` flag. `complete` is false when a page
+   * fetch fails partway through pagination, meaning we did NOT retrieve every page.
+   * The caller must not advance its "last sync" cursor on an incomplete pull, otherwise
+   * the un-fetched entries would be skipped forever.
    */
-  async fetchEntries(since?: string): Promise<WallabagEntry[]> {
+  async fetchEntries(since?: string): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
     const entries: WallabagEntry[] = [];
     let page = 1;
     let hasMore = true;
+    let complete = true;
 
     while (hasMore) {
       // Build URL with pagination
@@ -421,6 +427,9 @@ export class WallabagService {
 
       const response = await this.apiRequest('GET', endpoint);
       if (!response?._embedded?.items) {
+        // A page fetch failed. We may already hold earlier pages, so keep them,
+        // but flag the pull as incomplete so the caller does not advance last_sync.
+        complete = false;
         break;
       }
 
@@ -434,7 +443,7 @@ export class WallabagService {
       }
     }
 
-    return entries;
+    return { entries, complete };
   }
 
   /**
