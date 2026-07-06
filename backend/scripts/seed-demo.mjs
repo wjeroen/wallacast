@@ -359,6 +359,13 @@ async function pollSummary(id, label) {
 // ---------------------------------------------------------------------------
 
 const FEED_URL = 'https://feeds.transistor.fm/80000-hours-podcast';
+// Extra demo subscriptions so the Feed tab has content: one more podcast and one Substack
+// newsletter (the type is auto-detected from the feed). Swap these for other feeds freely,
+// re-running the seeder re-subscribes and refreshes the cache.
+const EXTRA_FEEDS = [
+  'https://apple.dwarkesh-podcast.workers.dev/feed.rss',
+  'https://www.astralcodexten.com/feed',
+];
 const ARTICLE_URL =
   'https://forum.effectivealtruism.org/posts/6dsrwxHtCgYfJNptp/the-world-is-much-better-the-world-is-awful-the-world-can-be';
 const ARTICLE_SLUG = '6dsrwxHtCgYfJNptp'; // stable across the EA-Forum host rewrite
@@ -507,6 +514,18 @@ async function main() {
     const podcast = await addPodcastEpisode();
     const article = await addArticle();
     const text = await addTextItem();
+
+    // 4b. Extra feed subscriptions + the feed cache, so the Feed tab is not empty. The
+    // refresh endpoint is a write, which demo visitors cannot call (their refresh button
+    // shows the read-only toast), so the seeder populates Recent Updates for them here.
+    console.log('\n[feeds] Subscribing to the extra demo feeds...');
+    for (const url of EXTRA_FEEDS) {
+      const { data: sub } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: url } });
+      console.log(`  Subscribed to "${sub.title}" (${sub.type}).`);
+    }
+    console.log('  Refreshing the feed cache (Recent Updates)...');
+    const { data: refreshed } = await apiFetch('POST', '/podcasts/refresh-feeds');
+    console.log(`  Feed cache refreshed: ${refreshed.totalFeeds} feeds, ${refreshed.totalItemsAdded} new items.`);
 
     // 5. Generate, sequentially, with progress.
     // 5a. Text audio.

@@ -384,6 +384,10 @@ function App() {
       try {
         const statuses = await contentAPI.getStatuses([id]);
         const status = statuses.data[0];
+        // Push the cheap status fields into the store on EVERY tick, so the library card
+        // shows the progress banner for player-started operations too. Cards render from
+        // the store, and it used to learn about the operation only at the very end.
+        if (status) useContentStore.getState().updateItem(id, status);
         // 'ready' means the audio landed, but transcription/alignment may still be running,
         // so keep polling while current_operation is set (it goes NULL when the item rests).
         const gs = status?.generation_status || '';
@@ -401,7 +405,9 @@ function App() {
         console.error('pollOperationThenRefresh failed:', err);
       }
     };
-    setTimeout(poll, 2000);
+    // First tick immediately: the start endpoints set their in-progress status before
+    // responding, so the card banner appears right away instead of after two seconds.
+    poll();
   };
 
   const handleRefetchContent = async () => {
@@ -461,8 +467,10 @@ function App() {
     const id = currentContent.id;
     try {
       await contentAPI.generateSummary(id, regenerate, generateTranscript);
-      // Reflect "generating" immediately, then poll until it finishes (independent of audio).
+      // Reflect "generating" immediately in BOTH the open player and the library store, so
+      // the card badge and the LibraryTab poller kick in for player-started summaries too.
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
+      useContentStore.getState().updateItem(id, { summary_status: 'generating' });
       let tries = 0;
       const maxTries = generateTranscript ? 200 : 30; // transcription first can take many minutes
       // Poll the LEAN status endpoint (a few hundred bytes) instead of getById (which
@@ -473,14 +481,17 @@ function App() {
         try {
           const statuses = await contentAPI.getStatuses([id]);
           const status = statuses.data[0];
+          if (status) useContentStore.getState().updateItem(id, status);
           if (status && status.summary_status === 'generating' && tries < maxTries) {
             // Reflect the cheap status fields so the UI keeps animating, keep polling.
             setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
             setTimeout(poll, 3000);
           } else {
-            // Summary finished (or we hit the try cap). Fetch the full item once.
+            // Summary finished (or we hit the try cap). Fetch the full item once and apply
+            // it to the player AND the store so the card learns the final state too.
             const response = await contentAPI.getById(id);
             setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+            useContentStore.getState().updateItem(id, response.data);
           }
         } catch {
           /* stop polling on error */
