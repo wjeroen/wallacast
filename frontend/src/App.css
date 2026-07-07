@@ -1468,8 +1468,10 @@
 }
 
 /* Comments alternate their background shade by nesting depth (LessWrong / EA Forum
-   style) using the two existing surface shades, with a thin uniform border instead of
-   the old blue left bar. Quotes keep their left bar, so the two stay distinct. */
+   style) with a thin uniform border instead of the old blue left bar. Quotes keep
+   their left bar, so the two stay distinct. The React renderers stamp .comment-alt on
+   every odd depth, so the alternation works at ANY depth (a pure-CSS descendant chain
+   could only cover a fixed number of levels). */
 .comment {
   padding: 0.75rem;
   background: var(--bg-surface);
@@ -1477,26 +1479,10 @@
   border: 1px solid var(--bg-raised);
 }
 
-/* Odd reply depths get the page shade, even depths the card shade. Six levels covers
-   real threads, anything deeper simply keeps its parent's shade. */
-.comment .comment {
-  background: var(--bg-app);
-}
-
-.comment .comment .comment {
-  background: var(--bg-surface);
-}
-
-.comment .comment .comment .comment {
-  background: var(--bg-app);
-}
-
-.comment .comment .comment .comment .comment {
-  background: var(--bg-surface);
-}
-
-.comment .comment .comment .comment .comment .comment {
-  background: var(--bg-app);
+/* The alternate shade sits halfway between the card and page shades (derived from the
+   theme variables, so it adapts to light mode), keeping the contrast gentle. */
+.comment.comment-alt {
+  background: color-mix(in srgb, var(--bg-surface) 55%, var(--bg-app));
 }
 
 .comment-header {
@@ -1609,8 +1595,11 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-right: -0.75rem;
-  padding-left: 10px; 
+  /* Replies indent by the parent's own padding (no extra), and reach to 3px short of
+     the parent's right border, a tiny gap so the two borders never read as one thick
+     line. 0.75rem is the parent's padding being cancelled out. */
+  margin-right: calc(3px - 0.75rem);
+  padding-left: 0;
 }
 
 /* Settings Modal */

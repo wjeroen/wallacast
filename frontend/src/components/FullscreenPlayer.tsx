@@ -187,7 +187,8 @@ function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: Comme
   );
 
   return (
-    <div className="comment">
+    // Odd depths get the alternate shade (comment-alt), LessWrong-style, at every depth.
+    <div className={`comment${depth % 2 === 1 ? ' comment-alt' : ''}`}>
       <div className="comment-header">
         <span className="comment-username">{comment.username}</span>
         {comment.date && (
@@ -950,14 +951,15 @@ export function FullscreenPlayer({
                   stack.push(node);
                 }
 
-                const renderCommentNode = (node: CommentNode): React.ReactNode => {
+                const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
                   const { element: el, globalIndex, children } = node;
                   const isNarrated = el.startTime >= 0;
                   const isActive = isNarrated && globalIndex === activeElementIndex;
                   const meta = el.commentMeta;
                   const metaStr = buildCommentMetadata(meta, isLW, isSub);
                   return (
-                    <div className="comment" key={`comment-${globalIndex}`}>
+                    // Odd depths get the alternate shade, same rule as the Comments tab.
+                    <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
                       <div
                         id={`ra-el-${globalIndex}`}
                         className={`read-along-element ${isActive ? 'ra-active' : ''}`}
@@ -986,7 +988,7 @@ export function FullscreenPlayer({
                       </div>
                       {children.length > 0 && (
                         <div className="comment-replies">
-                          {children.map(child => renderCommentNode(child))}
+                          {children.map(child => renderCommentNode(child, nodeDepth + 1))}
                         </div>
                       )}
                     </div>
@@ -1757,6 +1759,7 @@ export function FullscreenPlayer({
         </div>
         )}
 
+        {content.audio_url && (
         <div className="fullscreen-playback-controls">
           <button
             onClick={() => onSkipPrevTrack?.()}
@@ -1767,23 +1770,19 @@ export function FullscreenPlayer({
             <SkipBack size={22} />
           </button>
 
-          {content.audio_url && (
-            <>
-              <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
-                <RotateCcw className="seek-icon" />
-                <span className="seek-label">15</span>
-              </button>
+          <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+            <RotateCcw className="seek-icon" />
+            <span className="seek-label">15</span>
+          </button>
 
-              <button onClick={onPlayPause} className="play-pause-btn">
-                {isPlaying ? <Pause size={32} /> : <Play size={32} />}
-              </button>
+          <button onClick={onPlayPause} className="play-pause-btn">
+            {isPlaying ? <Pause size={32} /> : <Play size={32} />}
+          </button>
 
-              <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
-                <RotateCw className="seek-icon" />
-                <span className="seek-label">15</span>
-              </button>
-            </>
-          )}
+          <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
+            <RotateCw className="seek-icon" />
+            <span className="seek-label">15</span>
+          </button>
 
           <button
             onClick={() => onSkipNextTrack?.()}
@@ -1794,9 +1793,10 @@ export function FullscreenPlayer({
             <SkipForward size={22} />
           </button>
         </div>
+        )}
 
         <div className="fullscreen-player-options">
-          {content.audio_url && (
+          {content.audio_url ? (
             <>
               <button onClick={onToggleSpeed} className="option-toggle">
                 <Gauge size={20} />
@@ -1808,6 +1808,16 @@ export function FullscreenPlayer({
                 <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
               </button>
             </>
+          ) : (
+            // No audio: previous and next flank the display button in this single row.
+            <button
+              onClick={() => onSkipPrevTrack?.()}
+              title="Previous track"
+              className="track-skip-btn"
+              disabled={!hasPrevTrack}
+            >
+              <SkipBack size={22} />
+            </button>
           )}
 
           <div ref={displayPanelRef} style={{ position: 'relative' }}>
@@ -1853,6 +1863,17 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
+
+          {!content.audio_url && (
+            <button
+              onClick={() => onSkipNextTrack?.()}
+              title="Next track"
+              className="track-skip-btn"
+              disabled={!hasNextTrack}
+            >
+              <SkipForward size={22} />
+            </button>
+          )}
         </div>
       </div>
     </div>

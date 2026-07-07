@@ -215,6 +215,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
     manual_queue_always_autoplay: 'true',
+    autoplay_on_open: 'false',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -465,7 +466,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
-        'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay',
+        'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
@@ -907,6 +908,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <small className="settings-hint indent">
               When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
               Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.autoplay_on_open === 'true'}
+                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
+              />
+              Start playing when opening an item
+            </label>
+            <small className="settings-hint indent">
+              When on, clicking a library item starts its audio right away instead of waiting for play.
             </small>
           </div>
         </section>

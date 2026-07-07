@@ -90,6 +90,34 @@ If you skip this, your audio will vanish every time the backend redeploys, becau
 
 Wallacast is a multi-user app. After you deploy, you create your own account inside the app, and so does anyone else you invite. Every user pastes their own AI provider API keys into the in-app Settings page. Those keys are encrypted with your `ENCRYPTION_KEY` and saved to that user's row in the database. The server itself never holds one shared provider key.
 
+## Password resets
+
+There are two ways a lost password gets fixed, and both are safe to know publicly (the only secret is your `RESEND_API_KEY` value, which lives in Railway, never in this repo).
+
+**1. Self-service by email (recommended).** Activate it once:
+
+1. Create a free account at [resend.com](https://resend.com) (their free tier of 100 emails/day is far more than a reset flow needs).
+2. Copy an API key from the Resend dashboard and set it as `RESEND_API_KEY` on the backend service in Railway.
+
+That is the whole setup. From then on the login dropdown shows "Forgot password?". The user enters their username, gets an email with a one-hour, single-use reset link (only if their account has an email address), picks a new password, and every existing session for that account is logged out. Optionally set `EMAIL_FROM` (for example `Wallacast <you@yourdomain.com>`) after verifying your domain at Resend, otherwise emails come from Resend's shared onboarding sender, which works without any setup.
+
+**2. Manual reset by the operator.** For accounts without an email address (email is optional at registration), you reset the password by hand:
+
+1. Generate a password hash. From the `backend/` directory on any machine with the project installed:
+   `node -e "require('bcrypt').hash('THE-NEW-PASSWORD', 10).then(h => console.log(h))"`
+2. In your database tool (for example DbGate), run:
+   `UPDATE users SET password_hash = '<the hash from step 1>' WHERE username = 'their-username';`
+3. Log their old sessions out:
+   `UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = (SELECT id FROM users WHERE username = 'their-username');`
+
+## Backups (Hobby plan)
+
+Railway's automatic database backups need the Pro plan. On the Hobby plan, make a manual dump now and then (audio files are regenerable, the database is not). With the Postgres connection string from Railway (the PUBLIC url, Railway shows it on the Postgres service):
+
+`pg_dump "<the postgres public url>" -Fc -f wallacast-backup.dump`
+
+Store the file somewhere off Railway. Restoring later: `pg_restore -d "<url>" --clean wallacast-backup.dump`. Doing this once before promoting the instance also doubles as your backup test.
+
 ## HTTPS and installing as an app
 
 Railway serves every public domain over HTTPS automatically, you do not configure certificates. This matters because Wallacast is a PWA (a website you can install like a phone app), and installing a PWA only works over HTTPS. So once your frontend is on its Railway domain, you can add it to your home screen.

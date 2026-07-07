@@ -64,6 +64,7 @@ const VALID_SETTING_KEYS = [
   'queue_autoplay',             // Auto-continue into non-manual (library) items when queue empties (default: false)
   'manual_queue_always_autoplay', // When 'false', manual queue items only auto-advance if queue_autoplay is on. Default: 'true' (manual items always autoplay).
   'queue_shuffle',              // Persisted shuffle preference for the queue (frontend queueStore)
+  'autoplay_on_open',           // Start playing when a library item is opened (default: false)
 ];
 
 // Secret keys that should be masked in responses

@@ -57,6 +57,7 @@ function App() {
     };
   }, []);
 
+
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
@@ -84,6 +85,16 @@ function App() {
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
+
+  // Optional "start playing when opening an item" preference (off by default). Refetched
+  // when leaving the Settings page so a toggle takes effect without a reload.
+  const [autoplayOnOpen, setAutoplayOnOpen] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated || currentPage === 'settings') return;
+    userSettingsAPI.get('autoplay_on_open')
+      .then(res => setAutoplayOnOpen(res.data.value === 'true'))
+      .catch(() => { /* keep default off */ });
+  }, [isAuthenticated, currentPage]);
 
   // Get addItem and fetchContent from store
   const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
@@ -232,13 +243,14 @@ function App() {
 
   // Called from LibraryTab when the user clicks a library item. Captures the
   // current filter as a "play context" (Spotify-style) so the non-manual
-  // auto-queue can be derived from it. Does NOT bump autoPlayToken, as first
-  // click should load the track, not play it automatically.
+  // auto-queue can be derived from it. By default the first click loads the
+  // track without playing it; the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const { typeFilter, statusFilter, searchQuery } = useContentStore.getState();
     useQueueStore.getState().setLibraryContext({ typeFilter, statusFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
+    if (autoplayOnOpen && content.audio_url) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
