@@ -946,14 +946,17 @@ export function FullscreenPlayer({
                 id={`ra-el-${globalIndex}`}
                 className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                 onClick={(e) => {
-                  // Read-along is a tap-to-seek surface, so a tap on an image or any link must
-                  // only seek, never open/navigate (unlike the Content tab). Using closest('a')
-                  // covers images wrapped in a click-to-enlarge <a>, where the tap often lands on
-                  // the anchor (or a figure) rather than the <img> itself.
+                  // Read-along taps seek, with two exceptions so links stay usable:
+                  //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
+                  //    don't seek.
+                  //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
+                  //    don't open the picture.
+                  // Everything else (the plain text of the highlight) seeks.
                   const target = e.target as HTMLElement;
-                  if (target.tagName === 'IMG' || target.closest('a')) {
-                    e.preventDefault();
-                  }
+                  const anchor = target.closest('a');
+                  const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+                  if (anchor && !isImage) return; // real link: open it, don't seek
+                  if (isImage) e.preventDefault(); // image link: seek, don't open the image
                   onSeek(el.startTime);
                 }}
               >
@@ -1001,9 +1004,13 @@ export function FullscreenPlayer({
                         className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
+                          // Same rule as the body: a real link opens (no seek), an image link
+                          // seeks (no open), everything else seeks.
                           const target = e.target as HTMLElement;
-                          // Tap-to-seek: images and links in read-along seek, never navigate.
-                          if (target.tagName === 'IMG' || target.closest('a')) e.preventDefault();
+                          const anchor = target.closest('a');
+                          const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+                          if (anchor && !isImage) return;
+                          if (isImage) e.preventDefault();
                           if (isNarrated) onSeek(el.startTime);
                         }}
                       >
