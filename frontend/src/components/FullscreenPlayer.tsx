@@ -946,9 +946,12 @@ export function FullscreenPlayer({
                 id={`ra-el-${globalIndex}`}
                 className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                 onClick={(e) => {
-                  // Prevent image-wrapping links from navigating, clicking images should only seek audio
+                  // Read-along is a tap-to-seek surface, so a tap on an image or any link must
+                  // only seek, never open/navigate (unlike the Content tab). Using closest('a')
+                  // covers images wrapped in a click-to-enlarge <a>, where the tap often lands on
+                  // the anchor (or a figure) rather than the <img> itself.
                   const target = e.target as HTMLElement;
-                  if (target.tagName === 'IMG') {
+                  if (target.tagName === 'IMG' || target.closest('a')) {
                     e.preventDefault();
                   }
                   onSeek(el.startTime);
@@ -999,7 +1002,8 @@ export function FullscreenPlayer({
                         onClick={(e) => {
                           e.stopPropagation();
                           const target = e.target as HTMLElement;
-                          if (target.tagName === 'IMG') e.preventDefault();
+                          // Tap-to-seek: images and links in read-along seek, never navigate.
+                          if (target.tagName === 'IMG' || target.closest('a')) e.preventDefault();
                           if (isNarrated) onSeek(el.startTime);
                         }}
                       >
