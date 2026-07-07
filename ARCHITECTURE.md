@@ -77,7 +77,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
 ### Backend (`/backend/src/`)
 
 #### Entry Point
-- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling. On every startup, logs a `📦 [Storage]` database-size breakdown to the Railway logs (audio blobs, transcripts, word timestamps, HTML, comments, table + whole-DB totals). Check the Railway backend logs after a deploy/restart to see how much disk the data uses (used for sizing the audio-to-volume migration).
+- **`index.ts`**: Express server setup, CORS, JWT auth middleware, route mounting. **Important**: Public audio endpoint (`/api/content/:id/audio`) registered BEFORE protected routes to match first. Includes database initialization with retry logic and graceful shutdown handling. On every startup, logs a `📦 [Storage]` database-size breakdown to the Railway logs (audio blobs, transcripts, word timestamps, HTML, comments, table + whole-DB totals). Check the Railway backend logs after a deploy/restart to see how much disk the data uses (used for sizing the audio-to-volume migration). **Security**: sets `trust proxy` (so the auth rate limiters see the real client IP), caps the `/api/auth` request body at 100kb (vs 50mb elsewhere), and `warnMissingSecurityEnv()` logs a loud startup error in production when `ENCRYPTION_KEY`/`JWT_SECRET` are missing. The public audio endpoint requires an unguessable HMAC `?t=` token for private article/text narration (see `services/audio-token.ts`); podcasts (public CDN audio) are exempt. The old static `/audio/<id>.mp3` mount was removed (it let anyone enumerate audio by sequential id). The podcast audio proxy fetches through `safeFetch` (SSRF guard).
 
 #### Configuration
 - **`config/storage.ts`**: Storage directory management. Uses `/data` if Railway volume is mounted, otherwise `./public` for local dev. Provides `getAudioDir()`, `getTempDir()`, and `ensureStorageDirectories()`
@@ -111,6 +111,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
 - **`middleware/auth.ts`**: Authentication and database readiness middleware
   - `requireAuth()`: JWT token validation middleware, extracts user from token and adds to `req.user`
   - `requireDatabaseReady()`: Returns 503 if database isn't ready yet (prevents crashes during startup)
+- **`middleware/rate-limit.ts`**: `express-rate-limit` limiters for the unauthenticated auth endpoints (login: 10/15min per IP, register + forgot-password: capped per hour), applied per-route in `routes/auth.ts`. In-memory store (fine for a single Railway instance). Relies on `app.set('trust proxy', 1)` in `index.ts` to key on the real client IP, not the proxy's.
 
 #### Routes
 
@@ -194,6 +195,8 @@ This is the technical reference and codebase map for Wallacast (backend structur
   - `generateAccessToken()`, `generateRefreshToken()`: JWT token generation
   - `verifyAccessToken()`, `verifyRefreshToken()`: JWT verification
   - `bootstrapFirstUser()`: Assigns orphaned content to first user on startup
+- **`services/url-guard.ts`**: SSRF guard. `assertPublicHttpUrl()` rejects non-http(s) schemes and any host resolving to a loopback/private/link-local/reserved IP; `safeFetch()` wraps node-fetch, validating the initial URL and re-validating every redirect hop. Used at every user-supplied-URL fetch (article/feed/image/podcast-audio + the audio proxy in `index.ts`).
+- **`services/audio-token.ts`**: Unguessable per-item audio token (`audioToken(id)` = HMAC of the id, keyed by the server secret). `verifyAudioToken()` gates the `/api/content/:id/audio` route for article/text narration; `withAudioToken()` appends the token to `audio_url` at serialization (list / getById / patch in `content.ts`, and `queue.ts`) so the frontend needs no change. Derived from the id, so no DB storage and no backfill.
 
 - **`services/ai-providers.ts`**: Per-user API key management with intelligent routing
   - **Provider registry (`CHAT_PROVIDERS`)**: OpenAI, DeepInfra, OpenRouter, Anthropic, Google Gemini. All are spoken to via the **OpenAI SDK** (just a different `baseURL` + key), so one client handles every provider. OpenRouter is the easy on-ramp for Claude/Gemini/etc. (`provider/model` ids).
@@ -393,6 +396,7 @@ The matching CSS (`App.css`) caps every image at the column width (`max-width: 1
 
 #### Other Files
 - **`api.ts`**: Axios-based API client. A request interceptor injects the JWT access token as a `Bearer` header, and a response interceptor auto-refreshes the token on a 401 (retrying the original request once, or clearing tokens and redirecting to login when the refresh itself fails)
+- **`sanitize.ts`**: DOMPurify wrappers (`safeHtml` strict for comments/descriptions, `safeArticleHtml` also keeps `<style>` so LessWrong/EA Forum MathJax survives) applied at every `dangerouslySetInnerHTML` sink in `FullscreenPlayer.tsx`. This is the XSS defense for fetched article/comment/description HTML: JWTs live in localStorage, so an unsanitized sink would mean account takeover from a single poisoned forum comment.
 - **`types.ts`**: TypeScript interfaces for ContentItem, Podcast, QueueItem, Comment, Settings (field names aligned with Wallabag API)
 - **`App.css`**: All styles (single CSS file, no modules)
 - **`index.css`**: Base styles from Vite template

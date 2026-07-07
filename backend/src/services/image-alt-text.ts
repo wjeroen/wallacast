@@ -4,6 +4,7 @@ import { JSDOM } from 'jsdom';
 import { getUserSetting } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
+import { safeFetch } from './url-guard.js';
 
 // Default prompt for generating audio-friendly image descriptions. User-editable via Settings
 // (registered in prompt-registry.ts as `prompt_image_description`). Same prompt for Gemini + OpenRouter.
@@ -340,7 +341,7 @@ export class ImageAltTextService {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-      const response = await fetch(imageUrl, {
+      const response = await safeFetch(imageUrl, {
         signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

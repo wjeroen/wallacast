@@ -17,7 +17,7 @@
 - [ ] **[P1]** Registration security warning. Add a short notice on the register form: this is a vibe-coded project, your data (password, API keys, saved content) might not be fully safe, choose a unique password, use at your own risk, and you can run it yourself from the public repo. Must be live before promotion. (`HomePage.tsx` register branch.)
 - [ ] **[P2]** Home page finishing touches. The page is built (`HomePage.tsx`). Remaining: (1) replace the 5 red placeholder screenshots in `frontend/public/landing/` with real 600x1300 PNGs (library, read-along mid-highlight, player, podcast feed, summary tab), then drop the "red boxes" note in the carousel; (2) reword any copy, all current wording comes from the Claude Design mockup.
 - [ ] **[P2]** Reword the demo onboarding guide and demo banner/toast copy if my wording is not quite your voice (`backend/scripts/seed-demo-content.mjs`, then re-run `npm run seed:demo`).
-- Security review: you are running this separately on another model. Its findings plus the "Security, deferred" list below should land before promotion.
+- Security review: DONE (2026-07-07, see Completed below). Every high/critical item from the deferred list is fixed. One thing to verify after deploy: article/text audio now needs an HMAC token in its URL, so open an article AND a text item and confirm the audio plays (podcasts too). If an article/text won't play, a serialization path was missed, look for a 403 on `/api/content/:id/audio` in the Railway logs.
 
 ### Features to Implement
 - [ ] **[P3]** Offline support + local caching (was P1, demoted: multi-week project, not a launch blocker). Use IndexedDB to cache content on-device so opening items is instant even online, and the app works fully offline.
@@ -32,7 +32,6 @@
 - [ ] **[P4]** Save and display podcast RSS thumbnails (episode artwork from feeds).
 - [ ] **[P4]** For EA Forum articles, reuse the summarybot's existing comment summary instead of generating a new one, when present.
 - [ ] **[P8]** Groq API compatibility (very low priority, DeepInfra already covers cheap TTS + transcription).
-- [ ] **Confirm to close:** the "Content fetching overhaul" (free HTML fetch on add, LLM only for narration prep, manual generate uses available content) appears fully implemented. Name any missing delta, or say the word and it gets checked off.
 
 ### Bug Fixes
 - [ ] **[P2]** Images not displaying in read-along for some articles (descriptions ARE read aloud, so they exist in alignment data). Likely stale alignment from before image extraction was added, try regenerating the transcript to confirm.
@@ -82,29 +81,20 @@
 - [ ] **Propagate Wallabag-side deletions?** Today, deleting an entry in Wallabag does nothing locally (the item stays and can even push back). Option A: mirror it (delete locally too), but a Wallabag cleanup spree would destroy local items INCLUDING generated audio you paid for. Option B: leave as-is and document that deletions do not propagate (safest for your audio). Middle path: archive locally instead of delete.
 - [ ] **Startup query-killer scope.** `db.ts` kills any DB session older than 30s touching content_items at boot (added after a real stuck-lock). It is now constrained so it spares VACUUM / ANALYZE / pg_dump. Remaining question: delete it entirely and rely on the 5s lock_timeout + retry loop (reviewer's lean), or keep it as belt-and-suspenders. Current state: constrained version is live.
 
-### Security, deferred for later, do not investigate yet
-> One-line pointers only, for the separate security review. Deliberately not investigated or fixed here.
+### Security, deferred (lower impact or architectural)
+> The high/critical items from the pre-launch review are fixed (see the Completed entry). These remain, deliberately deferred:
 
-- `backend/src/routes/auth.ts` + `services/auth.ts`: no rate limiting, lockout, or password policy on register/login/forgot-password
-- `backend/src/services/auth.ts`: JWT secret fallback behavior and session/token lifecycle
-- `backend/src/services/encryption.ts`: crypto design, key management, plaintext fallback when ENCRYPTION_KEY unset
-- `backend/src/database/db.ts`: startup secret-encryption migration behavior when the key is absent
-- `backend/src/index.ts`: public audio endpoint uses sequential guessable integer ids
-- `backend/src/index.ts`: 50mb JSON body limit applies to unauthenticated routes
-- `backend/src/routes/queue.ts`: queue endpoints do not verify content-item ownership
-- `backend/src/services/wallabag-service.ts`: OAuth credentials and tokens at rest and in logs
-- `backend/src/services/article-fetcher.ts` + `podcast-service.ts` + `image-alt-text.ts` + `transcription.ts`: server-side fetching of user-supplied URLs (SSRF surface)
-- `backend/src/services/podcast-service.ts`: regex-based HTML sanitization in cleanDescription()
-- `frontend/src/api.ts`: JWT tokens stored in localStorage
-- `frontend/src/components/FullscreenPlayer.tsx`: dangerouslySetInnerHTML on fetched article/comment HTML
-- `frontend/src/components/SettingsPage.tsx`: settings object including API keys logged to browser console
-- `frontend/src/markdown.ts`: footnote keys interpolated into HTML ids/hrefs without escaping
-- `backend/mock-server.mjs`: accepts any credentials (local-only tool, by design)
-- (Incidentally hardened during the pre-launch passes, still worth a second look: the `/wallabag/cleanup` `hoursAgo` SQL interpolation is now parameterized, and `decrypt()` failures now return an empty sentinel instead of the raw ciphertext.)
+- **JWT tokens in localStorage** (`frontend/src/api.ts`): an XSS would hand over the token. All the XSS sinks are now DOMPurify-sanitized, so the exploit path is closed, but moving tokens to httpOnly cookies would be true defense-in-depth. Larger change (CORS credentials, SameSite, refresh flow).
+- **No Content-Security-Policy** header: a CSP is defense-in-depth behind the DOMPurify fix. It belongs on the frontend `serve` service (or `index.html`), not the API, and a too-strict policy can break the app, so it needs care.
+- **Uniform in-router `requireAuth`**: `content.ts` / `podcasts.ts` / `queue.ts` / `transcription.ts` rely on `index.ts` passing `requireAuth` at the mount (it does). Adding `router.use(requireAuth)` inside each (like `users.ts` / `wallabag.ts` already do) is belt-and-suspenders, not a live hole.
+- **Wallabag token-request failure logs the upstream error body** (`wallabag-service.ts` ~line 205): standard OAuth errors don't echo the password/secret, so exposure is minimal.
+- `backend/mock-server.mjs` accepts any credentials (local-only dev tool, by design).
 
 ## Completed Recently ✅
 
 > July 2026 onward. Older wins were pruned.
+
+- [x] **Pre-launch security hardening** (2026-07-07): worked through the deferred security list with three review agents, verified each finding in the code, fixed the real ones by hand. **Queue IDOR** closed (add-to-queue now checks content ownership, so a stranger could no longer read others' content via the queue). **Auth rate limiting** added (`express-rate-limit` on login/register/forgot-password, `trust proxy` set so it keys on real client IPs). **XSS killed at the sink**: DOMPurify (`frontend/src/sanitize.ts`) now cleans all 8 `dangerouslySetInnerHTML` sinks (fetched article/comment/description HTML), so a poisoned forum comment can no longer run script and steal the localStorage JWT, memoized so it does not re-run on every playback tick. **SSRF guard** (`services/url-guard.ts`): user-supplied URLs (article/feed/image/podcast-audio + the reflected audio proxy) are validated against private/loopback/link-local IPs, with per-redirect re-validation. **Audio enumeration** closed: the guessable static `/audio/<id>.mp3` mount was removed, and `/api/content/:id/audio` now requires an unguessable HMAC token (`services/audio-token.ts`) for private article/text narration (podcasts stay open, that is public CDN audio). Unauth `/api/auth` body limit tightened to 100kb (was 50mb). API keys no longer logged to the browser console. Loud startup warnings when `ENCRYPTION_KEY` / `JWT_SECRET` are missing in production. `npm audit`: 9 dependency vulns (incl. Express-layer ReDoS) patched to 0. See "Security, deferred" for what was intentionally left.
 
 - [x] **Launch polish round 2** (2026-07-07): comment thread redesign refined (alternating background shades by nesting depth at ANY depth via a React-stamped `.comment-alt`, a gentle color-mix shade so deep nesting no longer goes flat dark, tighter reply indent, a tiny 3px right gap so nested borders do not read as one thick line). No-audio player controls laid out as previous / display-settings / next in a single row. New opt-in Playback setting "Start playing when opening an item" (`autoplay_on_open`, off by default). Open Graph + Twitter social-preview meta tags. Sweary git history reworded in place (2 commits from the abandoned queue experiment, full history preserved, branch trees verified identical, all branches force-pushed). Operator docs added to RAILWAY_DEPLOYMENT: password reset (email + manual SQL) and Hobby-plan `pg_dump` backups.
 

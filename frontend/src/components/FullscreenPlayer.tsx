@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
+import { safeHtml, safeArticleHtml } from '../sanitize';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -185,6 +186,8 @@ function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: Comme
     isLessWrong,
     isSubstack
   );
+  // Sanitize third-party comment HTML before it reaches the DOM (see sanitize.ts).
+  const safeContent = useMemo(() => safeHtml(comment.content), [comment.content]);
 
   return (
     // Odd depths get the alternate shade (comment-alt), LessWrong-style, at every depth.
@@ -203,7 +206,7 @@ function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: Comme
           <span className="comment-votes">{metaStr}</span>
         </div>
       )}
-      <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
+      <div className="comment-content" dangerouslySetInnerHTML={{ __html: safeContent }} />
       {comment.replies && comment.replies.length > 0 && (
         <div className="comment-replies">
           {comment.replies.map((reply, idx) => (
@@ -490,6 +493,36 @@ export function FullscreenPlayer({
       return null;
     }
   }, [content?.content_alignment]);
+
+  // ---- Sanitize every HTML string that reaches dangerouslySetInnerHTML (XSS defense) ----
+  // Article and comment HTML comes from the open web (fetched articles, forum/Substack
+  // comments), so it must be cleaned before rendering. Without this, one poisoned comment
+  // could run script in our origin and steal the JWT from localStorage. Memoized so DOMPurify
+  // runs once per content change, not on every ~4x/sec read-along re-render during playback.
+  const safeArticleBodyHtml = useMemo(
+    () => safeArticleHtml(content.html_content || content.content || '<p>No content available</p>'),
+    [content.html_content, content.content]
+  );
+  const safeDescriptionHtml = useMemo(() => safeHtml(content.description), [content.description]);
+  const safeDraftPreview = useMemo(
+    () => safeHtml(markdownToHtml(draftMd) || '<p>Nothing to preview</p>'),
+    [draftMd]
+  );
+  const safeVersionHtml = useMemo(
+    () => (viewingVersion ? safeArticleHtml(viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>') : ''),
+    [viewingVersion]
+  );
+  // Read-along elements: sanitize each once (comments strict, body keeps <style> for math),
+  // keyed by element identity so the render sink is a cheap map lookup during playback.
+  const sanitizedElementHtml = useMemo(() => {
+    const map = new Map<LLMAlignmentElement, string>();
+    const els = (parsedAlignment?.elements || []) as LLMAlignmentElement[];
+    for (const el of els) {
+      if (typeof el.html !== 'string') continue;
+      map.set(el, el.type === 'comment' ? safeHtml(el.html) : safeArticleHtml(el.html));
+    }
+    return map;
+  }, [parsedAlignment]);
 
   // Check if this is the new LLM-based alignment
   const isLLMAlignment = parsedAlignment?.version === 'llm-v1';
@@ -921,7 +954,7 @@ export function FullscreenPlayer({
                   onSeek(el.startTime);
                 }}
               >
-                <div dangerouslySetInnerHTML={{ __html: el.html }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
               </div>
             );
           })}
@@ -984,7 +1017,7 @@ export function FullscreenPlayer({
                             <span className="comment-votes">{metaStr}</span>
                           </div>
                         )}
-                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
+                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
                       </div>
                       {children.length > 0 && (
                         <div className="comment-replies">
@@ -1089,7 +1122,7 @@ export function FullscreenPlayer({
                 {showEditPreview ? (
                   <div
                     className="article-content"
-                    dangerouslySetInnerHTML={{ __html: markdownToHtml(draftMd) || '<p>Nothing to preview</p>' }}
+                    dangerouslySetInnerHTML={{ __html: safeDraftPreview }}
                   />
                 ) : (
                   <textarea
@@ -1109,7 +1142,7 @@ export function FullscreenPlayer({
                 <div
                   className="article-content"
                   onClick={handleAnchorNav}
-                  dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+                  dangerouslySetInnerHTML={{ __html: safeArticleBodyHtml }}
                 />
                 {parsedComments.length > 0 && (
                   <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
@@ -1136,7 +1169,7 @@ export function FullscreenPlayer({
               <div
                 className="article-content"
                 style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}
-                dangerouslySetInnerHTML={{ __html: content.description }}
+                dangerouslySetInnerHTML={{ __html: safeDescriptionHtml }}
               />
             ) : (
               <p className="no-content">No description available</p>
@@ -1283,7 +1316,7 @@ export function FullscreenPlayer({
               </div>
               <div
                 className="article-content"
-                dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+                dangerouslySetInnerHTML={{ __html: safeArticleBodyHtml }}
               />
               {/* Show comments if available */}
               {parsedComments.length > 0 && (
@@ -1368,7 +1401,7 @@ export function FullscreenPlayer({
                 <div
                   className="article-content"
                   onClick={handleAnchorNav}
-                  dangerouslySetInnerHTML={{ __html: viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>' }}
+                  dangerouslySetInnerHTML={{ __html: safeVersionHtml }}
                 />
               </div>
             ) : versions.length === 0 ? (

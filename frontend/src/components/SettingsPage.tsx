@@ -250,7 +250,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setSettings(settingsRes.data.settings);
 
       const loaded = settingsRes.data.settings;
-      console.log('Loaded settings from server:', loaded);
 
       // Editable-prompt registry: pre-fill each box with the saved override, else the built-in
       // default, so a box is never blank and the user always edits from a real starting point.
@@ -497,7 +496,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Selected rotation voices (empty array = always use the single voice).
       toSave.tts_voices = JSON.stringify(ttsVoices);
 
-      console.log('Saving settings:', toSave);
       await userSettingsAPI.setBulk(toSave);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);

@@ -12,11 +12,12 @@ import {
 } from '../services/auth.js';
 import { emailConfigured, sendEmail } from '../services/email.js';
 import { requireAuth } from '../middleware/auth.js';
+import { loginLimiter, registerLimiter, forgotPasswordLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
 
 // POST /api/auth/login - Login and get tokens
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -70,7 +71,7 @@ router.get('/config', (_req, res) => {
 });
 
 // POST /api/auth/register - Register new user
-router.post('/register', async (req, res) => {
+router.post('/register', registerLimiter, async (req, res) => {
   try {
     const { username, password, displayName, email } = req.body;
 
@@ -122,7 +123,7 @@ router.post('/register', async (req, res) => {
 
 // POST /api/auth/forgot-password - Email a password reset link. Requires the email
 // service to be configured (RESEND_API_KEY), otherwise reports itself unavailable.
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
   try {
     if (!emailConfigured()) {
       return res.status(503).json({ error: 'Password reset by email is not set up on this instance. Contact the operator.' });

@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { safeFetch } from './url-guard.js';
 import { query } from '../database/db.js';
 import { JSDOM } from 'jsdom';
 
@@ -154,7 +155,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
 export async function fetchPodcastDetails(feedUrl: string) {
   try {
     // FIX: Added User-Agent to avoid blocking by Vox/Cloudflare
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/rss+xml, application/xml, text/xml, */*'
@@ -233,7 +234,7 @@ function detectFeedType(xml: string): 'podcast' | 'newsletter' {
 export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, userId: number): Promise<any[]> {
   try {
     // FIX: Added User-Agent
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
@@ -302,7 +303,7 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
     return cached.xml;
   }
 
-  const response = await fetch(feedUrl, {
+  const response = await safeFetch(feedUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -525,7 +526,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
   console.log(`Refreshing feed ${feedId} from network: ${feedUrl}`);
 
   try {
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }

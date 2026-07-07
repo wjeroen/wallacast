@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import fetch from 'node-fetch';
+import { safeFetch } from './url-guard.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -520,7 +520,7 @@ async function fetchSubstackComments(articleUrl: string, articleHtml: string): P
   try {
     // Send a browser User-Agent so Substack doesn't serve a bot/challenge page. The GraphQL
     // feed fetch above generates one via got-scraping; a bare fetch() sends none.
-    const response = await fetch(commentsUrl, {
+    const response = await safeFetch(commentsUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
@@ -641,7 +641,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
   // --- STANDARD SCRAPER for all other sites (including Substack) ---
   try {
     console.log('[Fetcher] Using simple fetch for standard scraping');
-    const response = await fetch(url);
+    const response = await safeFetch(url);
 
     if (!response.ok) {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);

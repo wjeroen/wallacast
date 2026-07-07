@@ -3,9 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fetch from 'node-fetch';
+import { safeFetch } from './services/url-guard.js';
+import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, getAudioDir, isPersistentVolume } from './config/storage.js';
+import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
@@ -33,10 +34,24 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Trust Railway's reverse proxy so req.ip is the real client IP (from X-Forwarded-For),
+// not the proxy's own address. Without this the auth rate limiters would bucket every
+// visitor together. '1' = trust exactly one proxy hop (Railway's edge), which also stops
+// clients spoofing X-Forwarded-For to dodge the limiter.
+app.set('trust proxy', 1);
+
+// The /api/auth endpoints only ever receive tiny JSON (credentials), so cap their body
+// size far below the global 50mb the content routes need for large paste-ins. This runs
+// BEFORE the global parser, and express.json marks the body as parsed, so the 50mb parser
+// then skips these routes. Keeps a 50mb pre-auth memory-exhaustion lever off the table.
+app.use('/api/auth', express.json({ limit: '100kb' }));
 app.use(express.json({ limit: '50mb' }));
 
-// Serve static files (audio, images, etc.) from persistent storage
-app.use('/audio', express.static(getAudioDir()));
+// The old `app.use('/audio', express.static(getAudioDir()))` static mount was removed for
+// security: it exposed generated audio as /audio/<id>.mp3 over sequential, guessable ids with
+// no auth. Audio is served only through the streaming route GET /api/content/:id/audio below
+// (which reads the same files from disk), so the static mount was pure extra attack surface.
 
 // Public routes (no auth required)
 app.get('/', (req, res) => {
@@ -116,6 +131,16 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
     const { type, audio_url: audioUrl } = metaResult.rows[0];
 
+    // Private generated audio (article/text narration of the user's saved/pasted text) must not
+    // be enumerable by sequential id. Require the unguessable per-item token (see audio-token.ts).
+    // Podcast episodes proxy already-public CDN audio, so they stay open.
+    if (type === 'article' || type === 'text') {
+      const t = typeof req.query.t === 'string' ? req.query.t : '';
+      if (!verifyAudioToken(Number(req.params.id), t)) {
+        return res.status(403).json({ error: 'Missing or invalid audio token' });
+      }
+    }
+
     // -------------------------------------------------------------------------
     // PATH A: podcast episode. Proxy external CDN URL through our server.
     // This sidesteps CORS issues (e.g. api.substack.com blocks cross-origin
@@ -132,7 +157,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
       console.log(`[AudioProxy] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
 
-      const upstreamRes = await fetch(audioUrl, { headers: upstreamHeaders });
+      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders });
 
       if (!upstreamRes.ok && upstreamRes.status !== 206) {
         console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
@@ -332,8 +357,25 @@ async function logStorageStats() {
   }
 }
 
+// Warn loudly at startup about missing security-critical env vars. We do NOT crash (the server
+// must stay up for health checks, per the db.ts philosophy), but silence was the real risk:
+// without ENCRYPTION_KEY every user's provider API key is stored as PLAINTEXT, and without
+// JWT_SECRET all sessions drop on each restart. Production only, so local dev stays quiet.
+function warnMissingSecurityEnv() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const key = process.env.ENCRYPTION_KEY;
+  if (!key || key.length !== 64) {
+    console.error('🔓 [SECURITY] ENCRYPTION_KEY is missing or not 64 hex chars: user API keys and Wallabag passwords are being stored as PLAINTEXT. Set a 64-hex-char ENCRYPTION_KEY (see RAILWAY_DEPLOYMENT.md).');
+  }
+  if (!process.env.JWT_SECRET) {
+    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so everyone is logged out on every redeploy. Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
+  }
+}
+
 // Initialize database and start server
 async function start() {
+  warnMissingSecurityEnv();
+
   // Start HTTP server FIRST so Railway sees it as healthy
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Wallacast API server running on http://0.0.0.0:${PORT}`);

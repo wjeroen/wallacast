@@ -13,6 +13,7 @@ import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
+import { withAudioToken } from '../services/audio-token.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 
 const router = express.Router();
@@ -66,7 +67,7 @@ router.get('/', async (req, res) => {
     sql += ' ORDER BY created_at DESC';
     
     const result = await query(sql, params);
-    res.json(result.rows);
+    res.json(result.rows.map(withAudioToken));
   } catch (error) {
     console.error('Error fetching content:', error);
     res.status(500).json({ error: 'Failed to fetch content' });
@@ -268,7 +269,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    const item = result.rows[0];
+    const item = withAudioToken(result.rows[0]);
     // Log podcast episode URLs so we can diagnose CDN/streaming issues in Railway logs
     if (item.type === 'podcast_episode' && item.audio_url) {
       console.log(`[PodcastDebug] id=${item.id} show="${item.podcast_show_name}" url=${item.audio_url}`);
@@ -903,7 +904,7 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(withAudioToken(result.rows[0]));
   } catch (error) {
     console.error('Error updating content item:', error);
     res.status(500).json({ error: 'Failed to update content item' });

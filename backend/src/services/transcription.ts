@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { safeFetch } from './url-guard.js';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -247,7 +247,7 @@ export async function transcribeWithTimestamps(
     } else {
       // URL passed, download it (legacy path, used for podcast transcription)
       console.log(`[Transcription] Downloading audio from ${audioSource}...`);
-      const response = await fetch(audioSource);
+      const response = await safeFetch(audioSource);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
       if (!response.body) throw new Error('No response body');
       await pipeline(response.body, createWriteStream(audioPath));
