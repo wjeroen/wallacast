@@ -1720,8 +1720,10 @@ export function FullscreenPlayer({
         {renderTabContent()}
       </div>
 
-      {/* Player Controls */}
+      {/* Player Controls. Without audio there is no timeline, no play/seek, and no
+          speed/sleep: the row reduces to previous track, display settings, next track. */}
       <div className="fullscreen-player-controls">
+        {content.audio_url && (
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
@@ -1753,6 +1755,7 @@ export function FullscreenPlayer({
           </div>
           <span className="time">{formatTime(duration)}</span>
         </div>
+        )}
 
         <div className="fullscreen-playback-controls">
           <button
@@ -1764,19 +1767,23 @@ export function FullscreenPlayer({
             <SkipBack size={22} />
           </button>
 
-          <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
-            <RotateCcw className="seek-icon" />
-            <span className="seek-label">15</span>
-          </button>
+          {content.audio_url && (
+            <>
+              <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+                <RotateCcw className="seek-icon" />
+                <span className="seek-label">15</span>
+              </button>
 
-          <button onClick={onPlayPause} className="play-pause-btn">
-            {isPlaying ? <Pause size={32} /> : <Play size={32} />}
-          </button>
+              <button onClick={onPlayPause} className="play-pause-btn">
+                {isPlaying ? <Pause size={32} /> : <Play size={32} />}
+              </button>
 
-          <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
-            <RotateCw className="seek-icon" />
-            <span className="seek-label">15</span>
-          </button>
+              <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
+                <RotateCw className="seek-icon" />
+                <span className="seek-label">15</span>
+              </button>
+            </>
+          )}
 
           <button
             onClick={() => onSkipNextTrack?.()}
@@ -1789,15 +1796,19 @@ export function FullscreenPlayer({
         </div>
 
         <div className="fullscreen-player-options">
-          <button onClick={onToggleSpeed} className="option-toggle">
-            <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
-          </button>
+          {content.audio_url && (
+            <>
+              <button onClick={onToggleSpeed} className="option-toggle">
+                <Gauge size={20} />
+                <span>{playbackSpeed}x</span>
+              </button>
 
-          <button onClick={onToggleSleepTimer} className="option-toggle">
-            <Clock size={20} />
-            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-          </button>
+              <button onClick={onToggleSleepTimer} className="option-toggle">
+                <Clock size={20} />
+                <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+              </button>
+            </>
+          )}
 
           <div ref={displayPanelRef} style={{ position: 'relative' }}>
             <button

@@ -1467,11 +1467,36 @@
   /* Comments tab uses full vertical space, no fixed height */
 }
 
+/* Comments alternate their background shade by nesting depth (LessWrong / EA Forum
+   style) using the two existing surface shades, with a thin uniform border instead of
+   the old blue left bar. Quotes keep their left bar, so the two stay distinct. */
 .comment {
   padding: 0.75rem;
   background: var(--bg-surface);
   border-radius: 0.375rem;
-  border-left: 3px solid #3b82f6;
+  border: 1px solid var(--bg-raised);
+}
+
+/* Odd reply depths get the page shade, even depths the card shade. Six levels covers
+   real threads, anything deeper simply keeps its parent's shade. */
+.comment .comment {
+  background: var(--bg-app);
+}
+
+.comment .comment .comment {
+  background: var(--bg-surface);
+}
+
+.comment .comment .comment .comment {
+  background: var(--bg-app);
+}
+
+.comment .comment .comment .comment .comment {
+  background: var(--bg-surface);
+}
+
+.comment .comment .comment .comment .comment .comment {
+  background: var(--bg-app);
 }
 
 .comment-header {

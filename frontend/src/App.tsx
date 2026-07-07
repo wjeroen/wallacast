@@ -201,7 +201,11 @@ function App() {
       await loadWallabagStatus();
 
       const { pulled, pushed, errors } = response.data;
-      let message = `Sync complete: ${pulled} pulled, ${pushed} pushed`;
+      // pulled/pushed only count entries that actually CHANGED (the backend checks many
+      // more and skips the up-to-date ones), so say so instead of a scary raw number.
+      let message = pulled === 0 && pushed === 0
+        ? 'Sync complete: everything already in sync'
+        : `Sync complete: ${pulled} updated from Wallabag, ${pushed} pushed`;
       if (errors.length > 0) {
         console.warn('Sync completed with errors:', errors);
         message += `, ${errors.length} error${errors.length !== 1 ? 's' : ''} (see server logs)`;

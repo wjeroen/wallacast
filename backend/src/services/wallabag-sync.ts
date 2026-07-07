@@ -15,7 +15,7 @@ import { snapshotContentVersion } from './content-versions.js';
 // ============================================================================
 
 export interface SyncResult {
-  count: number;       // Items processed
+  count: number;       // Items actually changed (created or updated), up-to-date entries are not counted
   errors: string[];    // Error messages for failed items
 }
 
@@ -297,8 +297,11 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             }
           } else {
             // Local is current, no update needed. Counted and logged once after the loop
-            // (see upToDateCount) instead of one line per item, to avoid log spam.
+            // (see upToDateCount) instead of one line per item, to avoid log spam. Skip
+            // the change counter below: the sync result reports only REAL changes, so the
+            // UI message cannot claim "N pulled" when nothing was actually modified.
             upToDateCount++;
+            continue;
           }
         } else {
           // INSERT new item
