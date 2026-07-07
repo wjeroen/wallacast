@@ -370,3 +370,56 @@ async function assignOrphanedContent(): Promise<void> {
     console.log(`✓ Assigned ${queueResult.rowCount} queue item(s) to user ${firstUserId}`);
   }
 }
+
+// ===========================================================================
+// Password reset (email flow)
+// ===========================================================================
+
+const RESET_TOKEN_EXPIRY_MINUTES = 60;
+
+// Create a reset token for the account with this username, if it exists, is active, and
+// has an email address. Returns the email plus the RAW token for the emailed link (only
+// the SHA-256 hash is stored), or null when there is nothing to send. The route answers
+// generically either way, so this cannot be used to probe which accounts exist.
+export async function createPasswordResetToken(username: string): Promise<{ email: string; token: string } | null> {
+  const result = await query(
+    'SELECT id, email FROM users WHERE LOWER(username) = LOWER($1) AND is_active = true',
+    [username]
+  );
+  if (result.rows.length === 0 || !result.rows[0].email) {
+    return null;
+  }
+  const userId = result.rows[0].id;
+
+  // Opportunistic cleanup of expired and used rows keeps the table tiny without a scheduler.
+  await query('DELETE FROM password_reset_tokens WHERE expires_at < NOW() OR used_at IS NOT NULL');
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_MINUTES * 60000);
+  await query(
+    'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+    [userId, tokenHash, expiresAt]
+  );
+  return { email: result.rows[0].email, token };
+}
+
+// Consume a reset token: set the new password, mark the token used, and revoke every
+// session so anyone still holding the old password gets logged out. Returns false when
+// the token is unknown, expired, or already used.
+export async function resetPasswordWithToken(token: string, newPassword: string): Promise<boolean> {
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const result = await query(
+    'SELECT id, user_id FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()',
+    [tokenHash]
+  );
+  if (result.rows.length === 0) {
+    return false;
+  }
+  const { id, user_id } = result.rows[0];
+  const passwordHash = await hashPassword(newPassword);
+  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, user_id]);
+  await query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [id]);
+  await logoutAllSessions(user_id);
+  return true;
+}

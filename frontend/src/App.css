@@ -1780,6 +1780,17 @@
   font-size: 0.875rem;
 }
 
+/* Neutral notice box (e.g. "reset link sent"), the calm sibling of .login-error */
+.login-notice {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  font-size: 0.875rem;
+}
+
 /* =============================================
    Home page (logged out landing page)
    ============================================= */

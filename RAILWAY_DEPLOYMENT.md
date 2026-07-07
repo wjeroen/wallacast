@@ -56,6 +56,9 @@ Environment variables are just settings you type into each service's **Variables
 - `JWT_SECRET` - any long random string. It signs the login tokens. If you leave it blank, everyone gets logged out every time you redeploy, so set it once and keep it.
 - `ENCRYPTION_KEY` - a random key used to encrypt each user's AI provider API keys before they go into the database. It must be exactly 64 hex characters (32 bytes). Without it, stored keys fall back to plaintext, which you do not want in production.
 - `DEMO_USERNAME` (optional) - the username of the shared read-only demo account behind the home page's "Try the demo" button. Defaults to `demo`. IMPORTANT: register that username yourself before promoting the instance (running the seed script does it for you), otherwise a stranger could claim it and control what demo visitors see. Populate the demo library with `cd backend && BASE_URL=https://your-backend-url DEMO_PASSWORD=... OPENAI_API_KEY=... DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo` (the keys are used once for generation and then removed from the demo account).
+- `INVITE_CODE` (optional) - when set, creating an account requires this exact code (the register form automatically shows an extra field on instances that need it). Leave unset to keep registration open.
+- `RESEND_API_KEY` (optional) - enables the "Forgot password?" email flow via resend.com (the free tier is plenty). Without it, the reset form tells users to contact the operator instead.
+- `EMAIL_FROM` (optional) - the sender for those reset emails, for example `Wallacast <you@yourdomain.com>` (requires verifying your domain at Resend). Defaults to Resend's shared onboarding sender, which works without any domain setup.
 - `PORT` - set to `3001` (the port the backend listens on).
 
 Tip for generating the secrets: on any machine with Node installed you can run

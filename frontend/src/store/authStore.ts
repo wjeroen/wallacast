@@ -9,7 +9,7 @@ interface AuthStore {
   error: string | null;
 
   login: (username: string, password: string) => Promise<boolean>;
-  register: (username: string, password: string, displayName?: string, email?: string) => Promise<boolean>;
+  register: (username: string, password: string, displayName?: string, email?: string, inviteCode?: string) => Promise<boolean>;
   demoLogin: () => Promise<boolean>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -42,10 +42,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
     }
   },
 
-  register: async (username: string, password: string, displayName?: string, email?: string) => {
+  register: async (username: string, password: string, displayName?: string, email?: string, inviteCode?: string) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await authAPI.register(username, password, displayName, email);
+      const response = await authAPI.register(username, password, displayName, email, inviteCode);
       const { accessToken, refreshToken, user } = response.data;
       setTokens(accessToken, refreshToken);
       set({ user, isAuthenticated: true, isLoading: false });

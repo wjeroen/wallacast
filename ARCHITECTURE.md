@@ -119,6 +119,9 @@ This is the technical reference and codebase map for Wallacast (backend structur
   - `POST /api/auth/login` - Login with username/password, returns access + refresh tokens
   - `POST /api/auth/refresh` - Refresh access token using refresh token
   - `POST /api/auth/logout` - Revoke refresh token
+  - `GET /api/auth/config` - Public instance config for the logged-out UI (currently `{ inviteRequired }`, driven by the `INVITE_CODE` env var; when set, register requires the matching `inviteCode` in the body)
+  - `POST /api/auth/forgot-password` - Emails a password reset link (Resend, gated on `RESEND_API_KEY`, 503 when unconfigured). Always answers generically so usernames cannot be probed. Tokens live in the `password_reset_tokens` table (migration 023), SHA-256 hashed, 1 hour expiry, single use
+  - `POST /api/auth/reset-password` - Consumes a reset token, sets the new password, and revokes all of the user's sessions
   - `POST /api/auth/demo` - Passwordless login into the shared READ-ONLY demo account (the ordinary users row named by the `DEMO_USERNAME` env var, default `demo`; 404 when that account does not exist). Demo-ness is a SESSION property carried as `demo: true` in the JWT: sessions from this endpoint are read-only, a PASSWORD login into the same account is a normal writable session (that is how `backend/scripts/seed-demo.mjs` populates the demo library), and token refresh re-locks any session on the demo username so a visitor session can never escape read-only (the operator just logs in again). `requireAuth` in `middleware/auth.ts` blocks every non-GET request for demo tokens with `403 { demo: true }`, except the lean status poll and playback-position PATCHes. The frontend shows a toast on that 403, renders a demo banner, and makes Settings read-only.
 
 - **`routes/users.ts`**: User settings management (requires JWT auth)

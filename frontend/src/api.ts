@@ -216,8 +216,18 @@ export const authAPI = {
   login: (username: string, password: string) =>
     api.post<AuthTokens>('/auth/login', { username, password }),
 
-  register: (username: string, password: string, displayName?: string, email?: string) =>
-    api.post<AuthTokens>('/auth/register', { username, password, displayName, email }),
+  register: (username: string, password: string, displayName?: string, email?: string, inviteCode?: string) =>
+    api.post<AuthTokens>('/auth/register', { username, password, displayName, email, inviteCode }),
+
+  // Public instance config for the logged-out UI (whether registration needs an invite code).
+  getConfig: () => api.get<{ inviteRequired: boolean }>('/auth/config'),
+
+  // Email-based password reset (503 when the instance has no email service configured).
+  forgotPassword: (username: string) =>
+    api.post<{ message: string }>('/auth/forgot-password', { username }),
+
+  resetPassword: (token: string, newPassword: string) =>
+    api.post<{ success: boolean; message?: string }>('/auth/reset-password', { token, newPassword }),
 
   // Passwordless login into the shared read-only demo account (404 when no demo
   // account exists on this instance).

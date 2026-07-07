@@ -4,6 +4,7 @@ import {
   KeyRound, LogIn, MessageCircle, Mic, Moon, Play, Plus, RefreshCw, Sun, UserPlus, Volume2,
 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
+import { authAPI } from '../api';
 
 // Landing-page screenshot carousel. The SVGs in public/landing are red placeholders,
 // swap each for a real 600x1300 screenshot PNG and update the src here.
@@ -36,6 +37,18 @@ export function HomePage() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  // Whether this instance gates registration behind an invite code (public config).
+  const [inviteRequired, setInviteRequired] = useState(false);
+  // Password reset flow: forgotMode asks for a username, a ?reset= token from an emailed
+  // link shows the choose-new-password form. notice/localError belong to these direct calls.
+  const [forgotMode, setForgotMode] = useState(false);
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
 
   const [isLight, setIsLight] = useState(initialIsLight);
@@ -54,6 +67,26 @@ export function HomePage() {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  useEffect(() => {
+    // The invite-code field only renders on instances that actually require one.
+    authAPI.getConfig()
+      .then((res) => setInviteRequired(!!res.data.inviteRequired))
+      .catch(() => { /* leave false, the backend still enforces it */ });
+  }, []);
+
+  useEffect(() => {
+    // An emailed reset link lands on /?reset=<token>. Open the dropdown in reset mode and
+    // scrub the token from the address bar so it does not linger in the browser history.
+    try {
+      const token = new URLSearchParams(window.location.search).get('reset');
+      if (token) {
+        setResetToken(token);
+        setLoginOpen(true);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } catch { /* fine, the user can use the forgot flow instead */ }
   }, []);
 
   // Close the login dropdown on outside click
@@ -84,9 +117,47 @@ export function HomePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isRegister) {
-      await register(username, password, displayName || undefined, email || undefined);
+      await register(username, password, displayName || undefined, email || undefined, inviteCode || undefined);
     } else {
       await login(username, password);
+    }
+  };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWorking(true);
+    setLocalError(null);
+    setNotice(null);
+    try {
+      const res = await authAPI.forgotPassword(username);
+      setNotice(res.data.message);
+    } catch (err: any) {
+      setLocalError(err.response?.data?.error || 'Something went wrong, try again later');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const handleReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setLocalError('The passwords do not match');
+      return;
+    }
+    if (!resetToken) return;
+    setWorking(true);
+    setLocalError(null);
+    try {
+      const res = await authAPI.resetPassword(resetToken, newPassword);
+      setResetToken(null);
+      setNewPassword('');
+      setConfirmPassword('');
+      setNotice(res.data.message || 'Password changed. You can now sign in.');
+      setIsRegister(false);
+    } catch (err: any) {
+      setLocalError(err.response?.data?.error || 'Could not reset the password');
+    } finally {
+      setWorking(false);
     }
   };
 
@@ -122,16 +193,78 @@ export function HomePage() {
             {loginOpen && (
               <div className="home-login-dropdown">
                 <div className="home-login-title">
-                  {isRegister ? 'Create your account' : 'Sign in to your account'}
+                  {resetToken ? 'Choose a new password'
+                    : forgotMode ? 'Reset your password'
+                    : isRegister ? 'Create your account' : 'Sign in to your account'}
                 </div>
 
-                {error && (
+                {(localError || error) && (
                   <div className="login-error">
                     <AlertCircle size={18} />
-                    <span>{error}</span>
+                    <span>{localError || error}</span>
                   </div>
                 )}
+                {notice && !localError && <div className="login-notice">{notice}</div>}
 
+                {resetToken ? (
+                  <form onSubmit={handleReset} className="home-login-form">
+                    <div className="form-group">
+                      <label htmlFor="home-newpw">New password</label>
+                      <input
+                        id="home-newpw"
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Enter new password"
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="home-confirmpw">Confirm password</label>
+                      <input
+                        id="home-confirmpw"
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Repeat new password"
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <button type="submit" className="home-btn-primary home-login-submit" disabled={working}>
+                      <span>{working ? 'Saving...' : 'Set new password'}</span>
+                    </button>
+                  </form>
+                ) : forgotMode ? (
+                  <form onSubmit={handleForgot} className="home-login-form">
+                    <div className="form-group">
+                      <label htmlFor="home-forgot-username">Username</label>
+                      <input
+                        id="home-forgot-username"
+                        type="text"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Enter username"
+                        required
+                        minLength={3}
+                        autoComplete="username"
+                      />
+                    </div>
+                    <button type="submit" className="home-btn-primary home-login-submit" disabled={working}>
+                      <span>{working ? 'Sending...' : 'Email me a reset link'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="home-login-toggle"
+                      onClick={() => { setForgotMode(false); setNotice(null); setLocalError(null); }}
+                    >
+                      Back to sign in
+                    </button>
+                  </form>
+                ) : (
                 <form onSubmit={handleSubmit} className="home-login-form">
                   <div className="form-group">
                     <label htmlFor="home-username">Username</label>
@@ -159,6 +292,19 @@ export function HomePage() {
                       autoComplete={isRegister ? 'new-password' : 'current-password'}
                     />
                   </div>
+                  {isRegister && inviteRequired && (
+                    <div className="form-group">
+                      <label htmlFor="home-invite">Invite code</label>
+                      <input
+                        id="home-invite"
+                        type="text"
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value)}
+                        placeholder="Enter invite code"
+                        required
+                      />
+                    </div>
+                  )}
                   {isRegister && (
                     <>
                       <div className="form-group">
@@ -194,6 +340,15 @@ export function HomePage() {
                       <><LogIn size={18} /><span>Sign In</span></>
                     )}
                   </button>
+                  {!isRegister && (
+                    <button
+                      type="button"
+                      className="home-login-toggle"
+                      onClick={() => { setForgotMode(true); clearError(); setNotice(null); setLocalError(null); }}
+                    >
+                      Forgot password?
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="home-login-toggle"
@@ -202,6 +357,7 @@ export function HomePage() {
                     {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Create one"}
                   </button>
                 </form>
+                )}
               </div>
             )}
           </div>

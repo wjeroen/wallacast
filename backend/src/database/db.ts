@@ -240,6 +240,11 @@ export async function initializeDatabase() {
     const wallabagNeedsPushMigration = await fs.readFile(wallabagNeedsPushMigrationPath, 'utf-8');
     await client.query(wallabagNeedsPushMigration);
 
+    // Run migration to add password reset tokens (email-based forgot-password flow)
+    const passwordResetMigrationPath = path.join(__dirname, 'migrations', '023_add_password_reset_tokens.sql');
+    const passwordResetMigration = await fs.readFile(passwordResetMigrationPath, 'utf-8');
+    await client.query(passwordResetMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
