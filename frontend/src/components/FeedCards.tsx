@@ -64,6 +64,14 @@ export function FeedCard({ feed, variant, onClick, actionButton }: {
         {variant !== 'subscription' && thumbnail}
         <h3>{feed.title}</h3>
         <p className="author">{feed.author}</p>
+        {variant === 'expanded' && feed.feed_url && (
+          <p className="content-source-link feed-url">
+            <a href={feed.feed_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+              {feed.feed_url}
+              <SquareArrowOutUpRight size={12} style={{ marginLeft: '0.25rem' }} />
+            </a>
+          </p>
+        )}
         {variant === 'search-result' && feed.description && (
           <p className="description">{truncate(cleanHtml(feed.description), 280)}</p>
         )}

@@ -540,6 +540,17 @@
   color: #93c5fd;
 }
 
+/* Expanded feed cards show the FULL RSS url, which can be long. Render it inline so it
+   wraps instead of stretching the card (the default inline-flex cannot break a long token). */
+.content-source-link.feed-url a {
+  display: inline;
+  word-break: break-all;
+}
+
+.content-source-link.feed-url a svg {
+  vertical-align: -0.1em;
+}
+
 .description {
   font-size: 0.875rem;
   color: var(--t2);
