@@ -1469,8 +1469,8 @@ export function FullscreenPlayer({
               <p className="version-audio-note">
                 <Volume2 size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} />
                 {audioVersionId === null
-                  ? 'The audio was generated from the current text.'
-                  : 'The audio was generated from an older version, marked below.'}
+                  ? 'The audio and transcript were generated from the current text.'
+                  : 'The audio and transcript were generated from an older version, marked below.'}
               </p>
             )}
             {versionsLoading ? (
@@ -1514,7 +1514,7 @@ export function FullscreenPlayer({
                       <span className="version-date">{new Date(v.created_at).toLocaleString('en-GB')}</span>
                       <span className="version-size">{Math.max(1, Math.round((v.html_bytes || 0) / 1024))} KB</span>
                       {v.id === audioVersionId && (
-                        <span className="version-badge version-audio" title="The current audio was generated from this version of the text">
+                        <span className="version-badge version-audio" title="The current audio and transcript were generated from this version of the text">
                           <Volume2 size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
                           audio
                         </span>
