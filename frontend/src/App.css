@@ -3767,6 +3767,7 @@
   background: transparent;
   border: none;
   border-left: 1px solid var(--bg-raised);
+  border-radius: 0;
   color: var(--t4);
   cursor: pointer;
   font-size: 0.75rem;

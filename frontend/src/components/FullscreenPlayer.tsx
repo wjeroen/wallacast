@@ -33,7 +33,7 @@ import {
   AlignLeft,
   Info,
   BookOpen,
-  FileText,
+  Sparkles,
   History,
   ListMusic,
 } from 'lucide-react';
@@ -104,8 +104,11 @@ interface FullscreenPlayerProps {
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
 
-// Tab bar labels and icons. On narrow screens the labels collapse and only the
-// icons remain (the .tab-label spans hide, same pattern as .filter-label).
+// Tab bar labels and icons. On narrow screens most labels collapse to icon-only
+// (the .tab-label spans hide, same pattern as .filter-label), except the tabs in
+// KEEP_LABEL_TABS which keep their text at every width.
+const KEEP_LABEL_TABS = new Set<TabType>(['read-along', 'content']);
+
 const TAB_LABELS: Record<TabType, string> = {
   'content': 'Content',
   'description': 'Description',
@@ -121,7 +124,7 @@ const TAB_ICONS: Record<TabType, LucideIcon> = {
   'description': Info,
   'comments': MessageCircle,
   'read-along': BookOpen,
-  'summary': FileText,
+  'summary': Sparkles,
   'history': History,
   'queue': ListMusic,
 };
@@ -1775,7 +1778,7 @@ export function FullscreenPlayer({
                 title={TAB_LABELS[tab]}
               >
                 <Icon size={16} />
-                <span className="tab-label">{TAB_LABELS[tab]}</span>
+                <span className={KEEP_LABEL_TABS.has(tab) ? undefined : 'tab-label'}>{TAB_LABELS[tab]}</span>
                 {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
               </button>
             );
