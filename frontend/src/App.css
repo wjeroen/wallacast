@@ -85,6 +85,9 @@
 }
 
 .app-header h1 {
+  /* Quicksand: geometric, monolinear, rounded terminals and a single-storey
+     circle-a, matching the logo's round-capped strokes (loaded in main.tsx) */
+  font-family: 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-size: 1.5rem;
   font-weight: 700;
   color: #60a5fa;
