@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, Filter, Volume2, VolumeOff, MessageSquareQuote, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareQuote, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -20,7 +20,7 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
     dim: 'archive',
     options: [
       { value: 'active', label: 'Active', icon: <Inbox size={16} /> },
-      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#3b82f6' }} /> },
+      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#60a5fa' }} /> },
     ],
   },
   {
@@ -64,6 +64,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     loading,
     setTypeFilter,
     setFacet,
+    setFacets,
     setSearchQuery,
     fetchContent,
     toggleStarred,
@@ -180,6 +181,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // on an outside tap (the click-outside effect above).
   const toggleFacet = (dim: FacetDim, value: FacetValue) => {
     setFacet(dim, facets[dim] === value ? null : value);
+    setSelectedItems(new Set());
+  };
+
+  // Double-click/tap an option to make it the ONLY selected filter (a hidden
+  // "reset to just this"). The two single-click toggles that fire first cancel
+  // each other out, so the end state is exactly the solo selection.
+  const soloFacet = (dim: FacetDim, value: FacetValue) => {
+    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, [dim]: value });
     setSelectedItems(new Set());
   };
 
@@ -653,7 +662,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                     const opt = row.options.find(o => o.value === facets[row.dim]);
                     return opt ? [<span key={row.dim} className="facet-btn-icon">{opt.icon}</span>] : [];
                   });
-                  return icons.length > 0 ? icons : <Filter size={16} />;
+                  return icons.length > 0 ? icons : <FunnelX size={16} />;
                 })()}
                 <ChevronDown size={14} />
               </button>
@@ -667,10 +676,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                           key={`${row.dim}-${opt.value}`}
                           className={isSelected ? 'selected' : undefined}
                           onClick={() => toggleFacet(row.dim, opt.value)}
+                          onDoubleClick={() => soloFacet(row.dim, opt.value)}
                           style={isSelected ? { color: '#60a5fa' } : undefined}
                         >
                           {opt.icon}
-                          <span>{opt.label}</span>
+                          <span className="facet-label">{opt.label}</span>
                           {isSelected && <Check size={14} className="facet-check" />}
                         </button>
                       );
@@ -728,7 +738,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </button>
             {allSelectedArchived ? (
               <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected">
-                <ArchiveRestore size={16} style={{ color: '#3b82f6' }} />
+                <ArchiveRestore size={16} style={{ color: '#60a5fa' }} />
               </button>
             ) : (
               <button onClick={() => runInstantBulk('archive')} title="Archive selected">

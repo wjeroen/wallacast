@@ -27,7 +27,10 @@
   --bg-surface: #ffffff;  /* cards/headers/panels */
   --bg-raised:  #e2e8f0;  /* visible as border + subtle hover on white */
   --bg-hover:   #cbd5e1;  /* deeper hover, active borders */
-  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
+  /* Light mode mixes toward the DEEPER gray: mixing toward --bg-raised lands
+     almost exactly on the page background (#f0f3f7 vs #f1f5f9), which made
+     hovered white buttons melt into the canvas. */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-hover));
 
   /* Text: darkest → lighter in light mode */
   --t0: #0f172a;
@@ -105,7 +108,7 @@
 }
 
 .sync-button:hover:not(:disabled) {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -474,7 +477,7 @@
 }
 
 .episodes-section .load-more-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -499,7 +502,7 @@
 }
 
 .show-all-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -821,8 +824,11 @@
    standard menu dividers, and the checkmark right-aligns in its cell. */
 .dropdown-menu.filter-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-width: 250px;
+  /* minmax(0, 1fr) keeps BOTH columns exactly half the fixed width no matter
+     how long a label + checkmark gets (plain 1fr lets a long cell steal width
+     from the other column, which made the menu jiggle on every selection) */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 250px;
 }
 
 .dropdown-menu.filter-grid button {
@@ -831,6 +837,16 @@
   gap: 0.5rem;
   white-space: nowrap;
   border-radius: 0;
+}
+
+/* Labels that no longer fit (long text + checkmark) fade out to the right
+   instead of being clipped hard. Short labels never reach the fade zone. */
+.dropdown-menu.filter-grid .facet-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, #000 80%, transparent 98%);
+  mask-image: linear-gradient(to right, #000 80%, transparent 98%);
 }
 
 .dropdown-menu.filter-grid button:nth-child(even) {
@@ -1110,7 +1126,7 @@
 }
 
 .content-actions button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -1119,9 +1135,9 @@
   color: #fbbf24;
 }
 
-/* Blue for the Archive button */
+/* Blue for the Archive button (same accent blue as selected text/icons) */
 .content-actions button.active[title="Restore from archive"] {
-  color: #3b82f6;
+  color: #60a5fa;
 }
 
 .content-actions .delete-btn:hover {
@@ -1152,7 +1168,7 @@
 }
 
 .more-options-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -1436,7 +1452,7 @@
 }
 
 .playback-controls button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: #60a5fa;
 }
 
@@ -1874,7 +1890,7 @@
 }
 
 .home-icon-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -2022,7 +2038,7 @@
 }
 
 .home-btn-secondary:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
 }
 
 .home-main {
@@ -2509,7 +2525,7 @@
 }
 
 .settings-page .back-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -2855,7 +2871,7 @@
 }
 
 .seek-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   transform: scale(1.05);
 }
 
@@ -2966,7 +2982,7 @@
 }
 
 .mini-close-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -3157,7 +3173,7 @@
 }
 
 .header-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -3252,23 +3268,29 @@
   margin-bottom: 0;
 }
 
+/* Fixed UI size on purpose: the provenance lines are app chrome, not article
+   text, so they do NOT follow the reader text-size control */
 .content-provenance {
-  font-size: calc(0.75rem * var(--reader-font-scale, 1));
+  font-size: 0.875rem;
 }
 
 /* Title/author/date/karma block below the provenance + buttons row in the
-   Content and Transcript tabs (mirrors what the TTS intro speaks) */
+   Content and Transcript tabs (mirrors what the TTS intro speaks). Unlike the
+   provenance, it IS part of the reading experience, so it follows the reader
+   text-size control like the article body. */
 .content-title-block {
   margin-bottom: 1rem;
+  font-size: calc(1rem * var(--reader-font-scale, 1));
 }
 
 .content-title-block h2 {
   margin: 0.75rem 0 0.25rem 0;
+  font-size: calc(1.5rem * var(--reader-font-scale, 1));
 }
 
 .content-title-block .content-author {
   color: var(--t3);
-  font-size: 0.875rem;
+  font-size: calc(0.875rem * var(--reader-font-scale, 1));
   margin: 0;
 }
 
@@ -3930,7 +3952,7 @@
 }
 .queue-clear-btn:hover,
 .queue-shuffle-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t0);
 }
 .queue-shuffle-btn.active {

@@ -949,28 +949,34 @@ export function FullscreenPlayer({
           {/* Provenance first, then the timed title/meta below it (same order as the content tab) */}
           {(content.type === 'article' || content.type === 'text') && renderProvenance()}
 
-          {/* Title - timestamped, highlights while the TTS speaks it */}
-          {titleEl && (
-            <div
-              id={`ra-el-${elements.indexOf(titleEl)}`}
-              className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(titleEl.startTime)}
-            >
-              <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
+          {/* Timed title/meta live inside .content-title-block so they follow the
+              reader text-size control like the article body does */}
+          {(titleEl || metaElements.length > 0) && (
+            <div className="content-title-block">
+              {/* Title - timestamped, highlights while the TTS speaks it */}
+              {titleEl && (
+                <div
+                  id={`ra-el-${elements.indexOf(titleEl)}`}
+                  className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(titleEl.startTime)}
+                >
+                  <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
+                </div>
+              )}
+
+              {/* Author/date/karma meta - timestamped */}
+              {metaElements.map((el, i) => (
+                <div
+                  key={`meta-${i}`}
+                  id={`ra-el-${elements.indexOf(el)}`}
+                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(el.startTime)}
+                >
+                  <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+                </div>
+              ))}
             </div>
           )}
-
-          {/* Author/date/karma meta - timestamped */}
-          {metaElements.map((el, i) => (
-            <div
-              key={`meta-${i}`}
-              id={`ra-el-${elements.indexOf(el)}`}
-              className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(el.startTime)}
-            >
-              <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
-            </div>
-          ))}
         </div>
 
         {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
@@ -1655,7 +1661,7 @@ export function FullscreenPlayer({
                       console.error('Failed to refresh player after archive:', err);
                     }
                   }}
-                  style={content.is_archived ? { color: '#3b82f6' } : undefined}
+                  style={content.is_archived ? { color: '#60a5fa' } : undefined}
                 >
                   {content.is_archived
                     ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />

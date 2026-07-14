@@ -98,6 +98,7 @@ interface ContentStore {
   // Actions
   setTypeFilter: (typeFilter: TypeFilter) => void;
   setFacet: (dim: FacetDim, value: FacetValue | null) => void;
+  setFacets: (facets: FacetFilter) => void;
   setSearchQuery: (searchQuery: string) => void;
   fetchContent: () => Promise<void>;
 
@@ -152,6 +153,12 @@ export const useContentStore = create<ContentStore>((set, get) => {
     // together, hence the cast on the computed property.
     setFacet: (dim, value) => {
       set({ facets: { ...get().facets, [dim]: value } as FacetFilter });
+      commit(get().allItems);
+    },
+
+    // Replace the whole facet selection at once (double-click "solo" gesture)
+    setFacets: (facets) => {
+      set({ facets });
       commit(get().allItems);
     },
 
