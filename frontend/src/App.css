@@ -85,11 +85,12 @@
 }
 
 .app-header h1 {
-  /* Quicksand: geometric, monolinear, rounded terminals and a single-storey
-     circle-a, matching the logo's round-capped strokes (loaded in main.tsx) */
-  font-family: 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Monomaniac One: compass-and-ruler geometric with rounded stroke ends,
+     matching the logo's round-capped strokes. Single native weight (400),
+     so no faux-bolding. Quicksand 700 is the fallback. Loaded in main.tsx. */
+  font-family: 'Monomaniac One', 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-size: 1.5rem;
-  font-weight: 700;
+  font-weight: 400;
   color: #60a5fa;
 }
 
