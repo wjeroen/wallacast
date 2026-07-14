@@ -30,7 +30,14 @@ import {
   ChevronDown,
   Pencil,
   Eye,
+  AlignLeft,
+  Info,
+  BookOpen,
+  FileText,
+  History,
+  ListMusic,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
@@ -96,6 +103,28 @@ interface FullscreenPlayerProps {
 }
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
+
+// Tab bar labels and icons. On narrow screens the labels collapse and only the
+// icons remain (the .tab-label spans hide, same pattern as .filter-label).
+const TAB_LABELS: Record<TabType, string> = {
+  'content': 'Content',
+  'description': 'Description',
+  'comments': 'Comments',
+  'read-along': 'Read-along',
+  'summary': 'Summary',
+  'history': 'History',
+  'queue': 'Queue',
+};
+
+const TAB_ICONS: Record<TabType, LucideIcon> = {
+  'content': AlignLeft,
+  'description': Info,
+  'comments': MessageCircle,
+  'read-along': BookOpen,
+  'summary': FileText,
+  'history': History,
+  'queue': ListMusic,
+};
 
 // Human-readable label for a version snapshot's source (the action that overwrote it).
 function versionSourceLabel(source: ContentVersion['source']): string {
@@ -1732,23 +1761,26 @@ export function FullscreenPlayer({
         </div>
       </div>
 
-      {/* Tabs with autoscroll toggle */}
+      {/* Tabs with autoscroll toggle. Only the tab list scrolls horizontally on
+          narrow screens, the autoscroll toggle stays pinned outside the scroll area. */}
       <div className="fullscreen-tabs">
-        {availableTabs.map((tab) => (
-          <button
-            key={tab}
-            className={`tab-button ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => handleTabClick(tab)}
-          >
-            {tab === 'content' && 'Content'}
-            {tab === 'description' && 'Description'}
-            {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
-            {tab === 'read-along' && 'Read-along'}
-            {tab === 'summary' && 'Summary'}
-            {tab === 'history' && 'History'}
-            {tab === 'queue' && 'Queue'}
-          </button>
-        ))}
+        <div className="fullscreen-tabs-scroll">
+          {availableTabs.map((tab) => {
+            const Icon = TAB_ICONS[tab];
+            return (
+              <button
+                key={tab}
+                className={`tab-button ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => handleTabClick(tab)}
+                title={TAB_LABELS[tab]}
+              >
+                <Icon size={16} />
+                <span className="tab-label">{TAB_LABELS[tab]}</span>
+                {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
+              </button>
+            );
+          })}
+        </div>
         {activeTab === 'read-along' && (
           <button
             className={`autoscroll-toggle ${autoScroll ? 'active' : ''}`}
@@ -1756,7 +1788,7 @@ export function FullscreenPlayer({
             title={autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
           >
             <ArrowDownToLine size={14} />
-            Auto-scroll
+            <span className="tab-label">Auto-scroll</span>
           </button>
         )}
       </div>

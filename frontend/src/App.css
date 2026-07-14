@@ -3100,11 +3100,23 @@
   border-bottom: 1px solid var(--bg-raised);
   padding: 0;
   flex-shrink: 0;
-  overflow-x: auto;
   background: var(--bg-surface);
 }
 
+/* Inner scroll area for the tab buttons, so the autoscroll toggle
+   (a sibling, pinned right) never scrolls out of view */
+.fullscreen-tabs-scroll {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .tab-button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   background: transparent;
   border: none;
   padding: 0.875rem 1.25rem;
@@ -3124,6 +3136,18 @@
 .tab-button.active {
   color: #60a5fa;
   background: var(--bg-app);
+}
+
+/* Narrow screens: tab labels collapse to icon-only (same pattern as
+   .filter-label), including the autoscroll toggle's text */
+@media (max-width: 740px) {
+  .fullscreen-tabs .tab-label {
+    display: none;
+  }
+
+  .tab-button {
+    padding: 0.875rem 0.9rem;
+  }
 }
 
 /* Tab Content Area */
@@ -3742,6 +3766,7 @@
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: none;
+  border-left: 1px solid var(--bg-raised);
   color: var(--t4);
   cursor: pointer;
   font-size: 0.75rem;
