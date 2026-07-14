@@ -1464,8 +1464,15 @@ export function FullscreenPlayer({
             </div>
             <p className="md-editor-hint" style={{ marginTop: 0 }}>
               Snapshots saved automatically before each edit, refetch, or restore. Audio is not versioned.
-              {audioAt !== null && audioVersionId === null && ' The audio narrates the current text.'}
             </p>
+            {audioAt !== null && (
+              <p className="version-audio-note">
+                <Volume2 size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} />
+                {audioVersionId === null
+                  ? 'The audio was generated from the current text.'
+                  : 'The audio was generated from an older version, marked below.'}
+              </p>
+            )}
             {versionsLoading ? (
               <p className="no-content">Loading…</p>
             ) : viewingVersion ? (
