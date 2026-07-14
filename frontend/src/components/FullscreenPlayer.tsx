@@ -33,7 +33,7 @@ import {
   AlignLeft,
   Info,
   Captions,
-  MessageSquareQuote,
+  MessageSquareText,
   MessageSquareOff,
   Volume2,
   VolumeOff,
@@ -129,7 +129,7 @@ const TAB_ICONS: Record<TabType, LucideIcon> = {
   'description': Info,
   'comments': MessageCircle,
   'read-along': Captions,
-  'summary': MessageSquareQuote,
+  'summary': MessageSquareText,
   'history': History,
   'queue': ListMusic,
 };
@@ -1706,19 +1706,19 @@ export function FullscreenPlayer({
                   <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
                       <button disabled>
-                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generating summary…
                       </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && !content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(false); }}>
-                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate summary
                       </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(true); }}>
-                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Regenerate summary
                       </button>
                     )}

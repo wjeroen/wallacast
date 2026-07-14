@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareQuote, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -27,7 +27,7 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
     dim: 'star',
     options: [
       { value: 'starred', label: 'Starred', icon: <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} /> },
-      { value: 'unstarred', label: 'No star', icon: <Star size={16} style={{ color: 'var(--t4)' }} /> },
+      { value: 'unstarred', label: 'No star', icon: <StarOff size={16} /> },
     ],
   },
   {
@@ -40,7 +40,7 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
   {
     dim: 'summary',
     options: [
-      { value: 'summary', label: 'Summary', icon: <MessageSquareQuote size={16} /> },
+      { value: 'summary', label: 'Summary', icon: <MessageSquareText size={16} /> },
       { value: 'no_summary', label: 'None', icon: <MessageSquareOff size={16} /> },
     ],
   },

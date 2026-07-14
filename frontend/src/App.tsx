@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareQuote, Sun, Moon, SunMoon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -768,7 +768,7 @@ function App() {
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
-                <MessageSquareQuote size={18} />
+                <MessageSquareText size={18} />
                 <span>Generate summaries</span>
               </button>
 

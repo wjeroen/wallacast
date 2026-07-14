@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareQuote, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
@@ -312,7 +312,7 @@ export function ContentCard({
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
-            <span className="badge summary"><MessageSquareQuote size={12} /> Summary</span>
+            <span className="badge summary"><MessageSquareText size={12} /> Summary</span>
           )}
           {/* All types, not just podcasts: articles/texts get a Whisper transcript
               of their generated audio too (it powers the Transcript tab) */}
@@ -428,18 +428,18 @@ export function ContentCard({
                   <>
                     {item.summary_status === 'generating' ? (
                       <button disabled>
-                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generating summary…
                       </button>
                     ) : !item.summary_generated_at ? (
                       <button onClick={() => onGenerateSummary(item.id, false)}>
-                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate summary
                       </button>
                     ) : (
                       <>
                         <button onClick={() => onGenerateSummary(item.id, true)}>
-                          <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                          <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Regenerate summary
                         </button>
                         <button onClick={() => onRemoveSummary(item.id)}>
