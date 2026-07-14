@@ -194,53 +194,43 @@ function extractContentElements(
     });
   }
 
-  // Author + date on one line
+  // Author, date, and vote count as ONE meta element, so the read-along shows a
+  // single byline like the content tab ("By Author • July 3, 2026 • 87 upvotes")
+  // and the whole line highlights while the narrator reads the intro. The text
+  // field mirrors the TTS intro (openai-tts.ts) so the LLM can match it against
+  // the Whisper transcript.
+  const bylineHtmlParts: string[] = [];
+  let bylineText = '';
   if (author) {
     const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-    let metaText = `Written by ${cleanAuthor}.`;
-    let metaHtml = `By ${escapeHtml(cleanAuthor)}`;
-    if (publishedAt) {
-      try {
-        const date = new Date(publishedAt);
-        // Skip the date on an invalid input so we never emit "Invalid Date" in the meta line.
-        if (!isNaN(date.getTime())) {
-          const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-          metaText += ` Published on ${formatted}.`;
-          metaHtml += ` • ${escapeHtml(formatted)}`;
-        }
-      } catch { /* ignore */ }
-    }
-    elements.push({
-      type: 'meta',
-      html: `<p class="content-author">${metaHtml}</p>`,
-      text: metaText,
-    });
-  } else if (publishedAt) {
+    bylineHtmlParts.push(`By ${escapeHtml(cleanAuthor)}`);
+    bylineText += `Written by ${cleanAuthor}.`;
+  }
+  if (publishedAt) {
     try {
       const date = new Date(publishedAt);
-      // Skip the date element entirely on an invalid input so we never emit "Invalid Date".
+      // Skip the date on an invalid input so we never emit "Invalid Date" in the byline.
       if (!isNaN(date.getTime())) {
         const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        elements.push({
-          type: 'meta',
-          html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
-          text: `Published on ${formatted}.`,
-        });
+        bylineHtmlParts.push(escapeHtml(formatted));
+        bylineText += `${bylineText ? ' ' : ''}Published on ${formatted}.`;
       }
     } catch { /* ignore */ }
   }
-
-  // Karma for EA Forum/LW
-  const isEAForumOrLW = isEAForumUrl(url) || (url && url.includes('lesswrong.com'));
-  if (isEAForumOrLW && karma !== undefined && karma !== null) {
-    // "upvotes" not "karma", matching the TTS intro wording (openai-tts.ts).
-    // The text field must mirror what the narrator actually says so the LLM
-    // can match it against the Whisper transcript.
-    const karmaLabel = karma === 1 ? 'upvote' : 'upvotes';
+  if (karma !== undefined && karma !== null) {
+    // Any source with a vote count (the TTS intro speaks it for all of them, so
+    // the element must exist or that sentence has nothing to highlight). Same
+    // label logic as the intro: Substack calls them likes, forums upvotes.
+    const isSubstackSrc = !!(url && url.includes('substack.com'));
+    const karmaLabel = isSubstackSrc ? (karma === 1 ? 'like' : 'likes') : (karma === 1 ? 'upvote' : 'upvotes');
+    bylineHtmlParts.push(`${karma} ${karmaLabel}`);
+    bylineText += `${bylineText ? ' ' : ''}It has ${karma} ${karmaLabel}.`;
+  }
+  if (bylineHtmlParts.length > 0) {
     elements.push({
       type: 'meta',
-      html: `<p class="content-author">${karma} ${karmaLabel}</p>`,
-      text: `It has ${karma} ${karmaLabel}.`,
+      html: `<p class="content-author">${bylineHtmlParts.join(' • ')}</p>`,
+      text: bylineText,
     });
   }
 

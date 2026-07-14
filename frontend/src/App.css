@@ -3335,23 +3335,6 @@
   font-size: calc(0.875rem * var(--reader-font-scale, 1));
   margin: 0;
 }
-
-/* Transcript tab: the timed author/date/karma elements render as ONE line.
-   The stored alignment HTML wraps each part in a <p>, force those inline,
-   and drop the block-level highlight edge (the background tint is enough
-   for an inline span mid-line). */
-.ra-meta-line .read-along-element {
-  display: inline;
-  border-left: none;
-  padding-left: 0;
-  margin-left: 0;
-}
-
-.ra-meta-line p {
-  display: inline;
-  margin: 0;
-}
-
 .content-source {
   margin: 0.5rem 0 0 0;
 }
@@ -3731,6 +3714,33 @@
   opacity: 0.55;
   cursor: default;
 }
+/* Title/author/date fields above the Markdown editor. Saved with the edit;
+   the pre-edit values are snapshotted into version history like the body. */
+.md-editor-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.md-editor-meta input {
+  background: var(--bg-surface);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+}
+.md-editor-meta input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.md-editor-meta input[aria-label="Title"] {
+  flex: 2 1 220px;
+}
+.md-editor-meta input[aria-label="Author"] {
+  flex: 1 1 140px;
+}
+
 .markdown-editor-textarea {
   width: 100%;
   min-height: 50vh;

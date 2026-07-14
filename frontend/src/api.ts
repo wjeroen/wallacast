@@ -105,9 +105,11 @@ export const contentAPI = {
     api.patch<ContentItem>(`/content/${id}`, data),
 
   // Save a Markdown/HTML edit of an article/text body. The backend snapshots the previous
-  // body into version history, sanitizes, and bumps content_fetched_at (audio is untouched).
-  saveEdit: (id: number, html_content: string, content: string) =>
-    api.patch<ContentItem>(`/content/${id}`, { is_edit: true, html_content, content }),
+  // body + byline metadata into version history, sanitizes, and bumps content_fetched_at
+  // (audio is untouched). meta carries only the title/author/published_at fields that
+  // changed; null clears a field.
+  saveEdit: (id: number, html_content: string, content: string, meta?: { title?: string; author?: string | null; published_at?: string | null }) =>
+    api.patch<ContentItem>(`/content/${id}`, { is_edit: true, html_content, content, ...(meta || {}) }),
 
   // Version history (article/text edit/refetch/restore snapshots)
   listVersions: (id: number) =>

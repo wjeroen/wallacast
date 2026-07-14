@@ -1281,7 +1281,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                                 <small className="settings-hint">
                                   {p.vars.map((v, i) => (
                                     <span key={v.token}>
-                                      {i > 0 && ' · '}
+                                      {i > 0 && ' • '}
                                       <code>{`{${v.token}}`}</code> = {v.desc}
                                     </span>
                                   ))}

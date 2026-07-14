@@ -173,7 +173,7 @@ function countAllComments(comments: Comment[]): number {
 }
 
 /**
- * Build metadata string for a comment (e.g., "5 upvotes · 3 agreement" or "5 likes" for Substack)
+ * Build metadata string for a comment (e.g., "5 upvotes • 3 agreement" or "5 likes" for Substack)
  */
 function buildCommentMetadata(
   meta: LLMAlignmentElement['commentMeta'],
@@ -202,7 +202,7 @@ function buildCommentMetadata(
     }
   }
 
-  return parts.join(' \u00B7 ');
+  return parts.join(' \u2022 ');
 }
 
 // Recursively render a parsed comment with its replies. Hoisted to module scope so its
@@ -233,7 +233,7 @@ function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: Comme
         <span className="comment-username">{comment.username}</span>
         {comment.date && (
           <span className="comment-date">
-            {' \u00B7 '}
+            {' \u2022 '}
             {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
           </span>
         )}
@@ -306,7 +306,7 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.type === 'podcast_episode' && item.podcast_show_name
               ? item.podcast_show_name
               : (item.author || '')}
-            {!item.audio_url && <span className="queue-row-noaudio"> · no audio</span>}
+            {!item.audio_url && <span className="queue-row-noaudio"> • no audio</span>}
           </div>
         </div>
       </div>
@@ -430,6 +430,9 @@ export function FullscreenPlayer({
   // Markdown editor (Content tab) state
   const [editing, setEditing] = useState(false);
   const [draftMd, setDraftMd] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [editAuthor, setEditAuthor] = useState('');
+  const [editDate, setEditDate] = useState('');
   const [showEditPreview, setShowEditPreview] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -757,6 +760,9 @@ export function FullscreenPlayer({
   const startEdit = () => {
     setEditError(null);
     setDraftMd(htmlToMarkdown(content.html_content || content.content || ''));
+    setEditTitle(content.title || '');
+    setEditAuthor(content.author || '');
+    setEditDate(content.published_at ? content.published_at.slice(0, 10) : '');
     setShowEditPreview(false);
     setEditing(true);
   };
@@ -773,7 +779,15 @@ export function FullscreenPlayer({
     try {
       const html = markdownToHtml(draftMd);
       const plain = (new DOMParser().parseFromString(html, 'text/html').body.textContent || '').trim();
-      await contentAPI.saveEdit(content.id, html, plain);
+      // Only send metadata fields that actually changed, so an untouched date
+      // keeps its original stored timestamp instead of being rewritten.
+      const meta: { title?: string; author?: string | null; published_at?: string | null } = {};
+      const newTitle = editTitle.trim();
+      if (newTitle && newTitle !== content.title) meta.title = newTitle;
+      if (editAuthor.trim() !== (content.author || '')) meta.author = editAuthor.trim() || null;
+      const origDate = content.published_at ? content.published_at.slice(0, 10) : '';
+      if (editDate !== origDate) meta.published_at = editDate || null;
+      await contentAPI.saveEdit(content.id, html, plain, meta);
       // The PATCH response omits html_content; fetch the full fresh item to update the view + store.
       const fresh = await contentAPI.getById(content.id);
       onContentUpdated?.(fresh.data);
@@ -969,27 +983,20 @@ export function FullscreenPlayer({
                 </div>
               )}
 
-              {/* Author/date/karma meta - timestamped. The stored elements stay
-                  separate (each keeps its own timing for highlight and seek) but
-                  render joined into a single line, matching the content tab. */}
-              {metaElements.length > 0 && (
-                <div className="content-author ra-meta-line">
-                  {metaElements.map((el, i) => (
-                    <span key={`meta-${i}`}>
-                      {i > 0 && ' • '}
-                      <span
-                        id={`ra-el-${elements.indexOf(el)}`}
-                        className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-                        onClick={() => onSeek(el.startTime)}
-                        // Alignments stored before the separator switch have a
-                        // middle dot baked into their author/date HTML; swap it
-                        // for the bullet used everywhere else.
-                        dangerouslySetInnerHTML={{ __html: (sanitizedElementHtml.get(el) ?? '').replace(/ · /g, ' • ') }}
-                      />
-                    </span>
-                  ))}
+              {/* Author/date/karma meta - timestamped. Newly generated alignments
+                  bake the whole byline into ONE element (single line, matching the
+                  content tab); older alignments have separate author/date and karma
+                  elements and simply show them as separate lines. */}
+              {metaElements.map((el, i) => (
+                <div
+                  key={`meta-${i}`}
+                  id={`ra-el-${elements.indexOf(el)}`}
+                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(el.startTime)}
+                >
+                  <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
                 </div>
-              )}
+              ))}
             </div>
           )}
         </div>
@@ -1077,7 +1084,7 @@ export function FullscreenPlayer({
                           <span className="comment-username">{meta?.username || 'Anonymous'}</span>
                           {meta?.date && (
                             <span className="comment-date">
-                              {' \u00B7 '}
+                              {' \u2022 '}
                               {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
                             </span>
                           )}
@@ -1174,6 +1181,28 @@ export function FullscreenPlayer({
                   <button type="button" className="md-toolbar-btn primary" onClick={saveEdit} disabled={savingEdit}>
                     {savingEdit ? 'Saving…' : 'Save'}
                   </button>
+                </div>
+                <div className="md-editor-meta">
+                  <input
+                    type="text"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Title"
+                    aria-label="Title"
+                  />
+                  <input
+                    type="text"
+                    value={editAuthor}
+                    onChange={(e) => setEditAuthor(e.target.value)}
+                    placeholder="Author"
+                    aria-label="Author"
+                  />
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    aria-label="Date"
+                  />
                 </div>
                 {editError && <p className="md-editor-error">{editError}</p>}
                 {showEditPreview ? (
@@ -1489,7 +1518,7 @@ export function FullscreenPlayer({
           if (f.facets.transcript === 'transcript') facetLabels.push('Transcribed');
           if (f.facets.transcript === 'no_transcript') facetLabels.push('Untranscribed');
           const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
-          const searchLabel = f.searchQuery.trim() ? ` · “${f.searchQuery.trim()}”` : '';
+          const searchLabel = f.searchQuery.trim() ? ` • “${f.searchQuery.trim()}”` : '';
           return `Up next from ${facetLabel}${typeLabel}${searchLabel}`;
         })() : 'Up next';
 

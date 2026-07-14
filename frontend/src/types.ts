@@ -70,6 +70,8 @@ export interface ContentVersion {
   id: number;
   source: 'fetch' | 'refetch' | 'edit' | 'restore' | 'sync';
   title?: string;
+  author?: string | null;       // null on snapshots from before migration 024
+  published_at?: string | null; // null on snapshots from before migration 024
   created_at: string;
   html_bytes?: number;      // present in the lean list response
   has_comments?: boolean;   // present in the lean list response

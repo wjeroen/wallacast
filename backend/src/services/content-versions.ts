@@ -15,7 +15,7 @@ export type ContentVersionSource = 'fetch' | 'refetch' | 'edit' | 'restore' | 's
 export async function snapshotContentVersion(
   contentItemId: number | string,
   userId: number,
-  row: { title?: string | null; html_content?: string | null; content?: string | null; comments?: any },
+  row: { title?: string | null; author?: string | null; published_at?: string | Date | null; html_content?: string | null; content?: string | null; comments?: any },
   source: ContentVersionSource
 ): Promise<void> {
   // Nothing worth keeping if there's no body at all.
@@ -29,9 +29,9 @@ export async function snapshotContentVersion(
         : JSON.stringify(row.comments);
 
   await query(
-    `INSERT INTO content_versions (content_item_id, user_id, source, title, html_content, content, comments)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [contentItemId, userId, source, row.title ?? null, row.html_content ?? null, row.content ?? null, commentsValue]
+    `INSERT INTO content_versions (content_item_id, user_id, source, title, author, published_at, html_content, content, comments)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [contentItemId, userId, source, row.title ?? null, row.author ?? null, row.published_at ?? null, row.html_content ?? null, row.content ?? null, commentsValue]
   );
 
   // Prune anything beyond the most recent MAX_VERSIONS_PER_ITEM.

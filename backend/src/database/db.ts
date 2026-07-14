@@ -245,6 +245,11 @@ export async function initializeDatabase() {
     const passwordResetMigration = await fs.readFile(passwordResetMigrationPath, 'utf-8');
     await client.query(passwordResetMigration);
 
+    // Run migration to add author/published_at to version snapshots (metadata editing)
+    const versionMetadataMigrationPath = path.join(__dirname, 'migrations', '024_add_version_metadata.sql');
+    const versionMetadataMigration = await fs.readFile(versionMetadataMigrationPath, 'utf-8');
+    await client.query(versionMetadataMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

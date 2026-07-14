@@ -262,7 +262,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
               // do) so a bad Wallabag re-parse is recoverable from the History tab. Best-effort:
               // a snapshot failure must never block the sync overwrite.
               const before = await query(
-                'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+                'SELECT title, author, published_at, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
                 [existing.rows[0].id, userId]
               );
               if (before.rows.length > 0) {

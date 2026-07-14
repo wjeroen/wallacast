@@ -606,6 +606,8 @@ router.patch('/:id', async (req, res) => {
       'playback_speed',
       'last_played_at',
       'title',
+      'author',
+      'published_at',
       'description',
       'duration',
     ];
@@ -617,7 +619,7 @@ router.patch('/:id', async (req, res) => {
     // provenance then shows the content is newer than the narration (regenerate to re-sync).
     if (updates.is_edit === true) {
       const cur = await query(
-        'SELECT type, title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT type, title, author, published_at, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
       if (cur.rows.length > 0 && (cur.rows[0].type === 'article' || cur.rows[0].type === 'text')) {
@@ -1091,7 +1093,7 @@ router.post('/:id/refetch', async (req, res) => {
 
         // Snapshot the current body before the refetch overwrites it (undoable via version history)
         const before = await query(
-          'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+          'SELECT title, author, published_at, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
           [id, req.user!.userId]
         );
         if (before.rows.length > 0) {
@@ -1187,7 +1189,7 @@ router.get('/:id/versions/:versionId', async (req, res) => {
   try {
     const { id, versionId } = req.params;
     const result = await query(
-      `SELECT id, source, title, html_content, content, comments, created_at
+      `SELECT id, source, title, author, published_at, html_content, content, comments, created_at
        FROM content_versions
        WHERE id = $1 AND content_item_id = $2 AND user_id = $3`,
       [versionId, id, req.user!.userId]
@@ -1208,7 +1210,7 @@ router.post('/:id/versions/:versionId/restore', async (req, res) => {
     const { id, versionId } = req.params;
 
     const v = await query(
-      `SELECT title, html_content, content, comments FROM content_versions
+      `SELECT title, author, published_at, html_content, content, comments FROM content_versions
        WHERE id = $1 AND content_item_id = $2 AND user_id = $3`,
       [versionId, id, req.user!.userId]
     );
@@ -1216,7 +1218,7 @@ router.post('/:id/versions/:versionId/restore', async (req, res) => {
     const version = v.rows[0];
 
     const cur = await query(
-      'SELECT title, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT title, author, published_at, html_content, content, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
     if (cur.rows.length === 0) return res.status(404).json({ error: 'Content not found' });
@@ -1232,13 +1234,20 @@ router.post('/:id/versions/:versionId/restore', async (req, res) => {
           ? version.comments
           : JSON.stringify(version.comments);
 
+    // COALESCE: snapshots from before migration 024 have NULL author/published_at
+    // (and a hypothetical NULL title), so a restore keeps the item's current value
+    // rather than wiping it. Trade-off: a restore cannot CLEAR a field that was
+    // genuinely empty at snapshot time, which is fine for byline metadata.
     await query(
       `UPDATE content_items SET
-         html_content = $1, content = $2, comments = $3,
+         title = COALESCE($1, title),
+         author = COALESCE($2, author),
+         published_at = COALESCE($3, published_at),
+         html_content = $4, content = $5, comments = $6,
          content_source = 'wallacast', content_fetched_at = NOW(), updated_at = NOW(),
          wallabag_needs_push = TRUE
-       WHERE id = $4 AND user_id = $5`,
-      [version.html_content, version.content, commentsValue, id, req.user!.userId]
+       WHERE id = $7 AND user_id = $8`,
+      [version.title, version.author, version.published_at, version.html_content, version.content, commentsValue, id, req.user!.userId]
     );
 
     res.json({ message: 'Version restored' });
