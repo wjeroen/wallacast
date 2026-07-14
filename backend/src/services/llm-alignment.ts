@@ -169,6 +169,27 @@ function findImageDescription(src: string, descriptions: Record<string, string>,
   return null;
 }
 
+// Mirror of formatDateForNarration in openai-tts.ts (not imported from there:
+// openai-tts already imports this module, so importing back would be a cycle).
+// The byline element's TEXT must use the narrated phrasing ("10th of July 2026"),
+// not the displayed one ("July 10, 2026"), so the alignment LLM sees the same
+// words Whisper heard. Keep the two functions in sync.
+function formatDateSpoken(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    const day = date.getDate();
+    const month = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    const suffix = ['th', 'st', 'nd', 'rd'];
+    const v = day % 100;
+    const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+    return `${ordinalDay} of ${month} ${year}`;
+  } catch {
+    return dateString;
+  }
+}
+
 /**
  * Extract block-level elements from HTML content.
  * Returns elements in document order, filtering out nested duplicates.
@@ -213,7 +234,8 @@ function extractContentElements(
       if (!isNaN(date.getTime())) {
         const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
         bylineHtmlParts.push(escapeHtml(formatted));
-        bylineText += `${bylineText ? ' ' : ''}Published on ${formatted}.`;
+        // Spoken form for the matcher text, display form for the html above.
+        bylineText += `${bylineText ? ' ' : ''}Published on ${formatDateSpoken(publishedAt)}.`;
       }
     } catch { /* ignore */ }
   }

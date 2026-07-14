@@ -792,6 +792,9 @@ export function FullscreenPlayer({
       const fresh = await contentAPI.getById(content.id);
       onContentUpdated?.(fresh.data);
       updateItem(content.id, fresh.data);
+      // The edit just snapshotted the previous state; refresh the History tab's
+      // list so the new snapshot shows without closing and reopening the player.
+      loadVersions();
       setEditing(false);
       setShowEditPreview(false);
     } catch (e) {
@@ -1155,8 +1158,9 @@ export function FullscreenPlayer({
               )}
             </div>
             {/* Title/author/date/karma below the provenance + buttons row, so the
-                buttons never squish it */}
-            {renderTitleBlock()}
+                buttons never squish it. Hidden while editing: the editor has its
+                own Title/Author/Date fields, showing both is redundant. */}
+            {!editing && renderTitleBlock()}
             {editing ? (
               <div className="markdown-editor">
                 <div className="markdown-editor-toolbar">
@@ -1439,6 +1443,20 @@ export function FullscreenPlayer({
         );
       }
       case 'history': {
+        // Which snapshot holds the text the current audio narrates? Snapshots are
+        // taken BEFORE each overwrite, so the audio's source text lives in the
+        // OLDEST snapshot created AFTER the audio was generated. No such snapshot
+        // means the audio was generated from the current text.
+        const audioAt = content.audio_url && content.audio_generated_at
+          ? new Date(content.audio_generated_at).getTime()
+          : null;
+        const audioVersionId = audioAt === null
+          ? null
+          : versions
+              .filter((v) => new Date(v.created_at).getTime() > audioAt)
+              .reduce<ContentVersion | null>((oldest, v) =>
+                !oldest || new Date(v.created_at).getTime() < new Date(oldest.created_at).getTime() ? v : oldest, null)
+              ?.id ?? null;
         return (
           <div className="tab-content-display">
             <div className="content-header">
@@ -1446,6 +1464,7 @@ export function FullscreenPlayer({
             </div>
             <p className="md-editor-hint" style={{ marginTop: 0 }}>
               Snapshots saved automatically before each edit, refetch, or restore. Audio is not versioned.
+              {audioAt !== null && audioVersionId === null && ' The audio narrates the current text.'}
             </p>
             {versionsLoading ? (
               <p className="no-content">Loading…</p>
@@ -1487,6 +1506,12 @@ export function FullscreenPlayer({
                       <span className={`version-badge version-${v.source}`}>{versionSourceLabel(v.source)}</span>
                       <span className="version-date">{new Date(v.created_at).toLocaleString('en-GB')}</span>
                       <span className="version-size">{Math.max(1, Math.round((v.html_bytes || 0) / 1024))} KB</span>
+                      {v.id === audioVersionId && (
+                        <span className="version-badge version-audio" title="The current audio was generated from this version of the text">
+                          <Volume2 size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
+                          audio
+                        </span>
+                      )}
                     </div>
                     <div className="version-actions">
                       <button className="md-toolbar-btn" onClick={() => viewVersion(v.id)}>

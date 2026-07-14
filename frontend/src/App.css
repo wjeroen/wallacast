@@ -3803,6 +3803,8 @@
 .version-badge.version-edit { color: #2563eb; border-color: #2563eb55; }
 .version-badge.version-refetch { color: #0891b2; border-color: #0891b255; }
 .version-badge.version-restore { color: #d97706; border-color: #d9770655; }
+/* Marks the snapshot the current audio narration was generated from */
+.version-badge.version-audio { color: #60a5fa; border-color: #60a5fa55; }
 .version-date { color: var(--t2); font-size: 0.85rem; }
 .version-size { color: var(--t3, #9ca3af); font-size: 0.8rem; }
 .version-actions { display: flex; gap: 0.5rem; }
