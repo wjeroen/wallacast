@@ -89,8 +89,12 @@
      matching the logo's round-capped strokes. Single native weight (400),
      so no faux-bolding. Quicksand 700 is the fallback. Loaded in main.tsx. */
   font-family: 'Monomaniac One', 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 1.5rem;
+  /* Sized against the 2.5rem logo mark: lowercase x-height lands around 55-60%
+     of the mark, the usual icon+wordmark lockup ratio (Monomaniac renders small
+     for its nominal size, its Japanese-heritage em box is roomy) */
+  font-size: 2rem;
   font-weight: 400;
+  line-height: 1;
   color: #60a5fa;
 }
 
