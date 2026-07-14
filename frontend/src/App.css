@@ -95,6 +95,12 @@
   font-size: 2rem;
   font-weight: 400;
   line-height: 1;
+  /* Optical centering: Monomaniac One places its Latin baseline low inside the
+     em box (37px ascent / 9px descent metrics on a 32px em), which leaves the
+     all-lowercase wordmark's ink center measured 3px below the flex-centered
+     box center. Lift it back up. */
+  position: relative;
+  top: -3px;
   color: #60a5fa;
 }
 
@@ -3396,7 +3402,7 @@
 
 /* Footnotes. Inline reference markers + the definition section at the end (clickable). */
 .article-content sup.footnote-ref a {
-  color: var(--accent, #60a5fa);
+  color: #60a5fa;
   text-decoration: none;
   cursor: pointer;
 }
@@ -3417,7 +3423,7 @@
   margin: 0.4em 0;
 }
 .article-content .footnote-backref {
-  color: var(--accent, #60a5fa);
+  color: #60a5fa;
   text-decoration: none;
   margin-left: 0.35em;
   cursor: pointer;
@@ -4414,7 +4420,9 @@
 }
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
-  color: var(--accent, #2563eb);
+  /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly
+     dim on the dark background) */
+  color: #60a5fa;
   font-weight: 600;
   font-size: 0.8rem;
 }
