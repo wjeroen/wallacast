@@ -551,28 +551,49 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
  * - "Username on Date with N upvotes:" needs its own line (comment headers)
  * - "Title, Do Your Job," separates from "written by Max Dalton."
  *
+ * Lines ALSO split at significant pauses in the narration. Whisper often
+ * transcribes titles, headings, and dates without any trailing punctuation
+ * (e.g. "JUN 2024" flowing straight into the next heading), so punctuation
+ * alone merges them into the surrounding text and the LLM gets no usable
+ * timestamp for them. The TTS voice does pause at those boundaries, so the
+ * pause is the reliable signal. This only ADDS boundaries; every line that
+ * existed before still exists.
+ *
  * Output:
  * [0.0] Title,
  * [0.2] Do Your Job Unreasonably Well,
  * [1.1] written by Max Dalton.
  * [2.8] Published on 27th of January, 2026,
- * [4.6] it has 102 karma.
+ * [4.6] it has 102 upvotes.
  */
+// Conservative: TTS mid-sentence pauses stay well under this, while heading,
+// title/byline, and paragraph boundaries pause noticeably longer.
+const GAP_SPLIT_SECONDS = 0.6;
+
 function buildTimedTranscript(words: TranscriptWord[]): string {
   if (words.length === 0) return '';
 
   const sentences: string[] = [];
   let currentWords: string[] = [];
   let sentenceStart: number = words[0].start;
+  let prevEnd: number | null = null;
 
   for (const word of words) {
     const trimmed = (word.word || '').trim();
     if (!trimmed) continue;
 
+    // Flush the running line when a significant pause precedes this word,
+    // so unpunctuated titles/headings/dates get their own timed line.
+    if (currentWords.length > 0 && prevEnd !== null && word.start - prevEnd >= GAP_SPLIT_SECONDS) {
+      sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
+      currentWords = [];
+    }
+
     if (currentWords.length === 0) {
       sentenceStart = word.start;
     }
     currentWords.push(trimmed);
+    prevEnd = typeof word.end === 'number' ? word.end : word.start;
 
     // Break at all punctuation: . ? ! : , ; (optionally followed by " ' ) ])
     const isClauseEnd = /[.!?:,;]["')\]]?$/.test(trimmed);

@@ -48,8 +48,7 @@
 - [ ] **[P4]** Settings shows a broken (undecryptable) API key as configured ("••••••••"), because the GET route masks secrets without decrypting. After an ENCRYPTION_KEY rotation, keys look set but silently fail. Detect decrypt-to-empty secrets in the settings GET and return a "needs re-entry" marker.
 
 ### Read-along quality
-- [ ] **[P2]** Test LLM alignment quality across content types (articles, EA Forum, LessWrong, podcasts).
-- [ ] **[P2]** Fix `buildTimedTranscript()` merging headings/dates into surrounding text. It only splits at punctuation, ignoring timing gaps, so short elements like "JUN 2024" merge with the next heading. Also split at significant timing gaps (e.g. >0.5s between words) so the alignment LLM gets cleaner lines. File: `backend/src/services/llm-alignment.ts`.
+- [ ] **[P2]** Test LLM alignment quality across content types (articles, EA Forum, LessWrong, podcasts). Especially verify the 2026-07-14 input-quality fixes (pause-based transcript splitting, single byline element, narrated date phrasing) actually improve title/byline highlighting on a regenerated item.
 - [ ] **[P3]** Read-along list splitting: a sub-list nested inside a list item, and the footnote section `<ol>`, are still one chunk each (could split the same way per-`<li>` splitting already works). Inter-item spacing not tuned yet.
 
 ### Performance & Optimization
@@ -93,6 +92,8 @@
 ## Completed Recently ✅
 
 > July 2026 onward. Older wins were pruned.
+
+- [x] **buildTimedTranscript() splits at narration pauses** (2026-07-14): transcript lines fed to the alignment LLM now also split when the narrator pauses 0.6s or longer, so unpunctuated titles, headings, and dates ("JUN 2024") get their own timed line instead of merging into the surrounding text. Purely additive, every punctuation-based line boundary still exists, so comment headers and body sentences are unaffected. Takes effect on newly generated or regenerated transcripts.
 
 - [x] **Player editor + history polish, byline matcher phrasing** (2026-07-14): the title/byline block is hidden while editing (the editor has its own Title/Author/Date fields, showing both was redundant); the History list refreshes immediately after saving an edit (used to require closing and reopening the player); an "audio" badge in the History list marks the snapshot the current narration was generated from, computed from audio_generated_at vs snapshot times (no badge = audio narrates the current text, the hint line says so). Alignment input quality: the byline element's matcher text now uses the narrated date phrasing ("10th of July 2026", mirroring formatDateForNarration) instead of the displayed "July 10, 2026", so the alignment LLM sees the same words Whisper heard.
 
