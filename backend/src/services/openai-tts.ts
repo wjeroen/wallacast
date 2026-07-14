@@ -929,7 +929,13 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       fullScript += `Title: ${content.title}. `;
       if (content.author) fullScript += `Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
       if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
-      if (content.karma !== undefined && content.karma !== null) fullScript += `It has ${content.karma} karma. `;
+      if (content.karma !== undefined && content.karma !== null) {
+        // Substack calls them likes; forums call them upvotes. Matches the
+        // comment narration (formatReactionsForNarration) and the player UI.
+        const isSubstackSrc = (content.url || '').includes('substack.com');
+        const karmaLabel = isSubstackSrc ? (content.karma === 1 ? 'like' : 'likes') : (content.karma === 1 ? 'upvote' : 'upvotes');
+        fullScript += `It has ${content.karma} ${karmaLabel}. `;
+      }
       fullScript += '\n\n';
     }
 

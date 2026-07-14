@@ -905,22 +905,27 @@ export function FullscreenPlayer({
   // Title/author/date/karma block, mirroring exactly what the TTS intro speaks
   // (comments are announced later in the narration, so no comment count here).
   // Sits BELOW the provenance lines + action buttons so it never gets squished.
-  const renderTitleBlock = () => (
-    <div className="content-header content-title-block">
-      <h2>{content.title}</h2>
-      {content.author && (
-        <p className="content-author">
-          By {content.author}
-          {content.published_at && (
-            <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
-          )}
-          {content.karma !== undefined && content.karma !== null && (
-            <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-          )}
-        </p>
-      )}
-    </div>
-  );
+  const renderTitleBlock = () => {
+    const parts: string[] = [];
+    if (content.author) parts.push(`By ${content.author}`);
+    if (content.published_at) {
+      const d = new Date(content.published_at);
+      if (!isNaN(d.getTime())) {
+        parts.push(d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
+      }
+    }
+    if (content.karma !== undefined && content.karma !== null) {
+      const isSub = content.url ? content.url.includes('substack.com') : false;
+      const label = isSub ? (content.karma === 1 ? 'like' : 'likes') : (content.karma === 1 ? 'upvote' : 'upvotes');
+      parts.push(`${content.karma} ${label}`);
+    }
+    return (
+      <div className="content-header content-title-block">
+        <h2>{content.title}</h2>
+        {parts.length > 0 && <p className="content-author">{parts.join(' • ')}</p>}
+      </div>
+    );
+  };
 
   // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
@@ -964,17 +969,27 @@ export function FullscreenPlayer({
                 </div>
               )}
 
-              {/* Author/date/karma meta - timestamped */}
-              {metaElements.map((el, i) => (
-                <div
-                  key={`meta-${i}`}
-                  id={`ra-el-${elements.indexOf(el)}`}
-                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(el.startTime)}
-                >
-                  <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+              {/* Author/date/karma meta - timestamped. The stored elements stay
+                  separate (each keeps its own timing for highlight and seek) but
+                  render joined into a single line, matching the content tab. */}
+              {metaElements.length > 0 && (
+                <div className="content-author ra-meta-line">
+                  {metaElements.map((el, i) => (
+                    <span key={`meta-${i}`}>
+                      {i > 0 && ' • '}
+                      <span
+                        id={`ra-el-${elements.indexOf(el)}`}
+                        className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+                        onClick={() => onSeek(el.startTime)}
+                        // Alignments stored before the separator switch have a
+                        // middle dot baked into their author/date HTML; swap it
+                        // for the bullet used everywhere else.
+                        dangerouslySetInnerHTML={{ __html: (sanitizedElementHtml.get(el) ?? '').replace(/ · /g, ' • ') }}
+                      />
+                    </span>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>

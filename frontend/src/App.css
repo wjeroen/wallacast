@@ -1857,7 +1857,13 @@
 }
 
 .loading-content h1 {
+  /* Same wordmark treatment as .app-header h1. Size stays 2rem, which reads
+     fine under the 5rem loading logo. No optical lift needed here: the text
+     sits alone in a vertical stack, not flex-centered beside the mark. */
+  font-family: 'Monomaniac One', 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-size: 2rem;
+  font-weight: 400;
+  line-height: 1;
   color: #60a5fa;
   margin-bottom: 1.5rem;
 }
@@ -3327,6 +3333,22 @@
 .content-title-block .content-author {
   color: var(--t3);
   font-size: calc(0.875rem * var(--reader-font-scale, 1));
+  margin: 0;
+}
+
+/* Transcript tab: the timed author/date/karma elements render as ONE line.
+   The stored alignment HTML wraps each part in a <p>, force those inline,
+   and drop the block-level highlight edge (the background tint is enough
+   for an inline span mid-line). */
+.ra-meta-line .read-along-element {
+  display: inline;
+  border-left: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+.ra-meta-line p {
+  display: inline;
   margin: 0;
 }
 

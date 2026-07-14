@@ -206,7 +206,7 @@ function extractContentElements(
         if (!isNaN(date.getTime())) {
           const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
           metaText += ` Published on ${formatted}.`;
-          metaHtml += ` · ${escapeHtml(formatted)}`;
+          metaHtml += ` • ${escapeHtml(formatted)}`;
         }
       } catch { /* ignore */ }
     }
@@ -233,10 +233,14 @@ function extractContentElements(
   // Karma for EA Forum/LW
   const isEAForumOrLW = isEAForumUrl(url) || (url && url.includes('lesswrong.com'));
   if (isEAForumOrLW && karma !== undefined && karma !== null) {
+    // "upvotes" not "karma", matching the TTS intro wording (openai-tts.ts).
+    // The text field must mirror what the narrator actually says so the LLM
+    // can match it against the Whisper transcript.
+    const karmaLabel = karma === 1 ? 'upvote' : 'upvotes';
     elements.push({
       type: 'meta',
-      html: `<p class="content-author">${karma} karma</p>`,
-      text: `It has ${karma} karma.`,
+      html: `<p class="content-author">${karma} ${karmaLabel}</p>`,
+      text: `It has ${karma} ${karmaLabel}.`,
     });
   }
 
