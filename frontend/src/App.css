@@ -27,10 +27,13 @@
   --bg-surface: #ffffff;  /* cards/headers/panels */
   --bg-raised:  #e2e8f0;  /* visible as border + subtle hover on white */
   --bg-hover:   #cbd5e1;  /* deeper hover, active borders */
-  /* Light mode mixes toward the DEEPER gray: mixing toward --bg-raised lands
-     almost exactly on the page background (#f0f3f7 vs #f1f5f9), which made
-     hovered white buttons melt into the canvas. */
-  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-hover));
+  /* Light mode's gray ramp is compressed (white 255 → canvas 241 → raised 226),
+     so the soft hover must stay LIGHTER than raised (~#f6f7fa): anything darker
+     collides with the description boxes / selected states, and anything near
+     the canvas melts into the page. Buttons that rest on the canvas get their
+     hover affordance from a darker BORDER instead (see .filter-buttons /
+     .content-actions hovers), like .content-card already does. */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 65%, var(--bg-raised));
 
   /* Text: darkest → lighter in light mode */
   --t0: #0f172a;
@@ -799,6 +802,9 @@
 
 .filter-buttons button:hover {
   background: var(--bg-hover-soft);
+  /* the darker border carries the hover in light mode, where the soft fill
+     is nearly invisible against the canvas */
+  border-color: var(--bg-hover);
 }
 
 .filter-buttons button.active {
@@ -1135,6 +1141,7 @@
 
 .content-actions button:hover {
   background: var(--bg-hover-soft);
+  border-color: var(--bg-hover);
   color: var(--t1);
 }
 
@@ -1177,6 +1184,7 @@
 
 .more-options-btn:hover {
   background: var(--bg-hover-soft);
+  border-color: var(--bg-hover);
   color: var(--t1);
 }
 
@@ -1190,7 +1198,7 @@
   border-radius: 0.375rem;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
   z-index: 10;
-  min-width: 180px;
+  min-width: 214px; /* fits "Regenerate transcript" + icon on one line */
   overflow: hidden;
 }
 
