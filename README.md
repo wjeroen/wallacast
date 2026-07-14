@@ -17,7 +17,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 ## Core Concept
 
 - **Articles → Audio**: Add article URLs, they're extracted and converted to speech via TTS
-- **File Upload → Audio**: Upload `.html` or `.htm` files directly, treated exactly like articles
+- **File Upload → Audio**: Upload `.html`/`.htm` or Markdown (`.md`, `.txt`) files directly, treated exactly like articles
 - **Texts → Audio**: Paste Markdown, plain text, or HTML, converted to audio with read-along alignment
 - **Editable**: Articles and texts can be edited in a built-in Markdown editor (round-trips with Obsidian); every edit/refetch/restore is snapshotted to version history
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper

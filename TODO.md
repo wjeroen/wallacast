@@ -93,6 +93,8 @@
 
 > July 2026 onward. Older wins were pruned.
 
+- [x] **Markdown file uploads** (2026-07-15): the Upload tab accepts `.md`/`.markdown`/`.txt` alongside `.html`/`.htm`. Markdown files are converted with the same `markdownToHtml()` the Text tab uses (previously a markdown file would have been stored as raw "HTML" and shown its `#`/`**` markers as plain text). Hint copy, Quick Tips, README, and ARCHITECTURE updated.
+
 - [x] **buildTimedTranscript() splits at narration pauses** (2026-07-14): transcript lines fed to the alignment LLM now also split when the narrator pauses 0.6s or longer, so unpunctuated titles, headings, and dates ("JUN 2024") get their own timed line instead of merging into the surrounding text. Purely additive, every punctuation-based line boundary still exists, so comment headers and body sentences are unaffected. Takes effect on newly generated or regenerated transcripts.
 
 - [x] **Player editor + history polish, byline matcher phrasing** (2026-07-14): the title/byline block is hidden while editing (the editor has its own Title/Author/Date fields, showing both was redundant); the History list refreshes immediately after saving an edit (used to require closing and reopening the player); an "audio" badge in the History list marks the snapshot the current narration was generated from, computed from audio_generated_at vs snapshot times (no badge = audio narrates the current text, the hint line says so). Alignment input quality: the byline element's matcher text now uses the narrated date phrasing ("10th of July 2026", mirroring formatDateForNarration) instead of the displayed "July 10, 2026", so the alignment LLM sees the same words Whisper heard.

@@ -46,9 +46,13 @@ export function AddTab({ onContentAdded }: AddTabProps) {
 
     // Auto-fill title from filename (strip extension)
     if (!title) {
-      setTitle(file.name.replace(/\.(html|htm)$/i, ''));
+      setTitle(file.name.replace(/\.(html|htm|md|markdown|txt)$/i, ''));
     }
   };
+
+  // Markdown/plain-text uploads get the same Markdown->HTML conversion as the
+  // Text tab; .html/.htm files pass through raw (backend sanitizes either way).
+  const isMarkdownUpload = /\.(md|markdown|txt)$/i.test(uploadedFileName);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,7 +90,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         }
         data.type = 'text';
         data.title = title;
-        data.content = uploadedContent;
+        data.content = isMarkdownUpload ? markdownToHtml(uploadedContent) : uploadedContent;
       } else if (contentType === 'podcast_episode') {
         if (!url) {
           setMessage('Audio URL is required for podcasts');
@@ -253,20 +257,20 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         {contentType === 'upload' && (
           <>
             <div className="form-group">
-              <label>HTML File</label>
+              <label>File</label>
               <input
                 type="file"
-                accept=".html,.htm"
+                accept=".html,.htm,.md,.markdown,.txt"
                 onChange={handleFileSelect}
               />
               {uploadedFileName && (
                 <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
-                  Selected: {uploadedFileName}
+                  Selected: {uploadedFileName}{isMarkdownUpload ? ' (converted from Markdown)' : ''}
                 </p>
               )}
               {!uploadedFileName && (
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
-                  Supports HTML files. For PDFs, use an online PDF-to-HTML converter first.
+                  Supports HTML and Markdown (.md, .txt) files. For PDFs, use an online PDF-to-HTML converter first.
                 </p>
               )}
             </div>
@@ -325,7 +329,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         <h3>Quick Tips</h3>
         <ul>
           <li>Articles will be automatically parsed and formatted for easy reading</li>
-          <li>Upload HTML files to convert them to audio</li>
+          <li>Upload HTML or Markdown files to convert them to audio</li>
           <li>Text content can be converted to audio using AI text-to-speech</li>
           <li>For podcasts, use the Feed tab to subscribe to your favorite shows</li>
         </ul>

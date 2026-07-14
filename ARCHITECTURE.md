@@ -364,7 +364,7 @@ The matching CSS (`App.css`) caps every image at the column width (`max-width: 1
   - **Authentication**: Uses axios API client with automatic Bearer token injection (no raw fetch)
   - Uses same card styling as Library tab (content-card class, 80x80 thumbnails, `1h 23m` duration format)
 
-- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, HTML file uploads, and manual podcast episodes. Adds created content directly to store. HTML uploads are stored as `type='text'` items with the HTML as content, getting the same read-along/alignment/TTS treatment as regular articles. The **Text** type has a **Markdown / HTML format toggle** (Markdown is the friendly default, converted to HTML via `markdown.ts` `markdownToHtml()` before saving; HTML mode passes raw HTML through, cleaned server-side).
+- **`components/AddTab.tsx`**: Content addition form. Supports article URLs, plain text, file uploads (HTML or Markdown), and manual podcast episodes. Adds created content directly to store. Uploads are stored as `type='text'` items and get the same read-along/alignment/TTS treatment as regular articles; `.md`/`.markdown`/`.txt` files are converted with `markdownToHtml()` first, `.html`/`.htm` pass through raw (backend sanitizes either way). The **Text** type has a **Markdown / HTML format toggle** (Markdown is the friendly default, converted to HTML via `markdown.ts` `markdownToHtml()` before saving; HTML mode passes raw HTML through, cleaned server-side) plus optional Author and Date fields.
 
 - **`components/SettingsPage.tsx`**: User settings management UI
   - **Section order** (top to bottom): Account, Audio generation, Summaries, Playback, API keys, Models, Custom prompts (advanced), Wallabag sync.
