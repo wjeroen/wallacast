@@ -839,14 +839,22 @@
   border-radius: 0;
 }
 
-/* Labels that no longer fit (long text + checkmark) fade out to the right
-   instead of being clipped hard. Short labels never reach the fade zone. */
+/* Icons never shrink; only the label gives way when the checkmark appears */
+.dropdown-menu.filter-grid button svg {
+  flex-shrink: 0;
+}
+
 .dropdown-menu.filter-grid .facet-label {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, #000 80%, transparent 98%);
-  mask-image: linear-gradient(to right, #000 80%, transparent 98%);
+}
+
+/* Only SELECTED cells fade their label: that's when the checkmark competes
+   for space. Unselected labels fit their full slot and render normally. */
+.dropdown-menu.filter-grid button.selected .facet-label {
+  -webkit-mask-image: linear-gradient(to right, #000 75%, transparent 98%);
+  mask-image: linear-gradient(to right, #000 75%, transparent 98%);
 }
 
 .dropdown-menu.filter-grid button:nth-child(even) {
