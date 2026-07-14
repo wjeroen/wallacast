@@ -794,6 +794,42 @@
   white-space: nowrap;
 }
 
+/* Selected-facet icons on the filter button sit tight next to each other */
+.facet-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Library facet filter menu: a 2-column grid, one facet dimension per row.
+   The column split is a straight vertical line (no rounding), rows keep the
+   standard menu dividers, and the checkmark right-aligns in its cell. */
+.dropdown-menu.filter-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 250px;
+}
+
+.dropdown-menu.filter-grid button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border-radius: 0;
+}
+
+.dropdown-menu.filter-grid button:nth-child(even) {
+  border-left: 1px solid var(--bg-raised);
+}
+
+.dropdown-menu.filter-grid button:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.dropdown-menu.filter-grid .facet-check {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 /* Expandable library search bar (shown above the filter row when open) */
 .library-search {
   position: relative;
@@ -1256,6 +1292,9 @@
 }
 
 .metadata .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.75rem;
   padding: 0.25rem 0.5rem;
   background: #065f46;
@@ -3138,10 +3177,10 @@
   background: var(--bg-app);
 }
 
-/* Narrow screens: tab labels collapse to icon-only (same pattern as
-   .filter-label), including the autoscroll toggle's text */
+/* Narrow screens: tab labels always stay visible, only the autoscroll
+   toggle's text collapses to its icon. Tab padding tightens a little. */
 @media (max-width: 740px) {
-  .fullscreen-tabs .tab-label {
+  .autoscroll-toggle .tab-label {
     display: none;
   }
 

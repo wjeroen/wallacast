@@ -32,14 +32,19 @@ import {
   Eye,
   AlignLeft,
   Info,
-  BookOpen,
-  Sparkles,
+  Captions,
+  MessageSquareQuote,
+  MessageSquareOff,
+  Volume2,
+  VolumeOff,
+  Copy,
+  FolderDown,
   History,
   ListMusic,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { htmlToMarkdown, markdownToHtml } from '../markdown';
+import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
@@ -104,16 +109,16 @@ interface FullscreenPlayerProps {
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
 
-// Tab bar labels and icons. On narrow screens most labels collapse to icon-only
-// (the .tab-label spans hide, same pattern as .filter-label), except the tabs in
-// KEEP_LABEL_TABS which keep their text at every width.
-const KEEP_LABEL_TABS = new Set<TabType>(['read-along', 'content']);
-
+// Tab bar labels and icons. Tab labels stay visible at every width, only the
+// autoscroll toggle's text collapses on narrow screens (its .tab-label span).
+// The 'read-along' tab id is historical: the user-facing name is "Transcript"
+// for every content type (articles read along their aligned TTS transcript,
+// podcasts their Whisper transcript, same data family, one name).
 const TAB_LABELS: Record<TabType, string> = {
   'content': 'Content',
   'description': 'Description',
   'comments': 'Comments',
-  'read-along': 'Read-along',
+  'read-along': 'Transcript',
   'summary': 'Summary',
   'history': 'History',
   'queue': 'Queue',
@@ -123,8 +128,8 @@ const TAB_ICONS: Record<TabType, LucideIcon> = {
   'content': AlignLeft,
   'description': Info,
   'comments': MessageCircle,
-  'read-along': BookOpen,
-  'summary': Sparkles,
+  'read-along': Captions,
+  'summary': MessageSquareQuote,
   'history': History,
   'queue': ListMusic,
 };
@@ -855,46 +860,11 @@ export function FullscreenPlayer({
   }, []);
 
   // Copy the readable content (title, link, author, date, body, comments) to
-  // the clipboard as Markdown. What Ctrl+A/Ctrl+C *should* give you without
-  // the player chrome.
+  // the clipboard as Markdown, via the shared contentToMarkdown export.
   const handleCopyContent = async () => {
     setShowDropdown(false);
-
-    const lines: string[] = [`# ${content.title}`];
-    const meta: string[] = [];
-    if (content.author) meta.push(`By ${content.author}`);
-    if (content.type === 'podcast_episode' && content.podcast_show_name) meta.push(content.podcast_show_name);
-    if (content.published_at) meta.push(new Date(content.published_at).toLocaleDateString('en-GB'));
-    if (content.karma !== undefined && content.karma !== null) meta.push(`${content.karma} upvotes`);
-    if (meta.length > 0) lines.push(meta.join(' • '));
-    if (content.url) lines.push(displayUrl(content.url));
-
-    const body = content.html_content
-      ? htmlToMarkdown(content.html_content)
-      : content.type === 'podcast_episode' && content.transcript
-        ? content.transcript
-        : (content.content || '');
-    if (body.trim()) lines.push('', body.trim());
-
-    if (parsedComments.length > 0) {
-      const renderComment = (c: Comment, depth: number): string => {
-        const head: string[] = [c.username];
-        if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
-        if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
-        const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
-        // Replies become nested Markdown quotes
-        const prefixed = depth > 0
-          ? block.split('\n').map(l => `${'>'.repeat(depth)} ${l}`.trimEnd()).join('\n')
-          : block;
-        const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
-        return [prefixed, ...replies].join('\n\n');
-      };
-      lines.push('', `## Comments (${content.comment_count || parsedComments.length})`, '');
-      lines.push(parsedComments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
-    }
-
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
+      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -1479,9 +1449,19 @@ export function FullscreenPlayer({
         const nonManualLabel = libraryContext ? (() => {
           const f = libraryContext.filter;
           const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
-          const statusLabel = f.statusFilter === 'favorites' ? 'Favorite ' : f.statusFilter === 'archived' ? 'Archived ' : '';
+          // Short human tags for the captured facet filter (audio is implied for
+          // anything playable, so it is skipped to keep the label compact).
+          const facetLabels: string[] = [];
+          if (f.facets.star === 'starred') facetLabels.push('Starred');
+          if (f.facets.star === 'unstarred') facetLabels.push('Unstarred');
+          if (f.facets.archive === 'archived') facetLabels.push('Archived');
+          if (f.facets.summary === 'summary') facetLabels.push('Summarized');
+          if (f.facets.summary === 'no_summary') facetLabels.push('Unsummarized');
+          if (f.facets.transcript === 'transcript') facetLabels.push('Transcribed');
+          if (f.facets.transcript === 'no_transcript') facetLabels.push('Untranscribed');
+          const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
           const searchLabel = f.searchQuery.trim() ? ` · “${f.searchQuery.trim()}”` : '';
-          return `Up next from ${statusLabel}${typeLabel}${searchLabel}`;
+          return `Up next from ${facetLabel}${typeLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
@@ -1687,16 +1667,19 @@ export function FullscreenPlayer({
                   <>
                     {!content.audio_url && onGenerateAudio && (
                       <button onClick={() => { setShowDropdown(false); onGenerateAudio(false); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate audio
                       </button>
                     )}
                     {content.audio_url && onGenerateAudio && (
                       <button onClick={() => { setShowDropdown(false); onGenerateAudio(true); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Regenerate audio
                       </button>
                     )}
                     {content.audio_url && onRemoveAudio && (
                       <button onClick={() => { setShowDropdown(false); onRemoveAudio(); }}>
+                        <VolumeOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Remove audio
                       </button>
                     )}
@@ -1708,20 +1691,26 @@ export function FullscreenPlayer({
                 {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
                   <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
-                      <button disabled>Generating summary…</button>
+                      <button disabled>
+                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        Generating summary…
+                      </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && !content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(false); }}>
+                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate summary
                       </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(true); }}>
+                        <MessageSquareQuote size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Regenerate summary
                       </button>
                     )}
                     {onRemoveSummary && content.summary_status !== 'generating' && content.summary && (
                       <button onClick={() => { setShowDropdown(false); onRemoveSummary(); }}>
+                        <MessageSquareOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Remove summary
                       </button>
                     )}
@@ -1729,23 +1718,28 @@ export function FullscreenPlayer({
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Regenerate transcript
                   </button>
                 )}
                 {content.type === 'podcast_episode' && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     {content.transcript ? 'Regenerate' : 'Generate'} transcript
                   </button>
                 )}
                 {content.type === 'article' && content.url && (
                   <button onClick={() => { setShowDropdown(false); if (onRefetch) onRefetch(); }}>
+                    <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web
                   </button>
                 )}
                 <button onClick={handleCopyContent}>
+                  <Copy size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Copy content
                 </button>
                 <button onClick={handleDownloadDataZip}>
+                  <FolderDown size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
                 </button>
               </div>
@@ -1778,7 +1772,7 @@ export function FullscreenPlayer({
                 title={TAB_LABELS[tab]}
               >
                 <Icon size={16} />
-                <span className={KEEP_LABEL_TABS.has(tab) ? undefined : 'tab-label'}>{TAB_LABELS[tab]}</span>
+                <span>{TAB_LABELS[tab]}</span>
                 {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
               </button>
             );

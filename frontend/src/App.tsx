@@ -246,8 +246,8 @@ function App() {
   // auto-queue can be derived from it. By default the first click loads the
   // track without playing it; the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
-    const { typeFilter, statusFilter, searchQuery } = useContentStore.getState();
-    useQueueStore.getState().setLibraryContext({ typeFilter, statusFilter, searchQuery }, content.id);
+    const { typeFilter, facets, searchQuery } = useContentStore.getState();
+    useQueueStore.getState().setLibraryContext({ typeFilter, facets, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
     if (autoplayOnOpen && content.audio_url) setAutoPlayToken(t => t + 1);

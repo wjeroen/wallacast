@@ -21,6 +21,8 @@
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { marked } from 'marked';
+import type { ContentItem, Comment } from './types';
+import { displayUrl } from './format';
 
 // Prefix every line of a block with the Markdown blockquote marker `> ` (used for callouts).
 function quoteLines(text: string): string {
@@ -288,4 +290,45 @@ export function markdownToHtml(markdown: string): string {
   doc.querySelectorAll('script, style').forEach((el) => el.remove());
 
   return doc.body.innerHTML.trim();
+}
+
+// Readable Markdown export of an item (title, meta line, link, body, comments).
+// What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
+// "Copy content" action in both the fullscreen player and the library dropdown.
+// Needs the FULL item (html_content/transcript), the list payload is not enough.
+export function contentToMarkdown(item: ContentItem, comments: Comment[]): string {
+  const lines: string[] = [`# ${item.title}`];
+  const meta: string[] = [];
+  if (item.author) meta.push(`By ${item.author}`);
+  if (item.type === 'podcast_episode' && item.podcast_show_name) meta.push(item.podcast_show_name);
+  if (item.published_at) meta.push(new Date(item.published_at).toLocaleDateString('en-GB'));
+  if (item.karma !== undefined && item.karma !== null) meta.push(`${item.karma} upvotes`);
+  if (meta.length > 0) lines.push(meta.join(' • '));
+  if (item.url) lines.push(displayUrl(item.url));
+
+  const body = item.html_content
+    ? htmlToMarkdown(item.html_content)
+    : item.type === 'podcast_episode' && item.transcript
+      ? item.transcript
+      : (item.content || '');
+  if (body.trim()) lines.push('', body.trim());
+
+  if (comments.length > 0) {
+    const renderComment = (c: Comment, depth: number): string => {
+      const head: string[] = [c.username];
+      if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
+      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
+      const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
+      // Replies become nested Markdown quotes
+      const prefixed = depth > 0
+        ? block.split('\n').map(l => `${'>'.repeat(depth)} ${l}`.trimEnd()).join('\n')
+        : block;
+      const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
+      return [prefixed, ...replies].join('\n\n');
+    };
+    lines.push('', `## Comments (${item.comment_count || comments.length})`, '');
+    lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
+  }
+
+  return lines.join('\n');
 }

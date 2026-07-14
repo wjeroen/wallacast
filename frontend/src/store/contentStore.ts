@@ -2,14 +2,34 @@ import { create } from 'zustand';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
-// Library filter model: two independent dimensions (type × status) plus a
+// Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
 export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts';
-export type StatusFilter = 'active' | 'favorites' | 'archived';
+
+// One facet per row of the library filter grid. Each row is either one of its
+// two mutually exclusive options or null (no preference). Rows combine with AND.
+export interface FacetFilter {
+  archive: 'active' | 'archived' | null;
+  star: 'starred' | 'unstarred' | null;
+  audio: 'audio' | 'no_audio' | null;
+  summary: 'summary' | 'no_summary' | null;
+  transcript: 'transcript' | 'no_transcript' | null;
+}
+
+export type FacetDim = keyof FacetFilter;
+export type FacetValue = NonNullable<FacetFilter[FacetDim]>;
+
+export const DEFAULT_FACETS: FacetFilter = {
+  archive: 'active',
+  star: null,
+  audio: null,
+  summary: null,
+  transcript: null,
+};
 
 export interface LibraryFilter {
   typeFilter: TypeFilter;
-  statusFilter: StatusFilter;
+  facets: FacetFilter;
   searchQuery: string; // already-debounced value; '' = no search
 }
 
@@ -29,10 +49,20 @@ function metadataFields(item: ContentItem): (string | undefined | null)[] {
 export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean {
   if (f.typeFilter !== 'all' && item.type !== TYPE_MAP[f.typeFilter]) return false;
 
-  // Status: Active = not archived; Favorites = starred (incl. archived); Archived = archived
-  if (f.statusFilter === 'active' && item.is_archived) return false;
-  if (f.statusFilter === 'favorites' && !item.is_starred) return false;
-  if (f.statusFilter === 'archived' && !item.is_archived) return false;
+  // Facets: every non-null row must match. Summary/transcript presence mirrors
+  // the library card badges (summary_generated_at / transcript_words, since the
+  // list endpoint never sends the large transcript column).
+  const { archive, star, audio, summary, transcript } = f.facets;
+  if (archive === 'active' && item.is_archived) return false;
+  if (archive === 'archived' && !item.is_archived) return false;
+  if (star === 'starred' && !item.is_starred) return false;
+  if (star === 'unstarred' && item.is_starred) return false;
+  if (audio === 'audio' && !item.audio_url) return false;
+  if (audio === 'no_audio' && item.audio_url) return false;
+  if (summary === 'summary' && !item.summary_generated_at) return false;
+  if (summary === 'no_summary' && item.summary_generated_at) return false;
+  if (transcript === 'transcript' && !item.transcript_words) return false;
+  if (transcript === 'no_transcript' && item.transcript_words) return false;
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;
@@ -59,7 +89,7 @@ interface ContentStore {
   items: ContentItem[];       // filtered view (what the UI renders)
   allItems: ContentItem[];    // master list (all items, fetched once)
   typeFilter: TypeFilter;
-  statusFilter: StatusFilter;
+  facets: FacetFilter;
   searchQuery: string;
   loading: boolean;
   error: string | null;
@@ -67,7 +97,7 @@ interface ContentStore {
 
   // Actions
   setTypeFilter: (typeFilter: TypeFilter) => void;
-  setStatusFilter: (statusFilter: StatusFilter) => void;
+  setFacet: (dim: FacetDim, value: FacetValue | null) => void;
   setSearchQuery: (searchQuery: string) => void;
   fetchContent: () => Promise<void>;
 
@@ -88,8 +118,8 @@ interface ContentStore {
 
 export const useContentStore = create<ContentStore>((set, get) => {
   const currentFilter = (): LibraryFilter => {
-    const { typeFilter, statusFilter, searchQuery } = get();
-    return { typeFilter, statusFilter, searchQuery };
+    const { typeFilter, facets, searchQuery } = get();
+    return { typeFilter, facets, searchQuery };
   };
 
   // Single source of truth: set allItems and re-derive the filtered view + allCount.
@@ -106,7 +136,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     items: [],
     allItems: [],
     typeFilter: 'all',
-    statusFilter: 'active',
+    facets: DEFAULT_FACETS,
     searchQuery: '',
     loading: false,
     error: null,
@@ -118,8 +148,10 @@ export const useContentStore = create<ContentStore>((set, get) => {
       commit(get().allItems);
     },
 
-    setStatusFilter: (statusFilter) => {
-      set({ statusFilter });
+    // The FACET_ROWS config in LibraryTab guarantees dim/value pairs belong
+    // together, hence the cast on the computed property.
+    setFacet: (dim, value) => {
+      set({ facets: { ...get().facets, [dim]: value } as FacetFilter });
       commit(get().allItems);
     },
 

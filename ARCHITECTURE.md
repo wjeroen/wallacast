@@ -19,7 +19,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
 | Article extraction | `backend/src/services/article-fetcher.ts` |
 | Podcast feeds | `backend/src/services/podcast-service.ts` |
 | Audio player (mini + fullscreen) | `frontend/src/components/AudioPlayer.tsx`, `frontend/src/components/FullscreenPlayer.tsx` |
-| Read-along tab (fullscreen) | `frontend/src/components/FullscreenPlayer.tsx` |
+| Transcript tab (fullscreen read-along view, internal tab id `read-along`) | `frontend/src/components/FullscreenPlayer.tsx` |
 | Markdown editor / Copy content / HTML↔Markdown conversion | `frontend/src/markdown.ts` (turndown + marked), used by `FullscreenPlayer.tsx` |
 | Editing articles/texts (backend) | `backend/src/routes/content.ts` (PATCH `is_edit`) |
 | Version history (edit/refetch/restore snapshots) | `backend/src/routes/content.ts` (`/:id/versions*`), `content_versions` table, History tab in `FullscreenPlayer.tsx` |
@@ -312,7 +312,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
 #### State Management
 - **`store/contentStore.ts`**: Zustand store for centralized content state management
   - Fetches all items once on mount, stores in `allItems` master list; `items` is the filtered view
-  - **Filter model**: `LibraryFilter` = `{ typeFilter: 'all'|'articles'|'texts'|'podcasts', statusFilter: 'active'|'favorites'|'archived', searchQuery }`. The exported `itemMatchesFilter(item, filter)` is the single matcher, also used by `queueStore` for the "Up next" stream; `getSearchSnippet()` returns the "matched in text" excerpt for cards
+  - **Filter model**: `LibraryFilter` = `{ typeFilter: 'all'|'articles'|'texts'|'podcasts', facets, searchQuery }`. `facets` is a `FacetFilter` with five combinable rows (archive: active/archived, star: starred/unstarred, audio: audio/no_audio, summary: summary/no_summary, transcript: transcript/no_transcript). Each row is one-of-two or null (no preference) and rows AND together. Default: archive 'active', rest null; all-null shows literally everything. Summary/transcript presence mirrors the card badges (`summary_generated_at` / `transcript_words`). The exported `itemMatchesFilter(item, filter)` is the single matcher, also used by `queueStore` for the "Up next" stream; `getSearchSnippet()` returns the "matched in text" excerpt for cards. The LibraryTab filter button shows the selected facet icons (funnel when none selected) and opens a 2x5 grid menu that stays open so rows can be combined
   - **Client-side filtering**: switching filters or typing in search is instant, no API call, just an array `.filter()` on the master list (an internal `commit()` helper re-derives `items` + `allCount` after every mutation)
   - Provides optimistic updates for instant UI feedback (star, archive, delete), all mutations update both `allItems` and `items`
   - Handles Wallabag bidirectional sync state

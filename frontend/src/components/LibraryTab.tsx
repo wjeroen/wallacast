@@ -1,14 +1,57 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
+import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, Filter, Volume2, VolumeOff, MessageSquareQuote, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore, itemMatchesFilter } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
-import type { ContentItem } from '../types';
+import { contentToMarkdown } from '../markdown';
+import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
+
+// The 2x5 filter grid: one facet row per dimension, two mutually exclusive
+// options per row. Selecting an option deselects its sibling; clicking the
+// selected option again clears the row (1-or-none per row). The same icons
+// mark the filter button, the library card badges, and the dropdown actions.
+const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; icon: ReactElement }[] }[] = [
+  {
+    dim: 'archive',
+    options: [
+      { value: 'active', label: 'Active', icon: <Inbox size={16} /> },
+      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#3b82f6' }} /> },
+    ],
+  },
+  {
+    dim: 'star',
+    options: [
+      { value: 'starred', label: 'Starred', icon: <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} /> },
+      { value: 'unstarred', label: 'No star', icon: <Star size={16} style={{ color: 'var(--t4)' }} /> },
+    ],
+  },
+  {
+    dim: 'audio',
+    options: [
+      { value: 'audio', label: 'Audio', icon: <Volume2 size={16} /> },
+      { value: 'no_audio', label: 'No audio', icon: <VolumeOff size={16} /> },
+    ],
+  },
+  {
+    dim: 'summary',
+    options: [
+      { value: 'summary', label: 'Summary', icon: <MessageSquareQuote size={16} /> },
+      { value: 'no_summary', label: 'None', icon: <MessageSquareOff size={16} /> },
+    ],
+  },
+  {
+    dim: 'transcript',
+    options: [
+      { value: 'transcript', label: 'Transcript', icon: <Captions size={16} /> },
+      { value: 'no_transcript', label: 'None', icon: <CaptionsOff size={16} /> },
+    ],
+  },
+];
 
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Use Zustand store for content state
@@ -16,11 +59,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     items: content,
     allItems,
     typeFilter,
-    statusFilter,
+    facets,
     searchQuery,
     loading,
     setTypeFilter,
-    setStatusFilter,
+    setFacet,
     setSearchQuery,
     fetchContent,
     toggleStarred,
@@ -132,9 +175,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setTypeFilter(t);
     setSelectedItems(new Set());
   };
-  const changeStatusFilter = (s: Parameters<typeof setStatusFilter>[0]) => {
-    setStatusFilter(s);
-    setStatusMenuOpen(false);
+  // Facet rows toggle 1-or-none: clicking the selected option clears the row.
+  // The menu deliberately stays OPEN so rows can be combined; it only closes
+  // on an outside tap (the click-outside effect above).
+  const toggleFacet = (dim: FacetDim, value: FacetValue) => {
+    setFacet(dim, facets[dim] === value ? null : value);
     setSelectedItems(new Set());
   };
 
@@ -149,14 +194,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const typeCounts = useMemo(() => {
     const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
     for (const i of allItems) {
-      if (!itemMatchesFilter(i, { typeFilter: 'all', statusFilter, searchQuery: '' })) continue;
+      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, searchQuery: '' })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
     }
     return counts;
-  }, [allItems, statusFilter]);
+  }, [allItems, facets]);
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -507,6 +552,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
+  // "Copy content" from a card. The list payload lacks html_content/comments,
+  // so fetch the full item first, then reuse the shared Markdown export (the
+  // exact same output as the player's Copy content).
+  const handleCopyContent = async (item: ContentItem) => {
+    setOpenDropdown(null);
+    try {
+      const full = (await contentAPI.getById(item.id)).data;
+      let comments: Comment[] = [];
+      try {
+        comments = typeof full.comments === 'string' ? JSON.parse(full.comments) : (full.comments || []);
+      } catch {
+        comments = [];
+      }
+      await navigator.clipboard.writeText(contentToMarkdown(full, comments));
+    } catch (error) {
+      console.error('Failed to copy content:', error);
+      alert('Failed to copy to clipboard');
+    }
+  };
+
   const handleDownloadDataZip = async (item: ContentItem) => {
     setOpenDropdown(null);
     try {
@@ -576,42 +641,40 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <Search size={16} />
             </button>
             <div className="dropdown-container" ref={statusMenuRef}>
-              {/* Status selector: shows the current status's icon + label with a
-                  chevron, always highlighted (it always has a value) */}
+              {/* Facet filter: the button shows the icon of every selected facet
+                  (or a funnel when nothing is selected = show everything) */}
               <button
                 className="status-funnel-btn active"
                 onClick={() => setStatusMenuOpen(!statusMenuOpen)}
-                title="Filter by status"
+                title="Filter library"
               >
-                {statusFilter === 'active' && <Inbox size={16} />}
-                {statusFilter === 'favorites' && <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} />}
-                {statusFilter === 'archived' && <Archive size={16} style={{ color: '#3b82f6' }} />}
-                <span className="filter-label">{statusFilter === 'active' ? 'Active' : statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
+                {(() => {
+                  const icons = FACET_ROWS.flatMap(row => {
+                    const opt = row.options.find(o => o.value === facets[row.dim]);
+                    return opt ? [<span key={row.dim} className="facet-btn-icon">{opt.icon}</span>] : [];
+                  });
+                  return icons.length > 0 ? icons : <Filter size={16} />;
+                })()}
                 <ChevronDown size={14} />
               </button>
               {statusMenuOpen && (
-                <div className="dropdown-menu menu-left">
-                  <button
-                    onClick={() => changeStatusFilter('active')}
-                    style={statusFilter === 'active' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Inbox size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    Active
-                  </button>
-                  <button
-                    onClick={() => changeStatusFilter('favorites')}
-                    style={statusFilter === 'favorites' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Star size={14} fill="currentColor" style={{ marginRight: 6, verticalAlign: '-2px', color: '#fbbf24' }} />
-                    Favorites
-                  </button>
-                  <button
-                    onClick={() => changeStatusFilter('archived')}
-                    style={statusFilter === 'archived' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px', color: '#3b82f6' }} />
-                    Archived
-                  </button>
+                <div className="dropdown-menu menu-left filter-grid">
+                  {FACET_ROWS.map(row =>
+                    row.options.map(opt => {
+                      const isSelected = facets[row.dim] === opt.value;
+                      return (
+                        <button
+                          key={`${row.dim}-${opt.value}`}
+                          onClick={() => toggleFacet(row.dim, opt.value)}
+                          style={isSelected ? { color: '#60a5fa' } : undefined}
+                        >
+                          {opt.icon}
+                          <span>{opt.label}</span>
+                          {isSelected && <Check size={14} className="facet-check" />}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               )}
             </div>
@@ -740,6 +803,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onRegenerateTranscript={handleRegenerateTranscript}
               onRefetch={handleRefetchContent}
               onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}
+              onCopyContent={handleCopyContent}
               onDownloadZip={handleDownloadDataZip}
             />
           ))}
