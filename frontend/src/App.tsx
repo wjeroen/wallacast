@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, FileText, Sun, Moon, SunMoon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareQuote, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
@@ -764,17 +764,17 @@ function App() {
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
                 <Volume2 size={18} />
-                <span>Generate All Audio</span>
+                <span>Generate all audio</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
-                <FileText size={18} />
-                <span>Generate Summaries</span>
+                <MessageSquareQuote size={18} />
+                <span>Generate summaries</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>
                 <LogOut size={18} />
-                <span>Switch Account</span>
+                <span>Switch account</span>
               </button>
             </div>
           )}
