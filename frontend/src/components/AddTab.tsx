@@ -16,6 +16,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  const [author, setAuthor] = useState('');
+  const [publishedDate, setPublishedDate] = useState('');
   const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -74,6 +76,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
         data.content = textFormat === 'markdown' ? markdownToHtml(text) : text;
+        if (author) data.author = author;
+        if (publishedDate) data.published_at = publishedDate;
       } else if (contentType === 'upload') {
         if (!uploadedContent || !title) {
           setMessage('Please select a file and enter a title');
@@ -102,6 +106,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setUrl('');
       setTitle('');
       setText('');
+      setAuthor('');
+      setPublishedDate('');
       setUploadedContent('');
       setUploadedFileName('');
     } catch (error: any) {
@@ -186,6 +192,24 @@ export function AddTab({ onContentAdded }: AddTabProps) {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Enter a title for your text"
                 required
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="author">Author (optional)</label>
+              <input
+                id="author"
+                type="text"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="published-date">Date (optional)</label>
+              <input
+                id="published-date"
+                type="date"
+                value={publishedDate}
+                onChange={(e) => setPublishedDate(e.target.value)}
               />
             </div>
             <div className="form-group">
