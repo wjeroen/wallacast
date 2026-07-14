@@ -261,7 +261,7 @@ router.post('/bulk', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 

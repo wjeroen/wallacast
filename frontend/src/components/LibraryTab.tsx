@@ -665,6 +665,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                       return (
                         <button
                           key={`${row.dim}-${opt.value}`}
+                          className={isSelected ? 'selected' : undefined}
                           onClick={() => toggleFacet(row.dim, opt.value)}
                           style={isSelected ? { color: '#60a5fa' } : undefined}
                         >

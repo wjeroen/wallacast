@@ -566,12 +566,6 @@ export function FullscreenPlayer({
 
   // Show content version toggle when alignment data exists (articles and texts)
   const hasAlignment = !!parsedAlignment && isLLMAlignment;
-  const isContentNewer = useMemo(() => {
-    if (!content.audio_generated_at) return false;
-    const contentDate = content.content_fetched_at || content.updated_at;
-    if (!contentDate) return false;
-    return new Date(contentDate) > new Date(content.audio_generated_at);
-  }, [content.audio_generated_at, content.content_fetched_at, content.updated_at]);
 
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
@@ -618,7 +612,9 @@ export function FullscreenPlayer({
       if (hasReadAlongData) tabs.push('read-along');
       tabs.push('content');
       // History only for editable items that actually have at least one prior snapshot.
-      if (versions.length > 0) tabs.push('history');
+      // versions_count (from GET /:id) makes the tab appear instantly on open, the
+      // separately-fetched versions list keeps it visible after edits create snapshots.
+      if (versions.length > 0 || (content.versions_count ?? 0) > 0) tabs.push('history');
     } else {
       tabs.push('read-along');
     }
@@ -626,7 +622,7 @@ export function FullscreenPlayer({
     if ((content.summary || '').trim()) tabs.push('summary');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length]);
+  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -890,6 +886,42 @@ export function FullscreenPlayer({
     }
   };
 
+  // Two short provenance lines, identical wording in the Content and Transcript
+  // tabs: "Fetched by wallacast/wallabag on [date]" (texts: "Last edited on
+  // [date]") and "Audio generated on [date]".
+  const renderProvenance = () => (
+    <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', lineHeight: '1.6' }}>
+      <div>
+        {content.type === 'article'
+          ? `Fetched by ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
+          : `Last edited on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`}
+      </div>
+      {content.audio_generated_at && content.audio_url && (
+        <div>Audio generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</div>
+      )}
+    </div>
+  );
+
+  // Title/author/date/karma block, mirroring exactly what the TTS intro speaks
+  // (comments are announced later in the narration, so no comment count here).
+  // Sits BELOW the provenance lines + action buttons so it never gets squished.
+  const renderTitleBlock = () => (
+    <div className="content-header content-title-block">
+      <h2>{content.title}</h2>
+      {content.author && (
+        <p className="content-author">
+          By {content.author}
+          {content.published_at && (
+            <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
+          )}
+          {content.karma !== undefined && content.karma !== null && (
+            <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+          )}
+        </p>
+      )}
+    </div>
+  );
+
   // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
   // Renders content EXACTLY like content tab + comments tab, with timestamps
@@ -901,8 +933,10 @@ export function FullscreenPlayer({
     const isLW = content.url ? content.url.includes('lesswrong.com') : false;
     const isSub = content.url ? content.url.includes('substack.com') : false;
 
-    // Split elements into categories. Title and author/date meta are intentionally not
-    // rendered here, the fullscreen player top header already shows them.
+    // Split elements into categories. Title and author/date meta render as timed
+    // elements in the header below (the TTS speaks them, so they highlight too).
+    const titleEl = elements.find(e => e.type === 'title');
+    const metaElements = elements.filter(e => e.type === 'meta');
     const bodyElements = elements.filter(e =>
       ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
     );
@@ -911,30 +945,32 @@ export function FullscreenPlayer({
 
     return (
       <div className="tab-content-display">
-        {/* Provenance only: title/author/date/karma/comments are in the fullscreen player top header. */}
         <div className="content-header" style={{ marginBottom: '1rem' }}>
-          {/* Content provenance: two lines for content version and audio/read-along version */}
-          {(content.type === 'article' || content.type === 'text') && (
-            <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
-              {/* Line 1: Content version */}
-              <div>
-                {content.type === 'article'
-                  ? `Content ${isContentNewer ? 'updated in' : 'fetched by'} ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
-                  : `Content updated in wallacast on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`
-                }
-              </div>
-              {/* Line 2: Audio & read-along version (only when alignment exists) */}
-              {hasAlignment && content.audio_generated_at && (
-                <div>
-                  Audio &amp; read-along generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}
-                </div>
-              )}
-              {/* Fallback: just show audio date when no alignment (e.g. still generating) */}
-              {!hasAlignment && content.audio_generated_at && content.audio_url && (
-                <div>Audio generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</div>
-              )}
+          {/* Provenance first, then the timed title/meta below it (same order as the content tab) */}
+          {(content.type === 'article' || content.type === 'text') && renderProvenance()}
+
+          {/* Title - timestamped, highlights while the TTS speaks it */}
+          {titleEl && (
+            <div
+              id={`ra-el-${elements.indexOf(titleEl)}`}
+              className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
+              onClick={() => onSeek(titleEl.startTime)}
+            >
+              <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
             </div>
           )}
+
+          {/* Author/date/karma meta - timestamped */}
+          {metaElements.map((el, i) => (
+            <div
+              key={`meta-${i}`}
+              id={`ra-el-${elements.indexOf(el)}`}
+              className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+              onClick={() => onSeek(el.startTime)}
+            >
+              <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+            </div>
+          ))}
         </div>
 
         {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
@@ -1071,23 +1107,7 @@ export function FullscreenPlayer({
           <div className="tab-content-display">
             <div className="content-header-with-button">
               <div className="content-header">
-                {/* Title/author/date/karma/comments already shown in the fullscreen player top header. */}
-                {content.type === 'article' && content.content_source && (
-                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
-                    {content.audio_generated_at && content.audio_url && (
-                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                    )}
-                  </p>
-                )}
-                {content.type === 'text' && (content.content_fetched_at || content.updated_at) && (
-                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Last edited on {new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB')}
-                    {content.audio_generated_at && content.audio_url && (
-                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                    )}
-                  </p>
-                )}
+                {renderProvenance()}
               </div>
               {!editing && (content.type === 'article' || content.type === 'text') && (
                 <div className="content-header-actions">
@@ -1106,6 +1126,9 @@ export function FullscreenPlayer({
                 </div>
               )}
             </div>
+            {/* Title/author/date/karma below the provenance + buttons row, so the
+                buttons never squish it */}
+            {renderTitleBlock()}
             {editing ? (
               <div className="markdown-editor">
                 <div className="markdown-editor-toolbar">
@@ -1301,23 +1324,7 @@ export function FullscreenPlayer({
             <div className="tab-content-display">
               <div className="content-header-with-button">
                 <div className="content-header">
-                  {/* Title/author/date/karma/comments already shown in the fullscreen player top header. */}
-                  {content.type === 'article' && content.content_source && (
-                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                      Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
-                      {content.audio_generated_at && content.audio_url && (
-                        <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                      )}
-                    </p>
-                  )}
-                  {content.type === 'text' && (content.content_fetched_at || content.updated_at) && (
-                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                      Last edited on {new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB')}
-                      {content.audio_generated_at && content.audio_url && (
-                        <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                      )}
-                    </p>
-                  )}
+                  {renderProvenance()}
                 </div>
                 {content.type === 'article' && content.url && onRefetch && (
                   <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
@@ -1327,6 +1334,7 @@ export function FullscreenPlayer({
                   </button>
                 )}
               </div>
+              {renderTitleBlock()}
               <div
                 className="article-content"
                 dangerouslySetInnerHTML={{ __html: safeArticleBodyHtml }}

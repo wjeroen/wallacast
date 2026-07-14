@@ -8,6 +8,10 @@
   --bg-surface: #1e293b;
   --bg-raised:  #334155;
   --bg-hover:   #475569;
+  /* Soft transient hover for anything that also has a "selected" state, so a
+     hovered item can never be mistaken for a selected one (selected states keep
+     the stronger --bg-raised / accent styling). Mixes theme vars, so it adapts. */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
 
   /* Text: lightest → darkest in dark mode */
   --t0: #f1f5f9;  /* bright headings */
@@ -23,6 +27,7 @@
   --bg-surface: #ffffff;  /* cards/headers/panels */
   --bg-raised:  #e2e8f0;  /* visible as border + subtle hover on white */
   --bg-hover:   #cbd5e1;  /* deeper hover, active borders */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
 
   /* Text: darkest → lighter in light mode */
   --t0: #0f172a;
@@ -201,7 +206,12 @@
   font-size: 0.75rem;
 }
 
-.bottom-nav button:hover,
+/* Hover is a soft transient highlight; only the ACTIVE tab gets the strong
+   background + accent text, so hovering never fakes a selected state. */
+.bottom-nav button:hover {
+  background: var(--bg-hover-soft);
+}
+
 .bottom-nav button.active {
   color: #60a5fa;
   background: var(--bg-raised);
@@ -597,7 +607,10 @@
   transition: all 0.2s;
 }
 
-.content-type-selector button:hover,
+.content-type-selector button:hover {
+  background: var(--bg-hover-soft);
+}
+
 .content-type-selector button.active {
   border-color: #3b82f6;
   color: #60a5fa;
@@ -781,7 +794,10 @@
   font-size: 0.875rem;
 }
 
-.filter-buttons button:hover,
+.filter-buttons button:hover {
+  background: var(--bg-hover-soft);
+}
+
 .filter-buttons button.active {
   background: var(--bg-raised);
   border-color: #3b82f6;
@@ -828,6 +844,20 @@
 .dropdown-menu.filter-grid .facet-check {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+/* Selected facet cells get a persistent strong background (the old dropdown
+   hover color), while hover everywhere stays the soft transient tint, so the
+   two can never be confused. Theme vars keep it correct in light mode. */
+.dropdown-menu.filter-grid button.selected,
+.dropdown-menu.filter-grid button.selected:hover {
+  background: var(--bg-raised);
+}
+
+/* In the filter grid, blue TEXT means "selected", so unselected cells keep
+   their normal text color on hover (unlike regular action menus) */
+.dropdown-menu.filter-grid button:hover:not(.selected):not(:disabled) {
+  color: var(--t1);
 }
 
 /* Expandable library search bar (shown above the filter row when open) */
@@ -949,7 +979,7 @@
   /* A midpoint between the card's normal color and the box color (--bg-raised), so the
      description/summary boxes stay visibly distinct on hover. Works in both themes since it
      mixes the theme variables. */
-  background: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
 }
 
@@ -1168,7 +1198,7 @@
 }
 
 .dropdown-menu button:hover:not(:disabled) {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-raised); /* keep the divider neutral, no colored hover edges */
   color: #60a5fa;
 }
@@ -2427,6 +2457,7 @@
   padding: 0.875rem 1rem;
   background: none;
   border: none;
+  border-radius: 0; /* square hover highlight (the global button radius rounded it) */
   color: var(--t1);
   font-size: 0.875rem;
   cursor: pointer;
@@ -2435,7 +2466,7 @@
 }
 
 .user-dropdown-item:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
 }
 
 /* Settings Page */
@@ -3169,7 +3200,7 @@
 
 .tab-button:hover {
   color: var(--t1);
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
 }
 
 .tab-button.active {
@@ -3223,6 +3254,22 @@
 
 .content-provenance {
   font-size: calc(0.75rem * var(--reader-font-scale, 1));
+}
+
+/* Title/author/date/karma block below the provenance + buttons row in the
+   Content and Transcript tabs (mirrors what the TTS intro speaks) */
+.content-title-block {
+  margin-bottom: 1rem;
+}
+
+.content-title-block h2 {
+  margin: 0.75rem 0 0.25rem 0;
+}
+
+.content-title-block .content-author {
+  color: var(--t3);
+  font-size: 0.875rem;
+  margin: 0;
 }
 
 .content-source {

@@ -62,6 +62,7 @@ export interface ContentItem {
   summary_status?: 'idle' | 'generating' | 'completed' | 'failed';
   summary_generated_at?: string; // When the summary was last generated
   summary_error?: string; // Error message when summary_status === 'failed' (shown on cards)
+  versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 
 // A snapshot of an article/text body saved before an edit/refetch/restore (version history).
