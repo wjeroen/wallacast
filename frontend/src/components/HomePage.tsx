@@ -174,7 +174,7 @@ export function HomePage() {
     <div className="home-page">
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
         <div className="header-right">

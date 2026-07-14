@@ -9,10 +9,10 @@ self.addEventListener('install', (event) => {
       .then((cache) => {
         return cache.addAll([
           '/manifest.json',
-          '/favicon-16x16.png',
-          '/favicon-32x32.png',
-          '/icon-192.png',
-          '/icon-512.png'
+          '/favicon-16x16.png?v=2',
+          '/favicon-32x32.png?v=2',
+          '/icon-192.png?v=2',
+          '/icon-512.png?v=2'
         ]);
       })
       .catch((error) => {

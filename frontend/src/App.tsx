@@ -681,7 +681,7 @@ function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-content">
-          <img src="/logo-0f172a.png" alt="wallacast logo" className="loading-logo" />
+          <img src="/logo-0f172a.png?v=2" alt="wallacast logo" className="loading-logo" />
           <h1>wallacast</h1>
           <div className="loading-spinner"></div>
         </div>
@@ -710,7 +710,7 @@ function App() {
       {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
 
