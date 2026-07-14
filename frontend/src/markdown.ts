@@ -130,7 +130,15 @@ export function htmlToMarkdown(html: string): string {
   // Turn the inline marker tokens left by extractFootnotes into `[^n]`.
   md = md.replace(/XWCFNREFX(\d+)X/g, (_m, n) => `[^${n}]`);
   if (footnotes.length > 0) {
-    md = md.trim() + '\n\n' + footnotes.map((f) => `[^${f.n}]: ${f.body}`).join('\n\n');
+    md = md.trim() + '\n\n' + footnotes
+      .map((f) => {
+        // Every line after the first gets the standard 4-space indent so it stays part
+        // of the footnote (blank separator lines stay blank).
+        const [first, ...rest] = f.body.split('\n');
+        const cont = rest.map((l) => (l.trim() ? '    ' + l : '')).join('\n');
+        return `[^${f.n}]: ${first}` + (rest.length > 0 ? '\n' + cont : '');
+      })
+      .join('\n\n');
   }
   return md.trim();
 }
@@ -184,8 +192,11 @@ function extractFootnotes(doc: Document): ExtractedFootnote[] {
       const sup = back.closest('sup');
       (sup && (sup.textContent || '').trim() === (back.textContent || '').trim() ? sup : back).remove();
     });
-    let body = turndownService.turndown(def.innerHTML).replace(/\s+/g, ' ').trim();
-    body = body.replace(/^[\^↩\s]+/, '').replace(/[↩\s]+$/, '').trim();
+    // Keep the block structure (multi-paragraph footnotes are real); just tame extra blanks.
+    // The old `\s+ -> ' '` collapse flattened every footnote to one line, which destroyed
+    // multi-paragraph footnotes on each edit round-trip.
+    let body = turndownService.turndown(def.innerHTML).trim();
+    body = body.replace(/^[\^↩\s]+/, '').replace(/[↩\s]+$/, '').replace(/\n{3,}/g, '\n\n').trim();
     footnotes.push({ n, body });
     if (def.parentElement) parents.add(def.parentElement);
     def.remove();
@@ -196,7 +207,14 @@ function extractFootnotes(doc: Document): ExtractedFootnote[] {
     if (p.childElementCount === 0) {
       const gp = p.parentElement;
       p.remove();
-      if (gp && gp.childElementCount === 0 && /footnote/i.test(gp.className || '')) gp.remove();
+      // The canonical section is `<section class="footnotes"><hr><ol>…</ol></section>`.
+      // With the <ol> gone, a leftover lone <hr> would round-trip into a stray `---`
+      // at the end of the body (and accumulate one more per edit), so treat a section
+      // whose only remains are <hr>s as empty.
+      if (gp && /footnote/i.test(gp.className || '')) {
+        const meaningful = Array.from(gp.children).filter((c) => c.tagName !== 'HR');
+        if (meaningful.length === 0) gp.remove();
+      }
     }
   });
 
@@ -216,11 +234,59 @@ export function markdownToHtml(markdown: string): string {
   // Footnotes: pull out the `[^k]: body` definitions, then turn inline `[^k]` references into
   // <sup> links. Rendered back as one canonical, clickable footnote section at the end (ids
   // `fn-k` / `fnref-k`: recognized by the player's footnote click handler).
+  //
+  // A definition is NOT just its first line: standard Markdown continues a footnote with
+  // 4-space (or tab) indented blocks, plus lazy unindented lines directly under the marker.
+  // Leaving those behind made marked render them as indented CODE BLOCKS stranded above
+  // the footnotes section, so we walk lines and consume the whole definition.
   const footnoteDefs = new Map<string, string>();
-  md = md.replace(/^[ \t]*\[\^([^\]]+)\]:[ \t]?(.*)$/gm, (_m, key, body) => {
-    footnoteDefs.set(String(key).trim(), String(body || '').trim());
-    return '';
-  });
+  {
+    const lines = md.split('\n');
+    const kept: string[] = [];
+    let i = 0;
+    while (i < lines.length) {
+      const def = lines[i].match(/^[ \t]*\[\^([^\]]+)\]:[ \t]?(.*)$/);
+      if (!def) {
+        kept.push(lines[i]);
+        i++;
+        continue;
+      }
+      const bodyLines: string[] = [(def[2] || '').trim()];
+      i++;
+      // Lazy continuation: unindented non-blank lines right below the marker still belong
+      // to the first paragraph (standard Markdown), until a blank line or a new definition.
+      while (
+        i < lines.length &&
+        lines[i].trim() !== '' &&
+        !/^[ \t]*\[\^[^\]]+\]:/.test(lines[i]) &&
+        !/^(?: {4}|\t)/.test(lines[i])
+      ) {
+        bodyLines.push(lines[i].trim());
+        i++;
+      }
+      // Indented continuation: 4-space/tab blocks belong to this footnote; blank lines
+      // between them are kept as paragraph breaks (but only when more continuation follows).
+      while (i < lines.length) {
+        if (/^(?: {4}|\t)/.test(lines[i])) {
+          bodyLines.push(lines[i].replace(/^(?: {4}|\t)/, ''));
+          i++;
+        } else if (lines[i].trim() === '') {
+          let j = i + 1;
+          while (j < lines.length && lines[j].trim() === '') j++;
+          if (j < lines.length && /^(?: {4}|\t)/.test(lines[j])) {
+            bodyLines.push('');
+            i = j;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      footnoteDefs.set(String(def[1]).trim(), bodyLines.join('\n').trim());
+    }
+    md = kept.join('\n');
+  }
   if (footnoteDefs.size > 0) {
     md = md.replace(/\[\^([^\]]+)\]/g, (whole, key) => {
       const k = String(key).trim();
@@ -233,11 +299,17 @@ export function markdownToHtml(markdown: string): string {
 
   if (footnoteDefs.size > 0) {
     const items = Array.from(footnoteDefs.entries())
-      .map(
-        ([key, body]) =>
-          `<li id="fn-${key}">${marked.parseInline(body, { async: false }) as string} ` +
-          `<a href="#fnref-${key}" class="footnote-backref" aria-label="Back to content">↩</a></li>`
-      )
+      .map(([key, body]) => {
+        const backref = ` <a href="#fnref-${key}" class="footnote-backref" aria-label="Back to content">↩</a>`;
+        // Multi-block bodies (paragraphs, rules, lists) need block parsing; the backref
+        // tucks inside the last paragraph so it doesn't sit alone on its own line.
+        if (/\n\s*\n/.test(body)) {
+          const parsed = (marked.parse(body, { gfm: true, async: false }) as string).trim();
+          const inner = /<\/p>$/.test(parsed) ? parsed.replace(/<\/p>$/, `${backref}</p>`) : parsed + backref;
+          return `<li id="fn-${key}">${inner}</li>`;
+        }
+        return `<li id="fn-${key}">${marked.parseInline(body, { async: false }) as string}${backref}</li>`;
+      })
       .join('');
     rawHtml += `<section class="footnotes"><hr><ol>${items}</ol></section>`;
   }
