@@ -34,7 +34,7 @@
 - [ ] **[P8]** Groq API compatibility (very low priority, DeepInfra already covers cheap TTS + transcription).
 
 ### Bug Fixes
-- [ ] **[P3]** Verify the podcast resume fix on production (reopen a partially-played podcast: it should resume at the saved spot, and merely opening + closing must not change the card's % complete). If a podcast still won't SEEK at all (plays from 0 even via the retries), grab Railway logs of the `[AudioProxy]` lines to check whether the upstream CDN honors Range requests through safeFetch.
+- [ ] **[P3]** Verify the podcast resume fix on production (reopen a partially-played podcast: it should resume at the saved spot, and merely opening + closing must not change the card's % complete). If a podcast still won't SEEK at all (plays from 0 even via the retries), grab Railway logs of the `[AudioProxy]` lines to check whether the upstream CDN honors Range requests through safeFetch. Optional hardening if the proxy proves slow: raise safeFetch's redirect cap for the audio proxy (5 hops vs node-fetch's old 20; podcast tracker chains can be long) and skip the per-request DNS re-validation for hosts validated in the last few minutes (safeFetch re-resolves every hop of every range request, which adds latency to all podcast playback).
 - [ ] **[P2]** Images not displaying in read-along for some articles (descriptions ARE read aloud, so they exist in alignment data). Likely stale alignment from before image extraction was added, try regenerating the transcript to confirm.
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author-list outline before the comment section on LessWrong (sidebar content is being read).
