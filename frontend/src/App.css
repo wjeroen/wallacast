@@ -4575,6 +4575,24 @@
   flex: 0 0 auto;
 }
 .voice-chip input { margin: 0; }
+/* Speaker button inside a voice chip (plays the static preview sample).
+   Inside the chip's <label>, so its click handler preventDefaults to keep
+   it from toggling the checkbox. */
+.settings-section .voice-chip .voice-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0.15rem;
+  margin: -0.15rem -0.2rem -0.15rem 0;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.settings-section .voice-chip .voice-preview-btn:hover {
+  background: var(--bg-hover-soft);
+}
 .voice-chip.selected {
   background: #1e3a5f;
   border-color: #3b82f6;
