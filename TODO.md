@@ -34,6 +34,7 @@
 - [ ] **[P8]** Groq API compatibility (very low priority, DeepInfra already covers cheap TTS + transcription).
 
 ### Bug Fixes
+- [ ] **[P2]** Very long articles break narration scripting. The scriptwriter receives the whole article in ONE request (input capped at 400k-1.5M chars per model) and must return the whole script in ONE response, but model output ceilings are far smaller, so on huge articles the model balks. Seen 2026-07-15 ("AI 2040, Plan A"): the model's "this is extremely long, shall I do it in parts?" reply was narrated verbatim into the audio. Candidate fixes discussed, decision pending: (a) chunk the scriptwriter at heading boundaries and concatenate (TTS synthesis already chunks downstream), (b) pre-generation length warning with a rough duration/cost estimate, (c) sanity check that detects a conversational/refusal response and fails the generation loudly instead of narrating it. Likely all three, (c) being the cheapest immediate guard.
 - [ ] **[P2]** Images not displaying in read-along for some articles (descriptions ARE read aloud, so they exist in alignment data). Likely stale alignment from before image extraction was added, try regenerating the transcript to confirm.
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author-list outline before the comment section on LessWrong (sidebar content is being read).
@@ -92,6 +93,8 @@
 ## Completed Recently ✅
 
 > July 2026 onward. Older wins were pruned.
+
+- [x] **Library filters persist across refresh/restart** (2026-07-15): the type filter and the five facet rows are saved to localStorage (`wallacast-filters`) on every change and restored when the app opens, validated against the allowed values so a stale entry falls back to defaults. The search query is deliberately not persisted (transient by nature).
 
 - [x] **Multi-paragraph footnotes no longer mangled** (2026-07-15): `[^N]:` definitions in `markdown.ts` only captured their first line, so the 4-space-indented continuation paragraphs were left behind and rendered as indented CODE BLOCKS stranded above the footnotes section (with `* * *` lines becoming stray rules). Definitions now consume their indented continuations (plus standard lazy continuation lines), multi-block bodies are block-parsed so they render as real paragraphs (and rules) inside the footnote with the backref tucked into the last paragraph, `htmlToMarkdown` no longer flattens footnote bodies to one line and re-emits the 4-space indent, and the footnote section's decorative `<hr>` no longer leaks a stray `---` into the body on every edit round-trip (it used to accumulate one per edit). Regression test: `frontend/scripts/test-footnotes.mts` (`npm i --no-save jsdom tsx`, then `npx tsx scripts/test-footnotes.mts`).
 

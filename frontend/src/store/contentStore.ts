@@ -39,6 +39,47 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   podcasts: 'podcast_episode',
 };
 
+// Persist the chosen filters (type + facets, NOT the transient search query) per
+// device, so a refresh or app restart reopens the library exactly as you left it.
+// Same localStorage pattern as 'wallacast-theme'. Stored values are validated on
+// load so a stale or corrupted entry falls back to the defaults instead of
+// wedging the library view.
+const FILTERS_STORAGE_KEY = 'wallacast-filters';
+
+const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
+  archive: ['active', 'archived'],
+  star: ['starred', 'unstarred'],
+  audio: ['audio', 'no_audio'],
+  summary: ['summary', 'no_summary'],
+  transcript: ['transcript', 'no_transcript'],
+};
+
+function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter } {
+  const fallback = { typeFilter: 'all' as TypeFilter, facets: DEFAULT_FACETS };
+  try {
+    const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts'].includes(parsed?.typeFilter)
+      ? parsed.typeFilter
+      : 'all';
+    const facets: FacetFilter = { ...DEFAULT_FACETS };
+    for (const dim of Object.keys(FACET_VALUES) as FacetDim[]) {
+      const v = parsed?.facets?.[dim];
+      facets[dim] = v === null || FACET_VALUES[dim].includes(v) ? v : DEFAULT_FACETS[dim];
+    }
+    return { typeFilter, facets };
+  } catch {
+    return fallback; // private mode / corrupted JSON
+  }
+}
+
+function storeFilters(typeFilter: TypeFilter, facets: FacetFilter): void {
+  try {
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify({ typeFilter, facets }));
+  } catch { /* private mode */ }
+}
+
 // Fields covered by search, besides the full body text in `content`.
 function metadataFields(item: ContentItem): (string | undefined | null)[] {
   return [item.title, item.author, item.description, item.tags, item.podcast_show_name];
@@ -133,11 +174,13 @@ export const useContentStore = create<ContentStore>((set, get) => {
     });
   };
 
+  const storedFilters = loadStoredFilters();
+
   return {
     items: [],
     allItems: [],
-    typeFilter: 'all',
-    facets: DEFAULT_FACETS,
+    typeFilter: storedFilters.typeFilter,
+    facets: storedFilters.facets,
     searchQuery: '',
     loading: false,
     error: null,
@@ -146,19 +189,23 @@ export const useContentStore = create<ContentStore>((set, get) => {
     // Client-side filtering, no API call needed, instant switch
     setTypeFilter: (typeFilter) => {
       set({ typeFilter });
+      storeFilters(typeFilter, get().facets);
       commit(get().allItems);
     },
 
     // The FACET_ROWS config in LibraryTab guarantees dim/value pairs belong
     // together, hence the cast on the computed property.
     setFacet: (dim, value) => {
-      set({ facets: { ...get().facets, [dim]: value } as FacetFilter });
+      const facets = { ...get().facets, [dim]: value } as FacetFilter;
+      set({ facets });
+      storeFilters(get().typeFilter, facets);
       commit(get().allItems);
     },
 
     // Replace the whole facet selection at once (double-click "solo" gesture)
     setFacets: (facets) => {
       set({ facets });
+      storeFilters(get().typeFilter, facets);
       commit(get().allItems);
     },
 
