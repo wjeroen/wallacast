@@ -20,6 +20,14 @@ export function cleanHtml(text: string): string {
   return cleaned;
 }
 
+// "Very long" bar for the pre-generation audio warning: roughly 2x an average
+// LONG article (~8-10k words ≈ 50k chars of plain text), so it fires rarely.
+// Mirrors the backend scriptwriter chunking threshold in spirit (openai-tts.ts).
+export const VERY_LONG_ARTICLE_CHARS = 100_000;
+export function isVeryLongArticle(item: { content?: string | null }): boolean {
+  return (item.content || '').length > VERY_LONG_ARTICLE_CHARS;
+}
+
 // Format a playback time as m:ss (or h:mm:ss past an hour). Used by the audio players.
 export function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';

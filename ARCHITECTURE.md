@@ -225,7 +225,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
   - Cost: ~$0.003 per article (4% of TTS cost) using Gemini 3 Flash
 
 - **`services/openai-tts.ts`**: Main TTS service (requires per-user DeepInfra or OpenAI API key)
-  - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction.
+  - `scriptArticleForListening()`: Uses narration LLM (DeepSeek-V3.2 or GPT-5-Nano) to prepare HTML for TTS narration (formatting, date conversion, removing navigation elements). NOT used for initial article extraction. Extremely long articles (cleaned HTML > 150k chars, ~2x an average long article) are scripted in heading-aligned chunks of ~75k chars each and concatenated, since the whole script cannot fit in one model reply. A conversational-reply guard (`assertLooksLikeScript`) fails the generation loudly if the model answers with a question instead of a script (that reply used to be narrated verbatim); the frontend additionally confirms before generating audio for articles over ~100k plain-text chars (`isVeryLongArticle` in `format.ts`).
   - `generateArticleAudio()`: Generates TTS audio using Kokoro (via DeepInfra) or OpenAI gpt-4o-mini-tts, handles chunking for long articles, concatenates with FFmpeg
   - `generateAudioForContent(contentId, regenerate)`: Orchestrates the full pipeline with progress tracking:
     - 0-20%: Process image descriptions (if enabled) using Gemini, save to JSONB. When `regenerate=true`, regenerates ALL images instead of just new ones

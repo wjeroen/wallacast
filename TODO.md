@@ -34,7 +34,7 @@
 - [ ] **[P8]** Groq API compatibility (very low priority, DeepInfra already covers cheap TTS + transcription).
 
 ### Bug Fixes
-- [ ] **[P2]** Very long articles break narration scripting. The scriptwriter receives the whole article in ONE request (input capped at 400k-1.5M chars per model) and must return the whole script in ONE response, but model output ceilings are far smaller, so on huge articles the model balks. Seen 2026-07-15 ("AI 2040, Plan A"): the model's "this is extremely long, shall I do it in parts?" reply was narrated verbatim into the audio. Candidate fixes discussed, decision pending: (a) chunk the scriptwriter at heading boundaries and concatenate (TTS synthesis already chunks downstream), (b) pre-generation length warning with a rough duration/cost estimate, (c) sanity check that detects a conversational/refusal response and fails the generation loudly instead of narrating it. Likely all three, (c) being the cheapest immediate guard.
+- [ ] **[P1]** Timeline playback positions reported "no longer saved properly" (2026-07-15, cause unknown). Code audit found no regression: every save path (10s interval, pause, seek, unmount, track switch) and every open path (library card, queue, skip; all fetch fresh via getById) is intact, list/getById/PATCH all carry playback_position, and the audio token is stable per id. Needs a concrete repro (reopens at 0? jumps back mid-listen? which item type? mobile PWA or desktop?) and Railway runtime logs of PATCH /api/content/:id while listening.
 - [ ] **[P2]** Images not displaying in read-along for some articles (descriptions ARE read aloud, so they exist in alignment data). Likely stale alignment from before image extraction was added, try regenerating the transcript to confirm.
 - [ ] **[P2]** TTS narration improvements:
   - Skip the author-list outline before the comment section on LessWrong (sidebar content is being read).
@@ -93,6 +93,8 @@
 ## Completed Recently ✅
 
 > July 2026 onward. Older wins were pruned.
+
+- [x] **Very long articles no longer break narration scripting** (2026-07-15): three-part fix. (1) A conversational-reply guard: if the scriptwriter answers with a question instead of a script (which used to be narrated verbatim, "Would you like me to convert the whole article in multiple parts?"), the generation now fails loudly with a clear error. (2) Scriptwriter chunking: cleaned HTML over 150k chars (~2x an average long article) is scripted in heading-aligned ~75k-char chunks with a no-intros/no-recaps part instruction, then concatenated; TTS synthesis already chunked downstream, this was the missing stage. (3) A pre-generation confirm ("This article is very long. Generate audio anyway?", no time/cost estimate by request) on the player and card generate actions for articles over 100k plain-text chars.
 
 - [x] **Library filters persist across refresh/restart** (2026-07-15): the type filter and the five facet rows are saved to localStorage (`wallacast-filters`) on every change and restored when the app opens, validated against the allowed values so a stale entry falls back to defaults. The search query is deliberately not persisted (transient by nature).
 

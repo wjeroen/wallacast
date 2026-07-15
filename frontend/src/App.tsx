@@ -10,6 +10,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
+import { isVeryLongArticle } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -450,6 +451,8 @@ function App() {
 
   const handleGenerateAudio = async (regenerate: boolean) => {
     if (!currentContent) return;
+
+    if (isVeryLongArticle(currentContent) && !confirm('This article is very long. Generate audio anyway?')) return;
 
     if (currentContent.comment_count && currentContent.comment_count > 0) {
       let maxComments = 50;

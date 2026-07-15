@@ -5,6 +5,7 @@ import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } fr
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
 import { contentToMarkdown } from '../markdown';
+import { isVeryLongArticle } from '../format';
 import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
@@ -450,6 +451,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     setOpenDropdown(null);
     const item = content.find(c => c.id === id);
+    if (item && isVeryLongArticle(item) && !confirm('This article is very long. Generate audio anyway?')) return;
     if (item && item.comment_count && item.comment_count > 0) {
       let maxComments = 50;
       try {

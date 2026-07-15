@@ -472,6 +472,146 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
+// A conversational reply instead of a script must fail LOUDLY. Seen 2026-07-15
+// on a huge article: the model answered "this document is extremely long, shall
+// I convert it in parts?" and that reply was narrated verbatim into the audio.
+// This error class bypasses the htmlToNarrationText fallback so the generation
+// fails with a clear message instead of producing garbage audio.
+class NarrationScriptError extends Error {}
+
+// A real script is roughly as long as the input text (it's a verbatim
+// transformation); a refusal/question is a few short paragraphs. Flag output
+// that is drastically shorter than the input, when it is either tiny or reads
+// conversationally.
+function assertLooksLikeScript(script: string, inputTextLength: number): void {
+  const conversational = /\b(would you like|shall i|do you want me|please confirm|which (one |option )?(do )?you prefer|i can do this)\b/i;
+  const suspiciouslyShort = inputTextLength > 10000 && script.length < inputTextLength * 0.25;
+  if (suspiciouslyShort && (script.length < 4000 || conversational.test(script))) {
+    throw new NarrationScriptError(
+      'The narration model replied conversationally instead of producing the script (it likely balked at the article length). Generation was stopped so the reply would not be narrated. Try again.'
+    );
+  }
+}
+
+// An average LONG article runs ~8-10k words, which lands around 75k characters
+// of cleaned HTML. The chunking bar sits at 2x that (deliberately very high, it
+// should fire only on extreme outliers); when it does fire, each chunk is packed
+// to the size of one normal long article, which the single-shot path
+// demonstrably handles.
+const SCRIPT_CHUNK_THRESHOLD_CHARS = 150_000;
+const SCRIPT_CHUNK_TARGET_CHARS = 75_000;
+
+// Split a cleaned article body into chunks for per-chunk scriptwriting.
+// Prefers to break where a new section starts (h1-h3); hard-breaks at 1.5x the
+// target so one enormous unbroken section cannot recreate the one-shot problem.
+function splitBodyForScripting(body: any, targetChars: number): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  const flush = () => {
+    if (current.trim()) chunks.push(current);
+    current = '';
+  };
+  for (const node of Array.from(body.childNodes) as any[]) {
+    const piece: string = node.outerHTML ?? node.textContent ?? '';
+    if (!piece) continue;
+    const isHeading = /^H[1-3]$/.test(node.tagName || '');
+    const wouldBe = current.length + piece.length;
+    if (current && ((isHeading && wouldBe > targetChars) || wouldBe > targetChars * 1.5)) {
+      flush();
+    }
+    current += piece;
+  }
+  flush();
+  return chunks;
+}
+
+// One scriptwriter call over one piece of HTML, with the image-preservation
+// validation + retry and the conversational-reply guard. `part` is set when
+// the piece is one chunk of a longer article.
+async function scriptHtmlOnce(
+  userId: number,
+  html: string,
+  openai: any,
+  modelId: string,
+  extraParams: Record<string, any>,
+  systemPrompt: string,
+  part?: { index: number; total: number }
+): Promise<string> {
+  const partLabel = part ? ` (part ${part.index + 1}/${part.total})` : '';
+  const partAddendum = part
+    ? `\n\nIMPORTANT: You are converting PART ${part.index + 1} of ${part.total} of one long article. The converted parts will be concatenated in order. Convert ONLY the text provided below, completely and in order. Do not add any introduction, recap, transition into or out of the part, or closing remarks. Start directly with the converted content.`
+    : '';
+
+  const inputImageCount = (html.match(/An image is displayed showing.*?\./gs) || []).length;
+  console.log(`[TTS] Input HTML${partLabel} contains ${inputImageCount} image narration(s)`);
+  const inputTextLength = html.replace(/<[^>]+>/g, ' ').length;
+
+  const response = await openai.chat.completions.create({
+    model: modelId,
+    ...extraParams,
+    messages: [
+      { role: 'system', content: systemPrompt + partAddendum },
+      {
+        role: 'user',
+        // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
+        // larger for big-context models (see chatInputCharCap).
+        content: html.slice(0, chatInputCharCap(modelId))
+      }
+    ],
+  });
+
+  let scriptBody = response.choices[0]?.message?.content || '';
+
+  // Validation and Retry
+  const outputImageCount = (scriptBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
+  console.log(`[TTS] Scriptwriter output${partLabel} contains ${outputImageCount} image narration(s)`);
+
+  // Detect if images were dropped
+  if (inputImageCount > 0 && outputImageCount === 0) {
+    console.error(`[TTS] ❌ SCRIPTWRITER DROPPED ALL IMAGE NARRATIONS${partLabel}`);
+    console.error('[TTS] === SCRIPTWRITER OUTPUT SAMPLE (first 1000 chars) ===');
+    console.error(scriptBody.substring(0, 1000));
+    console.error('[TTS] === END SAMPLE ===');
+
+    // Retry with even more explicit instruction
+    console.warn('[TTS] 🔄 Retrying with explicit instruction...');
+
+    const retryAddendum = await resolveCustomPrompt(userId, 'prompt_narration_script_retry', NARRATION_SCRIPT_RETRY_DEFAULT, { inputImageCount });
+
+    const retryResponse = await openai.chat.completions.create({
+      model: modelId,
+      ...extraParams,
+      messages: [
+        { role: 'system', content: systemPrompt + partAddendum + retryAddendum },
+        // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
+        { role: 'user', content: html.slice(0, chatInputCharCap(modelId)) }
+      ],
+    });
+
+    const retryBody = retryResponse.choices[0]?.message?.content || '';
+    const retryImageCount = (retryBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
+
+    if (retryImageCount > outputImageCount) {
+      console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
+      scriptBody = retryBody;
+    } else {
+      console.error(`[TTS] ❌ Retry failed: only ${retryImageCount} image(s)`);
+      // Use retry body anyway if it's not worse
+      if (retryImageCount >= outputImageCount) {
+        scriptBody = retryBody;
+      }
+    }
+  } else if (inputImageCount > 0 && outputImageCount < inputImageCount) {
+    console.warn(`[TTS] ⚠️  Scriptwriter dropped some images${partLabel}`);
+    console.warn(`[TTS] Input: ${inputImageCount}, Output: ${outputImageCount}`);
+  } else if (outputImageCount > 0) {
+    console.log('[TTS] ✓ Image narrations preserved correctly');
+  }
+
+  assertLooksLikeScript(scriptBody, inputTextLength);
+  return scriptBody;
+}
+
 async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
@@ -485,95 +625,34 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
     // Use the cleaner HTML which retains structure but drops junk
     const cleanHtml = doc.body.innerHTML || htmlContent;
 
-    // Diagnostic Logging (count images in INPUT)
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
-    const inputImageCount = (cleanHtml.match(/An image is displayed showing.*?\./gs) || []).length;
-    console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
-
-    if (inputImageCount > 0) {
-      // Log sample image narration from input
-      const sampleImage = cleanHtml.match(/An image is displayed showing.*?End of the image description\./s);
-      if (sampleImage) {
-        console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
-      }
-    }
-    
     console.log(`[TTS] Scriptwriting with model: ${modelId}`);
-        const systemPrompt = await resolveCustomPrompt(userId, 'prompt_narration_script', NARRATION_SCRIPT_DEFAULT);
+    const systemPrompt = await resolveCustomPrompt(userId, 'prompt_narration_script', NARRATION_SCRIPT_DEFAULT);
 
-    const response = await openai.chat.completions.create({
-      model: modelId,
-      ...extraParams,
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
-          // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
-          // larger for big-context models (see chatInputCharCap).
-          content: cleanHtml.slice(0, chatInputCharCap(modelId))
-        }
-      ],
-    });
-
-    let scriptBody = response.choices[0]?.message?.content || '';
-
-    // Validation and Retry
-    const outputImageCount = (scriptBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
-    console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
-
-    // Detect if images were dropped
-    if (inputImageCount > 0 && outputImageCount === 0) {
-      console.error('[TTS] ❌ SCRIPTWRITER DROPPED ALL IMAGE NARRATIONS');
-      console.error('[TTS] Scriptwriter is actively removing image descriptions');
-
-      // Log scriptwriter output sample for debugging
-      console.error('[TTS] === SCRIPTWRITER OUTPUT SAMPLE (first 1000 chars) ===');
-      console.error(scriptBody.substring(0, 1000));
-      console.error('[TTS] === END SAMPLE ===');
-
-      // Retry with even more explicit instruction
-      console.warn('[TTS] 🔄 Retrying with explicit instruction...');
-
-      const retryAddendum = await resolveCustomPrompt(userId, 'prompt_narration_script_retry', NARRATION_SCRIPT_RETRY_DEFAULT, { inputImageCount });
-      const retrySystemPrompt = systemPrompt + retryAddendum;
-
-      const retryResponse = await openai.chat.completions.create({
-        model: modelId,
-        ...extraParams,
-        messages: [
-          { role: 'system', content: retrySystemPrompt },
-          // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
-          { role: 'user', content: cleanHtml.slice(0, chatInputCharCap(modelId)) }
-        ],
-      });
-
-      const retryBody = retryResponse.choices[0]?.message?.content || '';
-      const retryImageCount = (retryBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
-
-      if (retryImageCount > outputImageCount) {
-        console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
-        scriptBody = retryBody;
-      } else {
-        console.error(`[TTS] ❌ Retry failed: only ${retryImageCount} image(s)`);
-        // Use retry body anyway if it's not worse
-        if (retryImageCount >= outputImageCount) {
-          scriptBody = retryBody;
-        }
+    let scriptBody: string;
+    if (cleanHtml.length <= SCRIPT_CHUNK_THRESHOLD_CHARS) {
+      scriptBody = await scriptHtmlOnce(userId, cleanHtml, openai, modelId, extraParams, systemPrompt);
+    } else {
+      // Extremely long article: the whole script cannot fit in one model reply
+      // (output ceilings are far below input ceilings), so script it in
+      // heading-aligned chunks and concatenate. Sequential on purpose: cheaper
+      // to reason about, and generation is a background job anyway.
+      const pieces = splitBodyForScripting(doc.body, SCRIPT_CHUNK_TARGET_CHARS);
+      console.log(`[TTS] Article is very long (${cleanHtml.length} chars), scripting in ${pieces.length} chunks`);
+      const parts: string[] = [];
+      for (let i = 0; i < pieces.length; i++) {
+        parts.push(await scriptHtmlOnce(userId, pieces[i], openai, modelId, extraParams, systemPrompt, { index: i, total: pieces.length }));
       }
-    } else if (inputImageCount > 0 && outputImageCount < inputImageCount) {
-      console.warn(`[TTS] ⚠️  Scriptwriter dropped some images`);
-      console.warn(`[TTS] Input: ${inputImageCount}, Output: ${outputImageCount}`);
-    } else if (outputImageCount > 0) {
-      console.log('[TTS] ✓ Image narrations preserved correctly');
+      scriptBody = parts.join('\n\n');
     }
 
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE END =====');
 
     return scriptBody;
   } catch (e) {
+    // The conversational-reply guard must fail the generation loudly; falling
+    // back would produce unpolished audio without the user ever knowing why.
+    if (e instanceof NarrationScriptError) throw e;
     console.warn('Scriptwriting failed, falling back to simple text extraction:', e);
     return htmlToNarrationText(htmlContent);
   }
