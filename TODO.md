@@ -80,6 +80,7 @@
 
 - [ ] **Propagate Wallabag-side deletions?** Today, deleting an entry in Wallabag does nothing locally (the item stays and can even push back). Option A: mirror it (delete locally too), but a Wallabag cleanup spree would destroy local items INCLUDING generated audio you paid for. Option B: leave as-is and document that deletions do not propagate (safest for your audio). Middle path: archive locally instead of delete.
 - [ ] **Startup query-killer scope.** `db.ts` kills any DB session older than 30s touching content_items at boot (added after a real stuck-lock). It is now constrained so it spares VACUUM / ANALYZE / pg_dump. Remaining question: delete it entirely and rely on the 5s lock_timeout + retry loop (reviewer's lean), or keep it as belt-and-suspenders. Current state: constrained version is live.
+- [ ] **Image descriptions: proportional depth.** Decorative images (e.g. a Bosch painting in an article not about it) get the same long narrated description as a central chart. Candidate fixes discussed 2026-07-16: (D) prompt-only, tell the vision model to give one short sentence for photos/art and detail only for charts/diagrams/text-bearing images; (C) a cheap text-LLM pre-pass classifying each image as central vs decorative, then picking a detailed or one-liner vision prompt. Letting the scriptwriter condense descriptions was considered and disfavored (past drop/mangle history, and it would desync audio from the alignment elements). Adding article context to the Gemini vision call was tried before and behaved poorly.
 
 ### Security, deferred (lower impact or architectural)
 > The high/critical items from the pre-launch review are fixed (see the Completed entry). These remain, deliberately deferred:
@@ -155,6 +156,7 @@
 - UI bloat / intuitiveness review on the mock server (`npm run mock`), postponed until the big pre-launch changes land (you may run it with Opus).
 - Investigate Gemini native TTS as a voice provider (native SDK, returns raw PCM, so a new client path + voice catalog). Gemini transcription is not viable for read-along (no word timestamps).
 - Fullscreen reading mode, keyboard shortcuts for the player, share-article-with-audio, export to audiobook (M4B with chapters).
+- Voice picked by the author's guessed gender (opt-in, labeled AI-inferred, unknown falls back to the normal random pick). Kokoro voice IDs already encode gender (af_/am_/bf_/bm_), OpenAI voices would need a small hand-made table. Deferred: name-based guessing fails often on pseudonyms/handles, and a wrong guess misgenders a real author.
 
 ## Reference
 

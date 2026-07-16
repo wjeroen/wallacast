@@ -576,7 +576,7 @@ export class ImageAltTextService {
     // Output: $3.00 per 1M tokens
 
     const tokensPerImage = 1120; // High resolution
-    const tokensPerRequest = 500; // Prompt + article context
+    const tokensPerRequest = 500; // Prompt text (no article context is sent, each image goes alone)
     const totalInputTokens = (imageCount * tokensPerImage) + tokensPerRequest;
 
     const inputCost = (totalInputTokens / 1_000_000) * 0.50;
