@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { devNull } from 'os';
 import ffmpeg from 'fluent-ffmpeg';
 // RESTORED: JSDOM for robust HTML cleaning (fixes empty comments)
 import { JSDOM } from 'jsdom';
@@ -148,23 +149,94 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
   return chunks;
 }
 
+// ---- Loudness normalization (EBU R128) ----
+// TTS providers ship voices at wildly different levels (measured 2026-07-18: -19.7 to
+// -28.8 LUFS across the OpenAI and Kokoro catalogs), so every generation is normalized
+// to one target. All TTS output is mono; -19 LUFS integrated is the spoken-word norm
+// for mono files (equivalent to the -16 LUFS stereo standard used by Apple/Auphonic),
+// with a -1.5 dBTP true-peak ceiling.
+const LOUDNORM_TARGET = 'I=-19:TP=-1.5:LRA=11';
+
+interface LoudnormStats {
+  input_i: string;
+  input_tp: string;
+  input_lra: string;
+  input_thresh: string;
+  target_offset: string;
+}
+
+function parseLoudnormStats(stderrLines: string[]): LoudnormStats | null {
+  const text = stderrLines.join('\n');
+  const match = text.match(/\{[^{}]*"input_i"[^{}]*\}/);
+  if (!match) return null;
+  try {
+    const stats = JSON.parse(match[0]);
+    // Pure silence measures as -inf, which loudnorm rejects as a measured value.
+    for (const key of ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'] as const) {
+      if (!Number.isFinite(parseFloat(stats[key]))) return null;
+    }
+    return stats;
+  } catch {
+    return null;
+  }
+}
+
+// Second-pass filter string. With measured stats, loudnorm applies one constant gain
+// (linear mode) so the voice's own dynamics are untouched. Without them it falls back
+// to single-pass dynamic mode, which still lands close to the target.
+function loudnormFilter(stats: LoudnormStats | null): string {
+  if (!stats) return `loudnorm=${LOUDNORM_TARGET}`;
+  return `loudnorm=${LOUDNORM_TARGET}:measured_I=${stats.input_i}:measured_TP=${stats.input_tp}:measured_LRA=${stats.input_lra}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset}:linear=true`;
+}
+
+// Analysis pass over a single file: decode-only, writes nothing.
+async function measureFileLoudness(file: string): Promise<LoudnormStats | null> {
+  return new Promise((resolve) => {
+    const lines: string[] = [];
+    ffmpeg(file)
+      .audioFilters(`loudnorm=${LOUDNORM_TARGET}:print_format=json`)
+      .format('null')
+      .on('stderr', (line: string) => lines.push(line))
+      .on('end', () => resolve(parseLoudnormStats(lines)))
+      .on('error', () => resolve(null))
+      .save(devNull);
+  });
+}
+
 // FIXED: Seamless concatenation using complexFilter to physically remove MP3 padding
 async function concatenateAudioFiles(inputFiles: string[], outputFile: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (inputFiles.length === 0) {
-      reject(new Error('No input files provided for concatenation'));
-      return;
-    }
+  if (inputFiles.length === 0) {
+    throw new Error('No input files provided for concatenation');
+  }
 
+  // Create a filter chain: [0:a][1:a]...concat=n=X:v=0:a=1[out]
+  // This decodes the MP3s and joins the raw audio samples perfectly
+  const filterInput = inputFiles.map((_, i) => `[${i}:a]`).join('');
+  const concatGraph = `${filterInput}concat=n=${inputFiles.length}:v=0:a=1`;
+
+  // Pass 1: measure the loudness of the concatenated audio (decode-only, writes nothing).
+  const stats = await new Promise<LoudnormStats | null>((resolve) => {
+    const lines: string[] = [];
+    const analyze = ffmpeg();
+    inputFiles.forEach(f => analyze.input(f));
+    analyze
+      .complexFilter(`${concatGraph},loudnorm=${LOUDNORM_TARGET}:print_format=json[out]`)
+      .map('[out]')
+      .format('null')
+      .on('stderr', (line: string) => lines.push(line))
+      .on('end', () => resolve(parseLoudnormStats(lines)))
+      .on('error', () => resolve(null))
+      .save(devNull);
+  });
+  if (!stats) console.warn('[FFmpeg] Loudness analysis failed, falling back to dynamic normalization');
+
+  // Pass 2: concat + normalize + encode.
+  return new Promise((resolve, reject) => {
     const command = ffmpeg();
     inputFiles.forEach(f => command.input(f));
 
-    // Create a filter chain: [0:a][1:a]...concat=n=X:v=0:a=1[out]
-    // This decodes the MP3s and joins the raw audio samples perfectly
-    const filterInput = inputFiles.map((_, i) => `[${i}:a]`).join('');
-
     command
-      .complexFilter(`${filterInput}concat=n=${inputFiles.length}:v=0:a=1[out]`)
+      .complexFilter(`${concatGraph},${loudnormFilter(stats)}[out]`)
       .map('[out]')
       .audioFrequency(24000)
       .audioBitrate('96k')
@@ -730,8 +802,12 @@ export async function generateArticleAudio(
           // Re-encode through ffmpeg to produce proper MP3 headers (Xing/LAME).
           // Raw OpenAI TTS MP3s lack seeking headers, so browsers can't map
           // time-to-byte positions and audio.currentTime silently fails.
+          // The same pass normalizes loudness (see LOUDNORM_TARGET).
+          const loudStats = await measureFileLoudness(tempFile);
+          if (!loudStats) console.warn('[FFmpeg] Loudness analysis failed, falling back to dynamic normalization');
           await new Promise<void>((resolve, reject) => {
             ffmpeg(tempFile)
+              .audioFilters(loudnormFilter(loudStats))
               .audioFrequency(24000)
               .audioBitrate('96k')
               .format('mp3')

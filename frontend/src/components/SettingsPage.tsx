@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -163,6 +164,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   // Multiple voices to rotate between for audio generation (empty = use the single voice above).
   const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
+
+  // Speeds the player's speed button cycles through.
+  const [speedOptions, setSpeedOptions] = useState<number[]>(DEFAULT_SPEEDS);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -345,6 +349,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       setSummaryTiers(parseTiers(loaded.summary_tiers));
       setTtsVoices(parseVoices(loaded.tts_voices));
+      setSpeedOptions(parseSpeedOptions(loaded.playback_speed_options));
     } catch (err) {
       setError('Failed to load settings');
       console.error(err);
@@ -466,6 +471,13 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     audio.play().then(() => setPlayingPreview(key)).catch(() => setPlayingPreview(null));
   };
 
+  const toggleSpeedOption = (s: number) => {
+    setSpeedOptions(prev =>
+      prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s].sort((a, b) => a - b)
+    );
+    setSaved(false);
+  };
+
   // --- Voice rotation helpers ---
   const isVoiceSelected = (model: string, voice: string) =>
     ttsVoices.some(v => v.model === model && v.voice === voice);
@@ -520,6 +532,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       }
       // Selected rotation voices (empty array = always use the single voice).
       toSave.tts_voices = JSON.stringify(ttsVoices);
+      // Speed cycle: blank = default set, never pinned (so default changes reach everyone).
+      toSave.playback_speed_options =
+        JSON.stringify(speedOptions) === JSON.stringify(DEFAULT_SPEEDS) ? '' : JSON.stringify(speedOptions);
 
       await userSettingsAPI.setBulk(toSave);
       setSaved(true);
@@ -946,6 +961,25 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <small className="settings-hint indent">
               When on, clicking a library item starts its audio right away instead of waiting for play.
             </small>
+          </div>
+
+          <div className="form-group">
+            <label>Speed button options</label>
+            <small className="settings-hint">
+              Which speeds the player's speed button cycles through. None selected = the default set.
+            </small>
+            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
+              {SPEED_CATALOG.map(s => (
+                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={speedOptions.includes(s)}
+                    onChange={() => toggleSpeedOption(s)}
+                  />
+                  {s}x
+                </label>
+              ))}
+            </div>
           </div>
         </section>
 

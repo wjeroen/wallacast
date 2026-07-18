@@ -65,6 +65,7 @@ const VALID_SETTING_KEYS = [
   'manual_queue_always_autoplay', // When 'false', manual queue items only auto-advance if queue_autoplay is on. Default: 'true' (manual items always autoplay).
   'queue_shuffle',              // Persisted shuffle preference for the queue (frontend queueStore)
   'autoplay_on_open',           // Start playing when a library item is opened (default: false)
+  'playback_speed_options',     // JSON array of speeds the player's speed button cycles through (blank = default set)
 ];
 
 // Secret keys that should be masked in responses

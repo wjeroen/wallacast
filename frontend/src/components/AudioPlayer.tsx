@@ -3,15 +3,17 @@ import type { ContentItem } from '../types';
 import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
-
-const VALID_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 function getStoredSpeed(): number {
   try {
     const stored = localStorage.getItem('playbackSpeed');
     if (stored) {
       const parsed = parseFloat(stored);
-      if (VALID_SPEEDS.includes(parsed)) return parsed;
+      // Validate against the full catalog, not the user's cycle: a speed that was
+      // since removed from the cycle should still restore, the toggle just leaves it
+      // on the next press.
+      if (SPEED_CATALOG.includes(parsed)) return parsed;
     }
   } catch { /* private-mode Safari throws on localStorage access */ }
   return 1;
@@ -58,6 +60,7 @@ export function AudioPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(getStoredSpeed);
+  const [speedOptions, setSpeedOptions] = useState<number[]>(DEFAULT_SPEEDS);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -179,17 +182,20 @@ export function AudioPlayer({
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
 
-  // Sync speed from backend on mount (for cross-device persistence)
+  // Sync speed + the toggle's speed cycle from backend on mount (cross-device persistence)
   useEffect(() => {
     userSettingsAPI.get('playback_speed').then(res => {
       const val = res.data.value ? parseFloat(res.data.value) : null;
-      if (val && VALID_SPEEDS.includes(val)) {
+      if (val && SPEED_CATALOG.includes(val)) {
         localStorage.setItem('playbackSpeed', String(val));
         setPlaybackSpeed(val);
         if (audioRef.current) {
           audioRef.current.playbackRate = val;
         }
       }
+    }).catch(() => {});
+    userSettingsAPI.get('playback_speed_options').then(res => {
+      setSpeedOptions(parseSpeedOptions(res.data.value));
     }).catch(() => {});
   }, []);
 
@@ -539,9 +545,13 @@ export function AudioPlayer({
   };
 
   const toggleSpeed = () => {
-    const currentIndex = VALID_SPEEDS.indexOf(playbackSpeed);
-    const nextIndex = (currentIndex + 1) % VALID_SPEEDS.length;
-    handleSpeedChange(VALID_SPEEDS[nextIndex]);
+    const currentIndex = speedOptions.indexOf(playbackSpeed);
+    // Current speed can sit outside the configured cycle (options just changed, or a
+    // removed speed restored from storage): jump to the next faster one, wrapping around.
+    const next = currentIndex >= 0
+      ? speedOptions[(currentIndex + 1) % speedOptions.length]
+      : (speedOptions.find(s => s > playbackSpeed) ?? speedOptions[0]);
+    handleSpeedChange(next);
   };
 
   const toggleSleepTimer = () => {

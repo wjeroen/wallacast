@@ -28,6 +28,25 @@ export function isVeryLongArticle(item: { content?: string | null }): boolean {
   return (item.content || '').length > VERY_LONG_ARTICLE_CHARS;
 }
 
+// Playback-speed toggle: the full set selectable in Settings, and the default cycle.
+// The player's speed button cycles through the user's selection (setting
+// 'playback_speed_options', a JSON array; blank = DEFAULT_SPEEDS).
+export const SPEED_CATALOG = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+export const DEFAULT_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
+export function parseSpeedOptions(raw: string | null | undefined): number[] {
+  if (!raw) return DEFAULT_SPEEDS;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return DEFAULT_SPEEDS;
+    const valid = arr
+      .filter((n): n is number => typeof n === 'number' && SPEED_CATALOG.includes(n))
+      .sort((a, b) => a - b);
+    return valid.length > 0 ? valid : DEFAULT_SPEEDS;
+  } catch {
+    return DEFAULT_SPEEDS;
+  }
+}
+
 // Format a playback time as m:ss (or h:mm:ss past an hour). Used by the audio players.
 export function formatTime(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '0:00';
