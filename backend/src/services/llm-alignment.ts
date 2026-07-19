@@ -804,7 +804,7 @@ export async function generateLLMAlignment(
   // Helper: build prompt for a set of element indices
   function buildAlignmentPrompt(
     indices: number[],
-    batchInfo?: { batchNum: number; totalBatches: number }
+    batchInfo?: { batchNum: number; totalBatches: number; anchorTime?: number | null }
   ): string {
     const batchElementsList = indices.map(i => {
       const el = allElements[i];
@@ -824,6 +824,13 @@ export async function generateLLMAlignment(
     // Add batch context if this is a batched call
     if (batchInfo) {
       intro += `\n\nIMPORTANT: The full article has ${allElements.length} elements, but you are only matching a SUBSET: elements ${firstIdx} through ${lastIdx} (batch ${batchInfo.batchNum} of ${batchInfo.totalBatches}). Only match the elements listed below. Do NOT try to match elements outside this range. The element numbers are their ORIGINAL indices from the full article.`;
+      // Seam anchor: without it, a batch's FIRST element has no idea where the
+      // previous batch ended and can latch onto a DUPLICATE occurrence of its text
+      // much later in the audio (root-caused 2026-07-19: a list item narrated again
+      // as a section heading 15 minutes later).
+      if (batchInfo.anchorTime != null) {
+        intro += `\n\nCONTINUITY: The previous elements were matched up to roughly [${batchInfo.anchorTime}] in the transcript. This batch continues from there, so expect matches at or shortly after that point. If an element's text appears MORE THAN ONCE in the transcript, pick the occurrence that continues forward from [${batchInfo.anchorTime}], not a later duplicate. Only search earlier than [${batchInfo.anchorTime}] if you truly cannot find the element after it.`;
+      }
     }
 
     const closingInstruction = batchInfo
@@ -923,6 +930,16 @@ ${closingInstruction}`;
     let timestampMap: Map<number, number>;
     let batches: number[][] = [];
 
+    // Robust seam anchor for batch b: the median of the previous batch's last few
+    // matched timestamps (median, so one bad value at the seam can't poison it).
+    const batchAnchor = (map: Map<number, number>, batchList: number[][], b: number): number | null => {
+      if (b === 0) return null;
+      const prevVals = batchList[b - 1].filter(i => map.has(i)).map(i => map.get(i)!).slice(-5);
+      if (prevVals.length === 0) return null;
+      const sorted = [...prevVals].sort((x, y) => x - y);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
+
     if (!useBatching) {
       // Single call for small articles
       const allIndices = allElements.map((_, i) => i);
@@ -944,6 +961,7 @@ ${closingInstruction}`;
         const prompt = buildAlignmentPrompt(batchIndices, {
           batchNum: b + 1,
           totalBatches: batches.length,
+          anchorTime: batchAnchor(timestampMap, batches, b),
         });
         const batchMap = await callAndParse(
           prompt,
@@ -1032,7 +1050,11 @@ ${closingInstruction}`;
             if (local >= QUALITY_MIN_RATIO) continue;
             console.warn(`[LLM-Align] Quality retry for batch ${b + 1}/${batches.length} (elements ${first}-${last}, ${(local * 100).toFixed(0)}% advancing)`);
             const retryMap = await callAndParse(
-              buildAlignmentPrompt(batches[b], { batchNum: b + 1, totalBatches: batches.length }),
+              buildAlignmentPrompt(batches[b], {
+                batchNum: b + 1,
+                totalBatches: batches.length,
+                anchorTime: batchAnchor(candidate, batches, b),
+              }),
               chatConfig,
               `Quality retry batch ${b + 1}/${batches.length}`
             );
@@ -1080,7 +1102,61 @@ ${closingInstruction}`;
       });
     }
 
-    // Ensure non-decreasing
+    // Outlier repair BEFORE the non-decreasing clamp. The LLM occasionally matches
+    // an element to a DUPLICATE occurrence of its text later in the audio
+    // (root-caused 2026-07-19: a list item narrated again as a section heading 15
+    // minutes later). The bare clamp below would treat such a spike as ground truth
+    // and raise every following correct timestamp up to it, destroying the rest of
+    // the article. Instead: keep the longest non-decreasing subsequence (a majority
+    // vote over orderings that weighs BOTH earlier and later neighbors), and
+    // re-derive the dropped values by interpolating between their kept neighbors.
+    // This is numeric post-processing of the LLM's own timestamps, no text matching.
+    {
+      const n = timestamps.length;
+      if (n > 2) {
+        // Longest non-decreasing subsequence. O(n^2), fine at element counts <= ~1000.
+        const lnds = new Array<number>(n).fill(1);
+        const prevIdx = new Array<number>(n).fill(-1);
+        for (let i = 1; i < n; i++) {
+          for (let j = 0; j < i; j++) {
+            if (timestamps[j] <= timestamps[i] && lnds[j] + 1 > lnds[i]) {
+              lnds[i] = lnds[j] + 1;
+              prevIdx[i] = j;
+            }
+          }
+        }
+        // >= tie-break: among equally long orderings prefer the one ending at the
+        // LATEST element, so a late spike loses to the article's real tail.
+        let best = 0;
+        for (let i = 1; i < n; i++) {
+          if (lnds[i] >= lnds[best]) best = i;
+        }
+        const kept = new Array<boolean>(n).fill(false);
+        for (let i = best; i >= 0; i = prevIdx[i]) kept[i] = true;
+        const outlierCount = kept.filter(k => !k).length;
+
+        if (outlierCount > 0) {
+          console.warn(`[LLM-Align] ${outlierCount} timestamp(s) break the consensus ordering, repairing by interpolation`);
+          let i = 0;
+          while (i < n) {
+            if (kept[i]) { i++; continue; }
+            let j = i;
+            while (j < n && !kept[j]) j++;
+            const prevVal = i > 0 ? timestamps[i - 1] : 0;
+            const nextVal = j < n ? timestamps[j] : prevVal;
+            const run = j - i;
+            for (let k = 0; k < run; k++) {
+              const fixed = Math.round((prevVal + ((nextVal - prevVal) * (k + 1)) / (run + 1)) * 10) / 10;
+              console.warn(`[LLM-Align] Outlier repair: element ${i + k} (${timestamps[i + k]}s) -> ${fixed}s`);
+              timestamps[i + k] = fixed;
+            }
+            i = j;
+          }
+        }
+      }
+    }
+
+    // Ensure non-decreasing (after outlier repair this is normally a no-op safety net)
     for (let i = 1; i < timestamps.length; i++) {
       if (timestamps[i] < timestamps[i - 1]) {
         timestamps[i] = timestamps[i - 1];
