@@ -921,6 +921,7 @@ ${closingInstruction}`;
   let usedFallback = false;
   try {
     let timestampMap: Map<number, number>;
+    let batches: number[][] = [];
 
     if (!useBatching) {
       // Single call for small articles
@@ -930,7 +931,6 @@ ${closingInstruction}`;
       timestampMap = await callAndParse(prompt, chatConfig, 'Single');
     } else {
       // Batched calls for large articles
-      const batches: number[][] = [];
       for (let i = 0; i < allElements.length; i += BATCH_SIZE) {
         batches.push(
           allElements.map((_, idx) => idx).slice(i, i + BATCH_SIZE)
@@ -956,6 +956,79 @@ ${closingInstruction}`;
         }
       }
       console.log(`[LLM-Align] All batches complete: ${timestampMap.size}/${allElements.length} elements matched`);
+    }
+
+    // --- Quality retry -------------------------------------------------------
+    // A structurally failed alignment shows up as long runs of elements stuck on
+    // the same timestamp (the LLM lost its place, or skipped elements which the
+    // missing-fill below pins to the previous value). Score = fraction of element
+    // transitions whose timestamp strictly advances. ONE retry only: quality
+    // failures are either flaky (one re-roll usually recovers) or systematic (a
+    // third attempt won't help either), and each pass costs real LLM money. The
+    // best-scoring attempt wins, a retry can never make the stored alignment
+    // worse (same keep-best rule as the scriptwriter's image-drop retry).
+    const fillFromMap = (map: Map<number, number>): number[] => {
+      const out: number[] = [];
+      for (let i = 0; i < allElements.length; i++) {
+        out.push(map.has(i) ? map.get(i)! : (out.length > 0 ? out[out.length - 1] : 0));
+      }
+      return out;
+    };
+    const advancingRatio = (arr: number[], from = 1, to = arr.length - 1): number => {
+      if (to < from) return 1;
+      let advances = 0;
+      for (let i = from; i <= to; i++) {
+        if (arr[i] > arr[i - 1]) advances++;
+      }
+      return advances / (to - from + 1);
+    };
+    const QUALITY_MIN_RATIO = 0.7; // retry when >30% of transitions fail to advance
+    // Skip tiny items: matches the one-paragraph summary tier (1500 chars). Short
+    // articles produce noisy ratios and are trivial to regenerate by hand.
+    const QUALITY_MIN_CHARS = 1500;
+    const totalTextChars = allElements.reduce(
+      (sum, el) => sum + (el.text?.length || el.html?.length || 0),
+      0
+    );
+
+    let qualityScore = advancingRatio(fillFromMap(timestampMap));
+    if (qualityScore < QUALITY_MIN_RATIO && totalTextChars > QUALITY_MIN_CHARS) {
+      console.warn(`[LLM-Align] Quality check failed: only ${(qualityScore * 100).toFixed(0)}% of timestamps advance. Retrying once...`);
+      try {
+        const candidate = new Map(timestampMap);
+        if (!useBatching) {
+          const retryMap = await callAndParse(buildAlignmentPrompt(allElements.map((_, i) => i)), chatConfig, 'Quality retry');
+          for (const [idx, ts] of retryMap) candidate.set(idx, ts);
+        } else {
+          // Re-run only the batches whose local span failed to advance: cheaper
+          // than a full pass, and the collapse is usually confined to a few batches.
+          const filled = fillFromMap(timestampMap);
+          for (let b = 0; b < batches.length; b++) {
+            const first = batches[b][0];
+            const last = batches[b][batches[b].length - 1];
+            const local = advancingRatio(filled, Math.max(1, first), last);
+            if (local >= QUALITY_MIN_RATIO) continue;
+            console.warn(`[LLM-Align] Quality retry for batch ${b + 1}/${batches.length} (elements ${first}-${last}, ${(local * 100).toFixed(0)}% advancing)`);
+            const retryMap = await callAndParse(
+              buildAlignmentPrompt(batches[b], { batchNum: b + 1, totalBatches: batches.length }),
+              chatConfig,
+              `Quality retry batch ${b + 1}/${batches.length}`
+            );
+            for (const [idx, ts] of retryMap) candidate.set(idx, ts);
+          }
+        }
+        const retryScore = advancingRatio(fillFromMap(candidate));
+        if (retryScore > qualityScore) {
+          console.log(`[LLM-Align] Quality retry improved: ${(qualityScore * 100).toFixed(0)}% -> ${(retryScore * 100).toFixed(0)}%. Keeping retry.`);
+          timestampMap = candidate;
+          qualityScore = retryScore;
+        } else {
+          console.log(`[LLM-Align] Quality retry not better (${(retryScore * 100).toFixed(0)}% vs ${(qualityScore * 100).toFixed(0)}%). Keeping first attempt.`);
+        }
+      } catch (err: any) {
+        // Never let a failed retry destroy a usable first attempt.
+        console.error('[LLM-Align] Quality retry failed, keeping first attempt:', err?.message || err);
+      }
     }
 
     // Build timestamps array from map. Missing elements get previous value
