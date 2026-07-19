@@ -982,6 +982,24 @@ ${closingInstruction}`;
       }
       return advances / (to - from + 1);
     };
+    const lastAdvanceIndex = (arr: number[]): number => {
+      let last = 0;
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i] > arr[i - 1]) last = i;
+      }
+      return last;
+    };
+    // Score ignores the TRAILING plateau: a run of identical timestamps at the very
+    // end is the legitimate "rest isn't narrated" pattern (e.g. hundreds of comment
+    // elements when the audio contains no comments, confirmed via reasoning logs
+    // 2026-07-19), while plateaus in the MIDDLE are real failures. Without the trim,
+    // a correct alignment with a long unnarrated tail would trigger pointless and
+    // expensive retries that reproduce the same correct result.
+    const scoreAlignment = (arr: number[]): number => {
+      const lastAdv = lastAdvanceIndex(arr);
+      if (lastAdv === 0) return 0; // nothing ever advanced
+      return advancingRatio(arr, 1, lastAdv);
+    };
     const QUALITY_MIN_RATIO = 0.7; // retry when >30% of transitions fail to advance
     // Skip tiny items: matches the one-paragraph summary tier (1500 chars). Short
     // articles produce noisy ratios and are trivial to regenerate by hand.
@@ -991,7 +1009,7 @@ ${closingInstruction}`;
       0
     );
 
-    let qualityScore = advancingRatio(fillFromMap(timestampMap));
+    let qualityScore = scoreAlignment(fillFromMap(timestampMap));
     if (qualityScore < QUALITY_MIN_RATIO && totalTextChars > QUALITY_MIN_CHARS) {
       console.warn(`[LLM-Align] Quality check failed: only ${(qualityScore * 100).toFixed(0)}% of timestamps advance. Retrying once...`);
       try {
@@ -1002,10 +1020,14 @@ ${closingInstruction}`;
         } else {
           // Re-run only the batches whose local span failed to advance: cheaper
           // than a full pass, and the collapse is usually confined to a few batches.
+          // Batches entirely inside the trailing plateau are skipped (unnarrated
+          // tail, nothing to fix).
           const filled = fillFromMap(timestampMap);
+          const lastAdv = lastAdvanceIndex(filled);
           for (let b = 0; b < batches.length; b++) {
             const first = batches[b][0];
-            const last = batches[b][batches[b].length - 1];
+            if (first > lastAdv) continue;
+            const last = Math.min(batches[b][batches[b].length - 1], lastAdv);
             const local = advancingRatio(filled, Math.max(1, first), last);
             if (local >= QUALITY_MIN_RATIO) continue;
             console.warn(`[LLM-Align] Quality retry for batch ${b + 1}/${batches.length} (elements ${first}-${last}, ${(local * 100).toFixed(0)}% advancing)`);
@@ -1017,7 +1039,7 @@ ${closingInstruction}`;
             for (const [idx, ts] of retryMap) candidate.set(idx, ts);
           }
         }
-        const retryScore = advancingRatio(fillFromMap(candidate));
+        const retryScore = scoreAlignment(fillFromMap(candidate));
         if (retryScore > qualityScore) {
           console.log(`[LLM-Align] Quality retry improved: ${(qualityScore * 100).toFixed(0)}% -> ${(retryScore * 100).toFixed(0)}%. Keeping retry.`);
           timestampMap = candidate;
