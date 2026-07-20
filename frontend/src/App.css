@@ -4603,3 +4603,76 @@
   border-color: #3b82f6;
   color: #1e40af;
 }
+
+/* "Continue listening" strip under the library filters. Deliberately unobtrusive:
+   low-height 350px cards, progress as a thin bar on the bottom border, title fades
+   out where it overflows. Hidden in bulk-select mode and via the Settings toggle. */
+.continue-strip {
+  margin: 0.4rem 0 0.6rem;
+}
+.continue-strip-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--t3);
+  margin: 0 0 0.3rem 0.15rem;
+}
+.continue-strip-row {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: thin;
+}
+.continue-card {
+  position: relative;
+  flex: 0 0 350px;
+  width: 350px;
+  max-width: 85vw; /* keep the card (and a peek of the next) on narrow phones */
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem 0.6rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+}
+.continue-card img,
+.continue-card-art {
+  width: 32px;
+  height: 32px;
+  border-radius: 0.35rem;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raised);
+  color: var(--t3);
+}
+.continue-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+.continue-card-type {
+  color: var(--t3);
+  flex-shrink: 0;
+  display: flex;
+}
+.continue-card-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: #3b82f6;
+  border-radius: 0 2px 2px 0;
+}

@@ -66,6 +66,7 @@ const VALID_SETTING_KEYS = [
   'queue_shuffle',              // Persisted shuffle preference for the queue (frontend queueStore)
   'autoplay_on_open',           // Start playing when a library item is opened (default: false)
   'playback_speed_options',     // JSON array of speeds the player's speed button cycles through (blank = default set)
+  'show_continue_listening',    // Show the continue-listening row in the library (default: true)
 ];
 
 // Secret keys that should be masked in responses

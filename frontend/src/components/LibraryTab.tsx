@@ -101,6 +101,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
+  // "Continue listening" strip under the filters (Settings toggle, default on).
+  const [showContinueStrip, setShowContinueStrip] = useState(true);
 
   // Fetch content on mount
   useEffect(() => {
@@ -111,6 +113,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   useEffect(() => {
     userSettingsAPI.get('library_show_summary')
       .then(res => setShowSummaryInLibrary(res.data.value === 'true'))
+      .catch(() => {});
+    userSettingsAPI.get('show_continue_listening')
+      .then(res => setShowContinueStrip(res.data.value !== 'false'))
       .catch(() => {});
   }, []);
 
@@ -271,6 +276,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
     return () => clearInterval(pollInterval);
   }, [content, updateItem, refreshItem]);
+
+  // In-progress audio items from the CURRENT filtered view (so archived items stay
+  // hidden while viewing Active, etc.), most recently played first. 1%-99% window:
+  // below 1% is accidental-tap noise, above 99% is effectively finished.
+  const continueItems = useMemo(() => {
+    return content
+      .filter(item => {
+        if (!item.audio_url || !item.duration || !item.last_played_at) return false;
+        const frac = (item.playback_position || 0) / item.duration;
+        return frac > 0.01 && frac < 0.99;
+      })
+      .sort((a, b) => new Date(b.last_played_at!).getTime() - new Date(a.last_played_at!).getTime())
+      .slice(0, 12);
+  }, [content]);
+
+  const continueTypeIcon = (t: string) =>
+    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
@@ -777,6 +799,34 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           <div className="bulk-progress">{bulkProgress.label} {bulkProgress.done}/{bulkProgress.total}…</div>
         )}
       </div>
+
+      {showContinueStrip && !bulkMode && continueItems.length > 0 && (
+        <div className="continue-strip">
+          <div className="continue-strip-label">Continue listening</div>
+          <div className="continue-strip-row">
+            {continueItems.map(item => (
+              <button
+                key={item.id}
+                className="continue-card"
+                onClick={() => handlePlayContent(item)}
+                title={item.title}
+              >
+                {item.preview_picture ? (
+                  <img src={item.preview_picture} alt="" loading="lazy" />
+                ) : (
+                  <span className="continue-card-art">{continueTypeIcon(item.type)}</span>
+                )}
+                <span className="continue-card-title">{item.title}</span>
+                <span className="continue-card-type">{continueTypeIcon(item.type)}</span>
+                <span
+                  className="continue-card-progress"
+                  style={{ width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%` }}
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading">Loading...</div>
