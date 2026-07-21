@@ -16,42 +16,49 @@ import { useContentStore } from './contentStore';
 const DELAY_MS = 10_000;
 
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
-// Timers that fired while their item was still loaded in the player; these
-// archive the moment the player leaves the item.
-const deferred = new Set<number>();
 let currentPlayerId: number | null = null;
 
 // Called by App whenever the player's current item changes (null = closed).
 export function notifyArchivePlayerItem(id: number | null): void {
   const prev = currentPlayerId;
   currentPlayerId = id;
-  if (prev !== null && prev !== id && deferred.has(prev)) {
-    deferred.delete(prev);
+  if (prev !== null && prev !== id && usePendingArchiveStore.getState().deferred[prev]) {
+    usePendingArchiveStore.getState().consumeDeferred(prev);
     useContentStore.getState().toggleArchived(prev);
   }
 }
 
 interface PendingArchiveStore {
-  /** contentId -> epoch ms when the archive fires (drives the button UI). */
+  /** contentId -> epoch ms when the archive fires (drives the button's Undo state). */
   pending: Record<number, number>;
+  /**
+   * Timers that fired while their item was still loaded in the player; these
+   * archive the moment the player leaves the item. Tracked in state (not a bare
+   * Set) so the button keeps showing Undo, otherwise a second Archive press in
+   * this window would schedule another timer whose later toggleArchived would
+   * UN-archive the by-then-archived item.
+   */
+  deferred: Record<number, true>;
   schedule: (id: number) => void;
   cancel: (id: number) => void;
+  consumeDeferred: (id: number) => void;
 }
 
-export const usePendingArchiveStore = create<PendingArchiveStore>((set) => ({
+export const usePendingArchiveStore = create<PendingArchiveStore>((set, get) => ({
   pending: {},
+  deferred: {},
   schedule: (id) => {
-    if (timers.has(id)) return;
+    if (timers.has(id) || get().deferred[id]) return;
     timers.set(id, setTimeout(() => {
       timers.delete(id);
       set(s => {
         const pending = { ...s.pending };
         delete pending[id];
-        return { pending };
+        return currentPlayerId === id
+          ? { pending, deferred: { ...s.deferred, [id]: true as const } }
+          : { pending };
       });
-      if (currentPlayerId === id) {
-        deferred.add(id);
-      } else {
+      if (currentPlayerId !== id) {
         useContentStore.getState().toggleArchived(id);
       }
     }, DELAY_MS));
@@ -61,11 +68,19 @@ export const usePendingArchiveStore = create<PendingArchiveStore>((set) => ({
     const t = timers.get(id);
     if (t) clearTimeout(t);
     timers.delete(id);
-    deferred.delete(id);
     set(s => {
       const pending = { ...s.pending };
+      const deferred = { ...s.deferred };
       delete pending[id];
-      return { pending };
+      delete deferred[id];
+      return { pending, deferred };
+    });
+  },
+  consumeDeferred: (id) => {
+    set(s => {
+      const deferred = { ...s.deferred };
+      delete deferred[id];
+      return { deferred };
     });
   },
 }));

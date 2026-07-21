@@ -431,8 +431,10 @@ export function FullscreenPlayer({
   const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
-  // Delayed-archive state (player-only): pending map drives the Undo button state.
+  // Delayed-archive state (player-only): pending + deferred both render as Undo
+  // (deferred = timer fired while this item is loaded; archives on player-leave).
   const pendingArchives = usePendingArchiveStore(s => s.pending);
+  const deferredArchives = usePendingArchiveStore(s => s.deferred);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Markdown editor (Content tab) state
@@ -1739,7 +1741,7 @@ export function FullscreenPlayer({
                       // item is still loaded here, and a second press within the window undoes
                       // it before the server wipes anything.
                       const store = usePendingArchiveStore.getState();
-                      if (store.pending[content.id]) store.cancel(content.id);
+                      if (store.pending[content.id] || store.deferred[content.id]) store.cancel(content.id);
                       else store.schedule(content.id);
                       return;
                     }
@@ -1753,15 +1755,15 @@ export function FullscreenPlayer({
                       console.error('Failed to refresh player after archive:', err);
                     }
                   }}
-                  style={content.is_archived || pendingArchives[content.id] ? { color: '#60a5fa' } : undefined}
+                  style={content.is_archived || pendingArchives[content.id] || deferredArchives[content.id] ? { color: '#60a5fa' } : undefined}
                 >
                   {content.is_archived
                     ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    : pendingArchives[content.id]
+                    : pendingArchives[content.id] || deferredArchives[content.id]
                       ? <Undo2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                       : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   }
-                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] ? 'Undo' : 'Archive'}
+                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] || deferredArchives[content.id] ? 'Undo' : 'Archive'}
                   {!content.is_archived && pendingArchives[content.id] && <span className="pending-archive-bar" />}
                 </button>
                 <button

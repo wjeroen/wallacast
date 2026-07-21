@@ -176,8 +176,13 @@ router.post('/bulk', async (req, res) => {
         [userId, ids]
       );
       for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
-      // Archiving always drops any transient podcast-cache copy (no-op when absent).
-      for (const cid of ids) evictCachedPodcastAudio(cid).catch(() => {});
+      // Archiving drops transient podcast-cache copies, except for starred items
+      // (starred keeps audio on archive, cached podcast copies included).
+      const nonStarredIds = await query(
+        'SELECT id FROM content_items WHERE user_id = $1 AND id = ANY($2::int[]) AND is_starred = false',
+        [userId, ids]
+      );
+      for (const row of nonStarredIds.rows) evictCachedPodcastAudio(row.id).catch(() => {});
       const r = await query(
         `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
          WHERE user_id = $1 AND id = ANY($2::int[])`,
@@ -804,12 +809,14 @@ router.patch('/:id', async (req, res) => {
 
       if (contentResult.rows.length > 0) {
         const { has_blob, blob_bytes, type, is_starred: dbStarred } = contentResult.rows[0];
-        // Archiving always drops any transient podcast-cache copy (no-op when absent).
-        evictCachedPodcastAudio(id).catch(() => {});
 
         // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
         // If updates.is_starred is present, use it. Otherwise use DB value.
         const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
+
+        // Archiving drops any transient podcast-cache copy, UNLESS starred: starred
+        // items keep their audio on archive, cached podcast copies included.
+        if (!effectiveStarred) evictCachedPodcastAudio(id).catch(() => {});
 
         // Audio may be in the DB blob (legacy) OR on the disk volume (new). Check both, so
         // archiving still frees space after the migration (when audio_data is NULL).
