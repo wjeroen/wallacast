@@ -221,6 +221,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     manual_queue_always_autoplay: 'true',
     autoplay_on_open: 'false',
     show_continue_listening: 'true',
+    warn_archive_removes_audio: 'true',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -341,6 +342,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         max_narrated_comments: loaded.max_narrated_comments || '50',
         manual_queue_always_autoplay: loaded.manual_queue_always_autoplay !== undefined && loaded.manual_queue_always_autoplay !== null ? loaded.manual_queue_always_autoplay : 'true',
         show_continue_listening: loaded.show_continue_listening !== undefined && loaded.show_continue_listening !== null ? loaded.show_continue_listening : 'true',
+        warn_archive_removes_audio: loaded.warn_archive_removes_audio !== undefined && loaded.warn_archive_removes_audio !== null ? loaded.warn_archive_removes_audio : 'true',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -505,7 +507,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
-        'show_continue_listening',
+        'show_continue_listening', 'warn_archive_removes_audio',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
@@ -974,6 +976,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
               />
               Show the continue-listening row in the library
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.warn_archive_removes_audio === 'true'}
+                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
+              />
+              Warn when archiving removes generated audio
             </label>
           </div>
 

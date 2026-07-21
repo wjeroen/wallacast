@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
-import { getChatClientForJob, getUserSetting, chatCreateWithRetry } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting, chatCreateWithRetry, chatInputCharCap } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 
 /**
@@ -238,9 +238,11 @@ async function buildSummaryPrompt(
   return resolveCustomPrompt(userId, settingKey, def, { maxTweets, maxWords });
 }
 
-const ARTICLE_INPUT_CAP = 200000;       // chars sent to the article summarizer
+// Input caps are model-aware since 2026-07-21: chatInputCharCap() gives the model's
+// safe input budget (400k chars baseline, more for big-context models), so most
+// "long" articles are summarized IN FULL instead of silently truncated at a fixed
+// 200k. Only the comment-summarizer's article-context slice stays small and fixed.
 const ARTICLE_CONTEXT_CAP = 50000;      // chars of article context for the comment summarizer
-const COMMENTS_INPUT_CAP = 200000;      // chars of comments sent to the comment summarizer
 
 /**
  * Generate (or regenerate) the article + comment summaries for a content item.
@@ -296,13 +298,17 @@ export async function generateSummaryForContent(contentId: number): Promise<void
     const descriptionContext = isPodcast && item.description
       ? htmlToPlainText(item.description).slice(0, 2000)
       : '';
+    const articleInputCap = chatInputCharCap(chat.model);
+    if (articleText.length > articleInputCap) {
+      console.warn(`[Summary] Input exceeds the model cap, truncating: ${articleText.length} chars -> ${articleInputCap}`);
+    }
     const userContent = isPodcast
       ? metaHeader +
         (descriptionContext
           ? `EPISODE DESCRIPTION (context only, do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
           : '') +
-        `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${articleText.slice(0, ARTICLE_INPUT_CAP)}`
-      : metaHeader + articleText.slice(0, ARTICLE_INPUT_CAP);
+        `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${articleText.slice(0, articleInputCap)}`
+      : metaHeader + articleText.slice(0, articleInputCap);
 
     const articleResponse = await chatCreateWithRetry(chat.client, {
       model: chat.model,
@@ -348,7 +354,7 @@ export async function generateSummaryForContent(contentId: number): Promise<void
               content:
                 metaHeader +
                 `ARTICLE (context only, do not summarize this):\n${articleText.slice(0, ARTICLE_CONTEXT_CAP)}\n\n` +
-                `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, COMMENTS_INPUT_CAP)}`,
+                `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, Math.max(150000, chatInputCharCap(chat.model) - ARTICLE_CONTEXT_CAP))}`,
             },
           ],
         }, '[Summary] comments');

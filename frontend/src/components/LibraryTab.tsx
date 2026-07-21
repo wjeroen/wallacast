@@ -103,6 +103,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
   // "Continue listening" strip under the filters (Settings toggle, default on).
   const [showContinueStrip, setShowContinueStrip] = useState(true);
+  // Confirm before archiving wipes generated audio (Settings toggle, default on).
+  const [warnArchiveAudio, setWarnArchiveAudio] = useState(true);
 
   // Fetch content on mount
   useEffect(() => {
@@ -116,6 +118,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       .catch(() => {});
     userSettingsAPI.get('show_continue_listening')
       .then(res => setShowContinueStrip(res.data.value !== 'false'))
+      .catch(() => {});
+    userSettingsAPI.get('warn_archive_removes_audio')
+      .then(res => setWarnArchiveAudio(res.data.value !== 'false'))
       .catch(() => {});
   }, []);
 
@@ -311,6 +316,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   };
 
   const handleToggleArchive = async (id: number) => {
+    // The one destructive case: archiving a NON-STARRED article/text WITH generated
+    // audio wipes that audio server-side. Warn exactly there (toggleable in Settings).
+    const item = content.find(c => c.id === id);
+    if (
+      warnArchiveAudio && item && !item.is_archived && !item.is_starred &&
+      (item.type === 'article' || item.type === 'text') && item.audio_url &&
+      !confirm("Archiving removes this item's generated audio. Archive anyway?")
+    ) return;
     await toggleArchived(id);
   };
 
@@ -765,7 +778,20 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <ArchiveRestore size={16} style={{ color: '#60a5fa' }} />
               </button>
             ) : (
-              <button onClick={() => runInstantBulk('archive')} title="Archive selected">
+              <button
+                onClick={() => {
+                  const risky = selectedContentItems().filter(i =>
+                    !i.is_archived && !i.is_starred && (i.type === 'article' || i.type === 'text') && i.audio_url
+                  ).length;
+                  runInstantBulk(
+                    'archive',
+                    warnArchiveAudio && risky > 0
+                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes.`
+                      : undefined
+                  );
+                }}
+                title="Archive selected"
+              >
                 <Archive size={16} />
               </button>
             )}
