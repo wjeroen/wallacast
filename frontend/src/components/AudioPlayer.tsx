@@ -61,6 +61,10 @@ export function AudioPlayer({
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(getStoredSpeed);
   const [speedOptions, setSpeedOptions] = useState<number[]>(DEFAULT_SPEEDS);
+  // Resume-seek bookkeeping: bounded attempts, and the target we gave up on (shows
+  // the manual "Resume at MM:SS" chip; saves stay suppressed until the user acts).
+  const resumeAttemptsRef = useRef(0);
+  const [resumeFailedAt, setResumeFailedAt] = useState(0);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -287,6 +291,8 @@ export function AudioPlayer({
     }
     lastAudioSrcRef.current = audioSrc;
     pendingResumeSeekRef.current = startPosition > 0 ? startPosition : 0;
+    resumeAttemptsRef.current = 0;
+    setResumeFailedAt(0);
     audio.src = audioSrc;
 
     const storedSpeed = getStoredSpeed();
@@ -297,12 +303,10 @@ export function AudioPlayer({
       if (startPosition > 0) {
         audio.currentTime = startPosition;
         setCurrentTime(startPosition);
-        // If the stream accepted the seek, we're done; otherwise leave the
-        // pending marker set so the retry listeners keep trying and no save
-        // can wipe the stored position in the meantime.
-        if (Math.abs(audio.currentTime - startPosition) < 2) {
-          pendingResumeSeekRef.current = 0;
-        }
+        // Success is confirmed ONLY in the 'seeked' event handler: assigning
+        // currentTime echoes the target synchronously even when the browser later
+        // aborts the seek and snaps back to ~0, so reading it back here proves
+        // nothing (that false success re-enabled saves and wiped real positions).
       }
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
@@ -341,24 +345,57 @@ export function AudioPlayer({
     // Keep retrying the resume-seek until the stream becomes seekable (see
     // pendingResumeSeekRef). Attached once here (refs only), because the setup
     // effect's listeners get torn down on every content-object refresh.
+    const RESUME_MAX_ATTEMPTS = 6;
     const retryResumeSeek = () => {
+      const target = pendingResumeSeekRef.current;
+      if (!target) return;
+      if (audio.seeking) return; // a seek is in flight, let 'seeked' judge it
+      // Steady state near the target (no seek in flight) = genuinely resumed.
+      // currentTime only lies while a seek is pending, so this read is trustworthy.
+      if (Math.abs(audio.currentTime - target) < 2) {
+        pendingResumeSeekRef.current = 0;
+        resumeAttemptsRef.current = 0;
+        return;
+      }
+      if (resumeAttemptsRef.current >= RESUME_MAX_ATTEMPTS) {
+        setResumeFailedAt(target); // surface the manual resume chip
+        return;
+      }
+      resumeAttemptsRef.current++;
+      try { audio.currentTime = target; } catch { /* not seekable yet, retry on next event */ }
+    };
+    // The ONLY trustworthy resume confirmation: the browser fired 'seeked' AND the
+    // position is near the target at that moment. An aborted seek also fires
+    // 'seeked' but lands elsewhere (usually ~0), which counts as a failed attempt.
+    const handleResumeSeeked = () => {
       const target = pendingResumeSeekRef.current;
       if (!target) return;
       if (Math.abs(audio.currentTime - target) < 2) {
         pendingResumeSeekRef.current = 0;
+        resumeAttemptsRef.current = 0;
+        setResumeFailedAt(0);
+        setCurrentTime(audio.currentTime);
+        console.log(`[AudioPlayer] Resume-seek confirmed at ${audio.currentTime.toFixed(1)}s`);
         return;
       }
-      try { audio.currentTime = target; } catch { /* not seekable yet */ }
-      if (Math.abs(audio.currentTime - target) < 2) {
-        console.log(`[AudioPlayer] Resume-seek to ${target}s applied on retry`);
-        setCurrentTime(target);
-        pendingResumeSeekRef.current = 0;
+      if (resumeAttemptsRef.current >= RESUME_MAX_ATTEMPTS) {
+        console.warn(`[AudioPlayer] Resume-seek gave up after ${RESUME_MAX_ATTEMPTS} attempts (target ${target}s)`);
+        setResumeFailedAt(target);
+        return;
       }
+      resumeAttemptsRef.current++;
+      try { audio.currentTime = target; } catch { /* retry on next event */ }
     };
     const handleEnded = () => {
       setIsPlaying(false);
       userPausedRef.current = false; // natural end, reset intent
-      savePlaybackPosition(0);
+      // Reset-to-start is only valid for a GENUINE finish. A truncated or aborted
+      // stream can fire 'ended' mid-file, and unconditionally saving 0 here wiped
+      // real positions. Near the end = within 30s of duration or past 99%.
+      const dur = audio.duration;
+      const nearEnd = isFinite(dur) && dur > 0 &&
+        (dur - audio.currentTime <= 30 || audio.currentTime / dur >= 0.99);
+      if (nearEnd) savePlaybackPosition(0);
       // Defer the queue check so the state update lands before parent reloads content
       setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
@@ -425,6 +462,7 @@ export function AudioPlayer({
     audio.addEventListener('canplay', retryResumeSeek);
     audio.addEventListener('progress', retryResumeSeek);
     audio.addEventListener('play', retryResumeSeek);
+    audio.addEventListener('seeked', handleResumeSeeked);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
@@ -436,6 +474,7 @@ export function AudioPlayer({
       audio.removeEventListener('canplay', retryResumeSeek);
       audio.removeEventListener('progress', retryResumeSeek);
       audio.removeEventListener('play', retryResumeSeek);
+      audio.removeEventListener('seeked', handleResumeSeeked);
     };
   }, []);
 
@@ -517,6 +556,8 @@ export function AudioPlayer({
     const audio = audioRef.current;
     // An explicit user seek takes over from any still-pending resume-seek.
     pendingResumeSeekRef.current = 0;
+    resumeAttemptsRef.current = 0;
+    setResumeFailedAt(0);
     audio.currentTime = time;
     setCurrentTime(time);
     savePlaybackPosition(time);
@@ -701,6 +742,7 @@ export function AudioPlayer({
           currentTime={currentTime}
           duration={duration}
           playbackSpeed={playbackSpeed}
+          resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
           activeWordIndex={activeWordIndex}
           transcriptWords={parsedTranscriptWords}

@@ -9,6 +9,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
+import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import { isVeryLongArticle } from './format';
 import type { ContentItem } from './types';
@@ -349,6 +350,13 @@ function App() {
       // Loop, try the new "next" after mutation
     }
   };
+
+  // Tell the delayed-archive machinery which item the player holds: a pending
+  // archive that fires while its item is still loaded defers to player-leave,
+  // and leaving the item is exactly this id changing (or becoming null).
+  useEffect(() => {
+    notifyArchivePlayerItem(currentContent?.id ?? null);
+  }, [currentContent?.id]);
 
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');

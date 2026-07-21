@@ -155,12 +155,20 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         upstreamHeaders['Range'] = range;
       }
 
-      console.log(`[AudioProxy] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
+      console.log(`[AudioProxy:${req.params.id}] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
 
       const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders });
 
+      // Log what upstream ACTUALLY answered: a 200 to a ranged request means the
+      // CDN ignored the Range header, which breaks browser seeking silently.
+      const contentRangeHdr = upstreamRes.headers.get('content-range');
+      console.log(`[AudioProxy:${req.params.id}] upstream ${upstreamRes.status}${contentRangeHdr ? ` ${contentRangeHdr}` : ''}`);
+      if (range && upstreamRes.status === 200) {
+        console.warn(`[AudioProxy:${req.params.id}] upstream ignored Range header (200 to a ranged request)`);
+      }
+
       if (!upstreamRes.ok && upstreamRes.status !== 206) {
-        console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
+        console.error(`[AudioProxy:${req.params.id}] Upstream error ${upstreamRes.status} for ${audioUrl}`);
         return res.status(502).json({ error: 'Upstream audio unavailable' });
       }
 

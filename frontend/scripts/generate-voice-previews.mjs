@@ -28,7 +28,7 @@ const KOKORO_VOICES = [
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const kokoroName = (id) => cap(id.split('_')[1]); // af_heart -> Heart
-const sentence = (name) => `Hi, I'm ${name}. This is how I sound reading your articles.`;
+const sentence = (name) => `Hi, I'm ${name}. This is how I sound reading your articles, from the title and the author to the paragraphs and the comments.`;
 
 // Must match previewFile() in SettingsPage.tsx.
 const fileFor = (model, voice) => `${model.replace(/[^a-zA-Z0-9]+/g, '_').toLowerCase()}--${voice}.mp3`;

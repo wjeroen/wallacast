@@ -637,6 +637,10 @@ export function flattenEmailTables(root: Element): void {
   const tables = Array.from(root.querySelectorAll('table[role="presentation"]')).reverse();
   for (const table of tables) {
     const container = doc.createElement('div');
+    // The email's visual rhythm lived in table padding, which the unwrap discards;
+    // a margin per block restores it (nested blocks collapse margins, so spacing
+    // between the user-visible sections stays ~one line, not cumulative).
+    container.setAttribute('style', 'margin-bottom: 1em');
     for (const row of Array.from((table as HTMLTableElement).rows)) {
       for (const cell of Array.from(row.cells)) {
         const cellDiv = doc.createElement('div');

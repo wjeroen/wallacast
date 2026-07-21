@@ -622,7 +622,7 @@ export async function generateLLMAlignment(
   userId: number,
   transcriptWords: TranscriptWord[]
 ): Promise<LLMAlignmentResult> {
-  console.log('[LLM-Align] Starting LLM-based content alignment...');
+  console.log(`[LLM-Align:${contentId}] Starting LLM-based content alignment...`);
 
   // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
@@ -635,6 +635,8 @@ export async function generateLLMAlignment(
   }
 
   const content = result.rows[0];
+  // One line naming the item, so parallel alignment runs are tellable apart in logs.
+  console.log(`[LLM-Align:${contentId}] Aligning "${(content.title || 'untitled').slice(0, 60)}"`);
 
   // Check if image descriptions are enabled. If disabled, don't pass old Gemini data
   // to extractContentElements. When disabled, images show as plain [Image] in the element
@@ -855,7 +857,7 @@ ${closingInstruction}`;
     chatConfig: { client: any; model: string; extraParams?: Record<string, any> },
     label: string
   ): Promise<Map<number, number>> {
-    console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
+    console.log(`[LLM-Align:${contentId}] ${label}: calling ${chatConfig.model}...`);
 
     let response;
     try {
@@ -879,8 +881,8 @@ ${closingInstruction}`;
     }
 
     const responseText = response.choices[0]?.message?.content || '';
-    console.log(`[LLM-Align] ${label}: response ${responseText.length} chars`);
-    console.log(`[LLM-Align] ${label} response:\n${responseText}`);
+    console.log(`[LLM-Align:${contentId}] ${label}: response ${responseText.length} chars`);
+    console.log(`[LLM-Align:${contentId}] ${label} response:\n${responseText}`);
 
     const map = new Map<number, number>();
     const lines = responseText.split('\n');
@@ -909,7 +911,7 @@ ${closingInstruction}`;
       }
     }
 
-    console.log(`[LLM-Align] ${label}: parsed ${map.size} >>> markers`);
+    console.log(`[LLM-Align:${contentId}] ${label}: parsed ${map.size} >>> markers`);
     return map;
   }
 
@@ -953,7 +955,7 @@ ${closingInstruction}`;
           allElements.map((_, idx) => idx).slice(i, i + BATCH_SIZE)
         );
       }
-      console.log(`[LLM-Align] Batching: ${allElements.length} elements into ${batches.length} batches of up to ${BATCH_SIZE}`);
+      console.log(`[LLM-Align:${contentId}] Batching: ${allElements.length} elements into ${batches.length} batches of up to ${BATCH_SIZE}`);
 
       timestampMap = new Map<number, number>();
       for (let b = 0; b < batches.length; b++) {

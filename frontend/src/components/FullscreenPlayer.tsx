@@ -21,6 +21,7 @@ import {
   Star,
   Archive,
   ArchiveRestore,
+  Undo2,
   Trash2,
   SkipBack,
   SkipForward,
@@ -48,6 +49,7 @@ import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
+import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, ContentVersion, Comment } from '../types';
 
@@ -77,6 +79,9 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
+  // When > 0, the automatic resume-seek permanently failed at this position:
+  // show a manual "Resume at MM:SS" chip (clicking it is a normal user seek).
+  resumeTargetTime?: number;
   activeWordIndex?: number;
   transcriptWords?: TranscriptWord[];
   onPlayPause: () => void;
@@ -350,6 +355,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
+  resumeTargetTime = 0,
   activeWordIndex = -1,
   transcriptWords = [],
   onPlayPause,
@@ -425,6 +431,8 @@ export function FullscreenPlayer({
   const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
+  // Delayed-archive state (player-only): pending map drives the Undo button state.
+  const pendingArchives = usePendingArchiveStore(s => s.pending);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Markdown editor (Content tab) state
@@ -1725,10 +1733,18 @@ export function FullscreenPlayer({
                 </button>
                 <button
                   onClick={async () => {
-                    // toggleArchived does the optimistic store update + the server PATCH.
-                    // Archiving an article wipes its audio server-side, so the old optimistic
-                    // spread left the player holding a stale audio_url. Await the PATCH, then
-                    // fetch the fresh item once and hand THAT to the player.
+                    if (!content.is_archived) {
+                      // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
+                      // so it fires even after this player moves on or closes, defers while the
+                      // item is still loaded here, and a second press within the window undoes
+                      // it before the server wipes anything.
+                      const store = usePendingArchiveStore.getState();
+                      if (store.pending[content.id]) store.cancel(content.id);
+                      else store.schedule(content.id);
+                      return;
+                    }
+                    // Unarchiving stays instant. toggleArchived does the optimistic store
+                    // update + the server PATCH; then fetch the fresh item for the player.
                     await toggleArchived(content.id);
                     try {
                       const fresh = await contentAPI.getById(content.id);
@@ -1737,13 +1753,16 @@ export function FullscreenPlayer({
                       console.error('Failed to refresh player after archive:', err);
                     }
                   }}
-                  style={content.is_archived ? { color: '#60a5fa' } : undefined}
+                  style={content.is_archived || pendingArchives[content.id] ? { color: '#60a5fa' } : undefined}
                 >
                   {content.is_archived
                     ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    : pendingArchives[content.id]
+                      ? <Undo2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                      : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   }
-                  {content.is_archived ? 'Unarchive' : 'Archive'}
+                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] ? 'Undo' : 'Archive'}
+                  {!content.is_archived && pendingArchives[content.id] && <span className="pending-archive-bar" />}
                 </button>
                 <button
                   onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
@@ -1956,6 +1975,12 @@ export function FullscreenPlayer({
             <SkipForward size={22} />
           </button>
         </div>
+        )}
+
+        {resumeTargetTime > 0 && (
+          <button className="resume-chip" onClick={() => onSeek(resumeTargetTime)}>
+            Resume at {formatTime(resumeTargetTime)}
+          </button>
         )}
 
         <div className="fullscreen-player-options">
