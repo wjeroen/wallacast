@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
+import { shouldCachePodcastHost } from '../services/podcast-cache.js';
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ router.post('/content/:id', async (req, res) => {
 
     // OPTIMIZED: Select necessary columns for prompt generation
     const contentResult = await query(
-      'SELECT id, audio_url, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, audio_url, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -69,7 +70,8 @@ router.post('/content/:id', async (req, res) => {
     });
 
     // Start transcription in background (don't await)
-    transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt)
+    transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt,
+      content.type === 'podcast_episode' && shouldCachePodcastHost(content.audio_url) ? Number(id) : undefined)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 

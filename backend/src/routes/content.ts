@@ -14,6 +14,7 @@ import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
 import { withAudioToken, audioToken } from '../services/audio-token.js';
+import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 
 const router = express.Router();
@@ -175,6 +176,8 @@ router.post('/bulk', async (req, res) => {
         [userId, ids]
       );
       for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
+      // Archiving always drops any transient podcast-cache copy (no-op when absent).
+      for (const cid of ids) evictCachedPodcastAudio(cid).catch(() => {});
       const r = await query(
         `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
          WHERE user_id = $1 AND id = ANY($2::int[])`,
@@ -573,7 +576,8 @@ router.post('/', async (req, res) => {
         });
         console.log('Generated Whisper Prompt for new episode:', whisperPrompt);
 
-        transcribeWithTimestamps(audioUrlValue, req.user!.userId, whisperPrompt)
+        transcribeWithTimestamps(audioUrlValue, req.user!.userId, whisperPrompt,
+          shouldCachePodcastHost(audioUrlValue) ? createdItem.id : undefined)
           .then(async (result) => {
             await query(
               'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
@@ -723,7 +727,8 @@ router.patch('/:id', async (req, res) => {
               const downloadUrl = (type === 'article' || type === 'text')
                 ? `${audio_url}${audio_url.includes('?') ? '&' : '?'}t=${audioToken(Number(id))}`
                 : audio_url;
-              const result = await transcribeWithTimestamps(downloadUrl, req.user!.userId, whisperPrompt);
+              const result = await transcribeWithTimestamps(downloadUrl, req.user!.userId, whisperPrompt,
+                type === 'podcast_episode' && shouldCachePodcastHost(audio_url) ? Number(id) : undefined);
 
               // Decide up front whether LLM alignment will run (articles/texts that have a body).
               // The frontend stops polling the instant generation_status turns terminal, so we must
@@ -799,6 +804,8 @@ router.patch('/:id', async (req, res) => {
 
       if (contentResult.rows.length > 0) {
         const { has_blob, blob_bytes, type, is_starred: dbStarred } = contentResult.rows[0];
+        // Archiving always drops any transient podcast-cache copy (no-op when absent).
+        evictCachedPodcastAudio(id).catch(() => {});
 
         // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
         // If updates.is_starred is present, use it. Otherwise use DB value.
@@ -1416,7 +1423,8 @@ router.post('/:id/generate-summary', async (req, res) => {
         published_at: contentItem.published_at,
         comments: contentItem.comments,
       });
-      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt)
+      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt,
+        contentItem.type === 'podcast_episode' && shouldCachePodcastHost(contentItem.audio_url) ? Number(id) : undefined)
         .then(async (result) => {
           console.log(`Transcription complete for ${id} (${result.words.length} words), starting summary`);
           await query(

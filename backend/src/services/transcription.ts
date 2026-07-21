@@ -9,6 +9,7 @@ import { getAudioDuration } from './audio-utils.js';
 import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTempDir } from '../config/storage.js';
+import { cachePodcastAudio } from './podcast-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -220,7 +221,10 @@ async function transcribeFile(
 export async function transcribeWithTimestamps(
   audioSource: string | Buffer,
   userId: number,
-  initialPrompt?: string
+  initialPrompt?: string,
+  // When set, the downloaded episode is re-encoded into the transient podcast
+  // cache (callers gate this on podcast type + shouldCachePodcastHost).
+  cachePodcastForId?: number
 ): Promise<{
   text: string;
   words: Array<{ word: string; start: number; end: number }>;
@@ -257,6 +261,13 @@ export async function transcribeWithTimestamps(
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
     tempFiles.push(audioPath);
+
+    // The episode is fully on disk right now, the only moment we cache it.
+    // Awaited (adds ~a minute for long episodes) because the temp file is
+    // deleted in finally; cachePodcastAudio never throws.
+    if (cachePodcastForId) {
+      await cachePodcastAudio(cachePodcastForId, audioPath);
+    }
 
     let transcriptText = '';
     let allWords: any[] = [];

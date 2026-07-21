@@ -8,6 +8,8 @@ import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
+import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/podcast-cache.js';
+import { createReadStream } from 'fs';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -148,6 +150,40 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     // the requested bytes are fetched upstream, never the full file.
     // -------------------------------------------------------------------------
     if (type === 'podcast_episode' && audioUrl) {
+      // Transient cache first (SoundCloud-class hosts, see podcast-cache.ts):
+      // a clean CBR local file gives exact byte-range seeking, no proxy fragility.
+      const cachedSize = await getCachedPodcastAudioSize(req.params.id);
+      if (cachedSize !== null) {
+        const cachedPath = cachedPodcastAudioPath(req.params.id);
+        const onCacheError = (err: Error) => {
+          console.error(`[PodcastCache:${req.params.id}] stream error:`, err.message);
+          if (!res.writableEnded) res.end();
+        };
+        if (range) {
+          const parsed = parseAudioRange(range, cachedSize, 2 * 1024 * 1024);
+          if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${cachedSize}`);
+            return res.status(416).end();
+          }
+          const { start, end } = parsed;
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${cachedSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+            'Content-Type': 'audio/mpeg',
+          });
+          createReadStream(cachedPath, { start, end }).on('error', onCacheError).pipe(res);
+        } else {
+          res.writeHead(200, {
+            'Content-Length': cachedSize,
+            'Accept-Ranges': 'bytes',
+            'Content-Type': 'audio/mpeg',
+          });
+          createReadStream(cachedPath).on('error', onCacheError).pipe(res);
+        }
+        return;
+      }
+
       const upstreamHeaders: Record<string, string> = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       };
