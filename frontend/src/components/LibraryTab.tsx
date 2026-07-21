@@ -322,7 +322,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     if (
       warnArchiveAudio && item && !item.is_archived && !item.is_starred &&
       (item.type === 'article' || item.type === 'text') && item.audio_url &&
-      !confirm("Archiving removes this item's generated audio. Archive anyway?")
+      !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")
     ) return;
     await toggleArchived(id);
   };
@@ -419,14 +419,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       !item.audio_url &&
       (!item.generation_status || ['idle', 'failed', 'completed'].includes(item.generation_status))
     );
-    const eligible = candidates.filter(item => !item.comment_count || item.comment_count <= maxComments);
-    const skipped = candidates.length - eligible.length;
+    const notTooChatty = candidates.filter(item => !item.comment_count || item.comment_count <= maxComments);
+    const skipped = candidates.length - notTooChatty.length;
+    // Mirror the single-item very-long gate: bulk skips instead of asking per item.
+    const eligible = notTooChatty.filter(item => !isVeryLongArticle(item));
+    const skippedLong = notTooChatty.length - eligible.length;
 
     if (eligible.length === 0) {
       alert('No selected items are eligible (needs to be an article/text without audio).');
       return;
     }
-    const skipNote = skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments. Generate those individually.` : '';
+    const skipNote =
+      (skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments. Generate those individually.` : '') +
+      (skippedLong > 0 ? `\n\nSkipping ${skippedLong} very long article(s) (over 100,000 characters). Generate those individually.` : '');
     if (!confirm(`Generate audio for ${eligible.length} item(s)? This uses your TTS API credits.${skipNote}`)) return;
     await runSequentialBulk('Starting audio generation', eligible.map(i => i.id), id => contentAPI.generateAudio(id, false));
   };
@@ -486,7 +491,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     setOpenDropdown(null);
     const item = content.find(c => c.id === id);
-    if (item && isVeryLongArticle(item) && !confirm('This article is very long. Generate audio anyway?')) return;
+    if (item && isVeryLongArticle(item) && !confirm(`This article is very long (${(item.content || '').length.toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
     if (item && item.comment_count && item.comment_count > 0) {
       let maxComments = 50;
       try {
@@ -786,7 +791,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   runInstantBulk(
                     'archive',
                     warnArchiveAudio && risky > 0
-                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes.`
+                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes (starred items keep theirs).`
                       : undefined
                   );
                 }}

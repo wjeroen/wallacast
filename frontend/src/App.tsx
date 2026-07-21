@@ -274,7 +274,7 @@ function App() {
     const queueRow = qs.manualItems.find(m => m.id === item.id);
     if (!queueRow) return; // defensive, should not happen
     const proceed = confirm(
-      `"${item.title}" has no audio yet. Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
+      `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${(item.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
     if (!proceed) return;
     qs.markPendingRequeue(item.id);
@@ -333,7 +333,7 @@ function App() {
         return;
       }
       const shouldGenerate = confirm(
-        `"${nextItem.title}" has no audio yet. Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
+        `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${(nextItem.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
       );
       if (shouldGenerate) {
         qs.markPendingRequeue(nextItem.id);
@@ -460,7 +460,7 @@ function App() {
   const handleGenerateAudio = async (regenerate: boolean) => {
     if (!currentContent) return;
 
-    if (isVeryLongArticle(currentContent) && !confirm('This article is very long. Generate audio anyway?')) return;
+    if (isVeryLongArticle(currentContent) && !confirm(`This article is very long (${(currentContent.content || '').length.toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
 
     if (currentContent.comment_count && currentContent.comment_count > 0) {
       let maxComments = 50;
@@ -591,13 +591,18 @@ function App() {
       return;
     }
 
-    // Split into generateable and skipped (too many comments)
-    const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
+    // Split into generateable and skipped (too many comments, or very long article)
+    const notTooChatty = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
     const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
+    const eligibleItems = notTooChatty.filter(item => !isVeryLongArticle(item));
+    const skippedLong = notTooChatty.length - eligibleItems.length;
 
     let message = `Generate audio for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`;
     if (skippedItems.length > 0) {
       message += `\n\nSkipping ${skippedItems.length} item${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+    }
+    if (skippedLong > 0) {
+      message += `\n\nSkipping ${skippedLong} very long article${skippedLong !== 1 ? 's' : ''} (over 100,000 characters). Generate those manually.`;
     }
 
     if (eligibleItems.length === 0) {
