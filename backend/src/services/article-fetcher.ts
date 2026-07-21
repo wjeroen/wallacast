@@ -599,6 +599,69 @@ function cleanSubstackContent(contentEl: Element): void {
 
 // --- SUBSTACK HELPERS END ---
 
+// Flatten email-newsletter layout into normal block flow. Newsletters are built from
+// nested fixed-width tables (600px scaffolding marked role="presentation") which refuse
+// to shrink on narrow screens (horizontal scrollbar) and turn the whole email into ONE
+// giant block for the read-along extractor. Gated on the presence of presentation
+// tables, so ordinary articles pass through untouched. Runs at fetch/add time only;
+// already-stored items keep their HTML (refetch to heal them).
+export function flattenEmailTables(root: Element): void {
+  if (!root.querySelector('table[role="presentation"]')) return;
+  const doc = root.ownerDocument!;
+
+  // 1. Drop hidden elements FIRST: emails duplicate content in mobile/desktop variants
+  // suppressed only by inline styles, so flattening without this step would surface
+  // (and narrate) everything twice. Also removes invisible preview-text preheaders.
+  root.querySelectorAll('[style]').forEach(el => {
+    const s = (el.getAttribute('style') || '').toLowerCase();
+    if (/display\s*:\s*none/.test(s) || (/max-height\s*:\s*0/.test(s) && /overflow\s*:\s*hidden/.test(s))) {
+      el.remove();
+    }
+  });
+
+  // 2. Drop tracking beacons: 1-2px images and images whose URL carries
+  // per-recipient tracking parameters (these embed the subscriber's email address).
+  root.querySelectorAll('img').forEach(img => {
+    const w = parseInt(img.getAttribute('width') || '', 10);
+    const h = parseInt(img.getAttribute('height') || '', 10);
+    const src = img.getAttribute('src') || '';
+    if ((w > 0 && w <= 2) || (h > 0 && h <= 2) || /[?&](cs_email|cs_sendid)=/i.test(src)) {
+      img.remove();
+    }
+  });
+
+  // 3. Unwrap presentation tables bottom-up (inner first). Each cell becomes its own
+  // div so adjacent cells' inline content stays visually separated. `table.rows` and
+  // `row.cells` only cover the table's OWN rows per spec, so a genuine data table
+  // nested inside survives intact.
+  const tables = Array.from(root.querySelectorAll('table[role="presentation"]')).reverse();
+  for (const table of tables) {
+    const container = doc.createElement('div');
+    for (const row of Array.from((table as HTMLTableElement).rows)) {
+      for (const cell of Array.from(row.cells)) {
+        const cellDiv = doc.createElement('div');
+        while (cell.firstChild) cellDiv.appendChild(cell.firstChild);
+        if (cellDiv.childNodes.length > 0) container.appendChild(cellDiv);
+      }
+    }
+    table.replaceWith(container);
+  }
+
+  // 4. Prune the leftover scaffolding debris: spacer cells, nbsp-only paragraphs,
+  // and wrappers emptied by the steps above. Repeat until stable (emptying a child
+  // can empty its parent).
+  let removedAny = true;
+  while (removedAny) {
+    removedAny = false;
+    root.querySelectorAll('div, p, span, a').forEach(el => {
+      if (el.querySelector('img, video, iframe, audio')) return;
+      if ((el.textContent || '').replace(/\u00a0/g, ' ').trim() !== '') return;
+      el.remove();
+      removedAny = true;
+    });
+  }
+}
+
 // Strip author-set colours from inline styles so the reader's theme controls text colour.
 // Removes `color` / `background-color` declarations from `style` attributes (keeping other
 // props like width) and drops Substack's `data-color` attribute. Otherwise an explicit
@@ -925,6 +988,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       });
     }
 
+    flattenEmailTables(contentEl);
     stripInlineColors(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';

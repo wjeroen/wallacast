@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent, normalizeEAForumUrl } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -13,7 +13,7 @@ import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
-import { withAudioToken } from '../services/audio-token.js';
+import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 
 const router = express.Router();
@@ -409,6 +409,10 @@ router.post('/', async (req, res) => {
         }
       });
 
+      // Uploaded/pasted HTML can be a saved email newsletter; flatten its fixed-width
+      // table scaffolding just like the URL fetcher does (no-op for normal content).
+      flattenEmailTables(doc.body);
+
       htmlContent = doc.body.innerHTML;
     }
 
@@ -713,7 +717,13 @@ router.patch('/:id', async (req, res) => {
               );
 
               // CHANGED: Removed .slice(0, 1000) here; the service handles the slicing logic centrally.
-              const result = await transcribeWithTimestamps(audio_url, req.user!.userId, whisperPrompt);
+              // Article/text audio requires the per-item HMAC token since the audio-privacy
+              // pass; without it our own internal download gets a 403 Forbidden (this broke
+              // "Regenerate transcript" for articles; podcast URLs are external and tokenless).
+              const downloadUrl = (type === 'article' || type === 'text')
+                ? `${audio_url}${audio_url.includes('?') ? '&' : '?'}t=${audioToken(Number(id))}`
+                : audio_url;
+              const result = await transcribeWithTimestamps(downloadUrl, req.user!.userId, whisperPrompt);
 
               // Decide up front whether LLM alignment will run (articles/texts that have a body).
               // The frontend stops polling the instant generation_status turns terminal, so we must

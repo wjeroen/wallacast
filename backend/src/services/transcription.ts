@@ -246,7 +246,8 @@ export async function transcribeWithTimestamps(
       await fs.writeFile(audioPath, audioSource);
     } else {
       // URL passed, download it (legacy path, used for podcast transcription)
-      console.log(`[Transcription] Downloading audio from ${audioSource}...`);
+      // Log without the query string: article URLs carry the audio access token.
+      console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
       const response = await safeFetch(audioSource);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
       if (!response.body) throw new Error('No response body');
