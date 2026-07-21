@@ -250,6 +250,11 @@ export async function initializeDatabase() {
     const versionMetadataMigration = await fs.readFile(versionMetadataMigrationPath, 'utf-8');
     await client.query(versionMetadataMigration);
 
+    // Run migration to record whether generated audio narrates the item's comments
+    const commentsInAudioMigrationPath = path.join(__dirname, 'migrations', '025_add_comments_in_audio.sql');
+    const commentsInAudioMigration = await fs.readFile(commentsInAudioMigrationPath, 'utf-8');
+    await client.query(commentsInAudioMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

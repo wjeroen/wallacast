@@ -626,7 +626,7 @@ export async function generateLLMAlignment(
 
   // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
-    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data FROM content_items WHERE id = $1',
+    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data, comments_in_audio FROM content_items WHERE id = $1',
     [contentId]
   );
 
@@ -668,7 +668,14 @@ export async function generateLLMAlignment(
   const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
   let commentsNarrated = true;
-  if (isLessWrong || isEAForum) {
+  if (content.comments_in_audio === false || content.comments_in_audio === true) {
+    // Recorded at generation time (migration 025): the ground truth for whether THIS
+    // audio narrates comments. Prevents burning dozens of alignment batches on
+    // comment elements the audio never contains (e.g. comments excluded per-item, or
+    // fetched after the audio was generated).
+    commentsNarrated = content.comments_in_audio;
+  } else if (isLessWrong || isEAForum) {
+    // Legacy items (flag never recorded): fall back to the settings heuristic.
     const setting = await getUserSetting(userId, 'narrate_ea_forum_comments');
     commentsNarrated = setting !== 'false';
   } else if (isSubstack) {

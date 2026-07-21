@@ -1098,6 +1098,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     fullScript += articleBodyScript;
 
+    // Recorded on the item after generation, so alignment knows whether comment
+    // elements exist in THIS audio (instead of guessing from current settings).
+    let commentsInAudio = false;
     if (excludeComments) {
       console.log(`[TTS] Skipping comment narration: excluded by user request`);
     } else if (content.comments) {
@@ -1122,6 +1125,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               if (shouldNarrate) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
+                commentsInAudio = true;
               } else {
                 console.log(`[TTS] Skipping comment narration (${totalCount} comments): disabled by user setting`);
               }
@@ -1141,6 +1145,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
       contentId: contentId,
     });
+
+    // Audio synthesized: record what this audio actually contains (see migration 025).
+    await query('UPDATE content_items SET comments_in_audio = $1 WHERE id = $2', [commentsInAudio, contentId]);
 
     let warning: string | undefined;
     if (chunks > 1) {
