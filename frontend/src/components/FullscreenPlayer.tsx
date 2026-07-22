@@ -1979,6 +1979,10 @@ export function FullscreenPlayer({
         </div>
         )}
 
+        {content.generation_status === 'failed' && content.generation_error && (
+          <div className="player-error-banner">{content.generation_error}</div>
+        )}
+
         {resumeTargetTime > 0 && (
           <button className="resume-chip" onClick={() => onSeek(resumeTargetTime)}>
             Resume at {formatTime(resumeTargetTime)}

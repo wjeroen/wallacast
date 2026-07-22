@@ -4677,6 +4677,18 @@
   border-radius: 0 2px 2px 0;
 }
 
+/* Generation failures surfaced inside the player (the library card shows them too). */
+.player-error-banner {
+  margin: 0.35rem auto 0;
+  max-width: 640px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 0.4rem;
+  border: 1px solid #ef444455;
+  color: #f87171;
+  text-align: center;
+}
+
 /* Shown when the automatic resume-seek permanently failed: manual jump chip. */
 .resume-chip {
   display: block;

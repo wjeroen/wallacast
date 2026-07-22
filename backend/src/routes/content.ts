@@ -702,6 +702,13 @@ router.patch('/:id', async (req, res) => {
       delete updates.dismiss_summary_error;
     }
 
+    // Set in the regenerate_transcript branch, STARTED only after the route's main
+    // UPDATE commits. Starting it inline raced that update: an instant failure (e.g.
+    // the audio download 403) wrote generation_status='failed', which the main UPDATE
+    // then overwrote back to 'generating_transcript', leaving the item stuck
+    // "generating" forever with the error invisible.
+    let deferredTranscriptRegen: (() => Promise<void>) | null = null;
+
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
         'SELECT type, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
@@ -718,7 +725,7 @@ router.patch('/:id', async (req, res) => {
           const whisperPrompt = buildWhisperPrompt({ title, author, published_at, comments });
           console.log('Generated Whisper Prompt:', whisperPrompt);
 
-          (async () => {
+          deferredTranscriptRegen = async () => {
             try {
               await query(
                 'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
@@ -772,10 +779,13 @@ router.patch('/:id', async (req, res) => {
                   );
                   console.log(`[LLM-Align] Complete: ${alignment.elements.length} elements timestamped`);
                 } catch (alignError) {
-                  console.error('[LLM-Align] Failed (non-fatal):', alignError);
+                  console.error('[LLM-Align] Failed:', alignError);
+                  // Surface it (card error + Retry) instead of silently completing
+                  // without read-along; a missing key would otherwise be invisible.
+                  const alignMsg = ((alignError as Error)?.message || String(alignError)).slice(0, 300);
                   await query(
-                    'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                    ['completed', 100, id]
+                    "UPDATE content_items SET generation_status = 'failed', generation_error = $1, generation_progress = 100, current_operation = 'failed_transcript' WHERE id = $2",
+                    [`Transcript is ready, but read-along alignment failed: ${alignMsg}`, id]
                   );
                 }
               }
@@ -789,7 +799,7 @@ router.patch('/:id', async (req, res) => {
                 ['failed', (error as Error).message || 'Failed to regenerate transcript', 0, id]
               );
             }
-          })();
+          };
 
           updates.generation_status = 'generating_transcript';
           updates.generation_progress = 0;
@@ -928,6 +938,11 @@ router.patch('/:id', async (req, res) => {
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Content not found' });
+    }
+
+    // Only now, with the main UPDATE committed, may the transcript job start (see above).
+    if (deferredTranscriptRegen) {
+      deferredTranscriptRegen().catch(err => console.error('Transcript regeneration crashed:', err));
     }
 
     res.json(withAudioToken(result.rows[0]));

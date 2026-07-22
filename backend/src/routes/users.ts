@@ -68,6 +68,7 @@ const VALID_SETTING_KEYS = [
   'playback_speed_options',     // JSON array of speeds the player's speed button cycles through (blank = default set)
   'show_continue_listening',    // Show the continue-listening row in the library (default: true)
   'warn_archive_removes_audio', // Confirm before archiving a non-starred article/text with generated audio (default: true)
+  'generate_read_along',        // Auto-run transcription + alignment after audio generation (default: true; off = audio only)
 ];
 
 // Secret keys that should be masked in responses

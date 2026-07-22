@@ -1196,6 +1196,19 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     }
 
     // Step 6: Transcription (95-100% progress)
+    // User opt-out: audio only, no transcription/alignment (saves Whisper + LLM cost).
+    // The per-item "Regenerate transcript" action still works for items where the
+    // user wants read-along after all.
+    const readAlongEnabled = await getUserSetting(content.user_id, 'generate_read_along');
+    if (readAlongEnabled === 'false') {
+      console.log('[TTS] Read-along disabled by user setting, skipping transcription + alignment');
+      await query(
+        'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+        ['completed', 100, contentId]
+      );
+      return { audioUrl, warning };
+    }
+
     console.log('[TTS] Triggering auto-transcription for Read Along...');
     await query(
       'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
@@ -1270,11 +1283,15 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
               console.log(`[TTS] LLM alignment complete: ${alignment.elements.length} elements timestamped`);
             } catch (alignError) {
-              console.error('[TTS] LLM alignment failed (non-fatal):', alignError);
-              // Still mark as completed even if alignment fails
+              console.error('[TTS] LLM alignment failed:', alignError);
+              // The audio and transcript are fine, but read-along will be missing.
+              // Surface that as a visible failure (card shows the error + a Retry
+              // that maps failed_transcript -> regenerate transcript) instead of
+              // silently "completing" without read-along.
+              const msg = ((alignError as Error)?.message || String(alignError)).slice(0, 300);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                ['completed', 100, contentId]
+                "UPDATE content_items SET generation_status = 'failed', generation_error = $1, generation_progress = 100, current_operation = 'failed_transcript' WHERE id = $2",
+                [`Audio and transcript are ready, but read-along alignment failed: ${msg}`, contentId]
               );
             }
           } else {
@@ -1287,10 +1304,13 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       })
       .catch(async (err) => {
           console.error('[TTS] Auto-transcription failed:', err);
-          // Still mark as completed (audio is ready even without transcript)
+          // The audio is ready and playable, but read-along will be missing. Surface
+          // it (card error + Retry -> regenerate transcript) instead of silently
+          // "completing"; a missing API key would otherwise be invisible.
+          const msg = (err?.message || String(err)).slice(0, 300);
           await query(
-            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-            ['completed', 100, contentId]
+            "UPDATE content_items SET generation_status = 'failed', generation_error = $1, generation_progress = 100, current_operation = 'failed_transcript' WHERE id = $2",
+            [`Audio is ready, but transcription for read-along failed: ${msg}`, contentId]
           );
       });
 

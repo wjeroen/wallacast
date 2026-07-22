@@ -210,6 +210,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
+    generate_read_along: 'true',
     // Summaries
     auto_generate_summary: 'false',
     summarize_comments: 'true',
@@ -333,6 +334,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
+        generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
@@ -507,7 +509,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
-        'show_continue_listening', 'warn_archive_removes_audio',
+        'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
@@ -768,6 +770,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 />
                 Auto-transcribe podcasts
               </label>
+           </div>
+
+           <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={formData.generate_read_along === 'true'}
+                  onChange={(e) => handleChange('generate_read_along', e.target.checked ? 'true' : 'false')}
+                />
+                Generate read-along after audio
+              </label>
+              <small className="settings-hint indent">
+                Off = audio only, no transcription or highlighting. You can still add read-along per item via Regenerate transcript.
+              </small>
            </div>
 
            <div className="form-group checkbox-group">
