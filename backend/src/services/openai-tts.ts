@@ -724,11 +724,12 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
 
     return scriptBody;
   } catch (e) {
-    // The conversational-reply guard must fail the generation loudly; falling
-    // back would produce unpolished audio without the user ever knowing why.
     if (e instanceof NarrationScriptError) throw e;
-    console.warn('Scriptwriting failed, falling back to simple text extraction:', e);
-    return htmlToNarrationText(htmlContent);
+    // No fallback to raw text extraction (user decision 2026-07-22): a broken
+    // narration prep would silently produce worse audio forever. Fail loudly;
+    // the generation error lands on the library card and the player banner.
+    console.error('Scriptwriting failed:', e);
+    throw new Error(`Narration scriptwriter failed: ${(e as Error)?.message || e}`);
   }
 }
 
@@ -1065,10 +1066,18 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     );
 
     const chatConfig = await getChatClientForJob(content.user_id, 'narration');
-    if (chatConfig && sourceContent.includes('<')) {
+    if (!chatConfig) {
+        // No silent downgrade (user decision 2026-07-22): unscripted narration (raw
+        // symbols and digits, junk text, no quote markers) is a worse experience the
+        // user would never know about. Fail loudly; the card + player show the error.
+        throw new Error('No LLM configured for the narration scriptwriter. Add an API key (OpenAI, DeepInfra, OpenRouter, Anthropic, or Gemini) in Settings.');
+    }
+    if (sourceContent.includes('<')) {
         console.log(`[TTS] Scriptwriter using model: ${chatConfig.model}`);
         articleBodyScript = await scriptArticleForListening(content.user_id, sourceContent, chatConfig.client, chatConfig.model, chatConfig.extraParams);
     } else {
+        // Tagless plain text: nothing HTML-shaped to script, plain extraction is the
+        // correct path here, not a degradation.
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
