@@ -289,6 +289,8 @@ This is the technical reference and codebase map for Wallacast (backend structur
     - `getLastRefreshTime()`: Returns timestamp of last feed refresh
   - Simple regex-based XML parsing (no XML library) with support for both attributes and nested tags
 
+- **`services/podcast-cache.ts`**: Transient on-volume cache for podcast episode audio from problem hosts (suffix-matched `CACHEABLE_HOSTS` against the stored `audio_url`'s host). When a transcript is generated for an episode from a listed host, the already-downloaded file is re-encoded CBR (96k mono, loudness-normalized) and stored; the audio route then serves it with exact byte ranges instead of proxying. Covers two failure classes: bad seek behavior (SoundCloud VBR files, read-along drift after far seeks) and dynamically ad-stitched audio (AdsWizz chains, e.g. NYT/Simplecast behind podtrac/pdst.fm: every listening session can be a DIFFERENT file, so transcript timestamps only line up when playback is pinned to the exact bytes Whisper heard). Evicted on archive plus a 2GB LRU (serving touches mtime). Takes effect when an episode's transcript is (re)generated.
+
 - **`services/wallabag-service.ts`**: Wallabag API client (requires per-user credentials)
   - `testConnection()`: Validates Wallabag credentials (URL, client ID/secret, username/password)
   - `getToken()`: OAuth2 token acquisition with automatic refresh
