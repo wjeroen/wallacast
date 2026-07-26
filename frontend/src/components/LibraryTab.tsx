@@ -298,12 +298,17 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       .slice(0, 12);
   }, [content]);
 
-  // Type icon in the app's established type colors (same trio as the card
-  // type pills: article blue, text green, podcast purple).
   const continueTypeIcon = (t: string) =>
-    t === 'podcast_episode' ? <Podcast size={12} style={{ color: '#a855f7' }} />
-      : t === 'text' ? <NotebookPen size={12} style={{ color: '#10b981' }} />
-        : <Newspaper size={12} style={{ color: '#3b82f6' }} />;
+    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
+
+  // The progress bar carries the type identity (icon stays muted). Article and
+  // text use the pill colors; podcast purple is the brighter 400-tier because
+  // the pill purple reads muddy on a 3px line against the dark background.
+  const TYPE_BAR_COLORS: Record<string, string> = {
+    article: '#3b82f6',
+    text: '#10b981',
+    podcast_episode: '#c084fc',
+  };
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
@@ -871,7 +876,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <span className="continue-card-type">{continueTypeIcon(item.type)}</span>
                 <span
                   className="continue-card-progress"
-                  style={{ width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%` }}
+                  style={{
+                    width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%`,
+                    background: TYPE_BAR_COLORS[item.type] || '#3b82f6',
+                  }}
                 />
               </button>
             ))}
