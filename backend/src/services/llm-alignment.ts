@@ -934,7 +934,6 @@ ${closingInstruction}`;
   const useBatching = allElements.length > BATCH_THRESHOLD;
 
   let timestamps: number[];
-  let usedFallback = false;
   try {
     let timestampMap: Map<number, number>;
     let batches: number[][] = [];
@@ -1082,6 +1081,12 @@ ${closingInstruction}`;
         // Never let a failed retry destroy a usable first attempt.
         console.error('[LLM-Align] Quality retry failed, keeping first attempt:', err?.message || err);
       }
+    }
+
+    // An empty map means the model never produced a single usable timestamp line
+    // (e.g. a refusal or an empty reply). That is a failure, not an alignment.
+    if (timestampMap.size === 0) {
+      throw new Error(`the alignment model (${chatConfig.model}) returned no usable timestamps`);
     }
 
     // Build timestamps array from map. Missing elements get previous value
@@ -1290,19 +1295,23 @@ ${closingInstruction}`;
       }
     }
 
-  } catch (parseError: any) {
-    usedFallback = true;
-    const underlying = parseError?.message || parseError;
-    if (parseError?.__llmCallFailed) {
-      console.error(`[LLM-Align] LLM call failed after retries, using FALLBACK even distribution: ${underlying}`);
-    } else {
-      console.error(`[LLM-Align] LLM responded but parsing failed, using FALLBACK even distribution: ${underlying}`);
+  } catch (alignError: any) {
+    // NO FALLBACK. This used to build an evenly-spread fake alignment and return
+    // it as a success, so a quota-dead provider looked like "very bad alignment"
+    // with no error anywhere (user decision 2026-07-26, same principle as the
+    // scriptwriter's removed silent fallback). Failing here reaches the callers'
+    // visible failed state with Retry.
+    const underlying: string = alignError?.message || String(alignError);
+    if (alignError?.__llmCallFailed) {
+      console.error(`[LLM-Align:${contentId}] LLM call failed after retries, failing alignment: ${underlying}`);
+      const quotaLike = /quota|billing|credit|insufficient/i.test(underlying);
+      const hint = quotaLike
+        ? ' This looks like a quota or billing problem, check that provider\'s API key and credit in Settings.'
+        : '';
+      throw new Error(`the alignment model (${chatConfig.model}) failed: ${underlying}.${hint}`);
     }
-    // Fallback: distribute timestamps evenly across the audio duration
-    const totalDuration = transcriptWords.length > 0
-      ? transcriptWords[transcriptWords.length - 1].end
-      : 0;
-    timestamps = allElements.map((_, i) => Math.round((i / Math.max(allElements.length, 1)) * totalDuration * 10) / 10);
+    console.error(`[LLM-Align:${contentId}] Alignment failed: ${underlying}`);
+    throw alignError instanceof Error ? alignError : new Error(underlying);
   }
 
   // Helper: find transcript text near a timestamp for logging
@@ -1316,7 +1325,7 @@ ${closingInstruction}`;
   const sampleTimestamps = timestamps.length <= 10
     ? timestamps
     : [...timestamps.slice(0, 5), '...', ...timestamps.slice(-3)];
-  console.log(`[LLM-Align] ${usedFallback ? 'FALLBACK' : 'LLM'} timestamps (sample): [${sampleTimestamps.join(', ')}]`);
+  console.log(`[LLM-Align] LLM timestamps (sample): [${sampleTimestamps.join(', ')}]`);
   console.log(`[LLM-Align] Timestamp range: ${timestamps[0]}s to ${timestamps[timestamps.length - 1]}s`);
 
   // Log element-to-timestamp mapping for first few elements
