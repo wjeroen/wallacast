@@ -969,7 +969,7 @@ export function FullscreenPlayer({
     const titleEl = elements.find(e => e.type === 'title');
     const metaElements = elements.filter(e => e.type === 'meta');
     const bodyElements = elements.filter(e =>
-      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
+      ['heading', 'paragraph', 'image', 'blockquote', 'tweet', 'list', 'code-block', 'llm-block'].includes(e.type)
     );
     const commentDivider = elements.find(e => e.type === 'comment-divider');
     const commentElements = elements.filter(e => e.type === 'comment');

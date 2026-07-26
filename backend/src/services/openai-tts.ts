@@ -59,6 +59,7 @@ export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio nar
  * End every header (h1, h2, h3) with a period to enforce a breath pause.
  * Precede list items with transition words (e.g., "First," "Second," "Next")
  * Wrap blockquotes with explicit spoken markers: "Start of a quote: [The quote] End of the quote."
+ * Tweet embeds (blockquote with class "twitter-tweet"): instead of the generic quote markers, announce "A tweet by [author name]: [the tweet text]" then read the like/reply counts if present, then say "End of tweet." Read the tweet text verbatim. Skip the @handle and the date.
  * For LLM content blocks (div with class "llm-content-block" and data-model-name attribute): announce the model name before the content: "The following was written by [model name]: [content] End of AI-generated section."
  * Quotes within sentences can simply be turned from "He said, 'I am hungry', before he grabbed a sandwich." into "He said, quote, I am hungry, before he grabbed a sandwich."
  * For links/URLs: NEVER read out a full URL. Only read the anchor text. If a bare URL appears without anchor text, say just the domain name (e.g., "example dot com"). If the context relies on the link, append "linked here."

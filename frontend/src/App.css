@@ -3437,7 +3437,9 @@
   color: var(--t1);
 }
 
-.article-content blockquote.twitter-tweet img {
+/* Legacy avatar imgs inside old stored tweet embeds stay 24px circles.
+   tweet-photo (real photos in the canonical card) is excluded below. */
+.article-content blockquote.twitter-tweet img:not(.tweet-photo) {
   width: 24px !important;
   height: 24px !important;
   border-radius: 50% !important;
@@ -3447,20 +3449,23 @@
   object-fit: cover;
 }
 
-.article-content blockquote.twitter-tweet p {
+.article-content blockquote.twitter-tweet p,
+.read-along-element blockquote.twitter-tweet p {
   margin: 0.5em 0;
   color: var(--t1);
   font-style: normal;
   line-height: 1.5;
 }
 
-.article-content blockquote.twitter-tweet > a {
+.article-content blockquote.twitter-tweet > a,
+.read-along-element blockquote.twitter-tweet > a {
   color: #60a5fa;
   font-size: 0.85rem;
   text-decoration: none;
 }
 
-.article-content blockquote.twitter-tweet > a:hover {
+.article-content blockquote.twitter-tweet > a:hover,
+.read-along-element blockquote.twitter-tweet > a:hover {
   text-decoration: underline;
 }
 
@@ -3476,13 +3481,59 @@
   color: var(--t1);
 }
 
-.read-along-element blockquote.twitter-tweet img {
+.read-along-element blockquote.twitter-tweet img:not(.tweet-photo) {
   width: 24px !important;
   height: 24px !important;
   border-radius: 50% !important;
   display: inline-block !important;
   vertical-align: middle;
   margin: 0 8px 0 0 !important;
+}
+
+/* Canonical tweet card children (normalizeTweetEmbeds in the backend fetcher):
+   author line on top, full-size photos, muted footer with date + counts.
+   Scope-free selectors so the card looks identical in the Content tab, the
+   read-along, and comments. */
+blockquote.twitter-tweet .tweet-author {
+  margin: 0 0 0.5em 0;
+  font-style: normal;
+}
+
+blockquote.twitter-tweet .tweet-handle {
+  color: var(--t3);
+  font-size: 0.85em;
+}
+
+blockquote.twitter-tweet img.tweet-photo {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 8px !important;
+  margin: 0.5em 0 !important;
+  object-fit: contain;
+}
+
+blockquote.twitter-tweet .tweet-footer {
+  color: var(--t3);
+  font-size: 0.85rem;
+  margin: 0.5em 0 0 0;
+}
+
+blockquote.twitter-tweet .tweet-footer a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+blockquote.twitter-tweet .tweet-footer a:hover {
+  text-decoration: underline;
+}
+
+/* A quoted tweet nested inside a tweet: smaller inner card */
+blockquote.twitter-tweet.tweet-quoted {
+  margin: 0.75em 0 0 0;
+  max-width: 100%;
+  padding: 12px;
 }
 
 .article-content a {
