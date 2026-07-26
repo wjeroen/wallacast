@@ -408,16 +408,12 @@ export function FullscreenPlayer({
   const tabScrollPositions = useRef<Record<string, number>>({});
   const tabContentRef = useRef<HTMLDivElement>(null);
 
-  // When switching tracks, reset to the appropriate default tab.
-  // Only the queue tab is preserved across advances; content tabs
-  // reset to the default for the new content type (description for
-  // podcasts, read-along for articles/texts).
+  // When switching tracks, KEEP the active tab (so e.g. Summary stays open
+  // while pressing next to read summary after summary). The auto-select
+  // effect below snaps to the new item's first available tab whenever the
+  // kept tab doesn't exist for it, so a missing tab can never be forced.
   useEffect(() => {
     tabScrollPositions.current = {};
-    setActiveTab(prev => {
-      if (prev === 'queue') return prev;
-      return content.type === 'podcast_episode' ? 'description' : 'read-along';
-    });
   }, [content.id]);
 
   const [autoScroll, setAutoScroll] = useState(() => {
@@ -633,7 +629,10 @@ export function FullscreenPlayer({
     }
 
     if ((content.summary || '').trim()) tabs.push('summary');
-    tabs.push('queue');
+    // Queue is a listening feature: audio-less items hide it (the queue only
+    // lists audio items and autoplay skips them, while the prev/next buttons
+    // walk everything, so showing it there would just contradict the buttons).
+    if (content.audio_url) tabs.push('queue');
     return tabs;
   }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
@@ -1735,7 +1734,13 @@ export function FullscreenPlayer({
                 </button>
                 <button
                   onClick={async () => {
-                    if (!content.is_archived) {
+                    // The 10s undo window exists to protect generated audio from an
+                    // accidental archive. When archiving deletes nothing (no audio,
+                    // podcast source audio, or a starred item), archive instantly.
+                    const archiveWipesAudio = !!content.audio_url
+                      && (content.type === 'article' || content.type === 'text')
+                      && !content.is_starred;
+                    if (!content.is_archived && archiveWipesAudio) {
                       // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
                       // so it fires even after this player moves on or closes, defers while the
                       // item is still loaded here, and a second press within the window undoes
@@ -1745,8 +1750,9 @@ export function FullscreenPlayer({
                       else store.schedule(content.id);
                       return;
                     }
-                    // Unarchiving stays instant. toggleArchived does the optimistic store
-                    // update + the server PATCH; then fetch the fresh item for the player.
+                    // Unarchiving, and archiving that wipes nothing, stay instant.
+                    // toggleArchived does the optimistic store update + the server
+                    // PATCH; then fetch the fresh item for the player.
                     await toggleArchived(content.id);
                     try {
                       const fresh = await contentAPI.getById(content.id);

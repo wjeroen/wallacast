@@ -329,7 +329,16 @@ function App() {
       // Manual item without audio, prompt user
       const queueRow = qs.manualItems.find(m => m.id === nextItem.id);
       if (!queueRow) {
-        // Defensive: non-manual stream already filters out audio-less items.
+        // Non-manual item without audio: the skip button navigates the whole
+        // filtered stream now, so just OPEN it for reading (no play attempt,
+        // no generate prompt). Autoplay never lands here (getNextItem still
+        // requires audio for non-manual items).
+        try {
+          const res = await contentAPI.getById(nextItem.id);
+          setCurrentContent(res.data);
+        } catch {
+          setCurrentContent(nextItem);
+        }
         return;
       }
       const shouldGenerate = confirm(
@@ -384,7 +393,9 @@ function App() {
       item = { ...item, playback_position: 0 };
     }
     setCurrentContent(item);
-    setAutoPlayToken(t => t + 1);
+    // Only try to play when there is something to play (prev can now land on
+    // an audio-less item, which just opens for reading).
+    if (item.audio_url) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?
