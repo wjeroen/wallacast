@@ -88,8 +88,8 @@ type ChunkResult = { text: string; words: Array<{ word: string; start: number; e
 // condition_on_previous_text=false is the headline fix: it stops Whisper from re-reading its own
 // (possibly repetitive) output for the previous 30s window and snowballing into "even. even. even."
 // loops. The threshold params are Whisper defaults (only bite if DeepInfra runs the temperature
-// fallback loop, harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
-// yet, they're staged follow-ups so we can measure each knob's effect independently.
+// fallback loop, harmless no-ops otherwise). no_repeat_ngram_size is deliberately NOT set yet
+// (staged follow-up so each knob's effect stays measurable independently).
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
   // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false and
   // chunk_level=segment, which returns segment-level text only (no per-word timing). That broke
@@ -99,6 +99,11 @@ const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
   chunk_level: 'word',
   word_timestamps: 'true',
   condition_on_previous_text: 'false',
+  // Staged 2026-07-26 against scattered dropped speech (64 gaps >3s in one Hard Fork episode,
+  // none at chunk seams): with condition_on_previous_text off, every ~30s window decodes cold,
+  // and turbo's pruned decoder sometimes bails on a window's partial sentences. VAD segments at
+  // real speech boundaries instead of blind 30s windows, which targets exactly those bail-outs.
+  vad: 'true',
   temperature: '0',
   compression_ratio_threshold: '2.4',
   logprob_threshold: '-1',
