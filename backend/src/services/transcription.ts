@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { safeFetch } from './url-guard.js';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -7,6 +7,9 @@ import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import { getAudioDuration } from './audio-utils.js';
 import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
+import { getTempDir } from '../config/storage.js';
+import { cachePodcastAudio } from './podcast-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -218,7 +221,10 @@ async function transcribeFile(
 export async function transcribeWithTimestamps(
   audioSource: string | Buffer,
   userId: number,
-  initialPrompt?: string
+  initialPrompt?: string,
+  // When set, the downloaded episode is re-encoded into the transient podcast
+  // cache (callers gate this on podcast type + shouldCachePodcastHost).
+  cachePodcastForId?: number
 ): Promise<{
   text: string;
   words: Array<{ word: string; start: number; end: number }>;
@@ -232,7 +238,7 @@ export async function transcribeWithTimestamps(
 
     const model = config.model;
 
-    const tempDir = path.join(process.cwd(), 'temp');
+    const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
 
     const audioFilename = `audio_transcribe_${Date.now()}.mp3`;
@@ -244,8 +250,9 @@ export async function transcribeWithTimestamps(
       await fs.writeFile(audioPath, audioSource);
     } else {
       // URL passed, download it (legacy path, used for podcast transcription)
-      console.log(`[Transcription] Downloading audio from ${audioSource}...`);
-      const response = await fetch(audioSource);
+      // Log without the query string: article URLs carry the audio access token.
+      console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
+      const response = await safeFetch(audioSource);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
       if (!response.body) throw new Error('No response body');
       await pipeline(response.body, createWriteStream(audioPath));
@@ -255,6 +262,13 @@ export async function transcribeWithTimestamps(
     const fileSizeMB = fileStats.size / (1024 * 1024);
     tempFiles.push(audioPath);
 
+    // The episode is fully on disk right now, the only moment we cache it.
+    // Awaited (adds ~a minute for long episodes) because the temp file is
+    // deleted in finally; cachePodcastAudio never throws.
+    if (cachePodcastForId) {
+      await cachePodcastAudio(cachePodcastForId, audioPath);
+    }
+
     let transcriptText = '';
     let allWords: any[] = [];
     
@@ -262,9 +276,9 @@ export async function transcribeWithTimestamps(
     // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
     let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
 
-    if (fileSizeMB > 25) {
-      console.log(`File exceeds 25 MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
-      const chunkFiles = await splitAudioIntoChunks(audioPath, 15);
+    if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
+      console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
+      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
       tempFiles.push(...chunkFiles);
 
       let timeOffset = 0;
@@ -316,7 +330,7 @@ export async function transcribeWithTimestamps(
       }
     } else {
       let fileToTranscribe = audioPath;
-      if (fileSizeMB > 20) {
+      if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
         console.log('Compressing large file...');
         const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
         await compressAudio(audioPath, compressedPath);

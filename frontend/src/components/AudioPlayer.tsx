@@ -3,15 +3,19 @@ import type { ContentItem } from '../types';
 import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
-
-const VALID_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 function getStoredSpeed(): number {
-  const stored = localStorage.getItem('playbackSpeed');
-  if (stored) {
-    const parsed = parseFloat(stored);
-    if (VALID_SPEEDS.includes(parsed)) return parsed;
-  }
+  try {
+    const stored = localStorage.getItem('playbackSpeed');
+    if (stored) {
+      const parsed = parseFloat(stored);
+      // Validate against the full catalog, not the user's cycle: a speed that was
+      // since removed from the cycle should still restore, the toggle just leaves it
+      // on the next press.
+      if (SPEED_CATALOG.includes(parsed)) return parsed;
+    }
+  } catch { /* private-mode Safari throws on localStorage access */ }
   return 1;
 }
 
@@ -56,6 +60,11 @@ export function AudioPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(getStoredSpeed);
+  const [speedOptions, setSpeedOptions] = useState<number[]>(DEFAULT_SPEEDS);
+  // Resume-seek bookkeeping: bounded attempts, and the target we gave up on (shows
+  // the manual "Resume at MM:SS" chip; saves stay suppressed until the user acts).
+  const resumeAttemptsRef = useRef(0);
+  const [resumeFailedAt, setResumeFailedAt] = useState(0);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -86,6 +95,13 @@ export function AudioPlayer({
   // guard every refresh resets audio.src, interrupts playback, and leaves the
   // user unable to resume without closing and re-opening the player.
   const lastAudioSrcRef = useRef<string>('');
+  // The saved position we still owe the audio element. Proxied podcast streams are
+  // often not seek-ready at loadedmetadata, so the browser silently ignores the
+  // initial currentTime assignment and the track sits at 0:00; the auto-save then
+  // WIPED the real saved position ("podcast reopens at 0" bug). While this is > 0,
+  // every save is suppressed and the seek keeps retrying (canplay/progress/play)
+  // until it sticks or the user seeks manually.
+  const pendingResumeSeekRef = useRef<number>(0);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -170,17 +186,20 @@ export function AudioPlayer({
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
 
-  // Sync speed from backend on mount (for cross-device persistence)
+  // Sync speed + the toggle's speed cycle from backend on mount (cross-device persistence)
   useEffect(() => {
     userSettingsAPI.get('playback_speed').then(res => {
       const val = res.data.value ? parseFloat(res.data.value) : null;
-      if (val && VALID_SPEEDS.includes(val)) {
+      if (val && SPEED_CATALOG.includes(val)) {
         localStorage.setItem('playbackSpeed', String(val));
         setPlaybackSpeed(val);
         if (audioRef.current) {
           audioRef.current.playbackRate = val;
         }
       }
+    }).catch(() => {});
+    userSettingsAPI.get('playback_speed_options').then(res => {
+      setSpeedOptions(parseSpeedOptions(res.data.value));
     }).catch(() => {});
   }, []);
 
@@ -260,9 +279,20 @@ export function AudioPlayer({
     // metadata refreshes, star/archive toggles, etc.). Without this, every
     // one of those resets audio.src and interrupts playback.
     if (audioSrc === lastAudioSrcRef.current) {
+      // Same track already loaded. Tapping the currently-loaded item in the Queue
+      // tab bumps autoPlayToken but leaves the src unchanged, so honor the explicit
+      // autoplay request here before bailing, otherwise the tap does nothing.
+      if (shouldAutoPlay) {
+        userPausedRef.current = false;
+        appPlayRef.current = true;
+        audio.play().catch(() => { appPlayRef.current = false; });
+      }
       return;
     }
     lastAudioSrcRef.current = audioSrc;
+    pendingResumeSeekRef.current = startPosition > 0 ? startPosition : 0;
+    resumeAttemptsRef.current = 0;
+    setResumeFailedAt(0);
     audio.src = audioSrc;
 
     const storedSpeed = getStoredSpeed();
@@ -273,6 +303,10 @@ export function AudioPlayer({
       if (startPosition > 0) {
         audio.currentTime = startPosition;
         setCurrentTime(startPosition);
+        // Success is confirmed ONLY in the 'seeked' event handler: assigning
+        // currentTime echoes the target synchronously even when the browser later
+        // aborts the seek and snaps back to ~0, so reading it back here proves
+        // nothing (that false success re-enabled saves and wiped real positions).
       }
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
@@ -308,10 +342,60 @@ export function AudioPlayer({
 
     const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
     const handleLoadedMetadata = () => setDuration(audio.duration);
+    // Keep retrying the resume-seek until the stream becomes seekable (see
+    // pendingResumeSeekRef). Attached once here (refs only), because the setup
+    // effect's listeners get torn down on every content-object refresh.
+    const RESUME_MAX_ATTEMPTS = 6;
+    const retryResumeSeek = () => {
+      const target = pendingResumeSeekRef.current;
+      if (!target) return;
+      if (audio.seeking) return; // a seek is in flight, let 'seeked' judge it
+      // Steady state near the target (no seek in flight) = genuinely resumed.
+      // currentTime only lies while a seek is pending, so this read is trustworthy.
+      if (Math.abs(audio.currentTime - target) < 2) {
+        pendingResumeSeekRef.current = 0;
+        resumeAttemptsRef.current = 0;
+        return;
+      }
+      if (resumeAttemptsRef.current >= RESUME_MAX_ATTEMPTS) {
+        setResumeFailedAt(target); // surface the manual resume chip
+        return;
+      }
+      resumeAttemptsRef.current++;
+      try { audio.currentTime = target; } catch { /* not seekable yet, retry on next event */ }
+    };
+    // The ONLY trustworthy resume confirmation: the browser fired 'seeked' AND the
+    // position is near the target at that moment. An aborted seek also fires
+    // 'seeked' but lands elsewhere (usually ~0), which counts as a failed attempt.
+    const handleResumeSeeked = () => {
+      const target = pendingResumeSeekRef.current;
+      if (!target) return;
+      if (Math.abs(audio.currentTime - target) < 2) {
+        pendingResumeSeekRef.current = 0;
+        resumeAttemptsRef.current = 0;
+        setResumeFailedAt(0);
+        setCurrentTime(audio.currentTime);
+        console.log(`[AudioPlayer] Resume-seek confirmed at ${audio.currentTime.toFixed(1)}s`);
+        return;
+      }
+      if (resumeAttemptsRef.current >= RESUME_MAX_ATTEMPTS) {
+        console.warn(`[AudioPlayer] Resume-seek gave up after ${RESUME_MAX_ATTEMPTS} attempts (target ${target}s)`);
+        setResumeFailedAt(target);
+        return;
+      }
+      resumeAttemptsRef.current++;
+      try { audio.currentTime = target; } catch { /* retry on next event */ }
+    };
     const handleEnded = () => {
       setIsPlaying(false);
       userPausedRef.current = false; // natural end, reset intent
-      savePlaybackPosition(0);
+      // Reset-to-start is only valid for a GENUINE finish. A truncated or aborted
+      // stream can fire 'ended' mid-file, and unconditionally saving 0 here wiped
+      // real positions. Near the end = within 30s of duration or past 99%.
+      const dur = audio.duration;
+      const nearEnd = isFinite(dur) && dur > 0 &&
+        (dur - audio.currentTime <= 30 || audio.currentTime / dur >= 0.99);
+      if (nearEnd) savePlaybackPosition(0);
       // Defer the queue check so the state update lands before parent reloads content
       setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
@@ -375,6 +459,10 @@ export function AudioPlayer({
     audio.addEventListener('play', handlePlay);
     audio.addEventListener('pause', handlePause);
     audio.addEventListener('error', handleError);
+    audio.addEventListener('canplay', retryResumeSeek);
+    audio.addEventListener('progress', retryResumeSeek);
+    audio.addEventListener('play', retryResumeSeek);
+    audio.addEventListener('seeked', handleResumeSeeked);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
@@ -383,11 +471,19 @@ export function AudioPlayer({
       audio.removeEventListener('play', handlePlay);
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('error', handleError);
+      audio.removeEventListener('canplay', retryResumeSeek);
+      audio.removeEventListener('progress', retryResumeSeek);
+      audio.removeEventListener('play', retryResumeSeek);
+      audio.removeEventListener('seeked', handleResumeSeeked);
     };
   }, []);
 
   const savePlaybackPosition = async (position: number) => {
     if (!content) return;
+    // Never persist anything while the resume-seek hasn't been applied: the
+    // element is sitting at the wrong spot (usually 0:00) through no fault of
+    // the user, and saving would wipe the real stored position.
+    if (pendingResumeSeekRef.current > 0) return;
     const floored = Math.floor(position);
     // Skip save if position hasn't changed by at least 3 seconds (debounce)
     if (lastSavedPositionRef.current >= 0 && Math.abs(floored - lastSavedPositionRef.current) < 3) {
@@ -419,7 +515,10 @@ export function AudioPlayer({
   // Save position on unmount or content change
   useEffect(() => {
     return () => {
-      if (audioRef.current && content) {
+      // Same guard as savePlaybackPosition: if the resume-seek never stuck, the
+      // element still sits at the wrong spot; saving here is what turned "open a
+      // podcast, close it" into wiping its saved position to 0.
+      if (audioRef.current && content && pendingResumeSeekRef.current === 0) {
         // Force save on unmount regardless of debounce
         const floored = Math.floor(audioRef.current.currentTime);
         contentAPI.update(content.id, {
@@ -455,6 +554,10 @@ export function AudioPlayer({
   const handleSeek = (time: number) => {
     if (!audioRef.current) return;
     const audio = audioRef.current;
+    // An explicit user seek takes over from any still-pending resume-seek.
+    pendingResumeSeekRef.current = 0;
+    resumeAttemptsRef.current = 0;
+    setResumeFailedAt(0);
     audio.currentTime = time;
     setCurrentTime(time);
     savePlaybackPosition(time);
@@ -483,9 +586,13 @@ export function AudioPlayer({
   };
 
   const toggleSpeed = () => {
-    const currentIndex = VALID_SPEEDS.indexOf(playbackSpeed);
-    const nextIndex = (currentIndex + 1) % VALID_SPEEDS.length;
-    handleSpeedChange(VALID_SPEEDS[nextIndex]);
+    const currentIndex = speedOptions.indexOf(playbackSpeed);
+    // Current speed can sit outside the configured cycle (options just changed, or a
+    // removed speed restored from storage): jump to the next faster one, wrapping around.
+    const next = currentIndex >= 0
+      ? speedOptions[(currentIndex + 1) % speedOptions.length]
+      : (speedOptions.find(s => s > playbackSpeed) ?? speedOptions[0]);
+    handleSpeedChange(next);
   };
 
   const toggleSleepTimer = () => {
@@ -635,6 +742,7 @@ export function AudioPlayer({
           currentTime={currentTime}
           duration={duration}
           playbackSpeed={playbackSpeed}
+          resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
           activeWordIndex={activeWordIndex}
           transcriptWords={parsedTranscriptWords}

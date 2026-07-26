@@ -16,6 +16,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  const [author, setAuthor] = useState('');
+  const [publishedDate, setPublishedDate] = useState('');
   const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -44,9 +46,13 @@ export function AddTab({ onContentAdded }: AddTabProps) {
 
     // Auto-fill title from filename (strip extension)
     if (!title) {
-      setTitle(file.name.replace(/\.(html|htm)$/i, ''));
+      setTitle(file.name.replace(/\.(html|htm|md|markdown|txt)$/i, ''));
     }
   };
+
+  // Markdown/plain-text uploads get the same Markdown->HTML conversion as the
+  // Text tab; .html/.htm files pass through raw (backend sanitizes either way).
+  const isMarkdownUpload = /\.(md|markdown|txt)$/i.test(uploadedFileName);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,6 +80,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
         data.content = textFormat === 'markdown' ? markdownToHtml(text) : text;
+        if (author) data.author = author;
+        if (publishedDate) data.published_at = publishedDate;
       } else if (contentType === 'upload') {
         if (!uploadedContent || !title) {
           setMessage('Please select a file and enter a title');
@@ -82,7 +90,15 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         }
         data.type = 'text';
         data.title = title;
-        data.content = uploadedContent;
+        data.content = isMarkdownUpload ? markdownToHtml(uploadedContent) : uploadedContent;
+      } else if (contentType === 'podcast_episode') {
+        if (!url) {
+          setMessage('Audio URL is required for podcasts');
+          setLoading(false);
+          return;
+        }
+        // Backend stores the episode's source media under audio_url (see content.ts POST handler).
+        data.audio_url = url;
       }
 
       const response = await contentAPI.create(data);
@@ -94,6 +110,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setUrl('');
       setTitle('');
       setText('');
+      setAuthor('');
+      setPublishedDate('');
       setUploadedContent('');
       setUploadedFileName('');
     } catch (error: any) {
@@ -181,6 +199,24 @@ export function AddTab({ onContentAdded }: AddTabProps) {
               />
             </div>
             <div className="form-group">
+              <label htmlFor="author">Author (optional)</label>
+              <input
+                id="author"
+                type="text"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="published-date">Date (optional)</label>
+              <input
+                id="published-date"
+                type="date"
+                value={publishedDate}
+                onChange={(e) => setPublishedDate(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
               <label>Format</label>
               <div className="text-format-toggle">
                 <button
@@ -221,20 +257,20 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         {contentType === 'upload' && (
           <>
             <div className="form-group">
-              <label>HTML File</label>
+              <label>File</label>
               <input
                 type="file"
-                accept=".html,.htm"
+                accept=".html,.htm,.md,.markdown,.txt"
                 onChange={handleFileSelect}
               />
               {uploadedFileName && (
                 <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
-                  Selected: {uploadedFileName}
+                  Selected: {uploadedFileName}{isMarkdownUpload ? ' (converted from Markdown)' : ''}
                 </p>
               )}
               {!uploadedFileName && (
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
-                  Supports HTML files. For PDFs, use an online PDF-to-HTML converter first.
+                  Supports HTML and Markdown (.md, .txt) files. For PDFs, use an online PDF-to-HTML converter first.
                 </p>
               )}
             </div>
@@ -293,7 +329,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         <h3>Quick Tips</h3>
         <ul>
           <li>Articles will be automatically parsed and formatted for easy reading</li>
-          <li>Upload HTML files to convert them to audio</li>
+          <li>Upload HTML or Markdown files to convert them to audio</li>
           <li>Text content can be converted to audio using AI text-to-speech</li>
           <li>For podcasts, use the Feed tab to subscribe to your favorite shows</li>
         </ul>

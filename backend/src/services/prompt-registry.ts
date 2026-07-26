@@ -39,9 +39,9 @@ export interface PromptDef {
 }
 
 const V = {
-  maxTweets: { token: 'maxTweets', desc: 'max paragraphs for this item (from the length tier)' },
-  maxWords: { token: 'maxWords', desc: 'max words per paragraph (from "Words per paragraph")' },
-  inputImageCount: { token: 'inputImageCount', desc: 'number of image descriptions the first pass dropped' },
+  maxTweets: { token: 'maxTweets', desc: 'the maximum number of paragraphs, set by the length tiers' },
+  maxWords: { token: 'maxWords', desc: 'the maximum words per paragraph, set by Words per paragraph' },
+  inputImageCount: { token: 'inputImageCount', desc: 'how many image descriptions the first pass dropped' },
 };
 
 const CAT_SUMMARIES = 'Summaries';

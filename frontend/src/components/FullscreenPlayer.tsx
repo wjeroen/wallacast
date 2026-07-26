@@ -21,6 +21,7 @@ import {
   Star,
   Archive,
   ArchiveRestore,
+  Undo2,
   Trash2,
   SkipBack,
   SkipForward,
@@ -30,11 +31,25 @@ import {
   ChevronDown,
   Pencil,
   Eye,
+  AlignLeft,
+  Info,
+  Captions,
+  MessageSquareText,
+  MessageSquareOff,
+  Volume2,
+  VolumeOff,
+  Copy,
+  FolderDown,
+  History,
+  ListMusic,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { htmlToMarkdown, markdownToHtml } from '../markdown';
-import { displayUrl } from '../format';
+import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
+import { safeHtml, safeArticleHtml } from '../sanitize';
+import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
 import { useContentStore } from '../store/contentStore';
+import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
 import type { ContentItem, ContentVersion, Comment } from '../types';
 
@@ -64,6 +79,9 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
+  // When > 0, the automatic resume-seek permanently failed at this position:
+  // show a manual "Resume at MM:SS" chip (clicking it is a normal user seek).
+  resumeTargetTime?: number;
   activeWordIndex?: number;
   transcriptWords?: TranscriptWord[];
   onPlayPause: () => void;
@@ -96,6 +114,31 @@ interface FullscreenPlayerProps {
 
 type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
 
+// Tab bar labels and icons. Tab labels stay visible at every width, only the
+// autoscroll toggle's text collapses on narrow screens (its .tab-label span).
+// The 'read-along' tab id is historical: the user-facing name is "Transcript"
+// for every content type (articles read along their aligned TTS transcript,
+// podcasts their Whisper transcript, same data family, one name).
+const TAB_LABELS: Record<TabType, string> = {
+  'content': 'Content',
+  'description': 'Description',
+  'comments': 'Comments',
+  'read-along': 'Transcript',
+  'summary': 'Summary',
+  'history': 'History',
+  'queue': 'Queue',
+};
+
+const TAB_ICONS: Record<TabType, LucideIcon> = {
+  'content': AlignLeft,
+  'description': Info,
+  'comments': MessageCircle,
+  'read-along': Captions,
+  'summary': MessageSquareText,
+  'history': History,
+  'queue': ListMusic,
+};
+
 // Human-readable label for a version snapshot's source (the action that overwrote it).
 function versionSourceLabel(source: ContentVersion['source']): string {
   switch (source) {
@@ -103,6 +146,7 @@ function versionSourceLabel(source: ContentVersion['source']): string {
     case 'refetch': return 'Before refetch';
     case 'restore': return 'Before restore';
     case 'fetch': return 'Original fetch';
+    case 'sync': return 'Before Wallabag sync';
     default: return source;
   }
 }
@@ -117,32 +161,6 @@ function getStoredFontScale(): number {
   }
   return 1;
 }
-
-function cleanHtml(text: string): string {
-  if (!text) return '';
-  let cleaned = text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
-  cleaned = cleaned
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  return cleaned;
-}
-
-function getDomainFromUrl(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-
 
 /**
  * Count total comments including all nested replies.
@@ -159,21 +177,8 @@ function countAllComments(comments: Comment[]): number {
   return count;
 }
 
-function formatTime(seconds: number): string {
-  if (!seconds || !isFinite(seconds)) return '0:00';
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${minutes}:${secs.toString().padStart(2, '0')}`;
-}
-
 /**
- * Build metadata string for a comment (e.g., "5 upvotes · 3 agreement" or "5 likes" for Substack)
+ * Build metadata string for a comment (e.g., "5 upvotes • 3 agreement" or "5 likes" for Substack)
  */
 function buildCommentMetadata(
   meta: LLMAlignmentElement['commentMeta'],
@@ -202,7 +207,57 @@ function buildCommentMetadata(
     }
   }
 
-  return parts.join(' \u00B7 ');
+  return parts.join(' \u2022 ');
+}
+
+// Recursively render a parsed comment with its replies. Hoisted to module scope so its
+// function identity is stable. Previously it was defined INSIDE FullscreenPlayer's render,
+// so its identity changed every render and React unmounted/remounted the whole comment tree
+// on every timeupdate (~4x/sec during playback). Platform flags come in as props (derived
+// from the URL by the parent) and it uses the shared buildCommentMetadata helper, so the
+// "N basescore" leak from the old inline metadata is gone.
+interface CommentComponentProps {
+  comment: Comment;
+  depth?: number;
+  isLessWrong: boolean;
+  isSubstack: boolean;
+}
+function CommentComponent({ comment, depth = 0, isLessWrong, isSubstack }: CommentComponentProps) {
+  const metaStr = buildCommentMetadata(
+    { username: comment.username, date: comment.date, karma: comment.karma, extendedScore: comment.extendedScore, depth },
+    isLessWrong,
+    isSubstack
+  );
+  // Sanitize third-party comment HTML before it reaches the DOM (see sanitize.ts).
+  const safeContent = useMemo(() => safeHtml(comment.content), [comment.content]);
+
+  return (
+    // Odd depths get the alternate shade (comment-alt), LessWrong-style, at every depth.
+    <div className={`comment${depth % 2 === 1 ? ' comment-alt' : ''}`}>
+      <div className="comment-header">
+        <span className="comment-username">{comment.username}</span>
+        {comment.date && (
+          <span className="comment-date">
+            {' \u2022 '}
+            {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
+          </span>
+        )}
+      </div>
+      {metaStr && (
+        <div className="comment-metadata">
+          <span className="comment-votes">{metaStr}</span>
+        </div>
+      )}
+      <div className="comment-content" dangerouslySetInnerHTML={{ __html: safeContent }} />
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="comment-replies">
+          {comment.replies.map((reply, idx) => (
+            <CommentComponent key={idx} comment={reply} depth={depth + 1} isLessWrong={isLessWrong} isSubstack={isSubstack} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface QueueRowProps {
@@ -256,7 +311,7 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.type === 'podcast_episode' && item.podcast_show_name
               ? item.podcast_show_name
               : (item.author || '')}
-            {!item.audio_url && <span className="queue-row-noaudio"> · no audio</span>}
+            {!item.audio_url && <span className="queue-row-noaudio"> • no audio</span>}
           </div>
         </div>
       </div>
@@ -300,6 +355,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
+  resumeTargetTime = 0,
   activeWordIndex = -1,
   transcriptWords = [],
   onPlayPause,
@@ -367,8 +423,6 @@ export function FullscreenPlayer({
   const [autoScroll, setAutoScroll] = useState(() => {
     return localStorage.getItem('readAlongAutoScroll') !== 'false';
   });
-  // Toggle: show newest fetched html_content vs synced LLM alignment
-  const [showUnsyncedContent, setShowUnsyncedContent] = useState(false);
   // Dropdown menu state
   const [showDropdown, setShowDropdown] = useState(false);
   // Display panel state (font size)
@@ -377,11 +431,18 @@ export function FullscreenPlayer({
   const displayPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
+  // Delayed-archive state (player-only): pending + deferred both render as Undo
+  // (deferred = timer fired while this item is loaded; archives on player-leave).
+  const pendingArchives = usePendingArchiveStore(s => s.pending);
+  const deferredArchives = usePendingArchiveStore(s => s.deferred);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Markdown editor (Content tab) state
   const [editing, setEditing] = useState(false);
   const [draftMd, setDraftMd] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [editAuthor, setEditAuthor] = useState('');
+  const [editDate, setEditDate] = useState('');
   const [showEditPreview, setShowEditPreview] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -435,11 +496,6 @@ export function FullscreenPlayer({
     }).catch(() => {});
   }, []);
 
-  // Reset unsynced toggle when content changes
-  useEffect(() => {
-    setShowUnsyncedContent(false);
-  }, [content.id]);
-
   // Persist autoscroll preference
   useEffect(() => {
     localStorage.setItem('readAlongAutoScroll', String(autoScroll));
@@ -488,17 +544,41 @@ export function FullscreenPlayer({
     }
   }, [content?.content_alignment]);
 
+  // ---- Sanitize every HTML string that reaches dangerouslySetInnerHTML (XSS defense) ----
+  // Article and comment HTML comes from the open web (fetched articles, forum/Substack
+  // comments), so it must be cleaned before rendering. Without this, one poisoned comment
+  // could run script in our origin and steal the JWT from localStorage. Memoized so DOMPurify
+  // runs once per content change, not on every ~4x/sec read-along re-render during playback.
+  const safeArticleBodyHtml = useMemo(
+    () => safeArticleHtml(content.html_content || content.content || '<p>No content available</p>'),
+    [content.html_content, content.content]
+  );
+  const safeDescriptionHtml = useMemo(() => safeHtml(content.description), [content.description]);
+  const safeDraftPreview = useMemo(
+    () => safeHtml(markdownToHtml(draftMd) || '<p>Nothing to preview</p>'),
+    [draftMd]
+  );
+  const safeVersionHtml = useMemo(
+    () => (viewingVersion ? safeArticleHtml(viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>') : ''),
+    [viewingVersion]
+  );
+  // Read-along elements: sanitize each once (comments strict, body keeps <style> for math),
+  // keyed by element identity so the render sink is a cheap map lookup during playback.
+  const sanitizedElementHtml = useMemo(() => {
+    const map = new Map<LLMAlignmentElement, string>();
+    const els = (parsedAlignment?.elements || []) as LLMAlignmentElement[];
+    for (const el of els) {
+      if (typeof el.html !== 'string') continue;
+      map.set(el, el.type === 'comment' ? safeHtml(el.html) : safeArticleHtml(el.html));
+    }
+    return map;
+  }, [parsedAlignment]);
+
   // Check if this is the new LLM-based alignment
   const isLLMAlignment = parsedAlignment?.version === 'llm-v1';
 
   // Show content version toggle when alignment data exists (articles and texts)
   const hasAlignment = !!parsedAlignment && isLLMAlignment;
-  const isContentNewer = useMemo(() => {
-    if (!content.audio_generated_at) return false;
-    const contentDate = content.content_fetched_at || content.updated_at;
-    if (!contentDate) return false;
-    return new Date(contentDate) > new Date(content.audio_generated_at);
-  }, [content.audio_generated_at, content.content_fetched_at, content.updated_at]);
 
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
@@ -545,7 +625,9 @@ export function FullscreenPlayer({
       if (hasReadAlongData) tabs.push('read-along');
       tabs.push('content');
       // History only for editable items that actually have at least one prior snapshot.
-      if (versions.length > 0) tabs.push('history');
+      // versions_count (from GET /:id) makes the tab appear instantly on open, the
+      // separately-fetched versions list keeps it visible after edits create snapshots.
+      if (versions.length > 0 || (content.versions_count ?? 0) > 0) tabs.push('history');
     } else {
       tabs.push('read-along');
     }
@@ -553,7 +635,7 @@ export function FullscreenPlayer({
     if ((content.summary || '').trim()) tabs.push('summary');
     tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length]);
+  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -670,54 +752,14 @@ export function FullscreenPlayer({
     userSettingsAPI.set('reader_font_scale', String(newScale)).catch(() => {});
   };
 
-  // Recursive component to render comments with replies (for Comments tab)
-  const CommentComponent = ({ comment, depth = 0 }: { comment: Comment; depth?: number }) => {
-    const metadataParts: string[] = [];
-    const isSS = content.url ? content.url.includes('substack.com') : false;
-    if (comment.karma !== undefined && comment.karma !== null) {
-      const karmaLabel = isSS ? (comment.karma !== 1 ? 'likes' : 'like') : (comment.karma !== 1 ? 'upvotes' : 'upvote');
-      metadataParts.push(`${comment.karma} ${karmaLabel}`);
-    }
-    if (comment.extendedScore) {
-      const isLW = content.url ? content.url.includes('lesswrong.com') : false;
-      if (isLW) {
-        if (typeof comment.extendedScore.agreement === 'number') {
-          metadataParts.push(`${comment.extendedScore.agreement} agreement`);
-        }
-      } else {
-        Object.entries(comment.extendedScore).forEach(([reactionType, count]) => {
-          metadataParts.push(`${count} ${reactionType.toLowerCase()}`);
-        });
-      }
-    }
-
-    return (
-      <div className="comment">
-        <div className="comment-header">
-          <span className="comment-username">{comment.username}</span>
-          {comment.date && (
-            <span className="comment-date">
-              {' \u00B7 '}
-              {(() => { try { return new Date(comment.date).toLocaleDateString('en-GB'); } catch { return comment.date; } })()}
-            </span>
-          )}
-        </div>
-        {metadataParts.length > 0 && (
-          <div className="comment-metadata">
-            <span className="comment-votes">{metadataParts.join(' \u00B7 ')}</span>
-          </div>
-        )}
-        <div className="comment-content" dangerouslySetInnerHTML={{ __html: comment.content }} />
-        {comment.replies && comment.replies.length > 0 && (
-          <div className="comment-replies">
-            {comment.replies.map((reply, idx) => (
-              <CommentComponent key={idx} comment={reply} depth={depth + 1} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  // Platform detection for comment metadata labels (upvotes vs likes, agreement handling).
+  // Prefer the authoritative comment_source column (GET /:id, migration 017). Older items
+  // fetched before that column existed have it null/undefined, so fall back to URL detection.
+  // Passed into the module-scope CommentComponent so it can stay render-stable.
+  const isLessWrongUrl = content.comment_source === 'lesswrong'
+    || (!content.comment_source && !!content.url && content.url.includes('lesswrong.com'));
+  const isSubstackUrl = content.comment_source === 'substack'
+    || (!content.comment_source && !!content.url && content.url.includes('substack.com'));
 
   // --------------------------------------------------------------------------
   // Download data as zip (backend generates zip, frontend triggers download)
@@ -728,6 +770,9 @@ export function FullscreenPlayer({
   const startEdit = () => {
     setEditError(null);
     setDraftMd(htmlToMarkdown(content.html_content || content.content || ''));
+    setEditTitle(content.title || '');
+    setEditAuthor(content.author || '');
+    setEditDate(content.published_at ? content.published_at.slice(0, 10) : '');
     setShowEditPreview(false);
     setEditing(true);
   };
@@ -744,11 +789,22 @@ export function FullscreenPlayer({
     try {
       const html = markdownToHtml(draftMd);
       const plain = (new DOMParser().parseFromString(html, 'text/html').body.textContent || '').trim();
-      await contentAPI.saveEdit(content.id, html, plain);
+      // Only send metadata fields that actually changed, so an untouched date
+      // keeps its original stored timestamp instead of being rewritten.
+      const meta: { title?: string; author?: string | null; published_at?: string | null } = {};
+      const newTitle = editTitle.trim();
+      if (newTitle && newTitle !== content.title) meta.title = newTitle;
+      if (editAuthor.trim() !== (content.author || '')) meta.author = editAuthor.trim() || null;
+      const origDate = content.published_at ? content.published_at.slice(0, 10) : '';
+      if (editDate !== origDate) meta.published_at = editDate || null;
+      await contentAPI.saveEdit(content.id, html, plain, meta);
       // The PATCH response omits html_content; fetch the full fresh item to update the view + store.
       const fresh = await contentAPI.getById(content.id);
       onContentUpdated?.(fresh.data);
       updateItem(content.id, fresh.data);
+      // The edit just snapshotted the previous state; refresh the History tab's
+      // list so the new snapshot shows without closing and reopening the player.
+      loadVersions();
       setEditing(false);
       setShowEditPreview(false);
     } catch (e) {
@@ -827,46 +883,11 @@ export function FullscreenPlayer({
   }, []);
 
   // Copy the readable content (title, link, author, date, body, comments) to
-  // the clipboard as Markdown. What Ctrl+A/Ctrl+C *should* give you without
-  // the player chrome.
+  // the clipboard as Markdown, via the shared contentToMarkdown export.
   const handleCopyContent = async () => {
     setShowDropdown(false);
-
-    const lines: string[] = [`# ${content.title}`];
-    const meta: string[] = [];
-    if (content.author) meta.push(`By ${content.author}`);
-    if (content.type === 'podcast_episode' && content.podcast_show_name) meta.push(content.podcast_show_name);
-    if (content.published_at) meta.push(new Date(content.published_at).toLocaleDateString('en-GB'));
-    if (content.karma !== undefined && content.karma !== null) meta.push(`${content.karma} upvotes`);
-    if (meta.length > 0) lines.push(meta.join(' • '));
-    if (content.url) lines.push(displayUrl(content.url));
-
-    const body = content.html_content
-      ? htmlToMarkdown(content.html_content)
-      : content.type === 'podcast_episode' && content.transcript
-        ? content.transcript
-        : (content.content || '');
-    if (body.trim()) lines.push('', body.trim());
-
-    if (parsedComments.length > 0) {
-      const renderComment = (c: Comment, depth: number): string => {
-        const head: string[] = [c.username];
-        if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
-        if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
-        const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
-        // Replies become nested Markdown quotes
-        const prefixed = depth > 0
-          ? block.split('\n').map(l => `${'>'.repeat(depth)} ${l}`.trimEnd()).join('\n')
-          : block;
-        const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
-        return [prefixed, ...replies].join('\n\n');
-      };
-      lines.push('', `## Comments (${content.comment_count || parsedComments.length})`, '');
-      lines.push(parsedComments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
-    }
-
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
+      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -892,6 +913,47 @@ export function FullscreenPlayer({
     }
   };
 
+  // Two short provenance lines, identical wording in the Content and Transcript
+  // tabs: "Fetched by wallacast/wallabag on [date]" (texts: "Last edited on
+  // [date]") and "Audio generated on [date]".
+  const renderProvenance = () => (
+    <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', lineHeight: '1.6' }}>
+      <div>
+        {content.type === 'article'
+          ? `Fetched by ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
+          : `Last edited on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`}
+      </div>
+      {content.audio_generated_at && content.audio_url && (
+        <div>Audio generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</div>
+      )}
+    </div>
+  );
+
+  // Title/author/date/karma block, mirroring exactly what the TTS intro speaks
+  // (comments are announced later in the narration, so no comment count here).
+  // Sits BELOW the provenance lines + action buttons so it never gets squished.
+  const renderTitleBlock = () => {
+    const parts: string[] = [];
+    if (content.author) parts.push(`By ${content.author}`);
+    if (content.published_at) {
+      const d = new Date(content.published_at);
+      if (!isNaN(d.getTime())) {
+        parts.push(d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
+      }
+    }
+    if (content.karma !== undefined && content.karma !== null) {
+      const isSub = content.url ? content.url.includes('substack.com') : false;
+      const label = isSub ? (content.karma === 1 ? 'like' : 'likes') : (content.karma === 1 ? 'upvote' : 'upvotes');
+      parts.push(`${content.karma} ${label}`);
+    }
+    return (
+      <div className="content-header content-title-block">
+        <h2>{content.title}</h2>
+        {parts.length > 0 && <p className="content-author">{parts.join(' • ')}</p>}
+      </div>
+    );
+  };
+
   // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
   // Renders content EXACTLY like content tab + comments tab, with timestamps
@@ -903,7 +965,8 @@ export function FullscreenPlayer({
     const isLW = content.url ? content.url.includes('lesswrong.com') : false;
     const isSub = content.url ? content.url.includes('substack.com') : false;
 
-    // Split elements into categories
+    // Split elements into categories. Title and author/date meta render as timed
+    // elements in the header below (the TTS speaks them, so they highlight too).
     const titleEl = elements.find(e => e.type === 'title');
     const metaElements = elements.filter(e => e.type === 'meta');
     const bodyElements = elements.filter(e =>
@@ -914,132 +977,79 @@ export function FullscreenPlayer({
 
     return (
       <div className="tab-content-display">
-        {/* Header section (mirrors content tab header) */}
         <div className="content-header" style={{ marginBottom: '1rem' }}>
-          {/* Title - timestamped */}
-          {titleEl && (
-            <div
-              id={`ra-el-${elements.indexOf(titleEl)}`}
-              className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(titleEl.startTime)}
-            >
-              <h2 style={{ margin: '0 0 0.5rem 0' }}>{content.title}</h2>
-            </div>
-          )}
+          {/* Provenance first, then the timed title/meta below it (same order as the content tab) */}
+          {(content.type === 'article' || content.type === 'text') && renderProvenance()}
 
-          {/* Author/date meta - timestamped */}
-          {metaElements.map((el, i) => (
-            <div
-              key={`meta-${i}`}
-              id={`ra-el-${elements.indexOf(el)}`}
-              className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-              onClick={() => onSeek(el.startTime)}
-            >
-              <div dangerouslySetInnerHTML={{ __html: el.html }} />
-            </div>
-          ))}
-
-          {/* Content provenance: two lines for content version and audio/read-along version */}
-          {(content.type === 'article' || content.type === 'text') && (
-            <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', paddingLeft: '3px', lineHeight: '1.6' }}>
-              {/* Line 1: Content version */}
-              <div>
-                {content.type === 'article'
-                  ? `Content ${isContentNewer ? 'updated in' : 'fetched by'} ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
-                  : `Content updated in wallacast on ${(content.content_fetched_at || content.updated_at || content.created_at) ? new Date(content.content_fetched_at || content.updated_at || content.created_at!).toLocaleDateString('en-GB') : 'unknown date'}`
-                }
-                {hasAlignment && (
-                  <>
-                    {' - '}
-                    {showUnsyncedContent ? (
-                      <span style={{ color: '#9ca3af' }}>Shown</span>
-                    ) : (
-                      <button
-                        onClick={() => setShowUnsyncedContent(true)}
-                        style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
-                      >
-                        Show{isContentNewer ? ' (newer)' : ''}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-              {/* Line 2: Audio & read-along version (only when alignment exists) */}
-              {hasAlignment && content.audio_generated_at && (
-                <div>
-                  Audio &amp; read-along generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}
-                  {' - '}
-                  {showUnsyncedContent ? (
-                    <button
-                      onClick={() => setShowUnsyncedContent(false)}
-                      style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 'inherit', textDecoration: 'underline' }}
-                    >
-                      Show{isContentNewer ? ' (older)' : ''}
-                    </button>
-                  ) : (
-                    <span style={{ color: '#9ca3af' }}>Shown</span>
-                  )}
+          {/* Timed title/meta live inside .content-title-block so they follow the
+              reader text-size control like the article body does */}
+          {(titleEl || metaElements.length > 0) && (
+            <div className="content-title-block">
+              {/* Title - timestamped, highlights while the TTS speaks it */}
+              {titleEl && (
+                <div
+                  id={`ra-el-${elements.indexOf(titleEl)}`}
+                  className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(titleEl.startTime)}
+                >
+                  <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
                 </div>
               )}
-              {/* Fallback: just show audio date when no alignment (e.g. still generating) */}
-              {!hasAlignment && content.audio_generated_at && content.audio_url && (
-                <div>Audio generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</div>
-              )}
+
+              {/* Author/date/karma meta - timestamped. Newly generated alignments
+                  bake the whole byline into ONE element (single line, matching the
+                  content tab); older alignments have separate author/date and karma
+                  elements and simply show them as separate lines. */}
+              {metaElements.map((el, i) => (
+                <div
+                  key={`meta-${i}`}
+                  id={`ra-el-${elements.indexOf(el)}`}
+                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+                  onClick={() => onSeek(el.startTime)}
+                >
+                  <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        {/* Article body (same .article-content CSS as content tab) */}
-        {showUnsyncedContent ? (
-          <div
-            className="article-content"
-            dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
-          />
-        ) : (
-          <div className="article-content">
-            {bodyElements.map((el, i) => {
-              const globalIndex = elements.indexOf(el);
-              const isActive = globalIndex === activeElementIndex;
-              return (
-                <div
-                  key={`body-${i}`}
-                  id={`ra-el-${globalIndex}`}
-                  className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                  onClick={(e) => {
-                    // Prevent image-wrapping links from navigating, clicking images should only seek audio
-                    const target = e.target as HTMLElement;
-                    if (target.tagName === 'IMG') {
-                      e.preventDefault();
-                    }
-                    onSeek(el.startTime);
-                  }}
-                >
-                  <div dangerouslySetInnerHTML={{ __html: el.html }} />
-                </div>
-              );
-            })}
-          </div>
-        )}
+        {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
+        <div className="article-content">
+          {bodyElements.map((el, i) => {
+            const globalIndex = elements.indexOf(el);
+            const isActive = globalIndex === activeElementIndex;
+            return (
+              <div
+                key={`body-${i}`}
+                id={`ra-el-${globalIndex}`}
+                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
+                onClick={(e) => {
+                  // Read-along taps seek, with two exceptions so links stay usable:
+                  //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
+                  //    don't seek.
+                  //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
+                  //    don't open the picture.
+                  // Everything else (the plain text of the highlight) seeks.
+                  const target = e.target as HTMLElement;
+                  const anchor = target.closest('a');
+                  const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+                  if (anchor && !isImage) return; // real link: open it, don't seek
+                  if (isImage) e.preventDefault(); // image link: seek, don't open the image
+                  onSeek(el.startTime);
+                }}
+              >
+                <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+              </div>
+            );
+          })}
+        </div>
 
-        {/* Comments section */}
-        {(showUnsyncedContent ? parsedComments.length > 0 : commentElements.length > 0) && (
+        {/* Comments section: timestamped commentElements from the alignment */}
+        {commentElements.length > 0 && (
           <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
             <div className="read-along-comments-divider" />
-            {showUnsyncedContent ? (
-              // Newest fetch: show fresh parsedComments (no timestamps)
-              <>
-                <div className="comments-header">
-                  <h3>Comments ({totalCommentCount})</h3>
-                </div>
-                <div className="comments-list">
-                  {parsedComments.map((comment, index) => (
-                    <CommentComponent key={index} comment={comment} depth={0} />
-                  ))}
-                </div>
-              </>
-            ) : (
-              // Synced view: show timestamped commentElements from alignment
-              (() => {
+            {(() => {
                 interface CommentNode {
                   element: LLMAlignmentElement;
                   globalIndex: number;
@@ -1059,21 +1069,27 @@ export function FullscreenPlayer({
                   stack.push(node);
                 }
 
-                const renderCommentNode = (node: CommentNode): React.ReactNode => {
+                const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
                   const { element: el, globalIndex, children } = node;
                   const isNarrated = el.startTime >= 0;
                   const isActive = isNarrated && globalIndex === activeElementIndex;
                   const meta = el.commentMeta;
                   const metaStr = buildCommentMetadata(meta, isLW, isSub);
                   return (
-                    <div className="comment" key={`comment-${globalIndex}`}>
+                    // Odd depths get the alternate shade, same rule as the Comments tab.
+                    <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
                       <div
                         id={`ra-el-${globalIndex}`}
                         className={`read-along-element ${isActive ? 'ra-active' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
+                          // Same rule as the body: a real link opens (no seek), an image link
+                          // seeks (no open), everything else seeks.
                           const target = e.target as HTMLElement;
-                          if (target.tagName === 'IMG') e.preventDefault();
+                          const anchor = target.closest('a');
+                          const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+                          if (anchor && !isImage) return;
+                          if (isImage) e.preventDefault();
                           if (isNarrated) onSeek(el.startTime);
                         }}
                       >
@@ -1081,7 +1097,7 @@ export function FullscreenPlayer({
                           <span className="comment-username">{meta?.username || 'Anonymous'}</span>
                           {meta?.date && (
                             <span className="comment-date">
-                              {' \u00B7 '}
+                              {' \u2022 '}
                               {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
                             </span>
                           )}
@@ -1091,11 +1107,11 @@ export function FullscreenPlayer({
                             <span className="comment-votes">{metaStr}</span>
                           </div>
                         )}
-                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: el.html }} />
+                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
                       </div>
                       {children.length > 0 && (
                         <div className="comment-replies">
-                          {children.map(child => renderCommentNode(child))}
+                          {children.map(child => renderCommentNode(child, nodeDepth + 1))}
                         </div>
                       )}
                     </div>
@@ -1118,8 +1134,7 @@ export function FullscreenPlayer({
                     </div>
                   </>
                 );
-              })()
-            )}
+              })()}
           </div>
         )}
       </div>
@@ -1133,38 +1148,7 @@ export function FullscreenPlayer({
           <div className="tab-content-display">
             <div className="content-header-with-button">
               <div className="content-header">
-                <h2>{content.title}</h2>
-                {content.author && (
-                  <p className="content-author">
-                    By {content.author}
-                    {content.published_at && (
-                      <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
-                    )}
-                    {content.karma !== undefined && content.karma !== null && (
-                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                    )}
-                    {totalCommentCount > 0 && (
-                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                    )}
-                  </p>
-                )}
-                {/* URL removed, already shown in fullscreen player header */}
-                {content.type === 'article' && content.content_source && (
-                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
-                    {content.audio_generated_at && content.audio_url && (
-                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                    )}
-                  </p>
-                )}
-                {content.type === 'text' && (content.content_fetched_at || content.updated_at) && (
-                  <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                    Last edited on {new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB')}
-                    {content.audio_generated_at && content.audio_url && (
-                      <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                    )}
-                  </p>
-                )}
+                {renderProvenance()}
               </div>
               {!editing && (content.type === 'article' || content.type === 'text') && (
                 <div className="content-header-actions">
@@ -1183,6 +1167,10 @@ export function FullscreenPlayer({
                 </div>
               )}
             </div>
+            {/* Title/author/date/karma below the provenance + buttons row, so the
+                buttons never squish it. Hidden while editing: the editor has its
+                own Title/Author/Date fields, showing both is redundant. */}
+            {!editing && renderTitleBlock()}
             {editing ? (
               <div className="markdown-editor">
                 <div className="markdown-editor-toolbar">
@@ -1208,11 +1196,33 @@ export function FullscreenPlayer({
                     {savingEdit ? 'Saving…' : 'Save'}
                   </button>
                 </div>
+                <div className="md-editor-meta">
+                  <input
+                    type="text"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Title"
+                    aria-label="Title"
+                  />
+                  <input
+                    type="text"
+                    value={editAuthor}
+                    onChange={(e) => setEditAuthor(e.target.value)}
+                    placeholder="Author"
+                    aria-label="Author"
+                  />
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    aria-label="Date"
+                  />
+                </div>
                 {editError && <p className="md-editor-error">{editError}</p>}
                 {showEditPreview ? (
                   <div
                     className="article-content"
-                    dangerouslySetInnerHTML={{ __html: markdownToHtml(draftMd) || '<p>Nothing to preview</p>' }}
+                    dangerouslySetInnerHTML={{ __html: safeDraftPreview }}
                   />
                 ) : (
                   <textarea
@@ -1232,7 +1242,7 @@ export function FullscreenPlayer({
                 <div
                   className="article-content"
                   onClick={handleAnchorNav}
-                  dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+                  dangerouslySetInnerHTML={{ __html: safeArticleBodyHtml }}
                 />
                 {parsedComments.length > 0 && (
                   <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
@@ -1242,7 +1252,7 @@ export function FullscreenPlayer({
                     </div>
                     <div className="comments-list">
                       {parsedComments.map((comment, index) => (
-                        <CommentComponent key={index} comment={comment} depth={0} />
+                        <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                       ))}
                     </div>
                   </div>
@@ -1259,7 +1269,7 @@ export function FullscreenPlayer({
               <div
                 className="article-content"
                 style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}
-                dangerouslySetInnerHTML={{ __html: content.description }}
+                dangerouslySetInnerHTML={{ __html: safeDescriptionHtml }}
               />
             ) : (
               <p className="no-content">No description available</p>
@@ -1282,7 +1292,7 @@ export function FullscreenPlayer({
             {parsedComments.length > 0 ? (
               <div className="comments-list">
                 {parsedComments.map((comment, index) => (
-                  <CommentComponent key={index} comment={comment} depth={0} />
+                  <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                 ))}
               </div>
             ) : (
@@ -1378,29 +1388,7 @@ export function FullscreenPlayer({
             <div className="tab-content-display">
               <div className="content-header-with-button">
                 <div className="content-header">
-                  <h2>{content.title}</h2>
-                  {content.author && (
-                    <p className="content-author">
-                      By {content.author}
-                      {content.published_at && (
-                        <> {new Date(content.published_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>
-                      )}
-                      {content.karma !== undefined && content.karma !== null && (
-                        <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                      )}
-                      {totalCommentCount > 0 && (
-                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                      )}
-                    </p>
-                  )}
-                  {content.type === 'article' && content.content_source && (
-                    <p className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem' }}>
-                      Fetched by {content.content_source} on {(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}
-                      {content.audio_generated_at && content.audio_url && (
-                        <> &bull; Narration generated on {new Date(content.audio_generated_at).toLocaleDateString('en-GB')}</>
-                      )}
-                    </p>
-                  )}
+                  {renderProvenance()}
                 </div>
                 {content.type === 'article' && content.url && onRefetch && (
                   <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
@@ -1410,9 +1398,10 @@ export function FullscreenPlayer({
                   </button>
                 )}
               </div>
+              {renderTitleBlock()}
               <div
                 className="article-content"
-                dangerouslySetInnerHTML={{ __html: content.html_content || content.content || '<p>No content available</p>' }}
+                dangerouslySetInnerHTML={{ __html: safeArticleBodyHtml }}
               />
               {/* Show comments if available */}
               {parsedComments.length > 0 && (
@@ -1423,7 +1412,7 @@ export function FullscreenPlayer({
                   </div>
                   <div className="comments-list">
                     {parsedComments.map((comment, index) => (
-                      <CommentComponent key={index} comment={comment} depth={0} />
+                      <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
                     ))}
                   </div>
                 </div>
@@ -1464,6 +1453,20 @@ export function FullscreenPlayer({
         );
       }
       case 'history': {
+        // Which snapshot holds the text the current audio narrates? Snapshots are
+        // taken BEFORE each overwrite, so the audio's source text lives in the
+        // OLDEST snapshot created AFTER the audio was generated. No such snapshot
+        // means the audio was generated from the current text.
+        const audioAt = content.audio_url && content.audio_generated_at
+          ? new Date(content.audio_generated_at).getTime()
+          : null;
+        const audioVersionId = audioAt === null
+          ? null
+          : versions
+              .filter((v) => new Date(v.created_at).getTime() > audioAt)
+              .reduce<ContentVersion | null>((oldest, v) =>
+                !oldest || new Date(v.created_at).getTime() < new Date(oldest.created_at).getTime() ? v : oldest, null)
+              ?.id ?? null;
         return (
           <div className="tab-content-display">
             <div className="content-header">
@@ -1472,6 +1475,14 @@ export function FullscreenPlayer({
             <p className="md-editor-hint" style={{ marginTop: 0 }}>
               Snapshots saved automatically before each edit, refetch, or restore. Audio is not versioned.
             </p>
+            {audioAt !== null && (
+              <p className="version-audio-note">
+                <Volume2 size={13} style={{ verticalAlign: '-2px', marginRight: 5 }} />
+                {audioVersionId === null
+                  ? 'The audio and transcript were generated from the current text.'
+                  : 'The audio and transcript were generated from an older version, marked below.'}
+              </p>
+            )}
             {versionsLoading ? (
               <p className="no-content">Loading…</p>
             ) : viewingVersion ? (
@@ -1497,7 +1508,7 @@ export function FullscreenPlayer({
                 <div
                   className="article-content"
                   onClick={handleAnchorNav}
-                  dangerouslySetInnerHTML={{ __html: viewingVersion.html_content || viewingVersion.content || '<p>Empty</p>' }}
+                  dangerouslySetInnerHTML={{ __html: safeVersionHtml }}
                 />
               </div>
             ) : versions.length === 0 ? (
@@ -1512,6 +1523,12 @@ export function FullscreenPlayer({
                       <span className={`version-badge version-${v.source}`}>{versionSourceLabel(v.source)}</span>
                       <span className="version-date">{new Date(v.created_at).toLocaleString('en-GB')}</span>
                       <span className="version-size">{Math.max(1, Math.round((v.html_bytes || 0) / 1024))} KB</span>
+                      {v.id === audioVersionId && (
+                        <span className="version-badge version-audio" title="The current audio and transcript were generated from this version of the text">
+                          <Volume2 size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
+                          audio
+                        </span>
+                      )}
                     </div>
                     <div className="version-actions">
                       <button className="md-toolbar-btn" onClick={() => viewVersion(v.id)}>
@@ -1532,9 +1549,19 @@ export function FullscreenPlayer({
         const nonManualLabel = libraryContext ? (() => {
           const f = libraryContext.filter;
           const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
-          const statusLabel = f.statusFilter === 'favorites' ? 'Favorite ' : f.statusFilter === 'archived' ? 'Archived ' : '';
-          const searchLabel = f.searchQuery.trim() ? ` · “${f.searchQuery.trim()}”` : '';
-          return `Up next from ${statusLabel}${typeLabel}${searchLabel}`;
+          // Short human tags for the captured facet filter (audio is implied for
+          // anything playable, so it is skipped to keep the label compact).
+          const facetLabels: string[] = [];
+          if (f.facets.star === 'starred') facetLabels.push('Starred');
+          if (f.facets.star === 'unstarred') facetLabels.push('Unstarred');
+          if (f.facets.archive === 'archived') facetLabels.push('Archived');
+          if (f.facets.summary === 'summary') facetLabels.push('Summarized');
+          if (f.facets.summary === 'no_summary') facetLabels.push('Unsummarized');
+          if (f.facets.transcript === 'transcript') facetLabels.push('Transcribed');
+          if (f.facets.transcript === 'no_transcript') facetLabels.push('Untranscribed');
+          const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
+          const searchLabel = f.searchQuery.trim() ? ` • “${f.searchQuery.trim()}”` : '';
+          return `Up next from ${facetLabel}${typeLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
@@ -1707,17 +1734,37 @@ export function FullscreenPlayer({
                   {content.is_starred ? 'Unstar' : 'Star'}
                 </button>
                 <button
-                  onClick={() => {
-                    toggleArchived(content.id);
-                    onContentUpdated?.({ ...content, is_archived: !content.is_archived });
+                  onClick={async () => {
+                    if (!content.is_archived) {
+                      // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
+                      // so it fires even after this player moves on or closes, defers while the
+                      // item is still loaded here, and a second press within the window undoes
+                      // it before the server wipes anything.
+                      const store = usePendingArchiveStore.getState();
+                      if (store.pending[content.id] || store.deferred[content.id]) store.cancel(content.id);
+                      else store.schedule(content.id);
+                      return;
+                    }
+                    // Unarchiving stays instant. toggleArchived does the optimistic store
+                    // update + the server PATCH; then fetch the fresh item for the player.
+                    await toggleArchived(content.id);
+                    try {
+                      const fresh = await contentAPI.getById(content.id);
+                      onContentUpdated?.(fresh.data);
+                    } catch (err) {
+                      console.error('Failed to refresh player after archive:', err);
+                    }
                   }}
-                  style={content.is_archived ? { color: '#3b82f6' } : undefined}
+                  style={content.is_archived || pendingArchives[content.id] || deferredArchives[content.id] ? { color: '#60a5fa' } : undefined}
                 >
                   {content.is_archived
                     ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    : pendingArchives[content.id] || deferredArchives[content.id]
+                      ? <Undo2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                      : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   }
-                  {content.is_archived ? 'Unarchive' : 'Archive'}
+                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] || deferredArchives[content.id] ? 'Undo' : 'Archive'}
+                  {!content.is_archived && pendingArchives[content.id] && <span className="pending-archive-bar" />}
                 </button>
                 <button
                   onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
@@ -1731,16 +1778,19 @@ export function FullscreenPlayer({
                   <>
                     {!content.audio_url && onGenerateAudio && (
                       <button onClick={() => { setShowDropdown(false); onGenerateAudio(false); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate audio
                       </button>
                     )}
                     {content.audio_url && onGenerateAudio && (
                       <button onClick={() => { setShowDropdown(false); onGenerateAudio(true); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Regenerate audio
                       </button>
                     )}
                     {content.audio_url && onRemoveAudio && (
                       <button onClick={() => { setShowDropdown(false); onRemoveAudio(); }}>
+                        <VolumeOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Remove audio
                       </button>
                     )}
@@ -1752,20 +1802,26 @@ export function FullscreenPlayer({
                 {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
                   <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
-                      <button disabled>Generating summary…</button>
+                      <button disabled>
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        Generating summary…
+                      </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && !content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(false); }}>
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate summary
                       </button>
                     )}
                     {onGenerateSummary && content.summary_status !== 'generating' && content.summary && (
                       <button onClick={() => { setShowDropdown(false); onGenerateSummary(true); }}>
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Regenerate summary
                       </button>
                     )}
                     {onRemoveSummary && content.summary_status !== 'generating' && content.summary && (
                       <button onClick={() => { setShowDropdown(false); onRemoveSummary(); }}>
+                        <MessageSquareOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Remove summary
                       </button>
                     )}
@@ -1773,23 +1829,28 @@ export function FullscreenPlayer({
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Regenerate transcript
                   </button>
                 )}
                 {content.type === 'podcast_episode' && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     {content.transcript ? 'Regenerate' : 'Generate'} transcript
                   </button>
                 )}
                 {content.type === 'article' && content.url && (
                   <button onClick={() => { setShowDropdown(false); if (onRefetch) onRefetch(); }}>
+                    <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web
                   </button>
                 )}
                 <button onClick={handleCopyContent}>
+                  <Copy size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Copy content
                 </button>
                 <button onClick={handleDownloadDataZip}>
+                  <FolderDown size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
                 </button>
               </div>
@@ -1808,23 +1869,26 @@ export function FullscreenPlayer({
         </div>
       </div>
 
-      {/* Tabs with autoscroll toggle */}
+      {/* Tabs with autoscroll toggle. Only the tab list scrolls horizontally on
+          narrow screens, the autoscroll toggle stays pinned outside the scroll area. */}
       <div className="fullscreen-tabs">
-        {availableTabs.map((tab) => (
-          <button
-            key={tab}
-            className={`tab-button ${activeTab === tab ? 'active' : ''}`}
-            onClick={() => handleTabClick(tab)}
-          >
-            {tab === 'content' && 'Content'}
-            {tab === 'description' && 'Description'}
-            {tab === 'comments' && `Comments${totalCommentCount > 0 ? ` (${totalCommentCount})` : ''}`}
-            {tab === 'read-along' && 'Read-along'}
-            {tab === 'summary' && 'Summary'}
-            {tab === 'history' && 'History'}
-            {tab === 'queue' && 'Queue'}
-          </button>
-        ))}
+        <div className="fullscreen-tabs-scroll">
+          {availableTabs.map((tab) => {
+            const Icon = TAB_ICONS[tab];
+            return (
+              <button
+                key={tab}
+                className={`tab-button ${activeTab === tab ? 'active' : ''}`}
+                onClick={() => handleTabClick(tab)}
+                title={TAB_LABELS[tab]}
+              >
+                <Icon size={16} />
+                <span>{TAB_LABELS[tab]}</span>
+                {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
+              </button>
+            );
+          })}
+        </div>
         {activeTab === 'read-along' && (
           <button
             className={`autoscroll-toggle ${autoScroll ? 'active' : ''}`}
@@ -1832,7 +1896,7 @@ export function FullscreenPlayer({
             title={autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll'}
           >
             <ArrowDownToLine size={14} />
-            Auto-scroll
+            <span className="tab-label">Auto-scroll</span>
           </button>
         )}
       </div>
@@ -1842,8 +1906,10 @@ export function FullscreenPlayer({
         {renderTabContent()}
       </div>
 
-      {/* Player Controls */}
+      {/* Player Controls. Without audio there is no timeline, no play/seek, and no
+          speed/sleep: the row reduces to previous track, display settings, next track. */}
       <div className="fullscreen-player-controls">
+        {content.audio_url && (
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
@@ -1875,7 +1941,9 @@ export function FullscreenPlayer({
           </div>
           <span className="time">{formatTime(duration)}</span>
         </div>
+        )}
 
+        {content.audio_url && (
         <div className="fullscreen-playback-controls">
           <button
             onClick={() => onSkipPrevTrack?.()}
@@ -1909,17 +1977,42 @@ export function FullscreenPlayer({
             <SkipForward size={22} />
           </button>
         </div>
+        )}
+
+        {content.generation_status === 'failed' && content.generation_error && (
+          <div className="player-error-banner">{content.generation_error}</div>
+        )}
+
+        {resumeTargetTime > 0 && (
+          <button className="resume-chip" onClick={() => onSeek(resumeTargetTime)}>
+            Resume at {formatTime(resumeTargetTime)}
+          </button>
+        )}
 
         <div className="fullscreen-player-options">
-          <button onClick={onToggleSpeed} className="option-toggle">
-            <Gauge size={20} />
-            <span>{playbackSpeed}x</span>
-          </button>
+          {content.audio_url ? (
+            <>
+              <button onClick={onToggleSpeed} className="option-toggle">
+                <Gauge size={20} />
+                <span>{playbackSpeed}x</span>
+              </button>
 
-          <button onClick={onToggleSleepTimer} className="option-toggle">
-            <Clock size={20} />
-            <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-          </button>
+              <button onClick={onToggleSleepTimer} className="option-toggle">
+                <Clock size={20} />
+                <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+              </button>
+            </>
+          ) : (
+            // No audio: previous and next flank the display button in this single row.
+            <button
+              onClick={() => onSkipPrevTrack?.()}
+              title="Previous track"
+              className="track-skip-btn"
+              disabled={!hasPrevTrack}
+            >
+              <SkipBack size={22} />
+            </button>
+          )}
 
           <div ref={displayPanelRef} style={{ position: 'relative' }}>
             <button
@@ -1964,6 +2057,17 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
+
+          {!content.audio_url && (
+            <button
+              onClick={() => onSkipNextTrack?.()}
+              title="Next track"
+              className="track-skip-btn"
+              disabled={!hasNextTrack}
+            >
+              <SkipForward size={22} />
+            </button>
+          )}
         </div>
       </div>
     </div>

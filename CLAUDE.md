@@ -1,6 +1,16 @@
 ## Codebase map
 
-This project's codebase map is the **Quick Reference table in `README.md`**. It tells you EXACTLY which file handles what functionality (e.g. a TTS bug points to the backend TTS service, an audio-player UI bug points to the frontend audio-player component). Read the relevant service/component descriptions in `README.md` (backend structure, then frontend structure) for the big picture before diving into code.
+This project's codebase map is **`ARCHITECTURE.md`** at the repo root. Its **Quick Reference** and **Common Bug Locations** tables tell you EXACTLY which file handles what functionality (e.g. a TTS bug points to the backend TTS service, an audio-player UI bug points to the frontend audio-player component), and the backend/frontend structure sections give the big picture. Read the relevant service/component descriptions in `ARCHITECTURE.md` (backend structure, then frontend structure) before diving into code. `README.md` is now just the short user-facing intro.
+
+## Documentation to keep current
+
+When you finish a change, update the docs it affects:
+
+- **`README.md`**: the user-facing intro. Keep it short. Update it for user-facing behavior, setup, or deploy changes.
+- **`ARCHITECTURE.md`**: the technical reference and codebase map. Update it whenever the backend/frontend structure, API endpoints, or database schema change.
+- **`TODO.md`**: the task list (mark items done, add newly discovered work).
+- **`RAILWAY_DEPLOYMENT.md`**: the step-by-step deploy guide.
+- **The public demo**: the read-only demo account (home page "Try the demo" button) is living documentation and must stay current with the app. When user-facing features, settings, or the recommended models change, update the onboarding guide in `backend/scripts/seed-demo-content.mjs` (especially its "What was generated, and by what" and settings/costs sections) and tell the user to re-run `npm run seed:demo` against the hosted instance so the demo library reflects reality.
 
 ## NEVER Use Fuzzy Matching or Algorithmic Alignment
 

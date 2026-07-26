@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { devNull } from 'os';
 import ffmpeg from 'fluent-ffmpeg';
 // RESTORED: JSDOM for robust HTML cleaning (fixes empty comments)
 import { JSDOM } from 'jsdom';
@@ -8,7 +9,7 @@ import { getTempDir } from '../config/storage.js';
 import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
-import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice } from './ai-providers.js';
+import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice, chatInputCharCap } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
@@ -27,16 +28,6 @@ export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio nar
  DO NOT summarize.
  DO NOT rewrite sentences.
  DO NOT simplify the language.
-
- 🚨 IMAGE DESCRIPTIONS:
- DO NOT CHANGE OR REMOVE image descriptions. Always preserve text following the pattern: "An image is displayed showing [description]. End of the image description."*
- 1. ALWAYS keep text that starts with "An image is displayed"
- 2. ALWAYS keep text that ends with "End of the image description."*
- 3. These image descriptions are REQUIRED accessibility content
- 4. If you see image descriptions, they MUST appear in your output VERBATIM
- 5. Image descriptions are NOT extraneous - they are essential
- 6. PRESERVE THE EXACT WORDING - do not paraphrase or summarize them
- *EXCEPTION: If the image description is announced but no actual description is present, just say "An image is displayed but the description is missing." without announcing the end.
 
  The ONLY changes you are allowed to make:
  * Remove "junk" text that is not part of the article (navigation menus, footers, "share this", "related posts", advertisements).
@@ -74,6 +65,19 @@ export const NARRATION_SCRIPT_DEFAULT = `You are a scriptwriter for an audio nar
  * Drop any formatting you wouldn't say out loud, such as italics/bold and parentheses. Use punctuation instead so the TTS model takes intentional pauses.
  * Convert ALL-CAPS words and phrases to normal capitalization (e.g., "HEADS UP" -> "Heads up", "DO NOT ENTER" -> "Do not enter"). This does not apply to proper acronyms like NASA or FBI. TTS engines often spell out or distort all-caps text.
 
+🚨 IMAGE DESCRIPTIONS:
+DO NOT REMOVE image descriptions. These image descriptions are REQUIRED accessibility content. The input contains image description blocks shaped exactly like this: "An image is displayed showing [description]. End of the image description."
+1. Every block MUST appear in your output, in its original position.
+2. NEVER delete a block, never merge two blocks.
+3. Always keep the exact opening words "An image is displayed showing" and the exact closing sentence "End of the image description."
+4. Copy the description text between those two phrases VERBATIM. Only two exceptions:
+	- If the image is CLEARLY decorative or incidental to the article (not something the article discusses), replace the description with ONE short sentence naming what it shows (without dropping the opening and closing sentences).
+	- If part of the description merely repeats a caption or article text directly before or after the image, drop the repeated part.
+	- Unsure? Just copy verbatim.
+5. NEVER add new details and never guess beyond what the description already says.
+
+If a block announces an image but no description is present, say "An image is displayed but the description is missing." without announcing the end.
+
  Output ONLY the clean narration text.
 
  Input HTML follows.`;
@@ -84,10 +88,9 @@ export const NARRATION_SCRIPT_RETRY_DEFAULT = `
 The previous output dropped {inputImageCount} image descriptions.
 
 YOU MUST PRESERVE ALL TEXT that matches this pattern:
-"An image shows [description]. End of the image description."
+"An image is displayed showing [description]. End of the image description."
 
-DO NOT delete, modify, or omit these descriptions. They are REQUIRED accessibility content.
-Copy them VERBATIM from input to output.
+Every block must be present in your output. Copy each description VERBATIM, with the same two exceptions as above (one short sentence for clearly decorative images, dropping parts that repeat adjacent captions). The opening and closing phrases are mandatory in every block.
 
 Failure to preserve image descriptions is a critical error.`;
 
@@ -148,23 +151,94 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
   return chunks;
 }
 
+// ---- Loudness normalization (EBU R128) ----
+// TTS providers ship voices at wildly different levels (measured 2026-07-18: -19.7 to
+// -28.8 LUFS across the OpenAI and Kokoro catalogs), so every generation is normalized
+// to one target. All TTS output is mono; -19 LUFS integrated is the spoken-word norm
+// for mono files (equivalent to the -16 LUFS stereo standard used by Apple/Auphonic),
+// with a -1.5 dBTP true-peak ceiling.
+const LOUDNORM_TARGET = 'I=-19:TP=-1.5:LRA=11';
+
+interface LoudnormStats {
+  input_i: string;
+  input_tp: string;
+  input_lra: string;
+  input_thresh: string;
+  target_offset: string;
+}
+
+function parseLoudnormStats(stderrLines: string[]): LoudnormStats | null {
+  const text = stderrLines.join('\n');
+  const match = text.match(/\{[^{}]*"input_i"[^{}]*\}/);
+  if (!match) return null;
+  try {
+    const stats = JSON.parse(match[0]);
+    // Pure silence measures as -inf, which loudnorm rejects as a measured value.
+    for (const key of ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'] as const) {
+      if (!Number.isFinite(parseFloat(stats[key]))) return null;
+    }
+    return stats;
+  } catch {
+    return null;
+  }
+}
+
+// Second-pass filter string. With measured stats, loudnorm applies one constant gain
+// (linear mode) so the voice's own dynamics are untouched. Without them it falls back
+// to single-pass dynamic mode, which still lands close to the target.
+function loudnormFilter(stats: LoudnormStats | null): string {
+  if (!stats) return `loudnorm=${LOUDNORM_TARGET}`;
+  return `loudnorm=${LOUDNORM_TARGET}:measured_I=${stats.input_i}:measured_TP=${stats.input_tp}:measured_LRA=${stats.input_lra}:measured_thresh=${stats.input_thresh}:offset=${stats.target_offset}:linear=true`;
+}
+
+// Analysis pass over a single file: decode-only, writes nothing.
+async function measureFileLoudness(file: string): Promise<LoudnormStats | null> {
+  return new Promise((resolve) => {
+    const lines: string[] = [];
+    ffmpeg(file)
+      .audioFilters(`loudnorm=${LOUDNORM_TARGET}:print_format=json`)
+      .format('null')
+      .on('stderr', (line: string) => lines.push(line))
+      .on('end', () => resolve(parseLoudnormStats(lines)))
+      .on('error', () => resolve(null))
+      .save(devNull);
+  });
+}
+
 // FIXED: Seamless concatenation using complexFilter to physically remove MP3 padding
 async function concatenateAudioFiles(inputFiles: string[], outputFile: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (inputFiles.length === 0) {
-      reject(new Error('No input files provided for concatenation'));
-      return;
-    }
+  if (inputFiles.length === 0) {
+    throw new Error('No input files provided for concatenation');
+  }
 
+  // Create a filter chain: [0:a][1:a]...concat=n=X:v=0:a=1[out]
+  // This decodes the MP3s and joins the raw audio samples perfectly
+  const filterInput = inputFiles.map((_, i) => `[${i}:a]`).join('');
+  const concatGraph = `${filterInput}concat=n=${inputFiles.length}:v=0:a=1`;
+
+  // Pass 1: measure the loudness of the concatenated audio (decode-only, writes nothing).
+  const stats = await new Promise<LoudnormStats | null>((resolve) => {
+    const lines: string[] = [];
+    const analyze = ffmpeg();
+    inputFiles.forEach(f => analyze.input(f));
+    analyze
+      .complexFilter(`${concatGraph},loudnorm=${LOUDNORM_TARGET}:print_format=json[out]`)
+      .map('[out]')
+      .format('null')
+      .on('stderr', (line: string) => lines.push(line))
+      .on('end', () => resolve(parseLoudnormStats(lines)))
+      .on('error', () => resolve(null))
+      .save(devNull);
+  });
+  if (!stats) console.warn('[FFmpeg] Loudness analysis failed, falling back to dynamic normalization');
+
+  // Pass 2: concat + normalize + encode.
+  return new Promise((resolve, reject) => {
     const command = ffmpeg();
     inputFiles.forEach(f => command.input(f));
 
-    // Create a filter chain: [0:a][1:a]...concat=n=X:v=0:a=1[out]
-    // This decodes the MP3s and joins the raw audio samples perfectly
-    const filterInput = inputFiles.map((_, i) => `[${i}:a]`).join('');
-
     command
-      .complexFilter(`${filterInput}concat=n=${inputFiles.length}:v=0:a=1[out]`)
+      .complexFilter(`${concatGraph},${loudnormFilter(stats)}[out]`)
       .map('[out]')
       .audioFrequency(24000)
       .audioBitrate('96k')
@@ -195,6 +269,9 @@ function countAllComments(comments: any[]): number {
 function formatDateForNarration(dateString: string): string {
   try {
     const date = new Date(dateString);
+    // new Date(bad) never throws, it yields an Invalid Date. Guard so we never narrate
+    // "NaNth of Invalid Date NaN"; fall back to the raw input string instead.
+    if (isNaN(date.getTime())) return dateString;
     const day = date.getDate();
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
@@ -469,6 +546,146 @@ function formatCommentsForNarration(comments: Comment[], isReply: boolean = fals
   return narration;
 }
 
+// A conversational reply instead of a script must fail LOUDLY. Seen 2026-07-15
+// on a huge article: the model answered "this document is extremely long, shall
+// I convert it in parts?" and that reply was narrated verbatim into the audio.
+// This error class bypasses the htmlToNarrationText fallback so the generation
+// fails with a clear message instead of producing garbage audio.
+class NarrationScriptError extends Error {}
+
+// A real script is roughly as long as the input text (it's a verbatim
+// transformation); a refusal/question is a few short paragraphs. Flag output
+// that is drastically shorter than the input, when it is either tiny or reads
+// conversationally.
+function assertLooksLikeScript(script: string, inputTextLength: number): void {
+  const conversational = /\b(would you like|shall i|do you want me|please confirm|which (one |option )?(do )?you prefer|i can do this)\b/i;
+  const suspiciouslyShort = inputTextLength > 10000 && script.length < inputTextLength * 0.25;
+  if (suspiciouslyShort && (script.length < 4000 || conversational.test(script))) {
+    throw new NarrationScriptError(
+      'The narration model replied conversationally instead of producing the script (it likely balked at the article length). Generation was stopped so the reply would not be narrated. Try again.'
+    );
+  }
+}
+
+// An average LONG article runs ~8-10k words, which lands around 75k characters
+// of cleaned HTML. The chunking bar sits at 2x that (deliberately very high, it
+// should fire only on extreme outliers); when it does fire, each chunk is packed
+// to the size of one normal long article, which the single-shot path
+// demonstrably handles.
+const SCRIPT_CHUNK_THRESHOLD_CHARS = 150_000;
+const SCRIPT_CHUNK_TARGET_CHARS = 75_000;
+
+// Split a cleaned article body into chunks for per-chunk scriptwriting.
+// Prefers to break where a new section starts (h1-h3); hard-breaks at 1.5x the
+// target so one enormous unbroken section cannot recreate the one-shot problem.
+function splitBodyForScripting(body: any, targetChars: number): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  const flush = () => {
+    if (current.trim()) chunks.push(current);
+    current = '';
+  };
+  for (const node of Array.from(body.childNodes) as any[]) {
+    const piece: string = node.outerHTML ?? node.textContent ?? '';
+    if (!piece) continue;
+    const isHeading = /^H[1-3]$/.test(node.tagName || '');
+    const wouldBe = current.length + piece.length;
+    if (current && ((isHeading && wouldBe > targetChars) || wouldBe > targetChars * 1.5)) {
+      flush();
+    }
+    current += piece;
+  }
+  flush();
+  return chunks;
+}
+
+// One scriptwriter call over one piece of HTML, with the image-preservation
+// validation + retry and the conversational-reply guard. `part` is set when
+// the piece is one chunk of a longer article.
+async function scriptHtmlOnce(
+  userId: number,
+  html: string,
+  openai: any,
+  modelId: string,
+  extraParams: Record<string, any>,
+  systemPrompt: string,
+  part?: { index: number; total: number }
+): Promise<string> {
+  const partLabel = part ? ` (part ${part.index + 1}/${part.total})` : '';
+  const partAddendum = part
+    ? `\n\nIMPORTANT: You are converting PART ${part.index + 1} of ${part.total} of one long article. The converted parts will be concatenated in order. Convert ONLY the text provided below, completely and in order. Do not add any introduction, recap, transition into or out of the part, or closing remarks. Start directly with the converted content.`
+    : '';
+
+  const inputImageCount = (html.match(/An image is displayed showing.*?\./gs) || []).length;
+  console.log(`[TTS] Input HTML${partLabel} contains ${inputImageCount} image narration(s)`);
+  const inputTextLength = html.replace(/<[^>]+>/g, ' ').length;
+
+  const response = await openai.chat.completions.create({
+    model: modelId,
+    ...extraParams,
+    messages: [
+      { role: 'system', content: systemPrompt + partAddendum },
+      {
+        role: 'user',
+        // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
+        // larger for big-context models (see chatInputCharCap).
+        content: html.slice(0, chatInputCharCap(modelId))
+      }
+    ],
+  });
+
+  let scriptBody = response.choices[0]?.message?.content || '';
+
+  // Validation and Retry
+  const outputImageCount = (scriptBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
+  console.log(`[TTS] Scriptwriter output${partLabel} contains ${outputImageCount} image narration(s)`);
+
+  // Detect if images were dropped
+  if (inputImageCount > 0 && outputImageCount === 0) {
+    console.error(`[TTS] ❌ SCRIPTWRITER DROPPED ALL IMAGE NARRATIONS${partLabel}`);
+    console.error('[TTS] === SCRIPTWRITER OUTPUT SAMPLE (first 1000 chars) ===');
+    console.error(scriptBody.substring(0, 1000));
+    console.error('[TTS] === END SAMPLE ===');
+
+    // Retry with even more explicit instruction
+    console.warn('[TTS] 🔄 Retrying with explicit instruction...');
+
+    const retryAddendum = await resolveCustomPrompt(userId, 'prompt_narration_script_retry', NARRATION_SCRIPT_RETRY_DEFAULT, { inputImageCount });
+
+    const retryResponse = await openai.chat.completions.create({
+      model: modelId,
+      ...extraParams,
+      messages: [
+        { role: 'system', content: systemPrompt + partAddendum + retryAddendum },
+        // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
+        { role: 'user', content: html.slice(0, chatInputCharCap(modelId)) }
+      ],
+    });
+
+    const retryBody = retryResponse.choices[0]?.message?.content || '';
+    const retryImageCount = (retryBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
+
+    if (retryImageCount > outputImageCount) {
+      console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
+      scriptBody = retryBody;
+    } else {
+      console.error(`[TTS] ❌ Retry failed: only ${retryImageCount} image(s)`);
+      // Use retry body anyway if it's not worse
+      if (retryImageCount >= outputImageCount) {
+        scriptBody = retryBody;
+      }
+    }
+  } else if (inputImageCount > 0 && outputImageCount < inputImageCount) {
+    console.warn(`[TTS] ⚠️  Scriptwriter dropped some images${partLabel}`);
+    console.warn(`[TTS] Input: ${inputImageCount}, Output: ${outputImageCount}`);
+  } else if (outputImageCount > 0) {
+    console.log('[TTS] ✓ Image narrations preserved correctly');
+  }
+
+  assertLooksLikeScript(scriptBody, inputTextLength);
+  return scriptBody;
+}
+
 async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
@@ -482,97 +699,37 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
     // Use the cleaner HTML which retains structure but drops junk
     const cleanHtml = doc.body.innerHTML || htmlContent;
 
-    // Diagnostic Logging (count images in INPUT)
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE START =====');
-    const inputImageCount = (cleanHtml.match(/An image is displayed showing.*?\./gs) || []).length;
-    console.log(`[TTS] Input HTML contains ${inputImageCount} image narration(s)`);
-
-    if (inputImageCount > 0) {
-      // Log sample image narration from input
-      const sampleImage = cleanHtml.match(/An image is displayed showing.*?End of the image description\./s);
-      if (sampleImage) {
-        console.log(`[TTS] Sample input image narration: "${sampleImage[0].substring(0, 150)}..."`);
-      }
-    }
-    
     console.log(`[TTS] Scriptwriting with model: ${modelId}`);
-        const systemPrompt = await resolveCustomPrompt(userId, 'prompt_narration_script', NARRATION_SCRIPT_DEFAULT);
+    const systemPrompt = await resolveCustomPrompt(userId, 'prompt_narration_script', NARRATION_SCRIPT_DEFAULT);
 
-    const response = await openai.chat.completions.create({
-      model: modelId,
-      ...extraParams,
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
-          // UPDATED: Increased slice limit to 400k characters (approx 100k tokens)
-          // Safe for gpt-5-nano's 400k context window
-          content: cleanHtml.slice(0, 1000000)
-        }
-      ],
-    });
-
-    let scriptBody = response.choices[0]?.message?.content || '';
-
-    // Validation and Retry
-    const outputImageCount = (scriptBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
-    console.log(`[TTS] Scriptwriter output contains ${outputImageCount} image narration(s)`);
-
-    // Detect if images were dropped
-    if (inputImageCount > 0 && outputImageCount === 0) {
-      console.error('[TTS] ❌ SCRIPTWRITER DROPPED ALL IMAGE NARRATIONS');
-      console.error('[TTS] Scriptwriter is actively removing image descriptions');
-
-      // Log scriptwriter output sample for debugging
-      console.error('[TTS] === SCRIPTWRITER OUTPUT SAMPLE (first 1000 chars) ===');
-      console.error(scriptBody.substring(0, 1000));
-      console.error('[TTS] === END SAMPLE ===');
-
-      // Retry with even more explicit instruction
-      console.warn('[TTS] 🔄 Retrying with explicit instruction...');
-
-      const retryAddendum = await resolveCustomPrompt(userId, 'prompt_narration_script_retry', NARRATION_SCRIPT_RETRY_DEFAULT, { inputImageCount });
-      const retrySystemPrompt = systemPrompt + retryAddendum;
-
-      const retryResponse = await openai.chat.completions.create({
-        model: modelId,
-        ...extraParams,
-        messages: [
-          { role: 'system', content: retrySystemPrompt },
-          { role: 'user', content: cleanHtml.slice(0, 400000) }
-        ],
-        max_completion_tokens: 16000
-      });
-
-      const retryBody = retryResponse.choices[0]?.message?.content || '';
-      const retryImageCount = (retryBody.match(/An image is displayed showing.*?End of the image description\./gs) || []).length;
-
-      if (retryImageCount > outputImageCount) {
-        console.log(`[TTS] ✅ Retry succeeded: ${retryImageCount} image(s) preserved`);
-        scriptBody = retryBody;
-      } else {
-        console.error(`[TTS] ❌ Retry failed: only ${retryImageCount} image(s)`);
-        // Use retry body anyway if it's not worse
-        if (retryImageCount >= outputImageCount) {
-          scriptBody = retryBody;
-        }
+    let scriptBody: string;
+    if (cleanHtml.length <= SCRIPT_CHUNK_THRESHOLD_CHARS) {
+      scriptBody = await scriptHtmlOnce(userId, cleanHtml, openai, modelId, extraParams, systemPrompt);
+    } else {
+      // Extremely long article: the whole script cannot fit in one model reply
+      // (output ceilings are far below input ceilings), so script it in
+      // heading-aligned chunks and concatenate. Sequential on purpose: cheaper
+      // to reason about, and generation is a background job anyway.
+      const pieces = splitBodyForScripting(doc.body, SCRIPT_CHUNK_TARGET_CHARS);
+      console.log(`[TTS] Article is very long (${cleanHtml.length} chars), scripting in ${pieces.length} chunks`);
+      const parts: string[] = [];
+      for (let i = 0; i < pieces.length; i++) {
+        parts.push(await scriptHtmlOnce(userId, pieces[i], openai, modelId, extraParams, systemPrompt, { index: i, total: pieces.length }));
       }
-    } else if (inputImageCount > 0 && outputImageCount < inputImageCount) {
-      console.warn(`[TTS] ⚠️  Scriptwriter dropped some images`);
-      console.warn(`[TTS] Input: ${inputImageCount}, Output: ${outputImageCount}`);
-    } else if (outputImageCount > 0) {
-      console.log('[TTS] ✓ Image narrations preserved correctly');
+      scriptBody = parts.join('\n\n');
     }
 
     console.log('[TTS] ===== IMAGE NARRATION PIPELINE END =====');
 
     return scriptBody;
   } catch (e) {
-    console.warn('Scriptwriting failed, falling back to simple text extraction:', e);
-    return htmlToNarrationText(htmlContent);
+    if (e instanceof NarrationScriptError) throw e;
+    // No fallback to raw text extraction (user decision 2026-07-22): a broken
+    // narration prep would silently produce worse audio forever. Fail loudly;
+    // the generation error lands on the library card and the player banner.
+    console.error('Scriptwriting failed:', e);
+    throw new Error(`Narration scriptwriter failed: ${(e as Error)?.message || e}`);
   }
 }
 
@@ -588,7 +745,7 @@ export async function generateArticleAudio(
   try {
     const userSettings = await getTTSOptionsForUser(userId);
     let targetModel = userSettings.model || 'gpt-4o-mini-tts';
-    let targetVoice = options.voice || userSettings.voice || PROCESSING_CONFIG.tts.voice;
+    let targetVoice = options.voice || userSettings.voice;
 
     // Voice variety: if the user selected multiple voices, pick one at random for this
     // generation (can span TTS models, the picked model also overrides the client routing).
@@ -648,8 +805,12 @@ export async function generateArticleAudio(
           // Re-encode through ffmpeg to produce proper MP3 headers (Xing/LAME).
           // Raw OpenAI TTS MP3s lack seeking headers, so browsers can't map
           // time-to-byte positions and audio.currentTime silently fails.
+          // The same pass normalizes loudness (see LOUDNORM_TARGET).
+          const loudStats = await measureFileLoudness(tempFile);
+          if (!loudStats) console.warn('[FFmpeg] Loudness analysis failed, falling back to dynamic normalization');
           await new Promise<void>((resolve, reject) => {
             ffmpeg(tempFile)
+              .audioFilters(loudnormFilter(loudStats))
               .audioFrequency(24000)
               .audioBitrate('96k')
               .format('mp3')
@@ -793,9 +954,15 @@ export async function generateArticleAudio(
       for (const chunkFile of chunkFiles) await fs.unlink(chunkFile).catch(console.error);
       throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error generating audio:', error);
-    throw new Error('Failed to generate audio. Please check your API keys.');
+    const message = error?.message || String(error);
+    // A user cancellation ("Generation cancelled by user") must pass through unchanged so the
+    // caller can tell it apart from a real API-key failure and not show a misleading error.
+    if (message.includes('cancelled')) {
+      throw error;
+    }
+    throw new Error('Failed to generate audio: ' + message);
   }
 }
 
@@ -840,8 +1007,6 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
         imageAltTextData = await imageService.smartRegenerate(
           sourceContent,
           imageAltTextData, // existing data or null
-          content.url || '',
-          { articleTitle: content.title, articleAuthor: content.author },
           // Progress callback
           async (current, total) => {
             console.log(`[TTS] Image progress callback triggered: ${current}/${total}`);
@@ -901,10 +1066,18 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     );
 
     const chatConfig = await getChatClientForJob(content.user_id, 'narration');
-    if (chatConfig && sourceContent.includes('<')) {
+    if (!chatConfig) {
+        // No silent downgrade (user decision 2026-07-22): unscripted narration (raw
+        // symbols and digits, junk text, no quote markers) is a worse experience the
+        // user would never know about. Fail loudly; the card + player show the error.
+        throw new Error('No LLM configured for the narration scriptwriter. Add an API key (OpenAI, DeepInfra, OpenRouter, Anthropic, or Gemini) in Settings.');
+    }
+    if (sourceContent.includes('<')) {
         console.log(`[TTS] Scriptwriter using model: ${chatConfig.model}`);
         articleBodyScript = await scriptArticleForListening(content.user_id, sourceContent, chatConfig.client, chatConfig.model, chatConfig.extraParams);
     } else {
+        // Tagless plain text: nothing HTML-shaped to script, plain extraction is the
+        // correct path here, not a degradation.
         articleBodyScript = htmlToNarrationText(sourceContent);
     }
 
@@ -922,12 +1095,21 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       fullScript += `Title: ${content.title}. `;
       if (content.author) fullScript += `Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
       if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
-      if (content.karma !== undefined && content.karma !== null) fullScript += `It has ${content.karma} karma. `;
+      if (content.karma !== undefined && content.karma !== null) {
+        // Substack calls them likes; forums call them upvotes. Matches the
+        // comment narration (formatReactionsForNarration) and the player UI.
+        const isSubstackSrc = (content.url || '').includes('substack.com');
+        const karmaLabel = isSubstackSrc ? (content.karma === 1 ? 'like' : 'likes') : (content.karma === 1 ? 'upvote' : 'upvotes');
+        fullScript += `It has ${content.karma} ${karmaLabel}. `;
+      }
       fullScript += '\n\n';
     }
 
     fullScript += articleBodyScript;
 
+    // Recorded on the item after generation, so alignment knows whether comment
+    // elements exist in THIS audio (instead of guessing from current settings).
+    let commentsInAudio = false;
     if (excludeComments) {
       console.log(`[TTS] Skipping comment narration: excluded by user request`);
     } else if (content.comments) {
@@ -952,6 +1134,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
               if (shouldNarrate) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
+                commentsInAudio = true;
               } else {
                 console.log(`[TTS] Skipping comment narration (${totalCount} comments): disabled by user setting`);
               }
@@ -971,6 +1154,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const { buffer: audioBuffer, chunks, chunkMetadata } = await generateArticleAudio(fullScript, content.user_id, {
       contentId: contentId,
     });
+
+    // Audio synthesized: record what this audio actually contains (see migration 025).
+    await query('UPDATE content_items SET comments_in_audio = $1 WHERE id = $2', [commentsInAudio, contentId]);
 
     let warning: string | undefined;
     if (chunks > 1) {
@@ -1019,6 +1205,19 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     }
 
     // Step 6: Transcription (95-100% progress)
+    // User opt-out: audio only, no transcription/alignment (saves Whisper + LLM cost).
+    // The per-item "Regenerate transcript" action still works for items where the
+    // user wants read-along after all.
+    const readAlongEnabled = await getUserSetting(content.user_id, 'generate_read_along');
+    if (readAlongEnabled === 'false') {
+      console.log('[TTS] Read-along disabled by user setting, skipping transcription + alignment');
+      await query(
+        'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
+        ['completed', 100, contentId]
+      );
+      return { audioUrl, warning };
+    }
+
     console.log('[TTS] Triggering auto-transcription for Read Along...');
     await query(
       'UPDATE content_items SET current_operation = $1, generation_progress = $2 WHERE id = $3',
@@ -1066,12 +1265,12 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
           if (durationOverride !== null) {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5 WHERE id = $6',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, duration = $3, generation_progress = $4, current_operation = $5, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $6',
               [transcriptResult.text, JSON.stringify(transcriptResult.words), durationOverride, 97, 'aligning_content', contentId]
             );
           } else {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4 WHERE id = $5',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_progress = $3, current_operation = $4, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [transcriptResult.text, JSON.stringify(transcriptResult.words), 97, 'aligning_content', contentId]
             );
           }
@@ -1093,11 +1292,15 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
               console.log(`[TTS] LLM alignment complete: ${alignment.elements.length} elements timestamped`);
             } catch (alignError) {
-              console.error('[TTS] LLM alignment failed (non-fatal):', alignError);
-              // Still mark as completed even if alignment fails
+              console.error('[TTS] LLM alignment failed:', alignError);
+              // The audio and transcript are fine, but read-along will be missing.
+              // Surface that as a visible failure (card shows the error + a Retry
+              // that maps failed_transcript -> regenerate transcript) instead of
+              // silently "completing" without read-along.
+              const msg = ((alignError as Error)?.message || String(alignError)).slice(0, 300);
               await query(
-                'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-                ['completed', 100, contentId]
+                "UPDATE content_items SET generation_status = 'failed', generation_error = $1, generation_progress = 100, current_operation = 'failed_transcript' WHERE id = $2",
+                [`Audio and transcript are ready, but read-along alignment failed: ${msg}`, contentId]
               );
             }
           } else {
@@ -1110,10 +1313,13 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
       })
       .catch(async (err) => {
           console.error('[TTS] Auto-transcription failed:', err);
-          // Still mark as completed (audio is ready even without transcript)
+          // The audio is ready and playable, but read-along will be missing. Surface
+          // it (card error + Retry -> regenerate transcript) instead of silently
+          // "completing"; a missing API key would otherwise be invisible.
+          const msg = (err?.message || String(err)).slice(0, 300);
           await query(
-            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = NULL WHERE id = $3',
-            ['completed', 100, contentId]
+            "UPDATE content_items SET generation_status = 'failed', generation_error = $1, generation_progress = 100, current_operation = 'failed_transcript' WHERE id = $2",
+            [`Audio is ready, but transcription for read-along failed: ${msg}`, contentId]
           );
       });
 

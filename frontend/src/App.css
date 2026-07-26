@@ -8,6 +8,10 @@
   --bg-surface: #1e293b;
   --bg-raised:  #334155;
   --bg-hover:   #475569;
+  /* Soft transient hover for anything that also has a "selected" state, so a
+     hovered item can never be mistaken for a selected one (selected states keep
+     the stronger --bg-raised / accent styling). Mixes theme vars, so it adapts. */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
 
   /* Text: lightest → darkest in dark mode */
   --t0: #f1f5f9;  /* bright headings */
@@ -23,6 +27,13 @@
   --bg-surface: #ffffff;  /* cards/headers/panels */
   --bg-raised:  #e2e8f0;  /* visible as border + subtle hover on white */
   --bg-hover:   #cbd5e1;  /* deeper hover, active borders */
+  /* Light mode's gray ramp is compressed (white 255 → canvas 241 → raised 226),
+     so the soft hover must stay LIGHTER than raised (~#f6f7fa): anything darker
+     collides with the description boxes / selected states, and anything near
+     the canvas melts into the page. Buttons that rest on the canvas get their
+     hover affordance from a darker BORDER instead (see .filter-buttons /
+     .content-actions hovers), like .content-card already does. */
+  --bg-hover-soft: color-mix(in srgb, var(--bg-surface) 65%, var(--bg-raised));
 
   /* Text: darkest → lighter in light mode */
   --t0: #0f172a;
@@ -74,8 +85,22 @@
 }
 
 .app-header h1 {
-  font-size: 1.5rem;
-  font-weight: 700;
+  /* Monomaniac One: compass-and-ruler geometric with rounded stroke ends,
+     matching the logo's round-capped strokes. Single native weight (400),
+     so no faux-bolding. Quicksand 700 is the fallback. Loaded in main.tsx. */
+  font-family: 'Monomaniac One', 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Sized against the 2.5rem logo mark: lowercase x-height lands around 55-60%
+     of the mark, the usual icon+wordmark lockup ratio (Monomaniac renders small
+     for its nominal size, its Japanese-heritage em box is roomy) */
+  font-size: 2rem;
+  font-weight: 400;
+  line-height: 1;
+  /* Optical centering: Monomaniac One places its Latin baseline low inside the
+     em box (37px ascent / 9px descent metrics on a 32px em), which leaves the
+     all-lowercase wordmark's ink center measured 3px below the flex-centered
+     box center. Lift it back up. */
+  position: relative;
+  top: -3px;
   color: #60a5fa;
 }
 
@@ -100,7 +125,7 @@
 }
 
 .sync-button:hover:not(:disabled) {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -120,10 +145,6 @@
 
 .icon-article {
   color: #3b82f6; /* Blue */
-}
-
-.icon-text {
-  color: #10b981; /* Green */
 }
 
 @keyframes spin {
@@ -158,21 +179,6 @@
   .type-label {
     display: none;
   }
-}
-
-.settings-btn {
-  background: none;
-  border: none;
-  color: var(--t3);
-  cursor: pointer;
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  transition: all 0.2s;
-}
-
-.settings-btn:hover {
-  background: var(--bg-raised);
-  color: var(--t1);
 }
 
 .app-main {
@@ -220,7 +226,12 @@
   font-size: 0.75rem;
 }
 
-.bottom-nav button:hover,
+/* Hover is a soft transient highlight; only the ACTIVE tab gets the strong
+   background + accent text, so hovering never fakes a selected state. */
+.bottom-nav button:hover {
+  background: var(--bg-hover-soft);
+}
+
 .bottom-nav button.active {
   color: #60a5fa;
   background: var(--bg-raised);
@@ -340,11 +351,6 @@
 
 .search-results-close:hover {
   color: var(--t3);
-}
-
-.podcast-details,
-.subscribed-podcasts {
-  width: 100%;
 }
 
 /* Feed Tab - Collapsible Subscribed Podcasts Section */
@@ -488,7 +494,7 @@
 }
 
 .episodes-section .load-more-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -513,7 +519,7 @@
 }
 
 .show-all-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -564,6 +570,17 @@
   color: #93c5fd;
 }
 
+/* Expanded feed cards show the FULL RSS url, which can be long. Render it inline so it
+   wraps instead of stretching the card (the default inline-flex cannot break a long token). */
+.content-source-link.feed-url a {
+  display: inline;
+  word-break: break-all;
+}
+
+.content-source-link.feed-url a svg {
+  vertical-align: -0.1em;
+}
+
 .description {
   font-size: 0.875rem;
   color: var(--t2);
@@ -610,7 +627,10 @@
   transition: all 0.2s;
 }
 
-.content-type-selector button:hover,
+.content-type-selector button:hover {
+  background: var(--bg-hover-soft);
+}
+
 .content-type-selector button.active {
   border-color: #3b82f6;
   color: #60a5fa;
@@ -794,7 +814,13 @@
   font-size: 0.875rem;
 }
 
-.filter-buttons button:hover,
+.filter-buttons button:hover {
+  background: var(--bg-hover-soft);
+  /* the darker border carries the hover in light mode, where the soft fill
+     is nearly invisible against the canvas */
+  border-color: var(--bg-hover);
+}
+
 .filter-buttons button.active {
   background: var(--bg-raised);
   border-color: #3b82f6;
@@ -805,6 +831,77 @@
    "you are filtering by Favorites/Archived" badge, not a decorative label) */
 .status-funnel-btn span {
   white-space: nowrap;
+}
+
+/* Selected-facet icons on the filter button sit tight next to each other */
+.facet-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Library facet filter menu: a 2-column grid, one facet dimension per row.
+   The column split is a straight vertical line (no rounding), rows keep the
+   standard menu dividers, and the checkmark right-aligns in its cell. */
+.dropdown-menu.filter-grid {
+  display: grid;
+  /* minmax(0, 1fr) keeps BOTH columns exactly half the fixed width no matter
+     how long a label + checkmark gets (plain 1fr lets a long cell steal width
+     from the other column, which made the menu jiggle on every selection) */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 250px;
+}
+
+.dropdown-menu.filter-grid button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  border-radius: 0;
+}
+
+/* Icons never shrink; only the label gives way when the checkmark appears */
+.dropdown-menu.filter-grid button svg {
+  flex-shrink: 0;
+}
+
+.dropdown-menu.filter-grid .facet-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Only SELECTED cells fade their label: that's when the checkmark competes
+   for space. Unselected labels fit their full slot and render normally. */
+.dropdown-menu.filter-grid button.selected .facet-label {
+  -webkit-mask-image: linear-gradient(to right, #000 75%, transparent 98%);
+  mask-image: linear-gradient(to right, #000 75%, transparent 98%);
+}
+
+.dropdown-menu.filter-grid button:nth-child(even) {
+  border-left: 1px solid var(--bg-raised);
+}
+
+.dropdown-menu.filter-grid button:nth-last-child(-n + 2) {
+  border-bottom: none;
+}
+
+.dropdown-menu.filter-grid .facet-check {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Selected facet cells get a persistent strong background (the old dropdown
+   hover color), while hover everywhere stays the soft transient tint, so the
+   two can never be confused. Theme vars keep it correct in light mode. */
+.dropdown-menu.filter-grid button.selected,
+.dropdown-menu.filter-grid button.selected:hover {
+  background: var(--bg-raised);
+}
+
+/* In the filter grid, blue TEXT means "selected", so unselected cells keep
+   their normal text color on hover (unlike regular action menus) */
+.dropdown-menu.filter-grid button:hover:not(.selected):not(:disabled) {
+  color: var(--t1);
 }
 
 /* Expandable library search bar (shown above the filter row when open) */
@@ -926,7 +1023,7 @@
   /* A midpoint between the card's normal color and the box color (--bg-raised), so the
      description/summary boxes stay visibly distinct on hover. Works in both themes since it
      mixes the theme variables. */
-  background: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
 }
 
@@ -1047,6 +1144,12 @@
 }
 
 .content-actions button {
+  /* flex-centered so every button is the same height: a default button lays
+     its icon on the text baseline, which adds a few px of slack below (the
+     dropdown trigger was flex already and rendered shorter than its siblings) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0.5rem;
   background: var(--bg-surface);
   border: 1px solid var(--bg-raised);
@@ -1057,7 +1160,8 @@
 }
 
 .content-actions button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
+  border-color: var(--bg-hover);
   color: var(--t1);
 }
 
@@ -1066,9 +1170,9 @@
   color: #fbbf24;
 }
 
-/* Blue for the Archive button */
+/* Blue for the Archive button (same accent blue as selected text/icons) */
 .content-actions button.active[title="Restore from archive"] {
-  color: #3b82f6;
+  color: #60a5fa;
 }
 
 .content-actions .delete-btn:hover {
@@ -1099,7 +1203,8 @@
 }
 
 .more-options-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
+  border-color: var(--bg-hover);
   color: var(--t1);
 }
 
@@ -1113,7 +1218,7 @@
   border-radius: 0.375rem;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
   z-index: 10;
-  min-width: 180px;
+  min-width: 214px; /* fits "Regenerate transcript" + icon on one line */
   overflow: hidden;
 }
 
@@ -1145,7 +1250,7 @@
 }
 
 .dropdown-menu button:hover:not(:disabled) {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-raised); /* keep the divider neutral, no colored hover edges */
   color: #60a5fa;
 }
@@ -1268,32 +1373,10 @@
   border-radius: 2px;
 }
 
-.progress-bar-container {
-  position: relative;
-  margin-top: 0.5rem;
-  height: 20px;
-  background: var(--bg-raised);
-  border-radius: 0.25rem;
-  overflow: hidden;
-}
-
-.progress-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
-  transition: width 0.3s ease;
-}
-
-.progress-text {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--t1);
-}
-
 .metadata .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.75rem;
   padding: 0.25rem 0.5rem;
   background: #065f46;
@@ -1317,24 +1400,6 @@
 }
 
 /* Audio Player */
-.player-container {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--bg-raised);
-  max-height: 70vh;
-  overflow-y: auto;
-  z-index: 100;
-}
-
-.audio-player {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 1rem;
-}
-
 .player-header {
   display: flex;
   justify-content: space-between;
@@ -1358,25 +1423,6 @@
 .player-header h3 {
   font-size: 1rem;
   margin-bottom: 0.25rem;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  color: var(--t3);
-  cursor: pointer;
-  padding: 0.5rem;
-  border-radius: 0.375rem;
-  transition: all 0.2s;
-}
-
-.close-btn:hover {
-  background: var(--bg-raised);
-  color: var(--t1);
-}
-
-.player-main {
-  margin-bottom: 1rem;
 }
 
 .player-controls {
@@ -1442,7 +1488,7 @@
 }
 
 .playback-controls button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: #60a5fa;
 }
 
@@ -1496,16 +1542,6 @@
   font-weight: 500;
 }
 
-.volume-control {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.volume-control input[type="range"] {
-  width: 100px;
-}
-
 .description,
 .transcript-section {
   margin-top: 1rem;
@@ -1521,29 +1557,6 @@
   color: var(--t2);
 }
 
-.transcript-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
-}
-
-.transcript-header button {
-  padding: 0.375rem 0.75rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--bg-hover);
-  border-radius: 0.25rem;
-  color: var(--t1);
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-
-.transcript-content {
-  max-height: 300px;
-  overflow-y: auto;
-  line-height: 1.6;
-}
-
 .transcript-word {
   cursor: pointer;
   transition: color 0.2s;
@@ -1553,37 +1566,7 @@
   color: #60a5fa;
 }
 
-/* Article Metadata */
-.published-date {
-  font-size: 0.875rem;
-  color: var(--t3);
-  margin-top: 0.25rem;
-}
-
-.article-metadata {
-  display: flex;
-  gap: 1rem;
-  margin-top: 0.5rem;
-  font-size: 0.875rem;
-}
-
-.metadata-item {
-  color: var(--t2);
-}
-
-.metadata-item strong {
-  color: #60a5fa;
-  margin-right: 0.25rem;
-}
-
 /* Comments Section */
-.comments-section {
-  margin-top: 1rem;
-  padding: 1rem;
-  background: var(--bg-raised);
-  border-radius: 0.375rem;
-}
-
 .comments-header {
   display: flex;
   justify-content: space-between;
@@ -1605,11 +1588,22 @@
   /* Comments tab uses full vertical space, no fixed height */
 }
 
+/* Comments alternate their background shade by nesting depth (LessWrong / EA Forum
+   style) with a thin uniform border instead of the old blue left bar. Quotes keep
+   their left bar, so the two stay distinct. The React renderers stamp .comment-alt on
+   every odd depth, so the alternation works at ANY depth (a pure-CSS descendant chain
+   could only cover a fixed number of levels). */
 .comment {
   padding: 0.75rem;
   background: var(--bg-surface);
   border-radius: 0.375rem;
-  border-left: 3px solid #3b82f6;
+  border: 1px solid var(--bg-raised);
+}
+
+/* The alternate shade sits halfway between the card and page shades (derived from the
+   theme variables, so it adapts to light mode), keeping the contrast gentle. */
+.comment.comment-alt {
+  background: color-mix(in srgb, var(--bg-surface) 55%, var(--bg-app));
 }
 
 .comment-header {
@@ -1722,24 +1716,14 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin-right: -0.75rem;
-  padding-left: 10px; 
+  /* Replies indent by the parent's own padding (no extra), and reach to 3px short of
+     the parent's right border, a tiny gap so the two borders never read as one thick
+     line. 0.75rem is the parent's padding being cancelled out. */
+  margin-right: calc(3px - 0.75rem);
+  padding-left: 0;
 }
 
 /* Settings Modal */
-.settings-modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
-
 .settings-content {
   background: var(--bg-surface);
   border-radius: 0.5rem;
@@ -1770,26 +1754,6 @@
   font-size: 2rem;
   line-height: 1;
   padding: 0;
-}
-
-.settings-body {
-  padding: 1.5rem;
-}
-
-.setting-group {
-  margin-bottom: 1.5rem;
-}
-
-.setting-group h3 {
-  font-size: 1rem;
-  margin-bottom: 0.5rem;
-  color: var(--t2);
-}
-
-.setting-group p {
-  font-size: 0.875rem;
-  color: var(--t3);
-  line-height: 1.5;
 }
 
 /* Comment Warning Modal */
@@ -1893,7 +1857,13 @@
 }
 
 .loading-content h1 {
+  /* Same wordmark treatment as .app-header h1. Size stays 2rem, which reads
+     fine under the 5rem loading logo. No optical lift needed here: the text
+     sits alone in a vertical stack, not flex-centered beside the mark. */
+  font-family: 'Monomaniac One', 'Quicksand', system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-size: 2rem;
+  font-weight: 400;
+  line-height: 1;
   color: #60a5fa;
   margin-bottom: 1.5rem;
 }
@@ -1912,49 +1882,7 @@
   to { transform: rotate(360deg); }
 }
 
-/* Login Page */
-.login-page {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  background: var(--bg-app);
-  justify-content: center;
-  align-items: center;
-  padding: 1rem;
-}
-
-.login-container {
-  width: 100%;
-  max-width: 400px;
-  padding: 2rem;
-  background: var(--bg-surface);
-  border-radius: 0.75rem;
-  border: 1px solid var(--bg-raised);
-}
-
-.login-header {
-  text-align: center;
-  margin-bottom: 2rem;
-}
-
-.login-logo {
-  height: 5rem;
-  width: auto;
-  margin: 0 auto 1rem;
-  display: block;
-  object-fit: contain;
-}
-
-.login-header h1 {
-  font-size: 2rem;
-  color: #60a5fa;
-  margin-bottom: 0.5rem;
-}
-
-.login-header p {
-  color: var(--t3);
-}
-
+/* Login error box, shared by the home page's login dropdown */
 .login-error {
   display: flex;
   align-items: center;
@@ -1968,25 +1896,114 @@
   font-size: 0.875rem;
 }
 
-.login-form {
+/* Neutral notice box (e.g. "reset link sent"), the calm sibling of .login-error */
+.login-notice {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  font-size: 0.875rem;
+}
+
+/* =============================================
+   Home page (logged out landing page)
+   ============================================= */
+.home-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg-app);
+  color: var(--t1);
+}
+
+.home-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem;
+  background: none;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  color: var(--t3);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.home-icon-btn:hover {
+  background: var(--bg-hover-soft);
+  color: var(--t1);
+}
+
+.home-login-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.home-login-trigger:hover {
+  background: var(--bg-hover);
+}
+
+.home-login-trigger svg {
+  transition: transform 0.2s;
+}
+
+.home-login-trigger svg.rotated {
+  transform: rotate(180deg);
+}
+
+.home-login-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.5rem;
+  width: 300px;
+  max-width: calc(100vw - 2rem);
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  padding: 1.25rem;
+}
+
+.home-login-title {
+  font-size: 0.875rem;
+  color: var(--t3);
+  margin-bottom: 1rem;
+}
+
+.home-login-form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-.login-form .form-group {
+.home-login-form .form-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  margin-bottom: 0;
 }
 
-.login-form label {
+.home-login-form label {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--t2);
 }
 
-.login-form input {
+.home-login-form input {
   padding: 0.75rem 1rem;
   background: var(--bg-app);
   border: 1px solid var(--bg-raised);
@@ -1996,70 +2013,416 @@
   transition: border-color 0.2s;
 }
 
-.login-form input:focus {
+.home-login-form input:focus {
   outline: none;
   border-color: #3b82f6;
 }
 
-.login-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
+.home-login-submit {
+  width: 100%;
   padding: 0.875rem;
-  margin-top: 0.5rem;
-  background: #3b82f6;
-  border: none;
-  border-radius: 0.5rem;
-  color: white;
+  margin-top: 0.25rem;
   font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
 }
 
-.login-button:hover:not(:disabled) {
-  background: #2563eb;
-}
-
-.login-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.login-footer {
-  margin-top: 1.5rem;
-  text-align: center;
-}
-
-.toggle-mode-button {
+.home-login-toggle {
   background: none;
   border: none;
   color: #60a5fa;
   cursor: pointer;
   font-size: 0.875rem;
+  padding: 0;
 }
 
-.toggle-mode-button:hover {
+.home-login-toggle:hover {
   text-decoration: underline;
 }
 
-.login-hint {
-  margin-top: 1.5rem;
-  padding: 1rem;
-  background: var(--bg-raised);
+.home-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: #3b82f6;
+  border: none;
   border-radius: 0.5rem;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.home-btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.home-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.home-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.home-btn-secondary:hover {
+  background: var(--bg-hover-soft);
+}
+
+.home-main {
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 3.5rem) 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2.5rem, 6vw, 4rem);
+}
+
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: center;
   text-align: center;
-  font-size: 0.75rem;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.home-hero-title {
+  font-size: clamp(1.8rem, 1.2rem + 2.6vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--t0);
+}
+
+.home-hero-sub {
+  font-size: clamp(0.95rem, 0.85rem + 0.5vw, 1.1rem);
+  line-height: 1.55;
+  color: var(--t3);
+  max-width: 440px;
+}
+
+.home-hero-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.home-hero-note {
+  font-size: 0.8rem;
+  color: var(--t4);
+}
+
+.home-hero-error {
+  margin-bottom: 0;
+}
+
+.home-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.home-narrow {
+  width: 100%;
+  max-width: 660px;
+  margin: 0 auto;
+}
+
+.home-section-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--t2);
+}
+
+.home-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 1rem 1.5rem;
+}
+
+.home-step {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.home-step-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 0.5rem;
+  background: var(--bg-raised);
+  color: #60a5fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.home-step-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.home-step-desc {
+  font-size: 0.8rem;
+  line-height: 1.45;
   color: var(--t3);
 }
 
-.login-hint p {
-  margin-bottom: 0.25rem;
+.home-shots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
 }
 
-.login-hint strong {
+.home-shots-viewport {
+  width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.home-shots-track {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.home-shot {
+  flex-shrink: 0;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s;
+  cursor: pointer;
+}
+
+.home-shot-frame {
+  width: 100%;
+  aspect-ratio: 300 / 460;
+  border: 1px solid var(--bg-raised);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.home-shot-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+}
+
+.home-shots-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 420px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.home-shots-caption {
+  flex: 1;
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 600;
   color: var(--t2);
+}
+
+.home-shots-dots {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+}
+
+.home-dot-btn {
+  padding: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.home-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+
+.home-shots-note {
+  font-size: 0.72rem;
+  color: var(--t4);
+  text-align: center;
+}
+
+.home-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 0.6rem;
+}
+
+.home-feature {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+}
+
+.home-feature-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.home-feature-head span {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.home-feature-desc {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--t3);
+}
+
+.home-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+}
+
+.home-cost-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #60a5fa;
+}
+
+.home-cost-head span {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--t1);
+}
+
+.home-cost-text {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--t3);
+}
+
+.home-footer {
+  border-top: 1px solid var(--bg-raised);
+  margin-top: clamp(2.5rem, 6vw, 4rem);
+  padding: 1.5rem 1rem 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--t4);
+  text-align: center;
+}
+
+.home-footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #60a5fa;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.home-footer-link:hover {
+  text-decoration: underline;
+}
+
+/* =============================================
+   Read-only demo mode
+   ============================================= */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  background: #1d4ed8;
+  color: #ffffff;
+  font-size: 0.8rem;
+}
+
+.demo-banner button {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 0.375rem;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+
+.demo-banner button:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.demo-toast {
+  position: fixed;
+  bottom: 5.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-raised);
+  color: var(--t0);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.5rem;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  white-space: nowrap;
+}
+
+/* Wraps every Settings section below Account. Disabling the fieldset makes all
+   inputs inside inert for the read-only demo without touching each control. */
+.settings-demo-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: block;
+}
+
+.settings-demo-fieldset:disabled {
+  opacity: 0.7;
 }
 
 /* User Menu */
@@ -2152,6 +2515,7 @@
   padding: 0.875rem 1rem;
   background: none;
   border: none;
+  border-radius: 0; /* square hover highlight (the global button radius rounded it) */
   color: var(--t1);
   font-size: 0.875rem;
   cursor: pointer;
@@ -2160,7 +2524,7 @@
 }
 
 .user-dropdown-item:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
 }
 
 /* Settings Page */
@@ -2203,7 +2567,7 @@
 }
 
 .settings-page .back-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t1);
 }
 
@@ -2531,15 +2895,6 @@
   margin-right: 0.5rem;
 }
 
-.provider-description {
-  font-size: 0.875rem;
-  color: var(--t3);
-  margin-bottom: 1rem;
-  padding: 0.75rem;
-  background: var(--bg-app);
-  border-radius: 0.375rem;
-}
-
 /* Seek buttons styled like circular rewind/forward controls */
 .seek-btn {
   position: relative;
@@ -2558,7 +2913,7 @@
 }
 
 .seek-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   transform: scale(1.05);
 }
 
@@ -2669,7 +3024,7 @@
 }
 
 .mini-close-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -2840,12 +3195,6 @@
   margin: 0.25rem 0 0 0;
 }
 
-.fullscreen-metadata {
-  font-size: 0.875rem;
-  color: var(--t3);
-  margin: 0.25rem 0 0 0;
-}
-
 .fullscreen-header-buttons {
   display: flex;
   gap: 0.5rem;
@@ -2866,7 +3215,7 @@
 }
 
 .header-button:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
 }
@@ -2879,11 +3228,23 @@
   border-bottom: 1px solid var(--bg-raised);
   padding: 0;
   flex-shrink: 0;
-  overflow-x: auto;
   background: var(--bg-surface);
 }
 
+/* Inner scroll area for the tab buttons, so the autoscroll toggle
+   (a sibling, pinned right) never scrolls out of view */
+.fullscreen-tabs-scroll {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .tab-button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   background: transparent;
   border: none;
   padding: 0.875rem 1.25rem;
@@ -2897,12 +3258,24 @@
 
 .tab-button:hover {
   color: var(--t1);
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
 }
 
 .tab-button.active {
   color: #60a5fa;
   background: var(--bg-app);
+}
+
+/* Narrow screens: tab labels always stay visible, only the autoscroll
+   toggle's text collapses to its icon. Tab padding tightens a little. */
+@media (max-width: 740px) {
+  .autoscroll-toggle .tab-label {
+    display: none;
+  }
+
+  .tab-button {
+    padding: 0.875rem 0.9rem;
+  }
 }
 
 /* Tab Content Area */
@@ -2937,22 +3310,31 @@
   margin-bottom: 0;
 }
 
-.content-header h2 {
-  color: var(--t0);
-  margin: 0 0 0.5rem 0;
+/* Fixed UI size on purpose: the provenance lines are app chrome, not article
+   text, so they do NOT follow the reader text-size control */
+.content-provenance {
+  font-size: 0.875rem;
+}
+
+/* Title/author/date/karma block below the provenance + buttons row in the
+   Content and Transcript tabs (mirrors what the TTS intro speaks). Unlike the
+   provenance, it IS part of the reading experience, so it follows the reader
+   text-size control like the article body. */
+.content-title-block {
+  margin-bottom: 1rem;
+  font-size: calc(1rem * var(--reader-font-scale, 1));
+}
+
+.content-title-block h2 {
+  margin: 0.75rem 0 0.25rem 0;
   font-size: calc(1.5rem * var(--reader-font-scale, 1));
 }
 
-.content-author {
+.content-title-block .content-author {
   color: var(--t3);
   font-size: calc(0.875rem * var(--reader-font-scale, 1));
-  margin: 0.25rem 0;
+  margin: 0;
 }
-
-.content-provenance {
-  font-size: calc(0.75rem * var(--reader-font-scale, 1));
-}
-
 .content-source {
   margin: 0.5rem 0 0 0;
 }
@@ -3025,7 +3407,7 @@
 
 /* Footnotes. Inline reference markers + the definition section at the end (clickable). */
 .article-content sup.footnote-ref a {
-  color: var(--accent, #60a5fa);
+  color: #60a5fa;
   text-decoration: none;
   cursor: pointer;
 }
@@ -3046,7 +3428,7 @@
   margin: 0.4em 0;
 }
 .article-content .footnote-backref {
-  color: var(--accent, #60a5fa);
+  color: #60a5fa;
   text-decoration: none;
   margin-left: 0.35em;
   cursor: pointer;
@@ -3280,7 +3662,10 @@
   transition: background 0.2s, color 0.2s;
 }
 .text-format-toggle button.active {
-  background: var(--accent, #2563eb);
+  /* same filled-primary blue as .submit-btn ("Save content"). Note: --accent
+     was never defined anywhere, so the old var() always fell back to a darker
+     one-off blue. */
+  background: #3b82f6;
   color: #fff;
 }
 
@@ -3318,8 +3703,8 @@
   border-color: var(--t4);
 }
 .md-toolbar-btn.primary {
-  background: var(--accent, #2563eb);
-  border-color: var(--accent, #2563eb);
+  background: #3b82f6;
+  border-color: #3b82f6;
   color: #fff;
 }
 .md-toolbar-btn.primary:hover {
@@ -3329,6 +3714,33 @@
   opacity: 0.55;
   cursor: default;
 }
+/* Title/author/date fields above the Markdown editor. Saved with the edit;
+   the pre-edit values are snapshotted into version history like the body. */
+.md-editor-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.md-editor-meta input {
+  background: var(--bg-surface);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+}
+.md-editor-meta input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.md-editor-meta input[aria-label="Title"] {
+  flex: 2 1 220px;
+}
+.md-editor-meta input[aria-label="Author"] {
+  flex: 1 1 140px;
+}
+
 .markdown-editor-textarea {
   width: 100%;
   min-height: 50vh;
@@ -3344,7 +3756,7 @@
 }
 .markdown-editor-textarea:focus {
   outline: none;
-  border-color: var(--accent, #2563eb);
+  border-color: #3b82f6; /* the app's usual active-border blue */
 }
 .md-editor-error {
   color: #ef4444;
@@ -3391,6 +3803,14 @@
 .version-badge.version-edit { color: #2563eb; border-color: #2563eb55; }
 .version-badge.version-refetch { color: #0891b2; border-color: #0891b255; }
 .version-badge.version-restore { color: #d97706; border-color: #d9770655; }
+/* Marks the snapshot the current audio narration was generated from */
+.version-badge.version-audio { color: #60a5fa; border-color: #60a5fa55; }
+/* Audio-sync status line at the top of the History tab */
+.version-audio-note {
+  color: #60a5fa;
+  font-size: 0.8rem;
+  margin: 0.35rem 0 0;
+}
 .version-date { color: var(--t2); font-size: 0.85rem; }
 .version-size { color: var(--t3, #9ca3af); font-size: 0.8rem; }
 .version-actions { display: flex; gap: 0.5rem; }
@@ -3401,19 +3821,6 @@
 .tab-read-along-display {
   max-width: 800px;
   margin: 0 auto;
-}
-
-.read-along-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1.5rem;
-}
-
-.read-along-header h3 {
-  color: var(--t0);
-  margin: 0;
-  font-size: 1.25rem;
 }
 
 .read-along-text {
@@ -3546,6 +3953,8 @@
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: none;
+  border-left: 1px solid var(--bg-raised);
+  border-radius: 0;
   color: var(--t4);
   cursor: pointer;
   font-size: 0.75rem;
@@ -3622,7 +4031,7 @@
 }
 .queue-clear-btn:hover,
 .queue-shuffle-btn:hover {
-  background: var(--bg-raised);
+  background: var(--bg-hover-soft);
   color: var(--t0);
 }
 .queue-shuffle-btn.active {
@@ -4051,7 +4460,9 @@
 }
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
-  color: var(--accent, #2563eb);
+  /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly
+     dim on the dark background) */
+  color: #60a5fa;
   font-weight: 600;
   font-size: 0.8rem;
 }
@@ -4164,6 +4575,24 @@
   flex: 0 0 auto;
 }
 .voice-chip input { margin: 0; }
+/* Speaker button inside a voice chip (plays the static preview sample).
+   Inside the chip's <label>, so its click handler preventDefaults to keep
+   it from toggling the checkbox. */
+.settings-section .voice-chip .voice-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0.15rem;
+  margin: -0.15rem -0.2rem -0.15rem 0;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.settings-section .voice-chip .voice-preview-btn:hover {
+  background: var(--bg-hover-soft);
+}
 .voice-chip.selected {
   background: #1e3a5f;
   border-color: #3b82f6;
@@ -4173,4 +4602,116 @@
   background: #dbeafe;
   border-color: #3b82f6;
   color: #1e40af;
+}
+
+/* "Continue listening" strip under the library filters. Deliberately unobtrusive:
+   low-height 350px cards, progress as a thin bar on the bottom border, title fades
+   out where it overflows. Hidden in bulk-select mode and via the Settings toggle. */
+.continue-strip {
+  margin: 0.4rem 0 0.6rem;
+}
+.continue-strip-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--t3);
+  margin: 0 0 0.3rem 0.15rem;
+}
+.continue-strip-row {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: thin;
+}
+.continue-card {
+  position: relative;
+  flex: 0 0 350px;
+  width: 350px;
+  max-width: 85vw; /* keep the card (and a peek of the next) on narrow phones */
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem 0.6rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+  color: var(--t1);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+}
+.continue-card img,
+.continue-card-art {
+  width: 32px;
+  height: 32px;
+  border-radius: 0.35rem;
+  object-fit: cover;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raised);
+  color: var(--t3);
+}
+.continue-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+.continue-card-type {
+  color: var(--t3);
+  flex-shrink: 0;
+  display: flex;
+}
+.continue-card-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: #3b82f6;
+  border-radius: 0 2px 2px 0;
+}
+
+/* Generation failures surfaced inside the player (the library card shows them too). */
+.player-error-banner {
+  margin: 0.35rem auto 0;
+  max-width: 640px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 0.4rem;
+  border: 1px solid #ef444455;
+  color: #f87171;
+  text-align: center;
+}
+
+/* Shown when the automatic resume-seek permanently failed: manual jump chip. */
+.resume-chip {
+  display: block;
+  margin: 0.35rem auto 0;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid #3b82f6;
+  background: transparent;
+  color: #60a5fa;
+  cursor: pointer;
+}
+
+/* Draining countdown under the player's Archive->Undo button (10s window). */
+.pending-archive-bar {
+  display: block;
+  height: 2px;
+  margin-top: 3px;
+  background: #60a5fa;
+  border-radius: 1px;
+  animation: archive-drain 10s linear forwards;
+}
+@keyframes archive-drain {
+  from { width: 100%; }
+  to { width: 0; }
 }

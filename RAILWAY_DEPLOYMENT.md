@@ -1,198 +1,129 @@
-# Deploying Readcast to Railway
+# Deploying Wallacast to Railway (step by step)
 
-This guide will help you deploy Readcast to Railway.app so you can access it from your phone anywhere!
+This is a beginner-friendly guide for putting Wallacast online with [Railway](https://railway.app). Once it is live you can open it on your phone from anywhere and even install it like an app.
 
-## What You'll Deploy
+Wallacast runs as three separate pieces (Railway calls them "services") inside one project, all built from the same GitHub repo:
 
-- **Backend Service** (Node.js API)
-- **Frontend Service** (React Web App)
-- **PostgreSQL Database**
+1. A **PostgreSQL database** (stores your accounts, content, and settings).
+2. The **backend** (the Node.js API, built from the `backend/` folder).
+3. The **frontend** (the React web app you actually look at, built from the `frontend/` folder).
 
-## Step-by-Step Instructions
+You will set these up one at a time.
 
-### 1. Create a Railway Account
+## Before you start
 
-1. Go to [railway.app](https://railway.app)
-2. Click "Start a New Project"
-3. Sign up with GitHub (this is required)
+- Push this repo to your own GitHub account (Railway deploys from GitHub).
+- Create a Railway account and sign in.
 
-### 2. Create a New Project
+## Step 1: Create a Railway project
 
-1. Click "New Project"
-2. Select "Deploy from GitHub repo"
-3. Connect your GitHub account if not already connected
-4. Select your `readcast` repository
+1. In Railway, create a new project.
+2. Choose the option to deploy from a GitHub repo and pick your Wallacast repo.
+3. Railway will create the project. Do not worry if the first build looks unhappy, you will configure things in the next steps.
 
-### 3. Deploy the Database
+## Step 2: Add the PostgreSQL database
 
-1. In your Railway project, click "+ New"
-2. Select "Database" → "PostgreSQL"
-3. Railway will automatically create and provision the database
-4. **Write down the database credentials** (or leave the tab open - you'll need them)
+1. Inside the project, add a new PostgreSQL database service (Railway has a ready-made Postgres option).
+2. That is it for now. Railway provisions the database automatically and gives you a connection string you will reference later.
 
-### 4. Deploy the Backend
+## Step 3: Deploy the backend
 
-1. Click "+ New" → "GitHub Repo" → Select `readcast`
-2. Railway will try to deploy but fail (this is expected!)
-3. Click on the service → Go to "Settings"
-4. Set **Root Directory** to: `backend`
-5. **Connect the Database** (Most Important Step!):
-   - Go to "Variables" tab
-   - Railway usually auto-connects services, so you should already see variables like:
-     - `DATABASE_URL` or `POSTGRES_URL` (full connection string)
-     - OR individual variables: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
-   - **If you DON'T see these**, you need to connect the services:
-     - Option A: Look for a "Reference" or "Connect" button near "+ New Variable"
-     - Option B: Go to your PostgreSQL service, copy the DATABASE_URL, and add it to backend variables
-   - **Good news**: The backend automatically detects Railway's database variables! No manual copying needed.
+1. Add a service that deploys from your GitHub repo (or reuse the one Railway created in Step 1).
+2. Open that service's settings and set the **Root Directory** to `backend`.
+   - This matters because the `backend/` folder has a `Dockerfile`. Railway uses it to build the backend and it automatically installs FFmpeg, which Wallacast needs to make audio.
+3. Add the environment variables from Step 5 below to this service.
+4. Let it build and deploy.
+5. Once it is running, give the backend a public URL. In the service's networking settings, generate a domain. Copy that URL, you will need it in a moment (this is your `BACKEND_URL`).
 
-6. Add these **required** environment variables:
-   - `PORT` = `3001`
-   - `AUTH_USERNAME` = (your choice, e.g., "admin")
-   - `AUTH_PASSWORD` = (your choice, use a strong password)
-   - `OPENAI_API_KEY` = (required for transcription and TTS)
+## Step 4: Deploy the frontend
 
-   **Important**: The app now uses HTTP Basic Auth to protect your API. Your browser will prompt you for these credentials.
+1. Add another service from the same GitHub repo.
+2. In its settings, set the **Root Directory** to `frontend`.
+   - The `frontend/` folder uses Nixpacks (see `frontend/nixpacks.toml`). It builds the web app and serves it with `npx serve`.
+3. Add the frontend environment variable from Step 5 below.
+4. Let it build and deploy, then generate a public domain for it the same way you did for the backend.
+5. This frontend URL is the one you open on your phone or browser. It is also your `FRONTEND_URL` for the backend.
 
-7. Click "Deploy" or wait for automatic redeployment
-8. Once deployed, go to "Settings" → "Networking" → Click "Generate Domain" if not already created
-9. Copy the **public domain URL** (e.g., `backend-production-xxxx.up.railway.app`)
+## Step 5: Set the environment variables
 
-### 5. Deploy the Frontend
+Environment variables are just settings you type into each service's **Variables** tab. Add them, then let the service redeploy.
 
-1. Click "+ New" → "GitHub Repo" → Select `readcast` again
-2. Click on the new service → Go to "Settings"
-3. Set **Root Directory** to: `frontend`
-4. Go to "Variables" tab and add:
-   - `VITE_API_URL` = `https://[your-backend-url].up.railway.app/api`
+### Backend variables
 
-   **Replace** `[your-backend-url]` with the backend URL from step 4!
+- `DATABASE_URL` - the database connection string. The clean way to set this is to reference your PostgreSQL service (Railway lets one service point at another's variables), so it fills in automatically. You do not paste a password by hand.
+- `FRONTEND_URL` - your frontend's public URL (for example `https://your-frontend.up.railway.app`). The backend uses this to allow requests from your web app (this is called CORS).
+- `BACKEND_URL` - the backend's own public URL (for example `https://your-backend.up.railway.app`). It is used to build the links to your generated audio files.
+- `JWT_SECRET` - any long random string. It signs the login tokens. If you leave it blank, everyone gets logged out every time you redeploy, so set it once and keep it.
+- `ENCRYPTION_KEY` - a random key used to encrypt each user's AI provider API keys before they go into the database. It must be exactly 64 hex characters (32 bytes). Without it, stored keys fall back to plaintext, which you do not want in production.
+- `DEMO_USERNAME` (optional) - the username of the shared read-only demo account behind the home page's "Try the demo" button. Defaults to `demo`. IMPORTANT: register that username yourself before promoting the instance (running the seed script does it for you), otherwise a stranger could claim it and control what demo visitors see. Populate the demo library with `cd backend && BASE_URL=https://your-backend-url DEMO_PASSWORD=... OPENAI_API_KEY=... DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo` (the keys are used once for generation and then removed from the demo account).
+- `INVITE_CODE` (optional) - when set, creating an account requires this exact code (the register form automatically shows an extra field on instances that need it). Leave unset to keep registration open.
+- `RESEND_API_KEY` (optional) - enables the "Forgot password?" email flow via resend.com (the free tier is plenty). Without it, the reset form tells users to contact the operator instead.
+- `EMAIL_FROM` (optional) - the sender for those reset emails, for example `Wallacast <you@yourdomain.com>` (requires verifying your domain at Resend). Defaults to Resend's shared onboarding sender, which works without any domain setup.
+- `PORT` - set to `3001` (the port the backend listens on).
 
-5. Click "Deploy" or wait for redeployment
-6. Once deployed, go to "Settings" → "Networking" → Click "Generate Domain"
-7. **Copy your frontend URL!** This is what you'll visit on your phone
+Tip for generating the secrets: on any machine with Node installed you can run
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+to print a fresh 64-character value. Use it for `ENCRYPTION_KEY`, and run it again to get a separate value for `JWT_SECRET`.
 
-### 6. Update Backend CORS (Important!)
+You do NOT set any OpenAI or other AI provider key here. See "How accounts and API keys work" below.
 
-1. Go back to your backend service
-2. Add one more environment variable:
-   - `FRONTEND_URL` = `https://[your-frontend-url].up.railway.app`
+### Frontend variable
 
-Now the backend knows to accept requests from your frontend!
+- `VITE_API_URL` - your backend's public URL with `/api` on the end (for example `https://your-backend.up.railway.app/api`).
 
-### 7. Test It!
+## Step 6: Attach a volume for audio
 
-1. Open the frontend URL on your phone's browser
-2. You should see the Readcast app!
-3. Try adding content, subscribing to podcasts, etc.
+Generated audio files live on disk at `/data/audio`, not inside the database. So the backend needs a persistent volume.
 
-## Quick Reference - Environment Variables
+1. On the **backend** service, add a volume.
+2. Set its mount path to `/data`.
 
-### Backend Variables
-```
-# Database connection (Railway auto-provides these)
-DATABASE_URL=(auto-provided by Railway when you connect the PostgreSQL service)
-# OR individual variables:
-PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD=(auto-provided by Railway)
+If you skip this, your audio will vanish every time the backend redeploys, because a plain container's disk is wiped on each deploy.
 
-# Manual configuration (only needed if Railway doesn't auto-connect)
-DB_HOST=(from PostgreSQL service)
-DB_PORT=(from PostgreSQL service)
-DB_NAME=(from PostgreSQL service)
-DB_USER=(from PostgreSQL service)
-DB_PASSWORD=(from PostgreSQL service)
+## Step 7: Register and add your API keys
 
-# Required
-PORT=3001
-FRONTEND_URL=https://your-frontend-url.up.railway.app
-AUTH_USERNAME=admin (or your choice)
-AUTH_PASSWORD=your-secure-password
-OPENAI_API_KEY=sk-proj-... (required for transcription and TTS)
-```
+1. Open your frontend URL in a browser.
+2. Register your first account right there in the app. Wallacast is multi-user, there is no admin password baked into the deployment.
+3. Go to Settings and add your own AI provider API key(s) (OpenAI and others). Each account brings its own keys, and they are stored encrypted per account. There is no single global OpenAI key for the whole app.
 
-**Note**: The backend automatically installs ffmpeg via `Dockerfile` for audio processing. This is required for podcast transcription and article TTS to work correctly. Railway will automatically detect and use the Dockerfile.
+## How accounts and API keys work
 
-### Frontend Variables
-```
-VITE_API_URL=https://your-backend-url.up.railway.app/api
-```
+Wallacast is a multi-user app. After you deploy, you create your own account inside the app, and so does anyone else you invite. Every user pastes their own AI provider API keys into the in-app Settings page. Those keys are encrypted with your `ENCRYPTION_KEY` and saved to that user's row in the database. The server itself never holds one shared provider key.
+
+## Password resets
+
+There are two ways a lost password gets fixed, and both are safe to know publicly (the only secret is your `RESEND_API_KEY` value, which lives in Railway, never in this repo).
+
+**1. Self-service by email (recommended).** Activate it once:
+
+1. Create a free account at [resend.com](https://resend.com) (their free tier of 100 emails/day is far more than a reset flow needs).
+2. Copy an API key from the Resend dashboard and set it as `RESEND_API_KEY` on the backend service in Railway.
+
+That is the whole setup. From then on the login dropdown shows "Forgot password?". The user enters their username, gets an email with a one-hour, single-use reset link (only if their account has an email address), picks a new password, and every existing session for that account is logged out. Optionally set `EMAIL_FROM` (for example `Wallacast <you@yourdomain.com>`) after verifying your domain at Resend, otherwise emails come from Resend's shared onboarding sender, which works without any setup.
+
+**2. Manual reset by the operator.** For accounts without an email address (email is optional at registration), you reset the password by hand:
+
+1. Generate a password hash. From the `backend/` directory on any machine with the project installed:
+   `node -e "require('bcrypt').hash('THE-NEW-PASSWORD', 10).then(h => console.log(h))"`
+2. In your database tool (for example DbGate), run:
+   `UPDATE users SET password_hash = '<the hash from step 1>' WHERE username = 'their-username';`
+3. Log their old sessions out:
+   `UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = (SELECT id FROM users WHERE username = 'their-username');`
+
+## Backups (Hobby plan)
+
+Railway's automatic database backups need the Pro plan. On the Hobby plan, make a manual dump now and then (audio files are regenerable, the database is not). With the Postgres connection string from Railway (the PUBLIC url, Railway shows it on the Postgres service):
+
+`pg_dump "<the postgres public url>" -Fc -f wallacast-backup.dump`
+
+Store the file somewhere off Railway. Restoring later: `pg_restore -d "<url>" --clean wallacast-backup.dump`. Doing this once before promoting the instance also doubles as your backup test.
+
+## HTTPS and installing as an app
+
+Railway serves every public domain over HTTPS automatically, you do not configure certificates. This matters because Wallacast is a PWA (a website you can install like a phone app), and installing a PWA only works over HTTPS. So once your frontend is on its Railway domain, you can add it to your home screen.
 
 ## Troubleshooting
 
-### "Cannot connect to database" or "ECONNREFUSED 127.0.0.1:5432"
-This means the backend can't find the PostgreSQL service. Fix it:
-- **Check Variables tab** in your backend service - you should see `DATABASE_URL` or `PG*` variables
-- If you DON'T see them, the services aren't connected:
-  - Go to backend Variables tab → look for "Add Reference" or "Connect" option
-  - OR go to PostgreSQL service → copy DATABASE_URL → paste it in backend Variables
-- **After adding variables**, click "Redeploy" on the backend service
-- The backend now auto-detects Railway's standard PostgreSQL variables, so once they're present it should work!
-
-### "API requests failing"
-- Check that `VITE_API_URL` in frontend points to your backend URL
-- Make sure backend URL includes `/api` at the end
-- Check backend logs for CORS errors
-
-### "Build failed"
-- Make sure Root Directory is set correctly (`backend` or `frontend`)
-- Check the build logs for specific errors
-- Make sure `nixpacks.toml` files are present
-
-### Backend keeps crashing
-- Check that database connection is working
-- Railway free tier databases might sleep - wait a minute and retry
-- Check environment variables are all set
-
-### "Cannot find ffprobe" or ffmpeg errors
-- Make sure the backend service Root Directory is set to `backend` (Settings → Root Directory)
-- The `Dockerfile` in the backend directory automatically installs ffmpeg during build
-- Railway should automatically detect and use the Dockerfile
-- Redeploy the backend service to trigger a fresh build with ffmpeg installed
-- Check the build logs - you should see "Installing ffmpeg" during the Docker build phase
-- If Railway is not using the Dockerfile, ensure it's committed to git and pushed
-
-## Using Railway CLI (Advanced)
-
-If you want to use the command line instead:
-
-```bash
-# Install Railway CLI
-npm install -g @railway/cli
-
-# Login
-railway login
-
-# Link your project
-railway link
-
-# Deploy backend
-cd backend
-railway up
-
-# Deploy frontend
-cd ../frontend
-railway up
-```
-
-## Free Tier Limits
-
-Railway free tier includes:
-- $5 credit per month
-- Should be enough for light personal use
-- Backend, frontend, and database each count toward usage
-
-If you run out of credits, the services will stop until next month.
-
-## Next Steps
-
-Once deployed, you can:
-- Add the URL to your phone's home screen (works like an app!)
-- Share the URL with other devices
-- Consider upgrading Railway for more credits if needed
-
-## Support
-
-If you get stuck:
-- Check [Railway documentation](https://docs.railway.app)
-- Check the Railway dashboard logs for error messages
-- Make sure your GitHub repository is up to date
+- **Backend returns 503 ("service starting up")**: the database is probably still initializing, give it a minute. If it never clears, check that `DATABASE_URL` is set on the backend (usually by referencing the Postgres service).
+- **Everyone gets logged out after a redeploy**: `JWT_SECRET` is not set. Add a long random value and it will stop happening.
+- **Audio disappears after a redeploy**: the volume is missing or not mounted at `/data`. Add a volume on the backend service with mount path `/data`.

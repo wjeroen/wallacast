@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -136,6 +137,9 @@ const CHAT_MODEL_DEFAULTS: Record<string, string> = {
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
+  // The shared demo account may look at every setting but change none. Inputs are
+  // disabled via a fieldset wrapper below, and the backend blocks writes regardless.
+  const isDemo = !!user?.demo;
   const [settings, setSettings] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -160,6 +164,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   // Multiple voices to rotate between for audio generation (empty = use the single voice above).
   const [ttsVoices, setTtsVoices] = useState<TTSVoiceChoice[]>([]);
+
+  // Speeds the player's speed button cycles through.
+  const [speedOptions, setSpeedOptions] = useState<number[]>(DEFAULT_SPEEDS);
 
   // Wallabag connection state
   const [testingConnection, setTestingConnection] = useState(false);
@@ -203,6 +210,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     auto_transcribe_podcasts: 'true',
     auto_generate_audio_for_articles: 'false',
+    generate_read_along: 'true',
     // Summaries
     auto_generate_summary: 'false',
     summarize_comments: 'true',
@@ -212,6 +220,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
     manual_queue_always_autoplay: 'true',
+    autoplay_on_open: 'false',
+    show_continue_listening: 'true',
+    warn_archive_removes_audio: 'true',
     // Wallabag Settings
     wallabag_url: '',
     wallabag_client_id: '',
@@ -246,7 +257,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setSettings(settingsRes.data.settings);
 
       const loaded = settingsRes.data.settings;
-      console.log('Loaded settings from server:', loaded);
 
       // Editable-prompt registry: pre-fill each box with the saved override, else the built-in
       // default, so a box is never blank and the user always edits from a real starting point.
@@ -324,6 +334,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
+        generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
@@ -332,6 +343,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
         manual_queue_always_autoplay: loaded.manual_queue_always_autoplay !== undefined && loaded.manual_queue_always_autoplay !== null ? loaded.manual_queue_always_autoplay : 'true',
+        show_continue_listening: loaded.show_continue_listening !== undefined && loaded.show_continue_listening !== null ? loaded.show_continue_listening : 'true',
+        warn_archive_removes_audio: loaded.warn_archive_removes_audio !== undefined && loaded.warn_archive_removes_audio !== null ? loaded.warn_archive_removes_audio : 'true',
         wallabag_url: loaded.wallabag_url || '',
         wallabag_client_id: loaded.wallabag_client_id || '',
         wallabag_client_secret: loaded.wallabag_client_secret === '••••••••' ? '' : (loaded.wallabag_client_secret || ''),
@@ -342,6 +355,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       setSummaryTiers(parseTiers(loaded.summary_tiers));
       setTtsVoices(parseVoices(loaded.tts_voices));
+      setSpeedOptions(parseSpeedOptions(loaded.playback_speed_options));
     } catch (err) {
       setError('Failed to load settings');
       console.error(err);
@@ -395,7 +409,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 type="text"
                 value={fd[`${job}_reasoning_effort`] || ''}
                 onChange={(e) => handleChange(`${job}_reasoning_effort`, e.target.value)}
-                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'default = high' : 'blank = model default'}
+                placeholder={provider === 'openai' ? 'default = medium' : provider === 'anthropic' ? 'off / low / medium / high / xhigh / max (default = high)' : 'blank = model default'}
               />
             </div>
           </div>
@@ -438,6 +452,38 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setSaved(false);
   };
 
+  // --- Voice previews ---
+  // Static sample mp3s generated by frontend/scripts/generate-voice-previews.mjs
+  // (one short sentence per voice). The file name convention must match fileFor()
+  // in that script.
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingPreview, setPlayingPreview] = useState<string | null>(null);
+  const playVoicePreview = (model: string, voice: string, e: React.MouseEvent) => {
+    // The button lives inside the chip's <label>: without preventDefault the
+    // click would also toggle the voice checkbox.
+    e.preventDefault();
+    e.stopPropagation();
+    const key = `${model}:${voice}`;
+    if (!previewAudioRef.current) previewAudioRef.current = new Audio();
+    const audio = previewAudioRef.current;
+    if (playingPreview === key) {
+      audio.pause();
+      setPlayingPreview(null);
+      return;
+    }
+    audio.src = `/voice-previews/${model.replace(/[^a-zA-Z0-9]+/g, '_').toLowerCase()}--${voice}.mp3`;
+    audio.onended = () => setPlayingPreview(null);
+    audio.onerror = () => setPlayingPreview(null);
+    audio.play().then(() => setPlayingPreview(key)).catch(() => setPlayingPreview(null));
+  };
+
+  const toggleSpeedOption = (s: number) => {
+    setSpeedOptions(prev =>
+      prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s].sort((a, b) => a - b)
+    );
+    setSaved(false);
+  };
+
   // --- Voice rotation helpers ---
   const isVoiceSelected = (model: string, voice: string) =>
     ttsVoices.some(v => v.model === model && v.voice === voice);
@@ -452,6 +498,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   };
 
   const handleSave = async () => {
+    if (isDemo) return;
     try {
       setSaving(true);
       setError(null);
@@ -461,7 +508,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
-        'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay',
+        'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
+        'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
@@ -491,8 +539,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       }
       // Selected rotation voices (empty array = always use the single voice).
       toSave.tts_voices = JSON.stringify(ttsVoices);
+      // Speed cycle: blank = default set, never pinned (so default changes reach everyone).
+      toSave.playback_speed_options =
+        JSON.stringify(speedOptions) === JSON.stringify(DEFAULT_SPEEDS) ? '' : JSON.stringify(speedOptions);
 
-      console.log('Saving settings:', toSave);
       await userSettingsAPI.setBulk(toSave);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -630,12 +680,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <button
           onClick={handleSave}
           className={`save-button ${saved ? 'saved' : ''}`}
-          disabled={saving}
+          disabled={saving || isDemo}
+          title={isDemo ? 'Settings are read-only in the demo' : undefined}
         >
           {saved ? <Check size={18} /> : <Save size={18} />}
           <span>{saving ? 'Saving...' : saved ? 'Saved' : 'Save'}</span>
         </button>
       </header>
+
+      {isDemo && (
+        <p className="section-description" style={{ padding: '0 1rem', marginTop: '0.5rem' }}>
+          This is the read-only demo, so settings can be browsed but not changed.
+        </p>
+      )}
 
       {error && (
         <div className="settings-error">
@@ -683,6 +740,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           )}
         </section>
 
+        {/* Everything below the Account section goes inert for the read-only demo:
+            a disabled fieldset natively disables every input/select/button inside it.
+            The Account section stays outside so Sign Out keeps working. */}
+        <fieldset className="settings-demo-fieldset" disabled={isDemo}>
+
         {/* Audio Generation Section: what gets turned into audio automatically.
             Model/voice choices live in the Models section further down. */}
         <section className="settings-section">
@@ -708,6 +770,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 />
                 Auto-transcribe podcasts
               </label>
+           </div>
+
+           <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={formData.generate_read_along === 'true'}
+                  onChange={(e) => handleChange('generate_read_along', e.target.checked ? 'true' : 'false')}
+                />
+                Generate read-along after audio
+              </label>
+              <small className="settings-hint indent">
+                Off = audio only, no transcription or highlighting. You can still add read-along per item via Regenerate transcript.
+              </small>
            </div>
 
            <div className="form-group checkbox-group">
@@ -892,6 +968,61 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
               Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
             </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.autoplay_on_open === 'true'}
+                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
+              />
+              Start playing when opening an item
+            </label>
+            <small className="settings-hint indent">
+              When on, clicking a library item starts its audio right away instead of waiting for play.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.show_continue_listening === 'true'}
+                onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
+              />
+              Show the continue-listening row in the library
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.warn_archive_removes_audio === 'true'}
+                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
+              />
+              Warn when archiving removes generated audio
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>Speed button options</label>
+            <small className="settings-hint">
+              Which speeds the player's speed button cycles through. None selected = the default set.
+            </small>
+            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
+              {SPEED_CATALOG.map(s => (
+                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={speedOptions.includes(s)}
+                    onChange={() => toggleSpeedOption(s)}
+                  />
+                  {s}x
+                </label>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -1123,6 +1254,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                             onChange={() => toggleVoice(group.model, v.id)}
                           />
                           {v.label}
+                          <button
+                            type="button"
+                            className="voice-preview-btn"
+                            title="Preview voice"
+                            onClick={(e) => playVoicePreview(group.model, v.id, e)}
+                          >
+                            {playingPreview === `${group.model}:${v.id}` ? <Square size={12} /> : <Volume2 size={13} />}
+                          </button>
                         </label>
                       ))}
                     </div>
@@ -1250,7 +1389,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                               <small className="settings-hint">{p.description}</small>
                               {p.vars.length > 0 && (
                                 <small className="settings-hint">
-                                  Placeholders you can use: {p.vars.map(v => `{${v.token}} (${v.desc})`).join(', ')}.
+                                  {p.vars.map((v, i) => (
+                                    <span key={v.token}>
+                                      {i > 0 && ' • '}
+                                      <code>{`{${v.token}}`}</code> = {v.desc}
+                                    </span>
+                                  ))}
                                 </small>
                               )}
                               <textarea
@@ -1307,9 +1451,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
             </ol>
-            <ol style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
+            <p style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
             Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
-            </ol>
+            </p>
             </>)}
           </div>
 
@@ -1478,6 +1622,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </>
           )}
         </section>
+
+        </fieldset>
 
       </div>
     </div>

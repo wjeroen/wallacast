@@ -140,6 +140,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       onRefreshComplete?.();
     } catch (error) {
       console.error('Failed to refresh feeds:', error);
+      alert('Could not refresh feeds. Check your connection and try again.');
     } finally {
       setIsRefreshing(false);
     }
@@ -188,6 +189,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       setSearchResults([]);
     } catch (error) {
       console.error('Failed to subscribe:', error);
+      alert('Could not subscribe to this feed. Check the URL and try again.');
     }
   };
 
@@ -338,6 +340,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     } catch (error) {
       console.error('Failed to add to library:', error);
       setAddingToLibrary(null);
+      alert('Could not add this to your library. Please try again.');
     }
   };
 

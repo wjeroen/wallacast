@@ -89,6 +89,9 @@ export async function initializeDatabase() {
         AND state != 'idle'
         AND query LIKE '%content_items%'
         AND backend_start < NOW() - INTERVAL '30 seconds'
+        AND query NOT ILIKE '%vacuum%'
+        AND query NOT ILIKE '%analyze%'
+        AND query NOT ILIKE '%pg_dump%'
       `);
       if (stuckResult.rowCount && stuckResult.rowCount > 0) {
         console.log(`Terminated ${stuckResult.rowCount} stuck session(s) from previous crashes`);
@@ -180,7 +183,7 @@ export async function initializeDatabase() {
     // Run migration to add podcast_show_name column
     const podcastShowNameMigrationPath = path.join(__dirname, 'migrations', '010_add_podcast_show_name.sql');
     const podcastShowNameMigration = await fs.readFile(podcastShowNameMigrationPath, 'utf-8');
-    await poolInstance.query(podcastShowNameMigration);
+    await client.query(podcastShowNameMigration);
 
     // Run migration to add feed type column to podcasts table
     const feedTypeMigrationPath = path.join(__dirname, 'migrations', '012_add_feed_type.sql');
@@ -231,6 +234,26 @@ export async function initializeDatabase() {
     const summaryErrorMigrationPath = path.join(__dirname, 'migrations', '021_add_summary_error.sql');
     const summaryErrorMigration = await fs.readFile(summaryErrorMigrationPath, 'utf-8');
     await client.query(summaryErrorMigration);
+
+    // Run migration to add wallabag_needs_push flag (explicit dirty flag for the push)
+    const wallabagNeedsPushMigrationPath = path.join(__dirname, 'migrations', '022_add_wallabag_needs_push.sql');
+    const wallabagNeedsPushMigration = await fs.readFile(wallabagNeedsPushMigrationPath, 'utf-8');
+    await client.query(wallabagNeedsPushMigration);
+
+    // Run migration to add password reset tokens (email-based forgot-password flow)
+    const passwordResetMigrationPath = path.join(__dirname, 'migrations', '023_add_password_reset_tokens.sql');
+    const passwordResetMigration = await fs.readFile(passwordResetMigrationPath, 'utf-8');
+    await client.query(passwordResetMigration);
+
+    // Run migration to add author/published_at to version snapshots (metadata editing)
+    const versionMetadataMigrationPath = path.join(__dirname, 'migrations', '024_add_version_metadata.sql');
+    const versionMetadataMigration = await fs.readFile(versionMetadataMigrationPath, 'utf-8');
+    await client.query(versionMetadataMigration);
+
+    // Run migration to record whether generated audio narrates the item's comments
+    const commentsInAudioMigrationPath = path.join(__dirname, 'migrations', '025_add_comments_in_audio.sql');
+    const commentsInAudioMigration = await fs.readFile(commentsInAudioMigrationPath, 'utf-8');
+    await client.query(commentsInAudioMigration);
 
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted

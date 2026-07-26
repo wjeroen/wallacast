@@ -1,14 +1,58 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore, itemMatchesFilter } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
-import type { ContentItem } from '../types';
+import { contentToMarkdown } from '../markdown';
+import { isVeryLongArticle } from '../format';
+import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
+
+// The 2x5 filter grid: one facet row per dimension, two mutually exclusive
+// options per row. Selecting an option deselects its sibling; clicking the
+// selected option again clears the row (1-or-none per row). The same icons
+// mark the filter button, the library card badges, and the dropdown actions.
+const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; icon: ReactElement }[] }[] = [
+  {
+    dim: 'archive',
+    options: [
+      { value: 'active', label: 'Active', icon: <Inbox size={16} /> },
+      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#60a5fa' }} /> },
+    ],
+  },
+  {
+    dim: 'star',
+    options: [
+      { value: 'starred', label: 'Starred', icon: <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} /> },
+      { value: 'unstarred', label: 'No star', icon: <StarOff size={16} /> },
+    ],
+  },
+  {
+    dim: 'audio',
+    options: [
+      { value: 'audio', label: 'Audio', icon: <Volume2 size={16} /> },
+      { value: 'no_audio', label: 'No audio', icon: <VolumeOff size={16} /> },
+    ],
+  },
+  {
+    dim: 'summary',
+    options: [
+      { value: 'summary', label: 'Summary', icon: <MessageSquareText size={16} /> },
+      { value: 'no_summary', label: 'None', icon: <MessageSquareOff size={16} /> },
+    ],
+  },
+  {
+    dim: 'transcript',
+    options: [
+      { value: 'transcript', label: 'Transcript', icon: <Captions size={16} /> },
+      { value: 'no_transcript', label: 'None', icon: <CaptionsOff size={16} /> },
+    ],
+  },
+];
 
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Use Zustand store for content state
@@ -16,11 +60,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     items: content,
     allItems,
     typeFilter,
-    statusFilter,
+    facets,
     searchQuery,
     loading,
     setTypeFilter,
-    setStatusFilter,
+    setFacet,
+    setFacets,
     setSearchQuery,
     fetchContent,
     toggleStarred,
@@ -56,6 +101,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
+  // "Continue listening" strip under the filters (Settings toggle, default on).
+  const [showContinueStrip, setShowContinueStrip] = useState(true);
+  // Confirm before archiving wipes generated audio (Settings toggle, default on).
+  const [warnArchiveAudio, setWarnArchiveAudio] = useState(true);
 
   // Fetch content on mount
   useEffect(() => {
@@ -66,6 +115,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   useEffect(() => {
     userSettingsAPI.get('library_show_summary')
       .then(res => setShowSummaryInLibrary(res.data.value === 'true'))
+      .catch(() => {});
+    userSettingsAPI.get('show_continue_listening')
+      .then(res => setShowContinueStrip(res.data.value !== 'false'))
+      .catch(() => {});
+    userSettingsAPI.get('warn_archive_removes_audio')
+      .then(res => setWarnArchiveAudio(res.data.value !== 'false'))
       .catch(() => {});
   }, []);
 
@@ -132,9 +187,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setTypeFilter(t);
     setSelectedItems(new Set());
   };
-  const changeStatusFilter = (s: Parameters<typeof setStatusFilter>[0]) => {
-    setStatusFilter(s);
-    setStatusMenuOpen(false);
+  // Facet rows toggle 1-or-none: clicking the selected option clears the row.
+  // The menu deliberately stays OPEN so rows can be combined; it only closes
+  // on an outside tap (the click-outside effect above).
+  const toggleFacet = (dim: FacetDim, value: FacetValue) => {
+    setFacet(dim, facets[dim] === value ? null : value);
+    setSelectedItems(new Set());
+  };
+
+  // Double-click/tap an option to make it the ONLY selected filter (a hidden
+  // "reset to just this"). The two single-click toggles that fire first cancel
+  // each other out, so the end state is exactly the solo selection.
+  const soloFacet = (dim: FacetDim, value: FacetValue) => {
+    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, [dim]: value });
     setSelectedItems(new Set());
   };
 
@@ -149,14 +214,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const typeCounts = useMemo(() => {
     const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
     for (const i of allItems) {
-      if (!itemMatchesFilter(i, { typeFilter: 'all', statusFilter, searchQuery: '' })) continue;
+      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, searchQuery: '' })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
     }
     return counts;
-  }, [allItems, statusFilter]);
+  }, [allItems, facets]);
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -217,6 +282,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     return () => clearInterval(pollInterval);
   }, [content, updateItem, refreshItem]);
 
+  // In-progress audio items from the CURRENT filtered view (so archived items stay
+  // hidden while viewing Active, etc.), most recently played first. 1%-99% window:
+  // below 1% is accidental-tap noise, above 99% is effectively finished.
+  const continueItems = useMemo(() => {
+    return content
+      .filter(item => {
+        if (!item.audio_url || !item.duration || !item.last_played_at) return false;
+        const frac = (item.playback_position || 0) / item.duration;
+        return frac > 0.01 && frac < 0.99;
+      })
+      .sort((a, b) => new Date(b.last_played_at!).getTime() - new Date(a.last_played_at!).getTime())
+      .slice(0, 12);
+  }, [content]);
+
+  const continueTypeIcon = (t: string) =>
+    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
+
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
       // Fetch latest content data to get current playback position
@@ -234,6 +316,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   };
 
   const handleToggleArchive = async (id: number) => {
+    // The one destructive case: archiving a NON-STARRED article/text WITH generated
+    // audio wipes that audio server-side. Warn exactly there (toggleable in Settings).
+    const item = content.find(c => c.id === id);
+    if (
+      warnArchiveAudio && item && !item.is_archived && !item.is_starred &&
+      (item.type === 'article' || item.type === 'text') && item.audio_url &&
+      !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")
+    ) return;
     await toggleArchived(id);
   };
 
@@ -329,14 +419,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       !item.audio_url &&
       (!item.generation_status || ['idle', 'failed', 'completed'].includes(item.generation_status))
     );
-    const eligible = candidates.filter(item => !item.comment_count || item.comment_count <= maxComments);
-    const skipped = candidates.length - eligible.length;
+    const notTooChatty = candidates.filter(item => !item.comment_count || item.comment_count <= maxComments);
+    const skipped = candidates.length - notTooChatty.length;
+    // Mirror the single-item very-long gate: bulk skips instead of asking per item.
+    const eligible = notTooChatty.filter(item => !isVeryLongArticle(item));
+    const skippedLong = notTooChatty.length - eligible.length;
 
     if (eligible.length === 0) {
       alert('No selected items are eligible (needs to be an article/text without audio).');
       return;
     }
-    const skipNote = skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments. Generate those individually.` : '';
+    const skipNote =
+      (skipped > 0 ? `\n\nSkipping ${skipped} item(s) with more than ${maxComments} comments. Generate those individually.` : '') +
+      (skippedLong > 0 ? `\n\nSkipping ${skippedLong} very long article(s) (over 100,000 characters). Generate those individually.` : '');
     if (!confirm(`Generate audio for ${eligible.length} item(s)? This uses your TTS API credits.${skipNote}`)) return;
     await runSequentialBulk('Starting audio generation', eligible.map(i => i.id), id => contentAPI.generateAudio(id, false));
   };
@@ -396,6 +491,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     setOpenDropdown(null);
     const item = content.find(c => c.id === id);
+    if (item && isVeryLongArticle(item) && !confirm(`This article is very long (${(item.content || '').length.toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
     if (item && item.comment_count && item.comment_count > 0) {
       let maxComments = 50;
       try {
@@ -507,6 +603,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
+  // "Copy content" from a card. The list payload lacks html_content/comments,
+  // so fetch the full item first, then reuse the shared Markdown export (the
+  // exact same output as the player's Copy content).
+  const handleCopyContent = async (item: ContentItem) => {
+    setOpenDropdown(null);
+    try {
+      const full = (await contentAPI.getById(item.id)).data;
+      let comments: Comment[] = [];
+      try {
+        comments = typeof full.comments === 'string' ? JSON.parse(full.comments) : (full.comments || []);
+      } catch {
+        comments = [];
+      }
+      await navigator.clipboard.writeText(contentToMarkdown(full, comments));
+    } catch (error) {
+      console.error('Failed to copy content:', error);
+      alert('Failed to copy to clipboard');
+    }
+  };
+
   const handleDownloadDataZip = async (item: ContentItem) => {
     setOpenDropdown(null);
     try {
@@ -576,42 +692,42 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <Search size={16} />
             </button>
             <div className="dropdown-container" ref={statusMenuRef}>
-              {/* Status selector: shows the current status's icon + label with a
-                  chevron, always highlighted (it always has a value) */}
+              {/* Facet filter: the button shows the icon of every selected facet
+                  (or a funnel when nothing is selected = show everything) */}
               <button
                 className="status-funnel-btn active"
                 onClick={() => setStatusMenuOpen(!statusMenuOpen)}
-                title="Filter by status"
+                title="Filter library"
               >
-                {statusFilter === 'active' && <Inbox size={16} />}
-                {statusFilter === 'favorites' && <Star size={16} fill="currentColor" style={{ color: '#fbbf24' }} />}
-                {statusFilter === 'archived' && <Archive size={16} style={{ color: '#3b82f6' }} />}
-                <span className="filter-label">{statusFilter === 'active' ? 'Active' : statusFilter === 'favorites' ? 'Favorites' : 'Archived'}</span>
+                {(() => {
+                  const icons = FACET_ROWS.flatMap(row => {
+                    const opt = row.options.find(o => o.value === facets[row.dim]);
+                    return opt ? [<span key={row.dim} className="facet-btn-icon">{opt.icon}</span>] : [];
+                  });
+                  return icons.length > 0 ? icons : <FunnelX size={16} />;
+                })()}
                 <ChevronDown size={14} />
               </button>
               {statusMenuOpen && (
-                <div className="dropdown-menu menu-left">
-                  <button
-                    onClick={() => changeStatusFilter('active')}
-                    style={statusFilter === 'active' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Inbox size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    Active
-                  </button>
-                  <button
-                    onClick={() => changeStatusFilter('favorites')}
-                    style={statusFilter === 'favorites' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Star size={14} fill="currentColor" style={{ marginRight: 6, verticalAlign: '-2px', color: '#fbbf24' }} />
-                    Favorites
-                  </button>
-                  <button
-                    onClick={() => changeStatusFilter('archived')}
-                    style={statusFilter === 'archived' ? { color: '#60a5fa' } : undefined}
-                  >
-                    <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px', color: '#3b82f6' }} />
-                    Archived
-                  </button>
+                <div className="dropdown-menu menu-left filter-grid">
+                  {FACET_ROWS.map(row =>
+                    row.options.map(opt => {
+                      const isSelected = facets[row.dim] === opt.value;
+                      return (
+                        <button
+                          key={`${row.dim}-${opt.value}`}
+                          className={isSelected ? 'selected' : undefined}
+                          onClick={() => toggleFacet(row.dim, opt.value)}
+                          onDoubleClick={() => soloFacet(row.dim, opt.value)}
+                          style={isSelected ? { color: '#60a5fa' } : undefined}
+                        >
+                          {opt.icon}
+                          <span className="facet-label">{opt.label}</span>
+                          {isSelected && <Check size={14} className="facet-check" />}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               )}
             </div>
@@ -664,10 +780,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </button>
             {allSelectedArchived ? (
               <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected">
-                <ArchiveRestore size={16} style={{ color: '#3b82f6' }} />
+                <ArchiveRestore size={16} style={{ color: '#60a5fa' }} />
               </button>
             ) : (
-              <button onClick={() => runInstantBulk('archive')} title="Archive selected">
+              <button
+                onClick={() => {
+                  const risky = selectedContentItems().filter(i =>
+                    !i.is_archived && !i.is_starred && (i.type === 'article' || i.type === 'text') && i.audio_url
+                  ).length;
+                  runInstantBulk(
+                    'archive',
+                    warnArchiveAudio && risky > 0
+                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes (starred items keep theirs).`
+                      : undefined
+                  );
+                }}
+                title="Archive selected"
+              >
                 <Archive size={16} />
               </button>
             )}
@@ -701,6 +830,34 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           <div className="bulk-progress">{bulkProgress.label} {bulkProgress.done}/{bulkProgress.total}…</div>
         )}
       </div>
+
+      {showContinueStrip && !bulkMode && continueItems.length > 0 && (
+        <div className="continue-strip">
+          <div className="continue-strip-label">Continue listening</div>
+          <div className="continue-strip-row">
+            {continueItems.map(item => (
+              <button
+                key={item.id}
+                className="continue-card"
+                onClick={() => handlePlayContent(item)}
+                title={item.title}
+              >
+                {item.preview_picture ? (
+                  <img src={item.preview_picture} alt="" loading="lazy" />
+                ) : (
+                  <span className="continue-card-art">{continueTypeIcon(item.type)}</span>
+                )}
+                <span className="continue-card-title">{item.title}</span>
+                <span className="continue-card-type">{continueTypeIcon(item.type)}</span>
+                <span
+                  className="continue-card-progress"
+                  style={{ width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%` }}
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading">Loading...</div>
@@ -740,6 +897,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onRegenerateTranscript={handleRegenerateTranscript}
               onRefetch={handleRefetchContent}
               onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}
+              onCopyContent={handleCopyContent}
               onDownloadZip={handleDownloadDataZip}
             />
           ))}

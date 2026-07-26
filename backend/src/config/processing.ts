@@ -8,9 +8,6 @@ export const PROCESSING_CONFIG = {
     // Maximum characters per chunk for OpenAI TTS API
     // OpenAI limit is 4096, using 3500 to leave buffer for encoding
     chunkSize: 3500,
-
-    // Default voice for text-to-speech
-    voice: 'alloy' as const,
   },
 
   whisper: {
@@ -22,10 +19,6 @@ export const PROCESSING_CONFIG = {
 
     // Duration in minutes for splitting large audio files
     chunkDurationMinutes: 15,
-
-    // Maximum characters of previous transcript to use as context
-    // (Whisper API limit is 224 characters for prompt)
-    contextPromptMaxChars: 224,
   },
 
   retry: {

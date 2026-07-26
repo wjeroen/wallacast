@@ -20,6 +20,47 @@ export function cleanHtml(text: string): string {
   return cleaned;
 }
 
+// "Very long" bar for the pre-generation audio warning: roughly 2x an average
+// LONG article (~8-10k words ≈ 50k chars of plain text), so it fires rarely.
+// Mirrors the backend scriptwriter chunking threshold in spirit (openai-tts.ts).
+export const VERY_LONG_ARTICLE_CHARS = 100_000;
+export function isVeryLongArticle(item: { content?: string | null }): boolean {
+  return (item.content || '').length > VERY_LONG_ARTICLE_CHARS;
+}
+
+// Playback-speed toggle: the full set selectable in Settings, and the default cycle.
+// The player's speed button cycles through the user's selection (setting
+// 'playback_speed_options', a JSON array; blank = DEFAULT_SPEEDS).
+export const SPEED_CATALOG = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+export const DEFAULT_SPEEDS = [1, 1.25, 1.5, 1.75, 2];
+export function parseSpeedOptions(raw: string | null | undefined): number[] {
+  if (!raw) return DEFAULT_SPEEDS;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return DEFAULT_SPEEDS;
+    const valid = arr
+      .filter((n): n is number => typeof n === 'number' && SPEED_CATALOG.includes(n))
+      .sort((a, b) => a - b);
+    return valid.length > 0 ? valid : DEFAULT_SPEEDS;
+  } catch {
+    return DEFAULT_SPEEDS;
+  }
+}
+
+// Format a playback time as m:ss (or h:mm:ss past an hour). Used by the audio players.
+export function formatTime(seconds: number): string {
+  if (!seconds || !isFinite(seconds)) return '0:00';
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
 export function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -27,7 +68,18 @@ export function formatDuration(seconds: number): string {
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
+  if (minutes < 1) {
+    return `${Math.floor(seconds)}s`;
+  }
   return `${minutes}m`;
+}
+
+// Cut text to a maximum length, appending '...' only when something was actually
+// removed. Avoids the "New host...." look where an ellipsis is glued onto text
+// that already fit.
+export function truncate(text: string, max: number): string {
+  if (!text || text.length <= max) return text;
+  return text.slice(0, max) + '...';
 }
 
 export function getDomainFromUrl(url: string): string {

@@ -1,5 +1,7 @@
-import { StrictMode } from 'react'
+﻿import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@fontsource/monomaniac-one/latin-400.css' // wordmark font, see .app-header h1
+import '@fontsource/quicksand/700.css' // wordmark fallback
 import './index.css'
 import App from './App.tsx'
 

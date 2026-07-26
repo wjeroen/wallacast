@@ -46,6 +46,13 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // The read-only demo account gets 403 { demo: true } on any blocked write.
+    // Broadcast it so App can show one shared "not available in the demo" toast
+    // instead of every caller needing its own handling.
+    if (error.response?.status === 403 && error.response?.data?.demo) {
+      window.dispatchEvent(new Event('wallacast-demo-blocked'));
+    }
+
     if (error.response?.status === 401 && !originalRequest._retry && refreshToken) {
       originalRequest._retry = true;
 
@@ -61,9 +68,9 @@ api.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return api(originalRequest);
       } catch (refreshError) {
-        // Refresh failed, clear tokens
+        // Refresh failed, clear tokens. The login page renders at '/', there is no /login route.
         clearTokens();
-        window.location.href = '/login';
+        window.location.href = '/';
         return Promise.reject(refreshError);
       }
     }
@@ -98,9 +105,11 @@ export const contentAPI = {
     api.patch<ContentItem>(`/content/${id}`, data),
 
   // Save a Markdown/HTML edit of an article/text body. The backend snapshots the previous
-  // body into version history, sanitizes, and bumps content_fetched_at (audio is untouched).
-  saveEdit: (id: number, html_content: string, content: string) =>
-    api.patch<ContentItem>(`/content/${id}`, { is_edit: true, html_content, content }),
+  // body + byline metadata into version history, sanitizes, and bumps content_fetched_at
+  // (audio is untouched). meta carries only the title/author/published_at fields that
+  // changed; null clears a field.
+  saveEdit: (id: number, html_content: string, content: string, meta?: { title?: string; author?: string | null; published_at?: string | null }) =>
+    api.patch<ContentItem>(`/content/${id}`, { is_edit: true, html_content, content, ...(meta || {}) }),
 
   // Version history (article/text edit/refetch/restore snapshots)
   listVersions: (id: number) =>
@@ -209,8 +218,22 @@ export const authAPI = {
   login: (username: string, password: string) =>
     api.post<AuthTokens>('/auth/login', { username, password }),
 
-  register: (username: string, password: string, displayName?: string, email?: string) =>
-    api.post<AuthTokens>('/auth/register', { username, password, displayName, email }),
+  register: (username: string, password: string, displayName?: string, email?: string, inviteCode?: string) =>
+    api.post<AuthTokens>('/auth/register', { username, password, displayName, email, inviteCode }),
+
+  // Public instance config for the logged-out UI (whether registration needs an invite code).
+  getConfig: () => api.get<{ inviteRequired: boolean }>('/auth/config'),
+
+  // Email-based password reset (503 when the instance has no email service configured).
+  forgotPassword: (username: string) =>
+    api.post<{ message: string }>('/auth/forgot-password', { username }),
+
+  resetPassword: (token: string, newPassword: string) =>
+    api.post<{ success: boolean; message?: string }>('/auth/reset-password', { token, newPassword }),
+
+  // Passwordless login into the shared read-only demo account (404 when no demo
+  // account exists on this instance).
+  demoLogin: () => api.post<AuthTokens>('/auth/demo'),
 
   logout: () => {
     const token = refreshToken;
@@ -234,8 +257,6 @@ export const userSettingsAPI = {
   setBulk: (settings: Record<string, string>) => api.put('/users/settings', { settings }),
 
   delete: (key: string) => api.delete(`/users/settings/${key}`),
-
-  getAIProviders: () => api.get<{ providers: Record<string, any> }>('/users/ai-providers'),
 
   // The full registry of editable LLM prompts (grouped by category) with their built-in defaults.
   getPrompts: () => api.get<{ prompts: PromptDef[] }>('/users/prompts'),

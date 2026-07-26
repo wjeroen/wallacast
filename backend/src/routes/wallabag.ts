@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query } from '../database/db.js';
 import { WallabagService } from '../services/wallabag-service.js';
-import { fullSync, syncFromWallabag, syncToWallabag } from '../services/wallabag-sync.js';
+import { fullSync, syncFromWallabag, syncToWallabag, hasNosyncTag } from '../services/wallabag-sync.js';
+import { deleteAudioFile } from '../services/audio-storage.js';
 
 const router = Router();
 
@@ -42,14 +43,14 @@ router.get('/status', async (req, res) => {
     );
     const lastSync = lastSyncResult.rows[0]?.setting_value || null;
 
-    // Count pending changes (items that would be pushed)
+    // Count pending changes (items that would be pushed). nosync items are never pushed so they must not count as pending.
     const pendingResult = await query(
-      `SELECT COUNT(*) as count FROM content_items
+      `SELECT id, tags FROM content_items
        WHERE user_id = $1
-       AND (wallabag_id IS NULL OR updated_at > COALESCE(wallabag_updated_at, '1970-01-01'::timestamp))`,
+       AND (wallabag_id IS NULL OR wallabag_needs_push = TRUE)`,
       [req.user!.userId]
     );
-    const pendingChanges = parseInt(pendingResult.rows[0].count, 10);
+    const pendingChanges = pendingResult.rows.filter((row) => !hasNosyncTag(row.tags)).length;
 
     res.json({
       enabled,
@@ -136,17 +137,24 @@ router.post('/push', async (req, res) => {
 router.post('/cleanup', async (req, res) => {
   console.log('[Wallabag] Cleanup endpoint called by user:', req.user!.userId);
   try {
-    const hoursAgo = req.body.hoursAgo || 2; // Default 2 hours
+    // hoursAgo comes straight from the request body on a DELETE path, so coerce it to a
+    // safe integer and bind it as a query parameter (never interpolate it into the SQL
+    // text). Fall back to 2 and clamp to one week so a caller cannot request an absurd
+    // window or change the query structure.
+    let hoursAgo = Number.parseInt(req.body.hoursAgo, 10);
+    if (Number.isNaN(hoursAgo) || hoursAgo < 1) hoursAgo = 2; // Default 2 hours
+    if (hoursAgo > 168) hoursAgo = 168; // Clamp to one week (168 hours) max
 
     // First, count how many will be deleted
     const countResult = await query(
       `SELECT COUNT(*) as count FROM content_items
        WHERE user_id = $1
        AND wallabag_id IS NOT NULL
-       AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
+       AND created_at > NOW() - make_interval(hours => $2)
        AND is_starred = FALSE
-       AND audio_data IS NULL`,
-      [req.user!.userId]
+       AND audio_data IS NULL
+       AND audio_url IS NULL`,
+      [req.user!.userId, hoursAgo]
     );
     const count = parseInt(countResult.rows[0].count, 10);
 
@@ -158,13 +166,18 @@ router.post('/cleanup', async (req, res) => {
         `DELETE FROM content_items
          WHERE user_id = $1
          AND wallabag_id IS NOT NULL
-         AND created_at > NOW() - INTERVAL '${hoursAgo} hours'
+         AND created_at > NOW() - make_interval(hours => $2)
          AND is_starred = FALSE
          AND audio_data IS NULL
+         AND audio_url IS NULL
          RETURNING id`,
-        [req.user!.userId]
+        [req.user!.userId, hoursAgo]
       );
       deletedCount = deleteResult.rows.length;
+      // Delete any on-disk audio file for each removed row, otherwise the mp3s orphan on /data.
+      // Run in parallel. deleteAudioFile is best-effort (never throws), and allSettled makes
+      // sure one failed unlink cannot abort the rest.
+      await Promise.allSettled(deleteResult.rows.map((row) => deleteAudioFile(row.id)));
       console.log('[Wallabag] Cleanup deleted', deletedCount, 'items');
     } else {
       console.log('[Wallabag] No items to delete');

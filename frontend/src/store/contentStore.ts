@@ -2,14 +2,34 @@ import { create } from 'zustand';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
 
-// Library filter model: two independent dimensions (type × status) plus a
+// Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
 export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts';
-export type StatusFilter = 'active' | 'favorites' | 'archived';
+
+// One facet per row of the library filter grid. Each row is either one of its
+// two mutually exclusive options or null (no preference). Rows combine with AND.
+export interface FacetFilter {
+  archive: 'active' | 'archived' | null;
+  star: 'starred' | 'unstarred' | null;
+  audio: 'audio' | 'no_audio' | null;
+  summary: 'summary' | 'no_summary' | null;
+  transcript: 'transcript' | 'no_transcript' | null;
+}
+
+export type FacetDim = keyof FacetFilter;
+export type FacetValue = NonNullable<FacetFilter[FacetDim]>;
+
+export const DEFAULT_FACETS: FacetFilter = {
+  archive: 'active',
+  star: null,
+  audio: null,
+  summary: null,
+  transcript: null,
+};
 
 export interface LibraryFilter {
   typeFilter: TypeFilter;
-  statusFilter: StatusFilter;
+  facets: FacetFilter;
   searchQuery: string; // already-debounced value; '' = no search
 }
 
@@ -18,6 +38,47 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   texts: 'text',
   podcasts: 'podcast_episode',
 };
+
+// Persist the chosen filters (type + facets, NOT the transient search query) per
+// device, so a refresh or app restart reopens the library exactly as you left it.
+// Same localStorage pattern as 'wallacast-theme'. Stored values are validated on
+// load so a stale or corrupted entry falls back to the defaults instead of
+// wedging the library view.
+const FILTERS_STORAGE_KEY = 'wallacast-filters';
+
+const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
+  archive: ['active', 'archived'],
+  star: ['starred', 'unstarred'],
+  audio: ['audio', 'no_audio'],
+  summary: ['summary', 'no_summary'],
+  transcript: ['transcript', 'no_transcript'],
+};
+
+function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter } {
+  const fallback = { typeFilter: 'all' as TypeFilter, facets: DEFAULT_FACETS };
+  try {
+    const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts'].includes(parsed?.typeFilter)
+      ? parsed.typeFilter
+      : 'all';
+    const facets: FacetFilter = { ...DEFAULT_FACETS };
+    for (const dim of Object.keys(FACET_VALUES) as FacetDim[]) {
+      const v = parsed?.facets?.[dim];
+      facets[dim] = v === null || FACET_VALUES[dim].includes(v) ? v : DEFAULT_FACETS[dim];
+    }
+    return { typeFilter, facets };
+  } catch {
+    return fallback; // private mode / corrupted JSON
+  }
+}
+
+function storeFilters(typeFilter: TypeFilter, facets: FacetFilter): void {
+  try {
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify({ typeFilter, facets }));
+  } catch { /* private mode */ }
+}
 
 // Fields covered by search, besides the full body text in `content`.
 function metadataFields(item: ContentItem): (string | undefined | null)[] {
@@ -29,10 +90,20 @@ function metadataFields(item: ContentItem): (string | undefined | null)[] {
 export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean {
   if (f.typeFilter !== 'all' && item.type !== TYPE_MAP[f.typeFilter]) return false;
 
-  // Status: Active = not archived; Favorites = starred (incl. archived); Archived = archived
-  if (f.statusFilter === 'active' && item.is_archived) return false;
-  if (f.statusFilter === 'favorites' && !item.is_starred) return false;
-  if (f.statusFilter === 'archived' && !item.is_archived) return false;
+  // Facets: every non-null row must match. Summary/transcript presence mirrors
+  // the library card badges (summary_generated_at / transcript_words, since the
+  // list endpoint never sends the large transcript column).
+  const { archive, star, audio, summary, transcript } = f.facets;
+  if (archive === 'active' && item.is_archived) return false;
+  if (archive === 'archived' && !item.is_archived) return false;
+  if (star === 'starred' && !item.is_starred) return false;
+  if (star === 'unstarred' && item.is_starred) return false;
+  if (audio === 'audio' && !item.audio_url) return false;
+  if (audio === 'no_audio' && item.audio_url) return false;
+  if (summary === 'summary' && !item.summary_generated_at) return false;
+  if (summary === 'no_summary' && item.summary_generated_at) return false;
+  if (transcript === 'transcript' && !item.transcript_words) return false;
+  if (transcript === 'no_transcript' && item.transcript_words) return false;
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;
@@ -59,7 +130,7 @@ interface ContentStore {
   items: ContentItem[];       // filtered view (what the UI renders)
   allItems: ContentItem[];    // master list (all items, fetched once)
   typeFilter: TypeFilter;
-  statusFilter: StatusFilter;
+  facets: FacetFilter;
   searchQuery: string;
   loading: boolean;
   error: string | null;
@@ -67,7 +138,8 @@ interface ContentStore {
 
   // Actions
   setTypeFilter: (typeFilter: TypeFilter) => void;
-  setStatusFilter: (statusFilter: StatusFilter) => void;
+  setFacet: (dim: FacetDim, value: FacetValue | null) => void;
+  setFacets: (facets: FacetFilter) => void;
   setSearchQuery: (searchQuery: string) => void;
   fetchContent: () => Promise<void>;
 
@@ -88,8 +160,8 @@ interface ContentStore {
 
 export const useContentStore = create<ContentStore>((set, get) => {
   const currentFilter = (): LibraryFilter => {
-    const { typeFilter, statusFilter, searchQuery } = get();
-    return { typeFilter, statusFilter, searchQuery };
+    const { typeFilter, facets, searchQuery } = get();
+    return { typeFilter, facets, searchQuery };
   };
 
   // Single source of truth: set allItems and re-derive the filtered view + allCount.
@@ -102,11 +174,13 @@ export const useContentStore = create<ContentStore>((set, get) => {
     });
   };
 
+  const storedFilters = loadStoredFilters();
+
   return {
     items: [],
     allItems: [],
-    typeFilter: 'all',
-    statusFilter: 'active',
+    typeFilter: storedFilters.typeFilter,
+    facets: storedFilters.facets,
     searchQuery: '',
     loading: false,
     error: null,
@@ -115,11 +189,23 @@ export const useContentStore = create<ContentStore>((set, get) => {
     // Client-side filtering, no API call needed, instant switch
     setTypeFilter: (typeFilter) => {
       set({ typeFilter });
+      storeFilters(typeFilter, get().facets);
       commit(get().allItems);
     },
 
-    setStatusFilter: (statusFilter) => {
-      set({ statusFilter });
+    // The FACET_ROWS config in LibraryTab guarantees dim/value pairs belong
+    // together, hence the cast on the computed property.
+    setFacet: (dim, value) => {
+      const facets = { ...get().facets, [dim]: value } as FacetFilter;
+      set({ facets });
+      storeFilters(get().typeFilter, facets);
+      commit(get().allItems);
+    },
+
+    // Replace the whole facet selection at once (double-click "solo" gesture)
+    setFacets: (facets) => {
+      set({ facets });
+      storeFilters(get().typeFilter, facets);
       commit(get().allItems);
     },
 
@@ -140,9 +226,29 @@ export const useContentStore = create<ContentStore>((set, get) => {
         commit(activeItems, { loading: false });
 
         // Step 2: Fetch archived items in the background (could be hundreds)
-        // so the Archived/Favorites filters work instantly when clicked
+        // so the Archived/Favorites filters work instantly when clicked.
+        // Merge against the CURRENT state, not the step-1 array captured before this
+        // await. Otherwise any mutation that landed in between (e.g. a just-added item)
+        // gets clobbered and vanishes from the UI.
         const archivedResponse = await contentAPI.getAll({ archived: true });
-        commit([...activeItems, ...archivedResponse.data]);
+        const fetched = [...activeItems, ...archivedResponse.data];
+        const fetchedById = new Map(fetched.map(i => [i.id, i]));
+        const current = get().allItems;
+        const seen = new Set<number>();
+        // Update existing entries with fresh server data, preserving current ordering.
+        const merged = current.map(i => {
+          seen.add(i.id);
+          return fetchedById.get(i.id) ?? i;
+        });
+        // Append fetched items that aren't already present (e.g. archived items on
+        // first load), keeping their fetch order.
+        for (const i of fetched) {
+          if (!seen.has(i.id)) {
+            seen.add(i.id);
+            merged.push(i);
+          }
+        }
+        commit(merged);
       } catch (error) {
         console.error('Failed to fetch content:', error);
         set({ error: 'Failed to fetch content', loading: false });

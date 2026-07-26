@@ -3,10 +3,13 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fetch from 'node-fetch';
+import { safeFetch } from './services/url-guard.js';
+import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, getAudioDir, isPersistentVolume } from './config/storage.js';
+import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
+import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/podcast-cache.js';
+import { createReadStream } from 'fs';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -33,11 +36,24 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Trust Railway's reverse proxy so req.ip is the real client IP (from X-Forwarded-For),
+// not the proxy's own address. Without this the auth rate limiters would bucket every
+// visitor together. '1' = trust exactly one proxy hop (Railway's edge), which also stops
+// clients spoofing X-Forwarded-For to dodge the limiter.
+app.set('trust proxy', 1);
+
+// The /api/auth endpoints only ever receive tiny JSON (credentials), so cap their body
+// size far below the global 50mb the content routes need for large paste-ins. This runs
+// BEFORE the global parser, and express.json marks the body as parsed, so the 50mb parser
+// then skips these routes. Keeps a 50mb pre-auth memory-exhaustion lever off the table.
+app.use('/api/auth', express.json({ limit: '100kb' }));
 app.use(express.json({ limit: '50mb' }));
 
-// Serve static files (audio, images, etc.) from persistent storage
-app.use('/audio', express.static(getAudioDir()));
-app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+// The old `app.use('/audio', express.static(getAudioDir()))` static mount was removed for
+// security: it exposed generated audio as /audio/<id>.mp3 over sequential, guessable ids with
+// no auth. Audio is served only through the streaming route GET /api/content/:id/audio below
+// (which reads the same files from disk), so the static mount was pure extra attack surface.
 
 // Public routes (no auth required)
 app.get('/', (req, res) => {
@@ -54,6 +70,47 @@ app.get('/health', (req, res) => {
 
 // Auth routes (no JWT auth required, but requires database)
 app.use('/api/auth', requireDatabaseReady, authRouter);
+
+// Parse a single HTTP Range header against a known total size.
+// Supports "bytes=START-", "bytes=START-END", and the suffix form "bytes=-N" (last N bytes).
+// Open-ended ranges are capped to maxChunk bytes so playback starts fast (the browser then
+// asks for more). Returns null when the header is malformed or the range cannot be satisfied,
+// so the caller can answer 416 with "Content-Range: bytes */<size>" instead of emitting a NaN
+// Content-Length.
+function parseAudioRange(
+  rangeHeader: string,
+  totalSize: number,
+  maxChunk: number
+): { start: number; end: number } | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!m) return null;
+  const startStr = m[1];
+  const endStr = m[2];
+  if (startStr === '' && endStr === '') return null; // "bytes=-" is meaningless
+
+  let start: number;
+  let end: number;
+  if (startStr === '') {
+    // Suffix form: the last N bytes of the file.
+    const suffixLen = parseInt(endStr, 10);
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return null;
+    start = Math.max(0, totalSize - suffixLen);
+    end = totalSize - 1;
+  } else {
+    start = parseInt(startStr, 10);
+    if (!Number.isFinite(start) || start >= totalSize) return null; // unsatisfiable
+    if (endStr === '') {
+      // Open-ended (bytes=START-): cap the span for a fast start.
+      end = Math.min(start + maxChunk - 1, totalSize - 1);
+    } else {
+      const reqEnd = parseInt(endStr, 10);
+      if (!Number.isFinite(reqEnd)) return null;
+      end = Math.min(reqEnd, totalSize - 1);
+    }
+  }
+  if (end < start) return null;
+  return { start, end };
+}
 
 // Public audio endpoint (no auth - HTML5 audio player can't send JWT tokens)
 // Must be registered before protected /api/content routes to match first
@@ -76,6 +133,16 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
     const { type, audio_url: audioUrl } = metaResult.rows[0];
 
+    // Private generated audio (article/text narration of the user's saved/pasted text) must not
+    // be enumerable by sequential id. Require the unguessable per-item token (see audio-token.ts).
+    // Podcast episodes proxy already-public CDN audio, so they stay open.
+    if (type === 'article' || type === 'text') {
+      const t = typeof req.query.t === 'string' ? req.query.t : '';
+      if (!verifyAudioToken(Number(req.params.id), t)) {
+        return res.status(403).json({ error: 'Missing or invalid audio token' });
+      }
+    }
+
     // -------------------------------------------------------------------------
     // PATH A: podcast episode. Proxy external CDN URL through our server.
     // This sidesteps CORS issues (e.g. api.substack.com blocks cross-origin
@@ -83,6 +150,40 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     // the requested bytes are fetched upstream, never the full file.
     // -------------------------------------------------------------------------
     if (type === 'podcast_episode' && audioUrl) {
+      // Transient cache first (SoundCloud-class hosts, see podcast-cache.ts):
+      // a clean CBR local file gives exact byte-range seeking, no proxy fragility.
+      const cachedSize = await getCachedPodcastAudioSize(req.params.id);
+      if (cachedSize !== null) {
+        const cachedPath = cachedPodcastAudioPath(req.params.id);
+        const onCacheError = (err: Error) => {
+          console.error(`[PodcastCache:${req.params.id}] stream error:`, err.message);
+          if (!res.writableEnded) res.end();
+        };
+        if (range) {
+          const parsed = parseAudioRange(range, cachedSize, 2 * 1024 * 1024);
+          if (!parsed) {
+            res.setHeader('Content-Range', `bytes */${cachedSize}`);
+            return res.status(416).end();
+          }
+          const { start, end } = parsed;
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${cachedSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': end - start + 1,
+            'Content-Type': 'audio/mpeg',
+          });
+          createReadStream(cachedPath, { start, end }).on('error', onCacheError).pipe(res);
+        } else {
+          res.writeHead(200, {
+            'Content-Length': cachedSize,
+            'Accept-Ranges': 'bytes',
+            'Content-Type': 'audio/mpeg',
+          });
+          createReadStream(cachedPath).on('error', onCacheError).pipe(res);
+        }
+        return;
+      }
+
       const upstreamHeaders: Record<string, string> = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       };
@@ -90,12 +191,20 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         upstreamHeaders['Range'] = range;
       }
 
-      console.log(`[AudioProxy] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
+      console.log(`[AudioProxy:${req.params.id}] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
 
-      const upstreamRes = await fetch(audioUrl, { headers: upstreamHeaders });
+      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders });
+
+      // Log what upstream ACTUALLY answered: a 200 to a ranged request means the
+      // CDN ignored the Range header, which breaks browser seeking silently.
+      const contentRangeHdr = upstreamRes.headers.get('content-range');
+      console.log(`[AudioProxy:${req.params.id}] upstream ${upstreamRes.status}${contentRangeHdr ? ` ${contentRangeHdr}` : ''}`);
+      if (range && upstreamRes.status === 200) {
+        console.warn(`[AudioProxy:${req.params.id}] upstream ignored Range header (200 to a ranged request)`);
+      }
 
       if (!upstreamRes.ok && upstreamRes.status !== 206) {
-        console.error(`[AudioProxy] Upstream error ${upstreamRes.status} for ${audioUrl}`);
+        console.error(`[AudioProxy:${req.params.id}] Upstream error ${upstreamRes.status} for ${audioUrl}`);
         return res.status(502).json({ error: 'Upstream audio unavailable' });
       }
 
@@ -131,12 +240,13 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         if (!res.writableEnded) res.end();
       };
       if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
         const maxChunk = 2 * 1024 * 1024; // 2MB, same as the DB path, for fast start
-        const end = parts[1]
-          ? Math.min(parseInt(parts[1], 10), diskSize - 1)
-          : Math.min(start + maxChunk - 1, diskSize - 1);
+        const parsed = parseAudioRange(range, diskSize, maxChunk);
+        if (!parsed) {
+          res.setHeader('Content-Range', `bytes */${diskSize}`);
+          return res.status(416).end();
+        }
+        const { start, end } = parsed;
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${diskSize}`,
           'Accept-Ranges': 'bytes',
@@ -177,15 +287,16 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
         return res.status(404).json({ error: 'Audio not found' });
       }
 
-      const fileSize = sizeResult.rows[0].total_size;
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
+      const fileSize = Number(sizeResult.rows[0].total_size);
       // For open-ended ranges (bytes=0-), cap at 2MB chunks so initial playback
       // starts fast. The browser will automatically request more as needed.
       const maxChunk = 2 * 1024 * 1024; // 2MB
-      const end = parts[1]
-        ? Math.min(parseInt(parts[1], 10), fileSize - 1)
-        : Math.min(start + maxChunk - 1, fileSize - 1);
+      const parsed = parseAudioRange(range, fileSize, maxChunk);
+      if (!parsed) {
+        res.setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.status(416).end();
+      }
+      const { start, end } = parsed;
       const chunkSize = end - start + 1;
 
       // Read only the needed bytes (PostgreSQL substring is 1-based)
@@ -290,8 +401,25 @@ async function logStorageStats() {
   }
 }
 
+// Warn loudly at startup about missing security-critical env vars. We do NOT crash (the server
+// must stay up for health checks, per the db.ts philosophy), but silence was the real risk:
+// without ENCRYPTION_KEY every user's provider API key is stored as PLAINTEXT, and without
+// JWT_SECRET all sessions drop on each restart. Production only, so local dev stays quiet.
+function warnMissingSecurityEnv() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const key = process.env.ENCRYPTION_KEY;
+  if (!key || key.length !== 64) {
+    console.error('🔓 [SECURITY] ENCRYPTION_KEY is missing or not 64 hex chars: user API keys and Wallabag passwords are being stored as PLAINTEXT. Set a 64-hex-char ENCRYPTION_KEY (see RAILWAY_DEPLOYMENT.md).');
+  }
+  if (!process.env.JWT_SECRET) {
+    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so everyone is logged out on every redeploy. Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
+  }
+}
+
 // Initialize database and start server
 async function start() {
+  warnMissingSecurityEnv();
+
   // Start HTTP server FIRST so Railway sees it as healthy
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Wallacast API server running on http://0.0.0.0:${PORT}`);
@@ -337,7 +465,7 @@ async function start() {
       await initializeDatabase();
       console.log('✅ Database connection established');
 
-      // Bootstrap first user from AUTH_USERNAME/AUTH_PASSWORD env vars
+      // Assign any orphaned pre-multi-user content to the first registered user
       await bootstrapFirstUser();
 
       // Initialize storage directories

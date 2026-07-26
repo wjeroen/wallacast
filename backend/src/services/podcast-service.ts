@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { safeFetch } from './url-guard.js';
 import { query } from '../database/db.js';
 import { JSDOM } from 'jsdom';
 
@@ -33,14 +34,17 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
 
     const data: any = await response.json();
 
-    return data.results.map((result: any) => ({
-      title: result.collectionName,
-      author: result.artistName,
-      feed_url: result.feedUrl,
-      preview_picture: result.artworkUrl600 || result.artworkUrl100,
-      description: result.description,
-      type: 'podcast',
-    }));
+    return data.results
+      // Drop results without a feedUrl, they cannot be subscribed to and would fail opaquely later.
+      .filter((result: any) => result.feedUrl)
+      .map((result: any) => ({
+        title: result.collectionName,
+        author: result.artistName,
+        feed_url: result.feedUrl,
+        preview_picture: result.artworkUrl600 || result.artworkUrl100,
+        description: result.description,
+        type: 'podcast',
+      }));
   } catch (error) {
     console.error('Error searching podcasts:', error);
     throw error;
@@ -151,7 +155,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
 export async function fetchPodcastDetails(feedUrl: string) {
   try {
     // FIX: Added User-Agent to avoid blocking by Vox/Cloudflare
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/rss+xml, application/xml, text/xml, */*'
@@ -230,7 +234,7 @@ function detectFeedType(xml: string): 'podcast' | 'newsletter' {
 export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, userId: number): Promise<any[]> {
   try {
     // FIX: Added User-Agent
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
@@ -299,7 +303,7 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
     return cached.xml;
   }
 
-  const response = await fetch(feedUrl, {
+  const response = await safeFetch(feedUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -446,15 +450,18 @@ function parseDuration(duration: string): number | null {
   // Handle HH:MM:SS or MM:SS or just seconds
   const parts = duration.split(':').map(Number);
 
+  let seconds: number | null = null;
   if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
   } else if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
+    seconds = parts[0] * 60 + parts[1];
   } else if (parts.length === 1) {
-    return parts[0];
+    seconds = parts[0];
   }
 
-  return null;
+  // A non-numeric itunes:duration (e.g. "N/A") makes the arithmetic NaN. Returning NaN would
+  // abort the whole episode INSERT, so only return a finite number, else null.
+  return seconds != null && Number.isFinite(seconds) ? seconds : null;
 }
 
 function cleanDescription(description: string): string {
@@ -519,7 +526,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
   console.log(`Refreshing feed ${feedId} from network: ${feedUrl}`);
 
   try {
-    const response = await fetch(feedUrl, {
+    const response = await safeFetch(feedUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
@@ -540,6 +547,11 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const duration = extractXMLTag(itemXml, 'itunes:duration');
       const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
       const guid = extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || enclosureUrl;
+
+      // No guid/link/enclosure means no stable key. UNIQUE (feed_id, guid) treats NULLs as
+      // distinct, so such items would re-insert as duplicates on every refresh. They can't be
+      // opened anyway, so skip them entirely.
+      if (!guid) continue;
 
       // Extract per-item author (dc:creator for EA Forum/LessWrong, author/itunes:author as fallbacks)
       const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||

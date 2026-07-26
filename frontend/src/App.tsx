@@ -1,20 +1,32 @@
 import { useState, useEffect, useRef } from 'react';
-import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, FileText, Sun, Moon, SunMoon } from 'lucide-react';
+import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
 import { AudioPlayer } from './components/AudioPlayer';
-import { LoginPage } from './components/LoginPage';
+import { HomePage } from './components/HomePage';
 import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
+import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
+import { isVeryLongArticle } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
 type Tab = 'feed' | 'add' | 'library';
 type Page = 'main' | 'settings';
+
+// generation_status values that mean "still working". Anything else
+// ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
+// by pollOperationThenRefresh. 'fetching' is the status a refetch sets while it runs.
+// 'ready' is deliberately NOT in this list: it means the audio is saved, but Whisper
+// transcription and LLM alignment can still be running afterwards. A 'ready' item only
+// counts as still-working while current_operation is set (e.g. 'transcribing' or
+// 'aligning_content'). Once current_operation is NULL the item is at rest, even if a past
+// crash left it stuck on 'ready'. So pollOperationThenRefresh keys on BOTH fields for 'ready'.
+const GENERATION_IN_PROGRESS = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'];
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
@@ -29,6 +41,24 @@ function App() {
   const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
   // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts
   const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
+
+  // Toast shown when the read-only demo account hits a blocked write (the api.ts
+  // interceptor broadcasts the event on any 403 with { demo: true }).
+  const [showDemoToast, setShowDemoToast] = useState(false);
+  const demoToastTimer = useRef<number | null>(null);
+  useEffect(() => {
+    const onBlocked = () => {
+      setShowDemoToast(true);
+      if (demoToastTimer.current) window.clearTimeout(demoToastTimer.current);
+      demoToastTimer.current = window.setTimeout(() => setShowDemoToast(false), 2500);
+    };
+    window.addEventListener('wallacast-demo-blocked', onBlocked);
+    return () => {
+      window.removeEventListener('wallacast-demo-blocked', onBlocked);
+      if (demoToastTimer.current) window.clearTimeout(demoToastTimer.current);
+    };
+  }, []);
+
 
   // Theme: dark | light | system
   type ThemeMode = 'dark' | 'light' | 'system';
@@ -57,6 +87,16 @@ function App() {
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
+
+  // Optional "start playing when opening an item" preference (off by default). Refetched
+  // when leaving the Settings page so a toggle takes effect without a reload.
+  const [autoplayOnOpen, setAutoplayOnOpen] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated || currentPage === 'settings') return;
+    userSettingsAPI.get('autoplay_on_open')
+      .then(res => setAutoplayOnOpen(res.data.value === 'true'))
+      .catch(() => { /* keep default off */ });
+  }, [isAuthenticated, currentPage]);
 
   // Get addItem and fetchContent from store
   const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
@@ -105,12 +145,20 @@ function App() {
       if (qs.pendingRequeue.size === 0) return;
       for (const id of Array.from(qs.pendingRequeue)) {
         try {
-          const res = await contentAPI.getById(id);
-          if (res.data.generation_status === 'completed' && res.data.audio_url) {
-            await qs.addToFront(id);
+          // Poll the LEAN status endpoint, not getById (which ships the whole item every
+          // 5s per pending id). Only fetch the full item once, when audio generation is done.
+          const statuses = await contentAPI.getStatuses([id]);
+          const status = statuses.data[0];
+          if (!status) continue;
+          if (status.generation_status === 'completed') {
+            const res = await contentAPI.getById(id);
+            if (res.data.audio_url) {
+              await qs.addToFront(id);
+              refreshItem(id);
+            }
+            // 'completed' is terminal, so stop polling this id either way.
             qs.clearPendingRequeue(id);
-            refreshItem(id);
-          } else if (res.data.generation_status === 'failed') {
+          } else if (status.generation_status === 'failed') {
             qs.clearPendingRequeue(id);
           }
         } catch (err) {
@@ -165,11 +213,20 @@ function App() {
       // Reload status (pending changes should now be 0)
       await loadWallabagStatus();
 
-      if (response.data.errors.length > 0) {
-        console.warn('Sync completed with errors:', response.data.errors);
+      const { pulled, pushed, errors } = response.data;
+      // pulled/pushed only count entries that actually CHANGED (the backend checks many
+      // more and skips the up-to-date ones), so say so instead of a scary raw number.
+      let message = pulled === 0 && pushed === 0
+        ? 'Sync complete: everything already in sync'
+        : `Sync complete: ${pulled} updated from Wallabag, ${pushed} pushed`;
+      if (errors.length > 0) {
+        console.warn('Sync completed with errors:', errors);
+        message += `, ${errors.length} error${errors.length !== 1 ? 's' : ''} (see server logs)`;
       }
+      alert(message);
     } catch (err) {
       console.error('Sync failed:', err);
+      alert('Sync failed. Check your connection and try again.');
     } finally {
       setSyncing(false);
     }
@@ -188,13 +245,14 @@ function App() {
 
   // Called from LibraryTab when the user clicks a library item. Captures the
   // current filter as a "play context" (Spotify-style) so the non-manual
-  // auto-queue can be derived from it. Does NOT bump autoPlayToken, as first
-  // click should load the track, not play it automatically.
+  // auto-queue can be derived from it. By default the first click loads the
+  // track without playing it; the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
-    const { typeFilter, statusFilter, searchQuery } = useContentStore.getState();
-    useQueueStore.getState().setLibraryContext({ typeFilter, statusFilter, searchQuery }, content.id);
+    const { typeFilter, facets, searchQuery } = useContentStore.getState();
+    useQueueStore.getState().setLibraryContext({ typeFilter, facets, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
+    if (autoplayOnOpen && content.audio_url) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
@@ -216,7 +274,7 @@ function App() {
     const queueRow = qs.manualItems.find(m => m.id === item.id);
     if (!queueRow) return; // defensive, should not happen
     const proceed = confirm(
-      `"${item.title}" has no audio yet. Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
+      `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${(item.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
     if (!proceed) return;
     qs.markPendingRequeue(item.id);
@@ -237,10 +295,10 @@ function App() {
   // autoplay is on). When we hit a manual item with no audio, prompt the user
   // to generate-or-skip, then continue looking for a playable next item.
   //
-  // `mode` = 'auto': track ended naturally or user hit skip-next. We always
-  //                   clear the current manual item (it's been played/skipped).
-  // `mode` = 'ended': respects autoplay gating via getNextItem.
-  // `mode` = 'skip': ignores autoplay gating via peekNextItem.
+  // Regardless of mode, the current manual item is cleared first (it's been
+  // played or skipped).
+  // `mode` = 'ended': track ended naturally. Respects autoplay gating via getNextItem.
+  // `mode` = 'skip': user hit skip-next. Ignores autoplay gating via peekNextItem.
   const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
     const currentId = currentContent?.id ?? null;
 
@@ -275,7 +333,7 @@ function App() {
         return;
       }
       const shouldGenerate = confirm(
-        `"${nextItem.title}" has no audio yet. Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
+        `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${(nextItem.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
       );
       if (shouldGenerate) {
         qs.markPendingRequeue(nextItem.id);
@@ -292,6 +350,13 @@ function App() {
       // Loop, try the new "next" after mutation
     }
   };
+
+  // Tell the delayed-archive machinery which item the player holds: a pending
+  // archive that fires while its item is still loaded defers to player-leave,
+  // and leaving the item is exactly this id changing (or becoming null).
+  useEffect(() => {
+    notifyArchivePlayerItem(currentContent?.id ?? null);
+  }, [currentContent?.id]);
 
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');
@@ -328,16 +393,54 @@ function App() {
   const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
   const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
+  // Shared "fire an operation, then refresh once it finishes" helper. Polls the LEAN
+  // status endpoint every 2s (getStatuses, a few hundred bytes) until generation
+  // leaves its in-progress state, THEN fetches the full item exactly once via getById and
+  // applies it to BOTH the open player (if still on that item) and the library store (so
+  // cards stop going stale). Replaces the old one-shot 1s setTimeout reloads that always
+  // lost the race (refetch takes >1s, transcription takes minutes) and never touched the store.
+  // Refetch sets generation_status 'fetching' while it runs (then 'completed'/'failed'), so
+  // this correctly waits it out just like audio/transcript generation.
+  const pollOperationThenRefresh = (id: number) => {
+    let tries = 0;
+    const maxTries = 300; // ~10 minutes at 2s intervals
+    const poll = async () => {
+      tries++;
+      try {
+        const statuses = await contentAPI.getStatuses([id]);
+        const status = statuses.data[0];
+        // Push the cheap status fields into the store on EVERY tick, so the library card
+        // shows the progress banner for player-started operations too. Cards render from
+        // the store, and it used to learn about the operation only at the very end.
+        if (status) useContentStore.getState().updateItem(id, status);
+        // 'ready' means the audio landed, but transcription/alignment may still be running,
+        // so keep polling while current_operation is set (it goes NULL when the item rests).
+        const gs = status?.generation_status || '';
+        const inProgress = !!status && (GENERATION_IN_PROGRESS.includes(gs)
+          || (gs === 'ready' && !!status.current_operation));
+        if (inProgress && tries < maxTries) {
+          setTimeout(poll, 2000);
+          return;
+        }
+        // Done (or gave up): fetch the full item once, apply to player + store.
+        const response = await contentAPI.getById(id);
+        setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+        useContentStore.getState().updateItem(id, response.data);
+      } catch (err) {
+        console.error('pollOperationThenRefresh failed:', err);
+      }
+    };
+    // First tick immediately: the start endpoints set their in-progress status before
+    // responding, so the card banner appears right away instead of after two seconds.
+    poll();
+  };
+
   const handleRefetchContent = async () => {
     if (!currentContent) return;
 
     try {
       await contentAPI.refetch(currentContent.id);
-      // Wait a bit for the backend to process, then reload
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id);
     } catch (error) {
       console.error('Failed to refetch content:', error);
     }
@@ -347,10 +450,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id);
     } catch (error: any) {
       console.error('Failed to generate audio:', error);
       alert(error?.response?.data?.error || 'Failed to generate audio');
@@ -359,6 +459,8 @@ function App() {
 
   const handleGenerateAudio = async (regenerate: boolean) => {
     if (!currentContent) return;
+
+    if (isVeryLongArticle(currentContent) && !confirm(`This article is very long (${(currentContent.content || '').length.toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
 
     if (currentContent.comment_count && currentContent.comment_count > 0) {
       let maxComments = 50;
@@ -392,17 +494,31 @@ function App() {
     const id = currentContent.id;
     try {
       await contentAPI.generateSummary(id, regenerate, generateTranscript);
-      // Reflect "generating" immediately, then poll until it finishes (independent of audio).
+      // Reflect "generating" immediately in BOTH the open player and the library store, so
+      // the card badge and the LibraryTab poller kick in for player-started summaries too.
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
+      useContentStore.getState().updateItem(id, { summary_status: 'generating' });
       let tries = 0;
       const maxTries = generateTranscript ? 200 : 30; // transcription first can take many minutes
+      // Poll the LEAN status endpoint (a few hundred bytes) instead of getById (which
+      // ships the full transcript + word timestamps + alignment every tick). Only when
+      // summary_status leaves 'generating' do we fetch the full item once.
       const poll = async () => {
         tries++;
         try {
-          const response = await contentAPI.getById(id);
-          setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
-          if (response.data.summary_status === 'generating' && tries < maxTries) {
+          const statuses = await contentAPI.getStatuses([id]);
+          const status = statuses.data[0];
+          if (status) useContentStore.getState().updateItem(id, status);
+          if (status && status.summary_status === 'generating' && tries < maxTries) {
+            // Reflect the cheap status fields so the UI keeps animating, keep polling.
+            setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
             setTimeout(poll, 3000);
+          } else {
+            // Summary finished (or we hit the try cap). Fetch the full item once and apply
+            // it to the player AND the store so the card learns the final state too.
+            const response = await contentAPI.getById(id);
+            setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+            useContentStore.getState().updateItem(id, response.data);
           }
         } catch {
           /* stop polling on error */
@@ -443,10 +559,7 @@ function App() {
     if (!currentContent) return;
     try {
       await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
-      setTimeout(async () => {
-        const response = await contentAPI.getById(currentContent.id);
-        setCurrentContent(response.data);
-      }, 1000);
+      pollOperationThenRefresh(currentContent.id);
     } catch (error) {
       console.error('Failed to regenerate transcript:', error);
       alert('Failed to regenerate transcript');
@@ -478,13 +591,18 @@ function App() {
       return;
     }
 
-    // Split into generateable and skipped (too many comments)
-    const eligibleItems = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
+    // Split into generateable and skipped (too many comments, or very long article)
+    const notTooChatty = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
     const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
+    const eligibleItems = notTooChatty.filter(item => !isVeryLongArticle(item));
+    const skippedLong = notTooChatty.length - eligibleItems.length;
 
     let message = `Generate audio for ${eligibleItems.length} item${eligibleItems.length !== 1 ? 's' : ''}?`;
     if (skippedItems.length > 0) {
       message += `\n\nSkipping ${skippedItems.length} item${skippedItems.length !== 1 ? 's' : ''} with ${COMMENT_THRESHOLD}+ comments. Generate those manually.`;
+    }
+    if (skippedLong > 0) {
+      message += `\n\nSkipping ${skippedLong} very long article${skippedLong !== 1 ? 's' : ''} (over 100,000 characters). Generate those manually.`;
     }
 
     if (eligibleItems.length === 0) {
@@ -579,7 +697,7 @@ function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-content">
-          <img src="/logo-0f172a.png" alt="wallacast logo" className="loading-logo" />
+          <img src="/logo-0f172a.png?v=2" alt="wallacast logo" className="loading-logo" />
           <h1>wallacast</h1>
           <div className="loading-spinner"></div>
         </div>
@@ -587,9 +705,9 @@ function App() {
     );
   }
 
-  // Show login if not authenticated
+  // Logged out: the marketing home page (login lives in its top-right dropdown)
   if (!isAuthenticated) {
-    return <LoginPage />;
+    return <HomePage />;
   }
 
   // Show settings page
@@ -599,9 +717,16 @@ function App() {
 
   return (
     <div className="app">
+      {user?.demo && (
+        <div className="demo-banner">
+          <span>You are browsing the read-only demo.</span>
+          <button onClick={() => logout()}>Exit demo</button>
+        </div>
+      )}
+      {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}
       <header className="app-header">
         <div className="app-logo-container">
-          <img src="/logo-transparent.png" alt="wallacast logo" className="app-logo" />
+          <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="app-logo" />
           <h1>wallacast</h1>
         </div>
 
@@ -655,17 +780,17 @@ function App() {
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateAudio}>
                 <Volume2 size={18} />
-                <span>Generate All Audio</span>
+                <span>Generate all audio</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleBulkGenerateSummaries}>
-                <FileText size={18} />
-                <span>Generate Summaries</span>
+                <MessageSquareText size={18} />
+                <span>Generate summaries</span>
               </button>
 
               <button className="user-dropdown-item" onClick={handleLogout}>
                 <LogOut size={18} />
-                <span>Switch Account</span>
+                <span>Switch account</span>
               </button>
             </div>
           )}

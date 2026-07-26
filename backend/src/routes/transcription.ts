@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
+import { shouldCachePodcastHost } from '../services/podcast-cache.js';
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ router.post('/content/:id', async (req, res) => {
 
     // OPTIMIZED: Select necessary columns for prompt generation
     const contentResult = await query(
-      'SELECT id, audio_url, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, audio_url, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -27,11 +28,19 @@ router.post('/content/:id', async (req, res) => {
       return res.status(400).json({ error: 'Content has no audio URL' });
     }
 
-    // If already has transcript and not regenerating, return it
+    // If already has transcript and not regenerating, return it.
+    // transcript_words is a JSONB column, so pg usually returns it already parsed (an object).
+    // Only JSON.parse when it actually comes back as a string, otherwise JSON.parse(object)
+    // would throw and 500 the whole cached-transcript path.
     if (content.transcript && !regenerate) {
+      const words = content.transcript_words == null
+        ? null
+        : typeof content.transcript_words === 'string'
+          ? JSON.parse(content.transcript_words)
+          : content.transcript_words;
       return res.json({
         transcript: content.transcript,
-        words: content.transcript_words ? JSON.parse(content.transcript_words) : null
+        words
       });
     }
 
@@ -61,12 +70,13 @@ router.post('/content/:id', async (req, res) => {
     });
 
     // Start transcription in background (don't await)
-    transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt)
+    transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt,
+      content.type === 'podcast_episode' && shouldCachePodcastHost(content.audio_url) ? Number(id) : undefined)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
         await query(
-          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6',
+          'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5 AND user_id = $6',
           [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
         );
       })

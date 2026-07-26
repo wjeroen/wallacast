@@ -17,7 +17,7 @@
  */
 
 import { JSDOM } from 'jsdom';
-import { getChatClientForJob, getUserSetting } from './ai-providers.js';
+import { getChatClientForJob, getUserSetting, chatCreateWithRetry } from './ai-providers.js';
 import { query } from '../database/db.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { isEAForumUrl } from './article-fetcher.js';
@@ -169,6 +169,27 @@ function findImageDescription(src: string, descriptions: Record<string, string>,
   return null;
 }
 
+// Mirror of formatDateForNarration in openai-tts.ts (not imported from there:
+// openai-tts already imports this module, so importing back would be a cycle).
+// The byline element's TEXT must use the narrated phrasing ("10th of July 2026"),
+// not the displayed one ("July 10, 2026"), so the alignment LLM sees the same
+// words Whisper heard. Keep the two functions in sync.
+function formatDateSpoken(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    const day = date.getDate();
+    const month = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    const suffix = ['th', 'st', 'nd', 'rd'];
+    const v = day % 100;
+    const ordinalDay = day + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
+    return `${ordinalDay} of ${month} ${year}`;
+  } catch {
+    return dateString;
+  }
+}
+
 /**
  * Extract block-level elements from HTML content.
  * Returns elements in document order, filtering out nested duplicates.
@@ -194,43 +215,44 @@ function extractContentElements(
     });
   }
 
-  // Author + date on one line
+  // Author, date, and vote count as ONE meta element, so the read-along shows a
+  // single byline like the content tab ("By Author • July 3, 2026 • 87 upvotes")
+  // and the whole line highlights while the narrator reads the intro. The text
+  // field mirrors the TTS intro (openai-tts.ts) so the LLM can match it against
+  // the Whisper transcript.
+  const bylineHtmlParts: string[] = [];
+  let bylineText = '';
   if (author) {
     const cleanAuthor = author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-    let metaText = `Written by ${cleanAuthor}.`;
-    let metaHtml = `By ${escapeHtml(cleanAuthor)}`;
-    if (publishedAt) {
-      try {
-        const date = new Date(publishedAt);
-        const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-        metaText += ` Published on ${formatted}.`;
-        metaHtml += ` · ${escapeHtml(formatted)}`;
-      } catch { /* ignore */ }
-    }
-    elements.push({
-      type: 'meta',
-      html: `<p class="content-author">${metaHtml}</p>`,
-      text: metaText,
-    });
-  } else if (publishedAt) {
+    bylineHtmlParts.push(`By ${escapeHtml(cleanAuthor)}`);
+    bylineText += `Written by ${cleanAuthor}.`;
+  }
+  if (publishedAt) {
     try {
       const date = new Date(publishedAt);
-      const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      elements.push({
-        type: 'meta',
-        html: `<p class="content-author">${escapeHtml(formatted)}</p>`,
-        text: `Published on ${formatted}.`,
-      });
+      // Skip the date on an invalid input so we never emit "Invalid Date" in the byline.
+      if (!isNaN(date.getTime())) {
+        const formatted = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+        bylineHtmlParts.push(escapeHtml(formatted));
+        // Spoken form for the matcher text, display form for the html above.
+        bylineText += `${bylineText ? ' ' : ''}Published on ${formatDateSpoken(publishedAt)}.`;
+      }
     } catch { /* ignore */ }
   }
-
-  // Karma for EA Forum/LW
-  const isEAForumOrLW = isEAForumUrl(url) || (url && url.includes('lesswrong.com'));
-  if (isEAForumOrLW && karma !== undefined && karma !== null) {
+  if (karma !== undefined && karma !== null) {
+    // Any source with a vote count (the TTS intro speaks it for all of them, so
+    // the element must exist or that sentence has nothing to highlight). Same
+    // label logic as the intro: Substack calls them likes, forums upvotes.
+    const isSubstackSrc = !!(url && url.includes('substack.com'));
+    const karmaLabel = isSubstackSrc ? (karma === 1 ? 'like' : 'likes') : (karma === 1 ? 'upvote' : 'upvotes');
+    bylineHtmlParts.push(`${karma} ${karmaLabel}`);
+    bylineText += `${bylineText ? ' ' : ''}It has ${karma} ${karmaLabel}.`;
+  }
+  if (bylineHtmlParts.length > 0) {
     elements.push({
       type: 'meta',
-      html: `<p class="content-author">${karma} karma</p>`,
-      text: `It has ${karma} karma.`,
+      html: `<p class="content-author">${bylineHtmlParts.join(' • ')}</p>`,
+      text: bylineText,
     });
   }
 
@@ -425,6 +447,9 @@ function extractContentElements(
 function formatDateForLLM(dateString: string): string {
   try {
     const date = new Date(dateString);
+    // new Date(bad) never throws, it yields an Invalid Date. Guard so we never emit
+    // "NaNth of Invalid Date NaN"; fall back to the raw input string instead.
+    if (isNaN(date.getTime())) return dateString;
     const day = date.getDate();
     const month = date.toLocaleDateString('en-US', { month: 'long' });
     const year = date.getFullYear();
@@ -526,28 +551,49 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
  * - "Username on Date with N upvotes:" needs its own line (comment headers)
  * - "Title, Do Your Job," separates from "written by Max Dalton."
  *
+ * Lines ALSO split at significant pauses in the narration. Whisper often
+ * transcribes titles, headings, and dates without any trailing punctuation
+ * (e.g. "JUN 2024" flowing straight into the next heading), so punctuation
+ * alone merges them into the surrounding text and the LLM gets no usable
+ * timestamp for them. The TTS voice does pause at those boundaries, so the
+ * pause is the reliable signal. This only ADDS boundaries; every line that
+ * existed before still exists.
+ *
  * Output:
  * [0.0] Title,
  * [0.2] Do Your Job Unreasonably Well,
  * [1.1] written by Max Dalton.
  * [2.8] Published on 27th of January, 2026,
- * [4.6] it has 102 karma.
+ * [4.6] it has 102 upvotes.
  */
+// Conservative: TTS mid-sentence pauses stay well under this, while heading,
+// title/byline, and paragraph boundaries pause noticeably longer.
+const GAP_SPLIT_SECONDS = 0.6;
+
 function buildTimedTranscript(words: TranscriptWord[]): string {
   if (words.length === 0) return '';
 
   const sentences: string[] = [];
   let currentWords: string[] = [];
   let sentenceStart: number = words[0].start;
+  let prevEnd: number | null = null;
 
   for (const word of words) {
     const trimmed = (word.word || '').trim();
     if (!trimmed) continue;
 
+    // Flush the running line when a significant pause precedes this word,
+    // so unpunctuated titles/headings/dates get their own timed line.
+    if (currentWords.length > 0 && prevEnd !== null && word.start - prevEnd >= GAP_SPLIT_SECONDS) {
+      sentences.push(`[${sentenceStart.toFixed(1)}] ${currentWords.join(' ')}`);
+      currentWords = [];
+    }
+
     if (currentWords.length === 0) {
       sentenceStart = word.start;
     }
     currentWords.push(trimmed);
+    prevEnd = typeof word.end === 'number' ? word.end : word.start;
 
     // Break at all punctuation: . ? ! : , ; (optionally followed by " ' ) ])
     const isClauseEnd = /[.!?:,;]["')\]]?$/.test(trimmed);
@@ -576,11 +622,11 @@ export async function generateLLMAlignment(
   userId: number,
   transcriptWords: TranscriptWord[]
 ): Promise<LLMAlignmentResult> {
-  console.log('[LLM-Align] Starting LLM-based content alignment...');
+  console.log(`[LLM-Align:${contentId}] Starting LLM-based content alignment...`);
 
   // Get content from DB (also fetch content + type as fallback for text items)
   const result = await query(
-    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data FROM content_items WHERE id = $1',
+    'SELECT title, author, published_at, karma, url, html_content, content, type, comments, comment_source, image_alt_text_data, comments_in_audio FROM content_items WHERE id = $1',
     [contentId]
   );
 
@@ -589,6 +635,8 @@ export async function generateLLMAlignment(
   }
 
   const content = result.rows[0];
+  // One line naming the item, so parallel alignment runs are tellable apart in logs.
+  console.log(`[LLM-Align:${contentId}] Aligning "${(content.title || 'untitled').slice(0, 60)}"`);
 
   // Check if image descriptions are enabled. If disabled, don't pass old Gemini data
   // to extractContentElements. When disabled, images show as plain [Image] in the element
@@ -620,7 +668,14 @@ export async function generateLLMAlignment(
   const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
   let commentsNarrated = true;
-  if (isLessWrong || isEAForum) {
+  if (content.comments_in_audio === false || content.comments_in_audio === true) {
+    // Recorded at generation time (migration 025): the ground truth for whether THIS
+    // audio narrates comments. Prevents burning dozens of alignment batches on
+    // comment elements the audio never contains (e.g. comments excluded per-item, or
+    // fetched after the audio was generated).
+    commentsNarrated = content.comments_in_audio;
+  } else if (isLessWrong || isEAForum) {
+    // Legacy items (flag never recorded): fall back to the settings heuristic.
     const setting = await getUserSetting(userId, 'narrate_ea_forum_comments');
     commentsNarrated = setting !== 'false';
   } else if (isSubstack) {
@@ -758,7 +813,7 @@ export async function generateLLMAlignment(
   // Helper: build prompt for a set of element indices
   function buildAlignmentPrompt(
     indices: number[],
-    batchInfo?: { batchNum: number; totalBatches: number }
+    batchInfo?: { batchNum: number; totalBatches: number; anchorTime?: number | null }
   ): string {
     const batchElementsList = indices.map(i => {
       const el = allElements[i];
@@ -778,6 +833,13 @@ export async function generateLLMAlignment(
     // Add batch context if this is a batched call
     if (batchInfo) {
       intro += `\n\nIMPORTANT: The full article has ${allElements.length} elements, but you are only matching a SUBSET: elements ${firstIdx} through ${lastIdx} (batch ${batchInfo.batchNum} of ${batchInfo.totalBatches}). Only match the elements listed below. Do NOT try to match elements outside this range. The element numbers are their ORIGINAL indices from the full article.`;
+      // Seam anchor: without it, a batch's FIRST element has no idea where the
+      // previous batch ended and can latch onto a DUPLICATE occurrence of its text
+      // much later in the audio (root-caused 2026-07-19: a list item narrated again
+      // as a section heading 15 minutes later).
+      if (batchInfo.anchorTime != null) {
+        intro += `\n\nCONTINUITY: The previous elements were matched up to roughly [${batchInfo.anchorTime}] in the transcript. This batch continues from there, so expect matches at or shortly after that point. If an element's text appears MORE THAN ONCE in the transcript, pick the occurrence that continues forward from [${batchInfo.anchorTime}], not a later duplicate. Only search earlier than [${batchInfo.anchorTime}] if you truly cannot find the element after it.`;
+      }
     }
 
     const closingInstruction = batchInfo
@@ -802,18 +864,32 @@ ${closingInstruction}`;
     chatConfig: { client: any; model: string; extraParams?: Record<string, any> },
     label: string
   ): Promise<Map<number, number>> {
-    console.log(`[LLM-Align] ${label}: calling ${chatConfig.model}...`);
+    console.log(`[LLM-Align:${contentId}] ${label}: calling ${chatConfig.model}...`);
 
-    const response = await chatConfig.client.chat.completions.create({
-      model: chatConfig.model,
-      ...(chatConfig.extraParams || {}),
-      messages: [{ role: 'user', content: prompt }],
-      max_completion_tokens: 128000,
-    });
+    let response;
+    try {
+      response = await chatCreateWithRetry(
+        chatConfig.client,
+        {
+          model: chatConfig.model,
+          ...(chatConfig.extraParams || {}),
+          messages: [{ role: 'user', content: prompt }],
+          // Alignment output is small (one timestamp line per element) but reasoning models
+          // need headroom. 32000 fits every supported provider's output cap (Anthropic Haiku
+          // and Gemini Flash top out around 64k, so the old 128000 request was rejected).
+          max_completion_tokens: 32000,
+        },
+        `[LLM-Align] ${label}`
+      );
+    } catch (err: any) {
+      // Tag so the outer fallback can tell an LLM-call failure apart from a parsing failure.
+      if (err && typeof err === 'object') err.__llmCallFailed = true;
+      throw err;
+    }
 
     const responseText = response.choices[0]?.message?.content || '';
-    console.log(`[LLM-Align] ${label}: response ${responseText.length} chars`);
-    console.log(`[LLM-Align] ${label} response:\n${responseText}`);
+    console.log(`[LLM-Align:${contentId}] ${label}: response ${responseText.length} chars`);
+    console.log(`[LLM-Align:${contentId}] ${label} response:\n${responseText}`);
 
     const map = new Map<number, number>();
     const lines = responseText.split('\n');
@@ -842,7 +918,7 @@ ${closingInstruction}`;
       }
     }
 
-    console.log(`[LLM-Align] ${label}: parsed ${map.size} >>> markers`);
+    console.log(`[LLM-Align:${contentId}] ${label}: parsed ${map.size} >>> markers`);
     return map;
   }
 
@@ -861,6 +937,17 @@ ${closingInstruction}`;
   let usedFallback = false;
   try {
     let timestampMap: Map<number, number>;
+    let batches: number[][] = [];
+
+    // Robust seam anchor for batch b: the median of the previous batch's last few
+    // matched timestamps (median, so one bad value at the seam can't poison it).
+    const batchAnchor = (map: Map<number, number>, batchList: number[][], b: number): number | null => {
+      if (b === 0) return null;
+      const prevVals = batchList[b - 1].filter(i => map.has(i)).map(i => map.get(i)!).slice(-5);
+      if (prevVals.length === 0) return null;
+      const sorted = [...prevVals].sort((x, y) => x - y);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
 
     if (!useBatching) {
       // Single call for small articles
@@ -870,13 +957,12 @@ ${closingInstruction}`;
       timestampMap = await callAndParse(prompt, chatConfig, 'Single');
     } else {
       // Batched calls for large articles
-      const batches: number[][] = [];
       for (let i = 0; i < allElements.length; i += BATCH_SIZE) {
         batches.push(
           allElements.map((_, idx) => idx).slice(i, i + BATCH_SIZE)
         );
       }
-      console.log(`[LLM-Align] Batching: ${allElements.length} elements into ${batches.length} batches of up to ${BATCH_SIZE}`);
+      console.log(`[LLM-Align:${contentId}] Batching: ${allElements.length} elements into ${batches.length} batches of up to ${BATCH_SIZE}`);
 
       timestampMap = new Map<number, number>();
       for (let b = 0; b < batches.length; b++) {
@@ -884,6 +970,7 @@ ${closingInstruction}`;
         const prompt = buildAlignmentPrompt(batchIndices, {
           batchNum: b + 1,
           totalBatches: batches.length,
+          anchorTime: batchAnchor(timestampMap, batches, b),
         });
         const batchMap = await callAndParse(
           prompt,
@@ -896,6 +983,105 @@ ${closingInstruction}`;
         }
       }
       console.log(`[LLM-Align] All batches complete: ${timestampMap.size}/${allElements.length} elements matched`);
+    }
+
+    // --- Quality retry -------------------------------------------------------
+    // A structurally failed alignment shows up as long runs of elements stuck on
+    // the same timestamp (the LLM lost its place, or skipped elements which the
+    // missing-fill below pins to the previous value). Score = fraction of element
+    // transitions whose timestamp strictly advances. ONE retry only: quality
+    // failures are either flaky (one re-roll usually recovers) or systematic (a
+    // third attempt won't help either), and each pass costs real LLM money. The
+    // best-scoring attempt wins, a retry can never make the stored alignment
+    // worse (same keep-best rule as the scriptwriter's image-drop retry).
+    const fillFromMap = (map: Map<number, number>): number[] => {
+      const out: number[] = [];
+      for (let i = 0; i < allElements.length; i++) {
+        out.push(map.has(i) ? map.get(i)! : (out.length > 0 ? out[out.length - 1] : 0));
+      }
+      return out;
+    };
+    const advancingRatio = (arr: number[], from = 1, to = arr.length - 1): number => {
+      if (to < from) return 1;
+      let advances = 0;
+      for (let i = from; i <= to; i++) {
+        if (arr[i] > arr[i - 1]) advances++;
+      }
+      return advances / (to - from + 1);
+    };
+    const lastAdvanceIndex = (arr: number[]): number => {
+      let last = 0;
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i] > arr[i - 1]) last = i;
+      }
+      return last;
+    };
+    // Score ignores the TRAILING plateau: a run of identical timestamps at the very
+    // end is the legitimate "rest isn't narrated" pattern (e.g. hundreds of comment
+    // elements when the audio contains no comments, confirmed via reasoning logs
+    // 2026-07-19), while plateaus in the MIDDLE are real failures. Without the trim,
+    // a correct alignment with a long unnarrated tail would trigger pointless and
+    // expensive retries that reproduce the same correct result.
+    const scoreAlignment = (arr: number[]): number => {
+      const lastAdv = lastAdvanceIndex(arr);
+      if (lastAdv === 0) return 0; // nothing ever advanced
+      return advancingRatio(arr, 1, lastAdv);
+    };
+    const QUALITY_MIN_RATIO = 0.7; // retry when >30% of transitions fail to advance
+    // Skip tiny items: matches the one-paragraph summary tier (1500 chars). Short
+    // articles produce noisy ratios and are trivial to regenerate by hand.
+    const QUALITY_MIN_CHARS = 1500;
+    const totalTextChars = allElements.reduce(
+      (sum, el) => sum + (el.text?.length || el.html?.length || 0),
+      0
+    );
+
+    let qualityScore = scoreAlignment(fillFromMap(timestampMap));
+    if (qualityScore < QUALITY_MIN_RATIO && totalTextChars > QUALITY_MIN_CHARS) {
+      console.warn(`[LLM-Align] Quality check failed: only ${(qualityScore * 100).toFixed(0)}% of timestamps advance. Retrying once...`);
+      try {
+        const candidate = new Map(timestampMap);
+        if (!useBatching) {
+          const retryMap = await callAndParse(buildAlignmentPrompt(allElements.map((_, i) => i)), chatConfig, 'Quality retry');
+          for (const [idx, ts] of retryMap) candidate.set(idx, ts);
+        } else {
+          // Re-run only the batches whose local span failed to advance: cheaper
+          // than a full pass, and the collapse is usually confined to a few batches.
+          // Batches entirely inside the trailing plateau are skipped (unnarrated
+          // tail, nothing to fix).
+          const filled = fillFromMap(timestampMap);
+          const lastAdv = lastAdvanceIndex(filled);
+          for (let b = 0; b < batches.length; b++) {
+            const first = batches[b][0];
+            if (first > lastAdv) continue;
+            const last = Math.min(batches[b][batches[b].length - 1], lastAdv);
+            const local = advancingRatio(filled, Math.max(1, first), last);
+            if (local >= QUALITY_MIN_RATIO) continue;
+            console.warn(`[LLM-Align] Quality retry for batch ${b + 1}/${batches.length} (elements ${first}-${last}, ${(local * 100).toFixed(0)}% advancing)`);
+            const retryMap = await callAndParse(
+              buildAlignmentPrompt(batches[b], {
+                batchNum: b + 1,
+                totalBatches: batches.length,
+                anchorTime: batchAnchor(candidate, batches, b),
+              }),
+              chatConfig,
+              `Quality retry batch ${b + 1}/${batches.length}`
+            );
+            for (const [idx, ts] of retryMap) candidate.set(idx, ts);
+          }
+        }
+        const retryScore = scoreAlignment(fillFromMap(candidate));
+        if (retryScore > qualityScore) {
+          console.log(`[LLM-Align] Quality retry improved: ${(qualityScore * 100).toFixed(0)}% -> ${(retryScore * 100).toFixed(0)}%. Keeping retry.`);
+          timestampMap = candidate;
+          qualityScore = retryScore;
+        } else {
+          console.log(`[LLM-Align] Quality retry not better (${(retryScore * 100).toFixed(0)}% vs ${(qualityScore * 100).toFixed(0)}%). Keeping first attempt.`);
+        }
+      } catch (err: any) {
+        // Never let a failed retry destroy a usable first attempt.
+        console.error('[LLM-Align] Quality retry failed, keeping first attempt:', err?.message || err);
+      }
     }
 
     // Build timestamps array from map. Missing elements get previous value
@@ -925,7 +1111,61 @@ ${closingInstruction}`;
       });
     }
 
-    // Ensure non-decreasing
+    // Outlier repair BEFORE the non-decreasing clamp. The LLM occasionally matches
+    // an element to a DUPLICATE occurrence of its text later in the audio
+    // (root-caused 2026-07-19: a list item narrated again as a section heading 15
+    // minutes later). The bare clamp below would treat such a spike as ground truth
+    // and raise every following correct timestamp up to it, destroying the rest of
+    // the article. Instead: keep the longest non-decreasing subsequence (a majority
+    // vote over orderings that weighs BOTH earlier and later neighbors), and
+    // re-derive the dropped values by interpolating between their kept neighbors.
+    // This is numeric post-processing of the LLM's own timestamps, no text matching.
+    {
+      const n = timestamps.length;
+      if (n > 2) {
+        // Longest non-decreasing subsequence. O(n^2), fine at element counts <= ~1000.
+        const lnds = new Array<number>(n).fill(1);
+        const prevIdx = new Array<number>(n).fill(-1);
+        for (let i = 1; i < n; i++) {
+          for (let j = 0; j < i; j++) {
+            if (timestamps[j] <= timestamps[i] && lnds[j] + 1 > lnds[i]) {
+              lnds[i] = lnds[j] + 1;
+              prevIdx[i] = j;
+            }
+          }
+        }
+        // >= tie-break: among equally long orderings prefer the one ending at the
+        // LATEST element, so a late spike loses to the article's real tail.
+        let best = 0;
+        for (let i = 1; i < n; i++) {
+          if (lnds[i] >= lnds[best]) best = i;
+        }
+        const kept = new Array<boolean>(n).fill(false);
+        for (let i = best; i >= 0; i = prevIdx[i]) kept[i] = true;
+        const outlierCount = kept.filter(k => !k).length;
+
+        if (outlierCount > 0) {
+          console.warn(`[LLM-Align] ${outlierCount} timestamp(s) break the consensus ordering, repairing by interpolation`);
+          let i = 0;
+          while (i < n) {
+            if (kept[i]) { i++; continue; }
+            let j = i;
+            while (j < n && !kept[j]) j++;
+            const prevVal = i > 0 ? timestamps[i - 1] : 0;
+            const nextVal = j < n ? timestamps[j] : prevVal;
+            const run = j - i;
+            for (let k = 0; k < run; k++) {
+              const fixed = Math.round((prevVal + ((nextVal - prevVal) * (k + 1)) / (run + 1)) * 10) / 10;
+              console.warn(`[LLM-Align] Outlier repair: element ${i + k} (${timestamps[i + k]}s) -> ${fixed}s`);
+              timestamps[i + k] = fixed;
+            }
+            i = j;
+          }
+        }
+      }
+    }
+
+    // Ensure non-decreasing (after outlier repair this is normally a no-op safety net)
     for (let i = 1; i < timestamps.length; i++) {
       if (timestamps[i] < timestamps[i - 1]) {
         timestamps[i] = timestamps[i - 1];
@@ -1050,9 +1290,14 @@ ${closingInstruction}`;
       }
     }
 
-  } catch (parseError) {
+  } catch (parseError: any) {
     usedFallback = true;
-    console.error('[LLM-Align] Failed during LLM alignment, using FALLBACK even distribution:', parseError);
+    const underlying = parseError?.message || parseError;
+    if (parseError?.__llmCallFailed) {
+      console.error(`[LLM-Align] LLM call failed after retries, using FALLBACK even distribution: ${underlying}`);
+    } else {
+      console.error(`[LLM-Align] LLM responded but parsing failed, using FALLBACK even distribution: ${underlying}`);
+    }
     // Fallback: distribute timestamps evenly across the audio duration
     const totalDuration = transcriptWords.length > 0
       ? transcriptWords[transcriptWords.length - 1].end

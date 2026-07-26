@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { query } from '../database/db.js';
 import { decrypt } from './encryption.js';
+import { PROCESSING_CONFIG } from '../config/processing.js';
 
 // Get user setting from database (decrypts encrypted values transparently)
 export async function getUserSetting(userId: number, key: string): Promise<string | null> {
@@ -133,8 +134,138 @@ export type ChatJob = 'narration' | 'alignment' | 'summary';
 interface ChatProviderDef {
   baseURL?: string; // undefined = OpenAI default endpoint
   keySetting: string;
-  // Build the extra create() params for a non-empty reasoning effort (provider-specific shape).
-  reasoningParams: (effort: string) => Record<string, any>;
+  // Build the extra create() params for a non-empty reasoning effort (provider-specific
+  // shape). Gets the model id too, since some providers need model-aware mapping.
+  reasoningParams: (effort: string, model: string) => Record<string, any>;
+}
+
+// Effort handling for Anthropic. The OpenAI-compat endpoint silently strips EVERY effort
+// control (reasoning_effort AND the native output_config, both verified live 2026-07-06
+// with identical token spend under low/max/unset, and invalid values accepted without
+// error). Real graded effort only exists on the NATIVE /v1/messages API (verified live:
+// output_config.effort 'low' answered a test puzzle in 3 output tokens, 'max' used
+// 565-1058, and invalid values 400 with the valid list). So Anthropic chat goes through
+// AnthropicNativeChatClient below, and this mapping produces NATIVE params (routing
+// verified against Anthropic's model docs on 2026-07-06):
+//   - 'off' / 'none' / 'disabled' -> thinking disabled.
+//   - Claude 3 / 3.5 (but NOT 3.7): support neither extended thinking nor the effort
+//     parameter, so any effort setting is ignored (returns {}, warns once).
+//   - Claude 3.7, Haiku 4.5, Sonnet 4 / 4.5 (not 4.6), Opus 4 / 4.1 (not 4.5 and up): no
+//     output_config.effort support, so the effort tier maps to a thinking budget instead.
+//   - Everything newer (Sonnet 5, Sonnet 4.6, Opus 4.5 and up, Fable, future models):
+//     output_config.effort, the real thing (low | medium | high | xhigh | max).
+const ANTHROPIC_THINKING_BUDGETS: Record<string, number> = {
+  low: 1024, medium: 4096, high: 8192, xhigh: 16384, max: 24576,
+};
+const ANTHROPIC_EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Models we have already warned lack any thinking/effort support, keyed by the lowercased
+// model id, so the log is not spammed on every LLM call.
+const anthropicNoReasoningWarned = new Set<string>();
+function anthropicReasoningParams(effort: string, model: string): Record<string, any> {
+  const e = effort.toLowerCase().trim();
+  const m = (model || '').toLowerCase().trim();
+  if (e === 'off' || e === 'none' || e === 'disabled') return { thinking: { type: 'disabled' } };
+  // Claude 3 / 3.5 (but NOT 3.7) support neither extended thinking nor output_config.effort,
+  // so the effort setting cannot be honored at all. Warn once per model, then ignore it.
+  if (/claude-3(?!-7)/.test(m)) {
+    if (!anthropicNoReasoningWarned.has(m)) {
+      anthropicNoReasoningWarned.add(m);
+      console.warn(`[AI] anthropic: model '${model}' has no thinking or effort support, ignoring effort '${effort}'`);
+    }
+    return {};
+  }
+  // Claude 3.7, Haiku 4.5, Sonnet 4 / 4.5 (not 4.6), Opus 4 / 4.1 (not 4.5 and up): no
+  // output_config.effort support, so map the effort tier to a thinking budget instead.
+  if (/claude-3-7|haiku|sonnet-4(?!-6)|opus-4(?!-[5-9])/.test(m)) {
+    const budget = ANTHROPIC_THINKING_BUDGETS[e];
+    if (!budget) {
+      console.warn(`[AI] anthropic: unknown effort '${effort}' for ${model} (valid: off, low, medium, high, xhigh, max), thinking left at model default`);
+      return {};
+    }
+    return { thinking: { type: 'enabled', budget_tokens: budget } };
+  }
+  // Everything newer supports real graded effort via output_config.effort.
+  if (!ANTHROPIC_EFFORT_VALUES.includes(e)) {
+    console.warn(`[AI] anthropic: unknown effort '${effort}' (valid: off, low, medium, high, xhigh, max), using model default`);
+    return {};
+  }
+  return { output_config: { effort: e } };
+}
+
+// Output-token ceiling for the native /v1/messages API, which REQUIRES max_tokens. Thinking
+// tokens count against this, so too low a cap makes long narration scripts hit stop_reason
+// 'max_tokens' and cut off. Values from Anthropic's models overview (verified 2026-07-06).
+// max_tokens is a ceiling, not a cost: only actual output tokens are billed, so defaulting
+// to the real model ceiling never overcharges.
+function anthropicMaxOutputTokens(model: string): number {
+  const m = (model || '').toLowerCase();
+  if (/claude-3-haiku|claude-3-opus/.test(m)) return 4096;
+  if (/claude-3-5/.test(m)) return 8192;
+  if (/claude-3-7/.test(m)) return 64000;
+  if (/opus-4(?!-[5-9])/.test(m)) return 32000;                 // opus 4 and 4.1
+  if (/sonnet-4(?!-6)|haiku|opus-4-5/.test(m)) return 64000;    // sonnet 4 and 4.5, haiku 4.5, opus 4.5
+  return 128000;                                                // sonnet-5, sonnet-4-6, opus 4.6/4.7/4.8, fable, unknown future models
+}
+
+// Speaks Anthropic's NATIVE /v1/messages API while exposing the same
+// client.chat.completions.create() surface the rest of the app uses, so effort and
+// thinking controls actually work (the OpenAI-compat endpoint drops them, see above).
+export class AnthropicNativeChatClient {
+  constructor(private apiKey: string) {}
+  chat = {
+    completions: {
+      create: async (params: Record<string, any>): Promise<OpenAI.Chat.Completions.ChatCompletion> => {
+        const msgs = params.messages as Array<{ role: string; content: string }>;
+        // Native supports a single system param, so hoist system messages (same rule the
+        // compat endpoint applies).
+        const system = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+        const body: Record<string, any> = {
+          model: params.model,
+          // Native requires max_tokens and thinking counts toward it, so default to the
+          // model's real output ceiling (see anthropicMaxOutputTokens) rather than a low
+          // fixed cap that would truncate long narration scripts.
+          max_tokens: params.max_completion_tokens ?? params.max_tokens ?? anthropicMaxOutputTokens(params.model),
+          messages: msgs.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content })),
+        };
+        if (system) body.system = system;
+        if (params.thinking) body.thinking = params.thinking;
+        if (params.output_config) body.output_config = params.output_config;
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': this.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          // High-effort calls can think for a long time.
+          signal: AbortSignal.timeout(600000),
+        });
+        if (!res.ok) {
+          const errText = (await res.text()).slice(0, 500);
+          const err: any = new Error(`Anthropic API ${res.status}: ${errText}`);
+          // chatCreateWithRetry keys its retry decision off err.status (429/5xx retried).
+          err.status = res.status;
+          throw err;
+        }
+        const data: any = await res.json();
+        const text = (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+        return {
+          id: data.id,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: data.model,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: text, refusal: null },
+            finish_reason: data.stop_reason === 'max_tokens' ? 'length' : 'stop',
+            logprobs: null,
+          }],
+          usage: {
+            prompt_tokens: data.usage?.input_tokens ?? 0,
+            completion_tokens: data.usage?.output_tokens ?? 0,
+            total_tokens: (data.usage?.input_tokens ?? 0) + (data.usage?.output_tokens ?? 0),
+          },
+        } as OpenAI.Chat.Completions.ChatCompletion;
+      },
+    },
+  };
 }
 
 export const CHAT_PROVIDERS: Record<string, ChatProviderDef> = {
@@ -143,12 +274,33 @@ export const CHAT_PROVIDERS: Record<string, ChatProviderDef> = {
   // (validated live 2026-07-02); non-reasoning models simply ignore it.
   deepinfra: { baseURL: 'https://api.deepinfra.com/v1/openai', keySetting: 'deepinfra_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
   openrouter: { baseURL: 'https://openrouter.ai/api/v1', keySetting: 'openrouter_api_key', reasoningParams: (e) => ({ reasoning: { effort: e } }) },
-  anthropic: { baseURL: 'https://api.anthropic.com/v1/', keySetting: 'anthropic_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
+  anthropic: { baseURL: 'https://api.anthropic.com/v1/', keySetting: 'anthropic_api_key', reasoningParams: anthropicReasoningParams },
   gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', keySetting: 'gemini_api_key', reasoningParams: (e) => ({ reasoning_effort: e }) },
 };
 
+// Model-aware input character cap for scriptwriter/chat prompts. Baseline 400000 chars
+// (~100k tokens) fits every supported model, larger caps for known big-context models so
+// long articles are not needlessly truncated on models that can handle them.
+// - /gpt-5/ -> 1200000 (400k-token context)
+// - /gemini/ -> 1500000
+// - /claude-(sonnet-5|sonnet-4-6|opus-4|fable)/ -> 1500000 (1M-token contexts)
+// claude-haiku is deliberately NOT matched (200k context, baseline is right).
+export function chatInputCharCap(model: string): number {
+  const m = (model || '').toLowerCase();
+  if (/gpt-5/.test(m)) return 1200000;
+  if (/gemini/.test(m)) return 1500000;
+  if (/claude-(sonnet-5|sonnet-4-6|opus-4|fable)/.test(m)) return 1500000;
+  return 400000;
+}
+
+// The narrow chat surface every consumer uses. Both the OpenAI SDK client (all
+// OpenAI-compatible providers) and AnthropicNativeChatClient satisfy it.
+export interface ChatCompletionsClient {
+  chat: { completions: { create: (params: any) => Promise<OpenAI.Chat.Completions.ChatCompletion> } };
+}
+
 export interface ChatClientConfig {
-  client: OpenAI;
+  client: ChatCompletionsClient;
   model: string;
   extraParams: Record<string, any>; // reasoning params (empty unless a reasoning effort is set)
 }
@@ -184,8 +336,10 @@ export const CHAT_DEFAULT_MODELS: Record<string, string> = {
 };
 
 // Default reasoning effort per provider when the user leaves the effort field blank.
-// Haiku degrades badly without extended thinking, so Anthropic jobs think by default
-// (validated 2026-07-02: the OpenAI-compat endpoint accepts reasoning_effort for Haiku).
+// Haiku degrades badly without extended thinking, so Anthropic jobs think by default.
+// NOTE: the earlier belief that the compat endpoint "accepts reasoning_effort" was wrong,
+// it silently ignores it. Since 2026-07-06 this default is honored for real via the
+// native `thinking` param mapping in anthropicReasoningParams().
 export const CHAT_DEFAULT_EFFORT: Record<string, string> = {
   anthropic: 'high',
 };
@@ -213,8 +367,11 @@ async function resolveJobConfig(userId: number, job: ChatJob): Promise<{ provide
   return { provider: legacy.provider, model: legacy.model, effort };
 }
 
-function buildChatClient(apiKey: string, def: ChatProviderDef): OpenAI {
-  return new OpenAI(def.baseURL ? { apiKey, baseURL: def.baseURL } : { apiKey });
+function buildChatClient(apiKey: string, def: ChatProviderDef, provider: string): ChatCompletionsClient {
+  // Anthropic chat goes through the native API so effort and thinking controls work
+  // (the OpenAI-compat endpoint silently drops them, verified live 2026-07-06).
+  if (provider === 'anthropic') return new AnthropicNativeChatClient(apiKey);
+  return new OpenAI(def.baseURL ? { apiKey, baseURL: def.baseURL } : { apiKey }) as unknown as ChatCompletionsClient;
 }
 
 /**
@@ -229,7 +386,9 @@ export async function getChatClientForJob(userId: number, job: ChatJob): Promise
     const apiKey = await getUserSetting(userId, def.keySetting);
     if (apiKey) {
       const effectiveEffort = effort || CHAT_DEFAULT_EFFORT[provider] || '';
-      return { client: buildChatClient(apiKey, def), model, extraParams: effectiveEffort ? def.reasoningParams(effectiveEffort) : {} };
+      const extraParams = effectiveEffort ? def.reasoningParams(effectiveEffort, model) : {};
+      logChatConfig(job, provider, model, effectiveEffort, extraParams);
+      return { client: buildChatClient(apiKey, def, provider), model, extraParams };
     }
     console.warn(`[AI] ${job}: provider '${provider}' has no API key, falling back`);
   }
@@ -240,18 +399,67 @@ export async function getChatClientForJob(userId: number, job: ChatJob): Promise
   const legacyKey = await getUserSetting(userId, legacyDef.keySetting);
   if (legacyKey) {
     const effectiveEffort = effort || CHAT_DEFAULT_EFFORT[legacy.provider] || '';
-    return { client: buildChatClient(legacyKey, legacyDef), model: legacy.model, extraParams: effectiveEffort ? legacyDef.reasoningParams(effectiveEffort) : {} };
+    const extraParams = effectiveEffort ? legacyDef.reasoningParams(effectiveEffort, legacy.model) : {};
+    logChatConfig(job, legacy.provider, legacy.model, effectiveEffort, extraParams);
+    return { client: buildChatClient(legacyKey, legacyDef, legacy.provider), model: legacy.model, extraParams };
   }
   return null;
+}
+
+// One concise line per LLM call so the Railway logs show exactly which provider, model,
+// and effort params were sent (the request side; the response side is logged in
+// chatCreateWithRetry with the model the API actually served).
+function logChatConfig(job: string, provider: string, model: string, effort: string, extraParams: Record<string, any>): void {
+  const extras = Object.keys(extraParams).length ? ` sending=${JSON.stringify(extraParams)}` : '';
+  console.log(`[AI] ${job}: provider=${provider} model=${model} effort=${effort || '(provider default)'}${extras}`);
 }
 
 /**
  * Back-compat wrapper for the narration job, without the reasoning extraParams.
  * Prefer getChatClientForJob() in new code so reasoning effort is honored.
  */
-export async function getChatClientForUser(userId: number): Promise<{ client: OpenAI; model: string } | null> {
+export async function getChatClientForUser(userId: number): Promise<{ client: ChatCompletionsClient; model: string } | null> {
   const cfg = await getChatClientForJob(userId, 'narration');
   return cfg ? { client: cfg.client, model: cfg.model } : null;
+}
+
+// Retry a chat-completion call with exponential backoff. Connection-level failures (e.g.
+// "Premature close" / ECONNRESET on a reused keep-alive socket, see Node #63989) and
+// 429/5xx are transient and almost always succeed on a fresh attempt. 4xx (bad request /
+// auth) are NOT retried. Summaries previously had no retry, so these surfaced as failures
+// while TTS/transcription (which already retry) silently recovered.
+export async function chatCreateWithRetry(
+  client: ChatCompletionsClient,
+  params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & Record<string, any>,
+  label: string
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const { maxAttempts, baseDelayMs, maxDelayMs } = PROCESSING_CONFIG.retry;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await client.chat.completions.create(params);
+      // The response `model` field is ground truth for which model actually served the
+      // call (the request-side config is logged by getChatClientForJob).
+      console.log(`${label} done: served_by=${response.model} tokens_in=${response.usage?.prompt_tokens ?? '?'} tokens_out=${response.usage?.completion_tokens ?? '?'}`);
+      // finish_reason 'length' means the model hit its output-token ceiling and the result
+      // is cut off (works for every provider, the native Anthropic adapter maps stop_reason
+      // 'max_tokens' to 'length' too). Surface it so truncation is diagnosable in the logs.
+      if (response.choices[0]?.finish_reason === 'length') {
+        console.warn(`${label} TRUNCATED: ${response.model} hit its output token limit (finish_reason=length), the result is likely incomplete`);
+      }
+      return response;
+    } catch (err: any) {
+      lastErr = err;
+      const status: number | undefined = err?.status;
+      // Retry connection errors (no status) and 429/5xx; give up on 4xx.
+      const retryable = status === undefined || status === 429 || (status >= 500 && status < 600);
+      if (!retryable || attempt === maxAttempts) throw err;
+      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+      console.warn(`${label} attempt ${attempt}/${maxAttempts} failed (${status ?? 'conn'}): ${err?.message}. Retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 export async function getTTSOptionsForUser(userId: number): Promise<{ voice: string; model: string }> {
@@ -295,11 +503,12 @@ export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice
 
   const hasDeepInfra = !!(await getUserSetting(userId, 'deepinfra_api_key'));
   const hasOpenAI = !!(await getUserSetting(userId, 'openai_api_key'));
-  // Kokoro voices are usable with a DeepInfra key, or via OpenRouter when the user routes
-  // Kokoro TTS through it (same voices). OpenAI voices always need an OpenAI key.
-  const kokoroProvider = (await getUserSetting(userId, 'kokoro_tts_provider')) || 'deepinfra';
+  // Kokoro voices are usable with a DeepInfra key OR an OpenRouter key (same voices).
+  // getTTSClientForUser serves Kokoro via OpenRouter as a fallback even when
+  // kokoro_tts_provider is unset, so an OpenRouter-only user can still synthesize them.
+  // OpenAI voices always need an OpenAI key.
   const hasOpenRouter = !!(await getUserSetting(userId, 'openrouter_api_key'));
-  const canKokoroVoices = hasDeepInfra || (kokoroProvider === 'openrouter' && hasOpenRouter);
+  const canKokoroVoices = hasDeepInfra || hasOpenRouter;
   voices = voices.filter(v => {
     const isKokoro = v.model.includes('Kokoro') || v.model.startsWith('hexgrad/');
     return isKokoro ? canKokoroVoices : hasOpenAI;
@@ -307,10 +516,4 @@ export async function pickRandomTTSVoice(userId: number): Promise<TTSVoiceChoice
   if (voices.length === 0) return null;
 
   return voices[Math.floor(Math.random() * voices.length)];
-}
-
-export async function hasUserConfiguredAPIKey(userId: number): Promise<boolean> {
-    const openaiKey = await getUserSetting(userId, 'openai_api_key');
-    const diKey = await getUserSetting(userId, 'deepinfra_api_key');
-    return !!openaiKey || !!diKey;
 }

@@ -9,10 +9,10 @@ self.addEventListener('install', (event) => {
       .then((cache) => {
         return cache.addAll([
           '/manifest.json',
-          '/favicon-16x16.png',
-          '/favicon-32x32.png',
-          '/icon-192.png',
-          '/icon-512.png'
+          '/favicon-16x16.png?v=2',
+          '/favicon-32x32.png?v=2',
+          '/icon-192.png?v=2',
+          '/icon-512.png?v=2'
         ]);
       })
       .catch((error) => {
@@ -76,16 +76,25 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .then((response) => {
           if (response && response.status === 200) {
+            // Take BOTH clones now, synchronously, BEFORE returning the response to the
+            // browser. Cloning after the body has begun to be consumed (which happens once
+            // the browser reads the returned response) can throw, which would leave
+            // '/index.html' uncached and defeat the offline fallback below.
             const responseToCache = response.clone();
+            const indexShellCopy = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseToCache);
+              // Also store under a stable '/index.html' key so the offline
+              // fallback below can always find a shell to serve, regardless of
+              // which SPA route the user first visited.
+              cache.put('/index.html', indexShellCopy);
             });
           }
           return response;
         })
         .catch(() => {
-          // Offline fallback only
-          return caches.match('/index.html');
+          // Offline fallback: try the exact route first, then the shared shell.
+          return caches.match(request).then((cached) => cached || caches.match('/index.html'));
         })
     );
     return;

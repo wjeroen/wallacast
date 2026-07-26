@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -32,6 +32,7 @@ interface ContentCardProps {
   onRegenerateTranscript: (id: number) => void;
   onRefetch: (id: number) => void;
   onAddToQueue: (item: ContentItem) => void;
+  onCopyContent: (item: ContentItem) => void;
   onDownloadZip: (item: ContentItem) => void;
 }
 
@@ -59,6 +60,7 @@ export function ContentCard({
   onRegenerateTranscript,
   onRefetch,
   onAddToQueue,
+  onCopyContent,
   onDownloadZip,
 }: ContentCardProps) {
   // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
@@ -293,7 +295,7 @@ export function ContentCard({
             </div>
           );
         })() : item.description ? (
-          <p className="description">{cleanHtml(item.description).slice(0, 280)}...</p>
+          <p className="description">{truncate(cleanHtml(item.description), 280)}</p>
         ) : null}
         {searchQuery.trim() && (() => {
           const snippet = getSearchSnippet(item, searchQuery);
@@ -308,12 +310,14 @@ export function ContentCard({
             {item.type === 'podcast_episode' && <><Podcast size={14} /> <span className="type-label">Podcast</span></>}
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
-          {item.audio_url && <span className="badge">Audio</span>}
+          {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
-            <span className="badge summary">Summary</span>
+            <span className="badge summary"><MessageSquareText size={12} /> Summary</span>
           )}
-          {item.type === 'podcast_episode' && item.transcript_words && (
-            <span className="badge transcript">Transcript</span>
+          {/* All types, not just podcasts: articles/texts get a Whisper transcript
+              of their generated audio too (it powers the Transcript tab) */}
+          {item.transcript_words && (
+            <span className="badge transcript"><Captions size={12} /> Transcript</span>
           )}
           {item.playback_position > 0 && item.duration && item.duration > 0 && (
             <span className="progress">
@@ -397,6 +401,7 @@ export function ContentCard({
                         onClick={() => onGenerateAudio(item.id, false)}
                         disabled={item.generation_status === 'generating_audio'}
                       >
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate audio
                       </button>
                     )}
@@ -406,9 +411,11 @@ export function ContentCard({
                           onClick={() => onGenerateAudio(item.id, true)}
                           disabled={item.generation_status === 'generating_audio'}
                         >
+                          <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Regenerate audio
                         </button>
                         <button onClick={() => onRemoveAudio(item.id)}>
+                          <VolumeOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Remove audio
                         </button>
                       </>
@@ -420,17 +427,23 @@ export function ContentCard({
                 {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && (
                   <>
                     {item.summary_status === 'generating' ? (
-                      <button disabled>Generating summary…</button>
+                      <button disabled>
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        Generating summary…
+                      </button>
                     ) : !item.summary_generated_at ? (
                       <button onClick={() => onGenerateSummary(item.id, false)}>
+                        <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                         Generate summary
                       </button>
                     ) : (
                       <>
                         <button onClick={() => onGenerateSummary(item.id, true)}>
+                          <MessageSquareText size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Regenerate summary
                         </button>
                         <button onClick={() => onRemoveSummary(item.id)}>
+                          <MessageSquareOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Remove summary
                         </button>
                       </>
@@ -442,11 +455,13 @@ export function ContentCard({
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}
                   >
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Regenerate transcript
                   </button>
                 )}
                 {item.type === 'article' && item.url && (
                   <button onClick={() => onRefetch(item.id)}>
+                    <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web
                   </button>
                 )}
@@ -457,13 +472,20 @@ export function ContentCard({
                   >
                     {/* transcript_words, not transcript. The list endpoint doesn't send
                         the (large) transcript column, so checking it always said "Generate" */}
+                    <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>
                 )}
                 <button onClick={() => onAddToQueue(item)}>
+                  <ListPlus size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Add to queue
                 </button>
+                <button onClick={() => onCopyContent(item)}>
+                  <Copy size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Copy content
+                </button>
                 <button onClick={() => onDownloadZip(item)}>
+                  <FolderDown size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
                 </button>
               </div>

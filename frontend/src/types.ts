@@ -33,6 +33,9 @@ export interface ContentItem {
   disagree_votes?: number; // EA Forum disagree votes
   comments?: Comment[]; // Parsed comments with metadata
   comment_count?: number; // Number of top-level comments (from list endpoint, avoids loading full JSON)
+  // Where the comments came from (migration 017). Returned only by GET /:id. Null for
+  // older items fetched before the column existed, callers fall back to URL detection.
+  comment_source?: 'ea_forum' | 'lesswrong' | 'substack' | null;
   is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
   tags?: string;  // Comma-separated tags (Wallabag style)
@@ -40,9 +43,12 @@ export interface ContentItem {
   wallabag_id?: number;  // ID in Wallabag (for sync)
   wallabag_updated_at?: string;  // Last update in Wallabag (for conflict resolution)
   playback_position: number;
+  // Deprecated: per-item speed is no longer used. Global playback speed lives in
+  // user settings + localStorage since migration 011. Kept for backward compatibility
+  // with the API payload.
   playback_speed: number;
   last_played_at?: string;
-  generation_status?: 'idle' | 'starting' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'completed' | 'failed';
+  generation_status?: 'idle' | 'starting' | 'fetching' | 'extracting_content' | 'content_ready' | 'generating_audio' | 'generating_transcript' | 'ready' | 'completed' | 'failed';
   generation_progress?: number;
   generation_error?: string;
   current_operation?: 'initialization' | 'content_extraction' | 'audio_generation' | 'concatenating_audio' | 'audio' | 'transcript' | string;
@@ -56,13 +62,16 @@ export interface ContentItem {
   summary_status?: 'idle' | 'generating' | 'completed' | 'failed';
   summary_generated_at?: string; // When the summary was last generated
   summary_error?: string; // Error message when summary_status === 'failed' (shown on cards)
+  versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 
 // A snapshot of an article/text body saved before an edit/refetch/restore (version history).
 export interface ContentVersion {
   id: number;
-  source: 'fetch' | 'refetch' | 'edit' | 'restore';
+  source: 'fetch' | 'refetch' | 'edit' | 'restore' | 'sync';
   title?: string;
+  author?: string | null;       // null on snapshots from before migration 024
+  published_at?: string | null; // null on snapshots from before migration 024
   created_at: string;
   html_bytes?: number;      // present in the lean list response
   has_comments?: boolean;   // present in the lean list response
@@ -81,7 +90,10 @@ export interface Podcast {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   category?: string;
   language?: string;
-  type?: 'podcast' | 'newsletter' | 'blog';  // RSS feed type
+  // RSS feed type. The DB column still permits 'blog', but nothing writes it
+  // (detectFeedType only ever returns 'podcast' or 'newsletter'), so it is left
+  // out of this union.
+  type?: 'podcast' | 'newsletter';
   is_subscribed: boolean;
   last_fetched_at?: string;
   created_at: string;
@@ -110,6 +122,9 @@ export interface User {
   display_name: string | null;
   is_active: boolean;
   created_at: string;
+  // True when this session is the shared read-only demo account (computed by the
+  // backend from DEMO_USERNAME, never stored in the users table).
+  demo?: boolean;
 }
 
 export interface AuthTokens {
