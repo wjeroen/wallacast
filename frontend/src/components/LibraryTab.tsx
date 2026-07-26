@@ -301,13 +301,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const continueTypeIcon = (t: string) =>
     t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
 
-  // The progress bar carries the type identity (icon stays muted). Article and
-  // text use the pill colors; podcast purple is the brighter 400-tier because
-  // the pill purple reads muddy on a 3px line against the dark background.
+  // The progress bar carries the type identity (icon stays muted), using the
+  // same trio as the card type pills.
   const TYPE_BAR_COLORS: Record<string, string> = {
     article: '#3b82f6',
     text: '#10b981',
-    podcast_episode: '#c084fc',
+    podcast_episode: '#a855f7',
   };
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
