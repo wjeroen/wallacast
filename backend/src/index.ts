@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { safeFetch } from './services/url-guard.js';
+import { safeFetch, AUDIO_REDIRECT_HOPS } from './services/url-guard.js';
 import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
@@ -193,7 +193,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
       console.log(`[AudioProxy:${req.params.id}] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
 
-      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders });
+      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders }, AUDIO_REDIRECT_HOPS);
 
       // Log what upstream ACTUALLY answered: a 200 to a ranged request means the
       // CDN ignored the Range header, which breaks browser seeking silently.

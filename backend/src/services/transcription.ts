@@ -1,4 +1,4 @@
-import { safeFetch } from './url-guard.js';
+import { safeFetch, AUDIO_REDIRECT_HOPS } from './url-guard.js';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -252,7 +252,7 @@ export async function transcribeWithTimestamps(
       // URL passed, download it (legacy path, used for podcast transcription)
       // Log without the query string: article URLs carry the audio access token.
       console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
-      const response = await safeFetch(audioSource);
+      const response = await safeFetch(audioSource, {}, AUDIO_REDIRECT_HOPS);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
       if (!response.body) throw new Error('No response body');
       await pipeline(response.body, createWriteStream(audioPath));
