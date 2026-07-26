@@ -84,26 +84,27 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
 // Normalized per-file transcription result (word shape matches what read-along/DB expect).
 type ChunkResult = { text: string; words: Array<{ word: string; start: number; end: number }> };
 
-// Anti-hallucination safety params for DeepInfra's NATIVE Whisper endpoint (v1).
-// condition_on_previous_text=false is the headline fix: it stops Whisper from re-reading its own
-// (possibly repetitive) output for the previous 30s window and snowballing into "even. even. even."
-// loops. The threshold params are Whisper defaults (only bite if DeepInfra runs the temperature
-// fallback loop, harmless no-ops otherwise). no_repeat_ngram_size is deliberately NOT set yet
-// (staged follow-up so each knob's effect stays measurable independently).
+// Params for DeepInfra's NATIVE Whisper endpoint (v1).
+//
+// REALITY CHECK (schema-verified 2026-07-26 via GET api.deepinfra.com/models/<model>):
+// the endpoint's documented input fields are ONLY: service_tier, audio, task, initial_prompt,
+// temperature, language, chunk_level, chunk_length_s, webhook. That means several fields below
+// (word_timestamps, condition_on_previous_text, and the three thresholds) are NOT in the schema
+// and are presumably ignored. They are kept for now because the repetition loops ("even. even.
+// even.") demonstrably stopped after the native-endpoint switch and removing anything from a
+// working recipe deserves its own test (the real fix was likely the endpoint's different
+// inference pipeline plus chunk_level=word, not these params). A `vad` param does NOT exist
+// (a staged vad experiment on 2026-07-26 was a no-op and was removed the same day).
+// chunk_length_s (1-30, default 30) is the one REAL spare knob if window-boundary word drops
+// ever need attacking on the cheap.
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
-  // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false and
-  // chunk_level=segment, which returns segment-level text only (no per-word timing). That broke
-  // read-along. chunk_level=word is the switch that emits word-level output, word_timestamps=true
-  // asks each word to carry start/end. The response can put words at the top level OR nested inside
+  // Read-along needs per-word timestamps: chunk_level=word is the switch that makes the native
+  // endpoint emit word-level output (the default chunk_level=segment returns text only, which
+  // broke read-along). The response can put words at the top level OR nested inside
   // segments[].words, so extractDeepInfraWords() below reads both.
   chunk_level: 'word',
   word_timestamps: 'true',
   condition_on_previous_text: 'false',
-  // Staged 2026-07-26 against scattered dropped speech (64 gaps >3s in one Hard Fork episode,
-  // none at chunk seams): with condition_on_previous_text off, every ~30s window decodes cold,
-  // and turbo's pruned decoder sometimes bails on a window's partial sentences. VAD segments at
-  // real speech boundaries instead of blind 30s windows, which targets exactly those bail-outs.
-  vad: 'true',
   temperature: '0',
   compression_ratio_threshold: '2.4',
   logprob_threshold: '-1',
