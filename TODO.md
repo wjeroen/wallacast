@@ -20,9 +20,6 @@
 - Security review: DONE (2026-07-07, see Completed below). Every high/critical item from the deferred list is fixed. Post-deploy audio check: VERIFIED on production 2026-07-14 (article and text items play fine with the HMAC audio token).
 
 ### Features to Implement
-- [ ] **[P2]** Library sort toggle: reverse sort by date added (arrow up/down button between the search button and the filter buttons). Must also drive the queue's "Up next" order.
-- [ ] **[P2]** Restyle the bulk-select toggle: the wide "Select"/"Cancel" text button takes too much visual space. Make it a compact icon button styled like its toolbar neighbors (e.g. an edit/checklist icon that becomes an X while active) without hurting discoverability.
-- [ ] **[P3]** Continue-listening strip polish: when an item has no image, drop the thumbnail entirely (no type-icon placeholder, the strip card already shows a type icon next to the title) and let the title use the freed width (card width unchanged). Give the icons right of the title their respective colors.
 - [ ] **[P3]** Archive countdown in the fullscreen player only when archiving would actually delete audio. For items without audio the 10s undo delay serves no purpose, archive instantly.
 - [ ] **[P2]** Harmonize long-content AI warnings (approved 2026-07-21; summarizer cap part DONE). Done: summarizer input caps are model-aware via `chatInputCharCap` (400k chars baseline, more for big-context models; a truncation now logs a warning). Remaining: bulk audio ("Generate all audio" + library multi-select) skips very-long articles with a note; queue generate-or-skip prompts get the single-item gates; EVERY such warning states the article's character count. For articles beyond even the model-aware cap, the user chose SEQUENTIAL REFINE summarization instead of a warning: split at the cap, each chunk's call receives the summary-so-far as context and returns an updated summary, so summaries never silently truncate (rare path, only fires past ~400k chars).
 - [ ] **[P3]** Offline support + local caching (was P1, demoted: multi-week project, not a launch blocker). Use IndexedDB to cache content on-device so opening items is instant even online, and the app works fully offline.
@@ -104,6 +101,8 @@
 ## Completed Recently ✅
 
 > July 2026 onward. Older wins were pruned.
+
+- [x] **Library sort toggle + compact Select button + continue-strip polish** (2026-07-26): new sort button (between Search and the funnel) flips the library between newest-added-first and oldest-first, persisted per device alongside the filters. The sort is applied inside the content store's `commit()`, so the queue's "Up next" stream follows automatically (queue shuffle still overrides while on). Side effect: with both Active and Archived visible, items now interleave strictly by date added instead of active-first. The wide Select/Cancel text button became a toolbar icon button (ListChecks "Select" -> X "Cancel", labels collapse under 740px like its neighbors). Continue-listening strip: items without an image show no placeholder square anymore (the type icon next to the title already identifies the type, and it was showing twice), and that type icon now uses the card type-pill colors (article blue, text green, podcast purple).
 
 - [x] **Podcast audio redirect cap raised to 12 hops** (2026-07-26): a real episode failed transcription with "Blocked URL: too many redirects (>5)" because its URL chains through ~7 measurement hosts (pdst.fm, pscrb.fm, mgln.ai x2, claritaspod, podderapp, flightcast). The audio proxy and the transcription download now pass `AUDIO_REDIRECT_HOPS = 12` to safeFetch; every hop is still SSRF-validated, and RSS/article/image fetches keep the cap of 5.
 

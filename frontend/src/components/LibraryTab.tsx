@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -62,10 +62,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     typeFilter,
     facets,
     searchQuery,
+    sortDir,
     loading,
     setTypeFilter,
     setFacet,
     setFacets,
+    setSortDir,
     setSearchQuery,
     fetchContent,
     toggleStarred,
@@ -296,8 +298,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       .slice(0, 12);
   }, [content]);
 
+  // Type icon in the app's established type colors (same trio as the card
+  // type pills: article blue, text green, podcast purple).
   const continueTypeIcon = (t: string) =>
-    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
+    t === 'podcast_episode' ? <Podcast size={12} style={{ color: '#a855f7' }} />
+      : t === 'text' ? <NotebookPen size={12} style={{ color: '#10b981' }} />
+        : <Newspaper size={12} style={{ color: '#3b82f6' }} />;
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
@@ -669,12 +675,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           </div>
         )}
         <div className="header-top">
-          <button
-            onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
-            className="select-mode-btn"
-          >
-            {bulkMode ? 'Cancel' : 'Select'}
-          </button>
           <div className="filter-buttons">
             <button
               className={searchOpen || searchQuery.trim() ? 'active' : ''}
@@ -690,6 +690,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               title="Search library"
             >
               <Search size={16} />
+            </button>
+            {/* Bulk-select mode toggle, styled like its toolbar neighbors
+                (replaces the old wide standalone Select/Cancel text button) */}
+            <button
+              className={bulkMode ? 'active' : ''}
+              onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
+              title={bulkMode ? 'Exit selection' : 'Select items'}
+            >
+              {bulkMode ? <X size={16} /> : <ListChecks size={16} />}
+              <span className="filter-label">{bulkMode ? 'Cancel' : 'Select'}</span>
+            </button>
+            {/* Sort by date added: newest first (default) or oldest first.
+                Sorting lives in the store, so the queue's "Up next" follows. */}
+            <button
+              className={sortDir === 'asc' ? 'active' : ''}
+              onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+              title={sortDir === 'asc' ? 'Oldest added first, tap for newest first' : 'Newest added first, tap for oldest first'}
+            >
+              {sortDir === 'asc' ? <ArrowUpNarrowWide size={16} /> : <ArrowDownWideNarrow size={16} />}
+              <span className="filter-label">{sortDir === 'asc' ? 'Oldest' : 'Newest'}</span>
             </button>
             <div className="dropdown-container" ref={statusMenuRef}>
               {/* Facet filter: the button shows the icon of every selected facet
@@ -842,10 +862,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 onClick={() => handlePlayContent(item)}
                 title={item.title}
               >
-                {item.preview_picture ? (
+                {/* No image = no placeholder: the type icon already sits right of
+                    the title, so the title just gets the extra width instead */}
+                {item.preview_picture && (
                   <img src={item.preview_picture} alt="" loading="lazy" />
-                ) : (
-                  <span className="continue-card-art">{continueTypeIcon(item.type)}</span>
                 )}
                 <span className="continue-card-title">{item.title}</span>
                 <span className="continue-card-type">{continueTypeIcon(item.type)}</span>

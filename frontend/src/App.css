@@ -755,24 +755,6 @@
   align-items: center;
 }
 
-.select-mode-btn {
-  padding: 0.5rem 1rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--bg-hover);
-  border-radius: 0.375rem;
-  color: var(--t1);
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 0.875rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.select-mode-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--t4);
-}
-
 .filter-buttons {
   display: flex;
   gap: 0.5rem;
@@ -4641,18 +4623,13 @@
   overflow: hidden;
   text-align: left;
 }
-.continue-card img,
-.continue-card-art {
+.continue-card img {
   width: 32px;
   height: 32px;
   border-radius: 0.35rem;
   object-fit: cover;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: var(--bg-raised);
-  color: var(--t3);
 }
 .continue-card-title {
   flex: 1;

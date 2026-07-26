@@ -39,12 +39,16 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   podcasts: 'podcast_episode',
 };
 
-// Persist the chosen filters (type + facets, NOT the transient search query) per
-// device, so a refresh or app restart reopens the library exactly as you left it.
-// Same localStorage pattern as 'wallacast-theme'. Stored values are validated on
-// load so a stale or corrupted entry falls back to the defaults instead of
-// wedging the library view.
+// Persist the chosen filters (type + facets + sort direction, NOT the transient
+// search query) per device, so a refresh or app restart reopens the library
+// exactly as you left it. Same localStorage pattern as 'wallacast-theme'.
+// Stored values are validated on load so a stale or corrupted entry falls back
+// to the defaults instead of wedging the library view.
 const FILTERS_STORAGE_KEY = 'wallacast-filters';
+
+// Sort direction for the library list (and therefore the queue's "Up next"
+// stream, which reads allItems). 'desc' = newest added first (the default).
+export type SortDir = 'desc' | 'asc';
 
 const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
   archive: ['active', 'archived'],
@@ -54,8 +58,8 @@ const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
   transcript: ['transcript', 'no_transcript'],
 };
 
-function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter } {
-  const fallback = { typeFilter: 'all' as TypeFilter, facets: DEFAULT_FACETS };
+function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter; sortDir: SortDir } {
+  const fallback = { typeFilter: 'all' as TypeFilter, facets: DEFAULT_FACETS, sortDir: 'desc' as SortDir };
   try {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return fallback;
@@ -68,16 +72,28 @@ function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter } {
       const v = parsed?.facets?.[dim];
       facets[dim] = v === null || FACET_VALUES[dim].includes(v) ? v : DEFAULT_FACETS[dim];
     }
-    return { typeFilter, facets };
+    const sortDir: SortDir = parsed?.sortDir === 'asc' ? 'asc' : 'desc';
+    return { typeFilter, facets, sortDir };
   } catch {
     return fallback; // private mode / corrupted JSON
   }
 }
 
-function storeFilters(typeFilter: TypeFilter, facets: FacetFilter): void {
+function storeFilters(typeFilter: TypeFilter, facets: FacetFilter, sortDir: SortDir): void {
   try {
-    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify({ typeFilter, facets }));
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify({ typeFilter, facets, sortDir }));
   } catch { /* private mode */ }
+}
+
+// Canonical library ordering: date added (created_at). Applied in commit() so
+// EVERY consumer of allItems (library list, continue strip source, and the
+// queue's "Up next" stream in queueStore) follows the same direction.
+function sortByDateAdded(items: ContentItem[], dir: SortDir): ContentItem[] {
+  return [...items].sort((a, b) => {
+    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return dir === 'asc' ? ta - tb : tb - ta;
+  });
 }
 
 // Fields covered by search, besides the full body text in `content`.
@@ -132,6 +148,7 @@ interface ContentStore {
   typeFilter: TypeFilter;
   facets: FacetFilter;
   searchQuery: string;
+  sortDir: SortDir;
   loading: boolean;
   error: string | null;
   allCount: number; // count of all non-archived items, survives filter changes
@@ -140,6 +157,7 @@ interface ContentStore {
   setTypeFilter: (typeFilter: TypeFilter) => void;
   setFacet: (dim: FacetDim, value: FacetValue | null) => void;
   setFacets: (facets: FacetFilter) => void;
+  setSortDir: (sortDir: SortDir) => void;
   setSearchQuery: (searchQuery: string) => void;
   fetchContent: () => Promise<void>;
 
@@ -164,12 +182,16 @@ export const useContentStore = create<ContentStore>((set, get) => {
     return { typeFilter, facets, searchQuery };
   };
 
-  // Single source of truth: set allItems and re-derive the filtered view + allCount.
+  // Single source of truth: sort by date added, set allItems, and re-derive the
+  // filtered view + allCount. Sorting here (not at render time) keeps the queue's
+  // "Up next" stream, which reads allItems directly, in the same order the
+  // library shows.
   const commit = (allItems: ContentItem[], extra: Record<string, unknown> = {}) => {
+    const sorted = sortByDateAdded(allItems, get().sortDir);
     set({
-      allItems,
-      items: allItems.filter(i => itemMatchesFilter(i, currentFilter())),
-      allCount: allItems.filter(i => !i.is_archived).length,
+      allItems: sorted,
+      items: sorted.filter(i => itemMatchesFilter(i, currentFilter())),
+      allCount: sorted.filter(i => !i.is_archived).length,
       ...extra,
     });
   };
@@ -182,6 +204,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     typeFilter: storedFilters.typeFilter,
     facets: storedFilters.facets,
     searchQuery: '',
+    sortDir: storedFilters.sortDir,
     loading: false,
     error: null,
     allCount: 0,
@@ -189,7 +212,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     // Client-side filtering, no API call needed, instant switch
     setTypeFilter: (typeFilter) => {
       set({ typeFilter });
-      storeFilters(typeFilter, get().facets);
+      storeFilters(typeFilter, get().facets, get().sortDir);
       commit(get().allItems);
     },
 
@@ -198,14 +221,20 @@ export const useContentStore = create<ContentStore>((set, get) => {
     setFacet: (dim, value) => {
       const facets = { ...get().facets, [dim]: value } as FacetFilter;
       set({ facets });
-      storeFilters(get().typeFilter, facets);
+      storeFilters(get().typeFilter, facets, get().sortDir);
       commit(get().allItems);
     },
 
     // Replace the whole facet selection at once (double-click "solo" gesture)
     setFacets: (facets) => {
       set({ facets });
-      storeFilters(get().typeFilter, facets);
+      storeFilters(get().typeFilter, facets, get().sortDir);
+      commit(get().allItems);
+    },
+
+    setSortDir: (sortDir) => {
+      set({ sortDir });
+      storeFilters(get().typeFilter, get().facets, sortDir);
       commit(get().allItems);
     },
 
@@ -312,10 +341,8 @@ export const useContentStore = create<ContentStore>((set, get) => {
         await contentAPI.delete(id);
       } catch (error) {
         console.error('Failed to delete item:', error);
-        // Revert on error - add item back
-        commit([...get().allItems, item].sort((a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        ));
+        // Revert on error - add item back (commit() re-sorts it into place)
+        commit([...get().allItems, item]);
       }
     },
 
