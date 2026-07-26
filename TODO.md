@@ -192,6 +192,8 @@
 
 ## Future Ideas (Nice to Have)
 
+- Podcast ad-skipping (sketched 2026-07-26, user interest confirmed). Phase 1 "auto-skip": one LLM call over the timed transcript marks ad segments as time ranges (new small column, e.g. `ad_segments` JSONB); the player jumps over a range SponsorBlock-style with a "skipped an ad" indicator, a global setting, and a per-episode off switch. Gate to cache-pinned episodes for DAI shows (ranges only match the pinned rendition). Phase 2 (only if detection proves reliable): physically cut ranges from the cached file with ffmpeg and arithmetically shift the word timestamps after each cut (destructive, needs exactness). Follow-up either way: grey out or collapse ad segments in the read-along text.
+
 - Podcast speaker labels (diarization), someday when a cheap solution exists. The "prettier transcripts" LLM-rewrite idea was considered and dropped: Whisper output already reads well (even in Dutch), and a rewrite risks introducing more problems than it solves.
 - Automated database backups: a scheduled GitHub Action running `pg_dump` to private storage (needs `DATABASE_URL` as an encrypted Actions secret).
 - Lightweight uptime monitoring (e.g. UptimeRobot pinging the backend health endpoint) so you hear about downtime before users do.
