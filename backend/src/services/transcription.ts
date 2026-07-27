@@ -53,8 +53,12 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
   return chunkFiles;
 }
 
-// Retry a chunk API call on network errors (ECONNRESET, socket hang up, etc.)
-// Waits 2s, 4s, 8s between attempts. Throws immediately on non-network errors (e.g. auth failures).
+// Retry a chunk API call on transient errors: network drops (ECONNRESET, socket hang up,
+// etc., backoff 2s/4s/8s) AND provider capacity blips (HTTP 429 "Model busy, retry later" /
+// 5xx, backoff 15s/30s/60s, a busy model needs breathing room rather than a quick hammer).
+// Throws immediately on anything else (e.g. auth failures). Seen live 2026-07-27: DeepInfra
+// answered 429 Model busy on whisper-large-v3 and the old network-only classification gave
+// up after one attempt.
 async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRetries = 3): Promise<T> {
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
@@ -67,13 +71,23 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
         error?.constructor?.name === 'APIConnectionError' ||
         (typeof error?.message === 'string' && /connection|socket hang up|network/i.test(error.message));
 
-      if (!isNetworkError || attempt > maxRetries) {
+      // Covers both transports: the OpenAI SDK attaches a numeric status, the DeepInfra
+      // native path throws "DeepInfra transcription HTTP <status> ..." messages.
+      const status = error?.status ?? error?.response?.status;
+      const isCapacityError =
+        status === 429 ||
+        (typeof status === 'number' && status >= 500) ||
+        (typeof error?.message === 'string' && /HTTP (429|5\d\d)/.test(error.message));
+
+      if ((!isNetworkError && !isCapacityError) || attempt > maxRetries) {
         console.error(`${chunkLabel} failed after ${attempt} attempt(s), giving up.`);
         throw error;
       }
 
-      const delayMs = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
-      console.log(`${chunkLabel} network error (${error?.cause?.code || error?.message}), retrying in ${delayMs / 1000}s (attempt ${attempt}/${maxRetries})...`);
+      const delayMs = isCapacityError
+        ? [15000, 30000, 60000][Math.min(attempt - 1, 2)]
+        : Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`${chunkLabel} ${isCapacityError ? 'capacity' : 'network'} error (${error?.cause?.code || error?.message}), retrying in ${delayMs / 1000}s (attempt ${attempt}/${maxRetries})...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
