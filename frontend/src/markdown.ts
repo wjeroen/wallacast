@@ -378,10 +378,16 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[]): strin
   if (meta.length > 0) lines.push(meta.join(' • '));
   if (item.url) lines.push(displayUrl(item.url));
 
-  const body = item.html_content
-    ? htmlToMarkdown(item.html_content)
-    : item.type === 'podcast_episode' && item.transcript
-      ? item.transcript
+  // Podcasts: description first, then the transcript, each only when present
+  // (the `content` field is deliberately not used for podcasts). Articles/texts
+  // keep the html_content body with the plain-content fallback.
+  const body = item.type === 'podcast_episode'
+    ? [
+        item.description ? htmlToMarkdown(item.description) : '',
+        item.transcript || '',
+      ].filter(part => part.trim()).map(part => part.trim()).join('\n\n')
+    : item.html_content
+      ? htmlToMarkdown(item.html_content)
       : (item.content || '');
   if (body.trim()) lines.push('', body.trim());
 
