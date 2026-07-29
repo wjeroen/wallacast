@@ -602,6 +602,173 @@ export function FullscreenPlayer({
     return activeIdx;
   }, [isLLMAlignment, parsedAlignment, currentTime]);
 
+  // --- Read-along performance (2026-07-29) ----------------------------------
+  // The read-along used to compute the active-highlight class inline in JSX,
+  // which made React rebuild EVERY element roughly 4x/second while audio played
+  // (visible lag on phones with very long articles, even with autoscroll off).
+  // Instead, the element trees below are memoized per alignment WITHOUT any
+  // active class, and a tiny effect moves the ra-active class between the two
+  // affected DOM nodes as playback advances. Same DOM, same CSS, same behavior.
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+
+  const readAlongParts = useMemo(() => {
+    if (!isLLMAlignment || !parsedAlignment?.elements) return null;
+    const elements = parsedAlignment.elements as LLMAlignmentElement[];
+    // Precomputed index lookup (elements.indexOf per comment was quadratic on
+    // heavily-commented articles).
+    const indexByEl = new Map<LLMAlignmentElement, number>();
+    elements.forEach((el, i) => indexByEl.set(el, i));
+    return {
+      elements,
+      indexByEl,
+      titleEl: elements.find(e => e.type === 'title'),
+      metaElements: elements.filter(e => e.type === 'meta'),
+      bodyElements: elements.filter(e =>
+        ['heading', 'paragraph', 'image', 'blockquote', 'tweet', 'list', 'code-block', 'llm-block'].includes(e.type)
+      ),
+      commentDivider: elements.find(e => e.type === 'comment-divider'),
+      commentElements: elements.filter(e => e.type === 'comment'),
+    };
+  }, [isLLMAlignment, parsedAlignment]);
+
+  const readAlongBodyTree = useMemo(() => {
+    if (!readAlongParts) return null;
+    const { bodyElements, indexByEl } = readAlongParts;
+    return bodyElements.map((el) => {
+      const globalIndex = indexByEl.get(el)!;
+      return (
+        <div
+          key={`body-${globalIndex}`}
+          id={`ra-el-${globalIndex}`}
+          className="read-along-element"
+          onClick={(e) => {
+            // Read-along taps seek, with two exceptions so links stay usable:
+            //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
+            //    don't seek.
+            //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
+            //    don't open the picture.
+            // Everything else (the plain text of the highlight) seeks.
+            const target = e.target as HTMLElement;
+            const anchor = target.closest('a');
+            const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+            if (anchor && !isImage) return; // real link: open it, don't seek
+            if (isImage) e.preventDefault(); // image link: seek, don't open the image
+            onSeekRef.current(el.startTime);
+          }}
+        >
+          <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+        </div>
+      );
+    });
+  }, [readAlongParts, sanitizedElementHtml]);
+
+  const readAlongCommentsTree = useMemo(() => {
+    if (!readAlongParts || readAlongParts.commentElements.length === 0) return null;
+    const { commentElements, commentDivider, indexByEl } = readAlongParts;
+    const isLW = content.url ? content.url.includes('lesswrong.com') : false;
+    const isSub = content.url ? content.url.includes('substack.com') : false;
+
+    interface CommentNode {
+      element: LLMAlignmentElement;
+      globalIndex: number;
+      children: CommentNode[];
+    }
+    const roots: CommentNode[] = [];
+    const stack: CommentNode[] = [];
+    for (const el of commentElements) {
+      const depth = el.commentMeta?.depth ?? 0;
+      const node: CommentNode = { element: el, globalIndex: indexByEl.get(el)!, children: [] };
+      while (stack.length > depth) stack.pop();
+      if (stack.length === 0) {
+        roots.push(node);
+      } else {
+        stack[stack.length - 1].children.push(node);
+      }
+      stack.push(node);
+    }
+
+    const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
+      const { element: el, globalIndex, children } = node;
+      const isNarrated = el.startTime >= 0;
+      const meta = el.commentMeta;
+      const metaStr = buildCommentMetadata(meta, isLW, isSub);
+      return (
+        // Odd depths get the alternate shade, same rule as the Comments tab.
+        <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
+          <div
+            id={`ra-el-${globalIndex}`}
+            className="read-along-element"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Same rule as the body: a real link opens (no seek), an image link
+              // seeks (no open), everything else seeks.
+              const target = e.target as HTMLElement;
+              const anchor = target.closest('a');
+              const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+              if (anchor && !isImage) return;
+              if (isImage) e.preventDefault();
+              if (isNarrated) onSeekRef.current(el.startTime);
+            }}
+          >
+            <div className="comment-header">
+              <span className="comment-username">{meta?.username || 'Anonymous'}</span>
+              {meta?.date && (
+                <span className="comment-date">
+                  {' • '}
+                  {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
+                </span>
+              )}
+            </div>
+            {metaStr && (
+              <div className="comment-metadata">
+                <span className="comment-votes">{metaStr}</span>
+              </div>
+            )}
+            <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+          </div>
+          {children.length > 0 && (
+            <div className="comment-replies">
+              {children.map(child => renderCommentNode(child, nodeDepth + 1))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <>
+        {commentDivider && (
+          <div
+            id={`ra-el-${indexByEl.get(commentDivider)!}`}
+            className="comments-header read-along-element"
+            onClick={() => { if (commentDivider.startTime >= 0) onSeekRef.current(commentDivider.startTime); }}
+          >
+            <h3>Comments ({commentElements.length})</h3>
+          </div>
+        )}
+        <div className="comments-list">
+          {roots.map(node => renderCommentNode(node))}
+        </div>
+      </>
+    );
+  }, [readAlongParts, sanitizedElementHtml, content.url]);
+
+  // Apply the highlight imperatively. Runs after every render (at most two
+  // classList operations), which also self-heals after tab switches and after
+  // the memoized trees rebuild (fresh nodes render without the class).
+  const highlightedElRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const next = isLLMAlignment && activeTab === 'read-along' && activeElementIndex >= 0
+      ? document.getElementById(`ra-el-${activeElementIndex}`)
+      : null;
+    if (highlightedElRef.current && highlightedElRef.current !== next) {
+      highlightedElRef.current.classList.remove('ra-active');
+    }
+    if (next) next.classList.add('ra-active');
+    highlightedElRef.current = next;
+  });
+
   // Determine which tabs are available.
   // Articles/texts get an editable "Content" tab (current text) plus a read-only
   // "Read-along" tab (synced to the audio version) once audio/alignment exists, so the
@@ -958,21 +1125,10 @@ export function FullscreenPlayer({
   // Renders content EXACTLY like content tab + comments tab, with timestamps
   // --------------------------------------------------------------------------
   const renderLLMReadAlong = () => {
-    if (!parsedAlignment || !isLLMAlignment) return null;
-
-    const elements = parsedAlignment.elements as LLMAlignmentElement[];
-    const isLW = content.url ? content.url.includes('lesswrong.com') : false;
-    const isSub = content.url ? content.url.includes('substack.com') : false;
-
-    // Split elements into categories. Title and author/date meta render as timed
-    // elements in the header below (the TTS speaks them, so they highlight too).
-    const titleEl = elements.find(e => e.type === 'title');
-    const metaElements = elements.filter(e => e.type === 'meta');
-    const bodyElements = elements.filter(e =>
-      ['heading', 'paragraph', 'image', 'blockquote', 'tweet', 'list', 'code-block', 'llm-block'].includes(e.type)
-    );
-    const commentDivider = elements.find(e => e.type === 'comment-divider');
-    const commentElements = elements.filter(e => e.type === 'comment');
+    if (!readAlongParts) return null;
+    // Categorization, body, and comments all live in the memos above; only the
+    // small header (provenance + timed title/meta) renders per pass.
+    const { titleEl, metaElements, indexByEl } = readAlongParts;
 
     return (
       <div className="tab-content-display">
@@ -987,8 +1143,8 @@ export function FullscreenPlayer({
               {/* Title - timestamped, highlights while the TTS speaks it */}
               {titleEl && (
                 <div
-                  id={`ra-el-${elements.indexOf(titleEl)}`}
-                  className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
+                  id={`ra-el-${indexByEl.get(titleEl)!}`}
+                  className="read-along-element"
                   onClick={() => onSeek(titleEl.startTime)}
                 >
                   <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
@@ -1002,8 +1158,8 @@ export function FullscreenPlayer({
               {metaElements.map((el, i) => (
                 <div
                   key={`meta-${i}`}
-                  id={`ra-el-${elements.indexOf(el)}`}
-                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
+                  id={`ra-el-${indexByEl.get(el)!}`}
+                  className="read-along-element"
                   onClick={() => onSeek(el.startTime)}
                 >
                   <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
@@ -1015,125 +1171,14 @@ export function FullscreenPlayer({
 
         {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
         <div className="article-content">
-          {bodyElements.map((el, i) => {
-            const globalIndex = elements.indexOf(el);
-            const isActive = globalIndex === activeElementIndex;
-            return (
-              <div
-                key={`body-${i}`}
-                id={`ra-el-${globalIndex}`}
-                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                onClick={(e) => {
-                  // Read-along taps seek, with two exceptions so links stay usable:
-                  //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
-                  //    don't seek.
-                  //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
-                  //    don't open the picture.
-                  // Everything else (the plain text of the highlight) seeks.
-                  const target = e.target as HTMLElement;
-                  const anchor = target.closest('a');
-                  const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
-                  if (anchor && !isImage) return; // real link: open it, don't seek
-                  if (isImage) e.preventDefault(); // image link: seek, don't open the image
-                  onSeek(el.startTime);
-                }}
-              >
-                <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
-              </div>
-            );
-          })}
+          {readAlongBodyTree}
         </div>
 
         {/* Comments section: timestamped commentElements from the alignment */}
-        {commentElements.length > 0 && (
+        {readAlongCommentsTree && (
           <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
             <div className="read-along-comments-divider" />
-            {(() => {
-                interface CommentNode {
-                  element: LLMAlignmentElement;
-                  globalIndex: number;
-                  children: CommentNode[];
-                }
-                const roots: CommentNode[] = [];
-                const stack: CommentNode[] = [];
-                for (const el of commentElements) {
-                  const depth = el.commentMeta?.depth ?? 0;
-                  const node: CommentNode = { element: el, globalIndex: elements.indexOf(el), children: [] };
-                  while (stack.length > depth) stack.pop();
-                  if (stack.length === 0) {
-                    roots.push(node);
-                  } else {
-                    stack[stack.length - 1].children.push(node);
-                  }
-                  stack.push(node);
-                }
-
-                const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
-                  const { element: el, globalIndex, children } = node;
-                  const isNarrated = el.startTime >= 0;
-                  const isActive = isNarrated && globalIndex === activeElementIndex;
-                  const meta = el.commentMeta;
-                  const metaStr = buildCommentMetadata(meta, isLW, isSub);
-                  return (
-                    // Odd depths get the alternate shade, same rule as the Comments tab.
-                    <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
-                      <div
-                        id={`ra-el-${globalIndex}`}
-                        className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Same rule as the body: a real link opens (no seek), an image link
-                          // seeks (no open), everything else seeks.
-                          const target = e.target as HTMLElement;
-                          const anchor = target.closest('a');
-                          const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
-                          if (anchor && !isImage) return;
-                          if (isImage) e.preventDefault();
-                          if (isNarrated) onSeek(el.startTime);
-                        }}
-                      >
-                        <div className="comment-header">
-                          <span className="comment-username">{meta?.username || 'Anonymous'}</span>
-                          {meta?.date && (
-                            <span className="comment-date">
-                              {' \u2022 '}
-                              {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
-                            </span>
-                          )}
-                        </div>
-                        {metaStr && (
-                          <div className="comment-metadata">
-                            <span className="comment-votes">{metaStr}</span>
-                          </div>
-                        )}
-                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
-                      </div>
-                      {children.length > 0 && (
-                        <div className="comment-replies">
-                          {children.map(child => renderCommentNode(child, nodeDepth + 1))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                };
-
-                return (
-                  <>
-                    {commentDivider && (
-                      <div
-                        id={`ra-el-${elements.indexOf(commentDivider)}`}
-                        className={`comments-header read-along-element ${commentDivider.startTime >= 0 && elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
-                        onClick={() => { if (commentDivider.startTime >= 0) onSeek(commentDivider.startTime); }}
-                      >
-                        <h3>Comments ({commentElements.length})</h3>
-                      </div>
-                    )}
-                    <div className="comments-list">
-                      {roots.map(node => renderCommentNode(node))}
-                    </div>
-                  </>
-                );
-              })()}
+            {readAlongCommentsTree}
           </div>
         )}
       </div>
