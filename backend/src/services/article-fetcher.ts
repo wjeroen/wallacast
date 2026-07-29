@@ -118,17 +118,22 @@ function parseExtendedScore(score: any): { agree?: number; disagree?: number; ra
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
-  const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
+  // The post id appears as /posts/<id>/<slug> on normal links and as /s/<sequenceId>/p/<id>
+  // on sequence-navigation links (both Forum Magnum forums use both shapes; a sequence URL
+  // used to fail here, silently fall back to the standard scraper, and store a random
+  // comment as the article body).
+  const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/) || url.match(/\/p\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
-    throw new Error('Post ID extraction failed from URL; check the /posts/ID/slug format');
+    throw new Error('Post ID extraction failed from URL; expected /posts/<id>/<slug> or /s/<seq>/p/<id>');
   }
   const postId = idMatch[1];
   const baseUrl = isEAForum ? 'https://forum.effectivealtruism.org' : 'https://www.lesswrong.com';
   const apiEndpoint = `${baseUrl}/graphql`;
   // Keep the Referer on the same host as Origin/apiEndpoint. The stored link may be the
   // forum-bots mirror, but the GraphQL API lives on the main host, so send a main-host
-  // Referer to preserve the same-origin request shape the API expects.
-  const refererUrl = `${baseUrl}${idMatch[0]}`;
+  // Referer to preserve the same-origin request shape the API expects. Built from the
+  // canonical /posts/<id> form so sequence URLs get a plausible referer too.
+  const refererUrl = `${baseUrl}/posts/${postId}`;
 
   // Randomized wait between 1.5 and 4 seconds
   await sleep(1500 + Math.random() * 2500);

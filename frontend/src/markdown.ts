@@ -384,7 +384,7 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[]): strin
   const body = item.type === 'podcast_episode'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
-        item.transcript || '',
+        item.transcript ? `## Transcript\n\n${item.transcript.trim()}` : '',
       ].filter(part => part.trim()).map(part => part.trim()).join('\n\n')
     : item.html_content
       ? htmlToMarkdown(item.html_content)
