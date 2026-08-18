@@ -314,7 +314,10 @@ export function ContentCard({
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
-            <span className="badge summary"><MessageSquareText size={12} /> Summary</span>
+            <span className="badge summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
+              <MessageSquareText size={12} /> Summary
+              {item.summary_audio_url && <Volume2 size={11} />}
+            </span>
           )}
           {/* All types, not just podcasts: articles/texts get a Whisper transcript
               of their generated audio too (it powers the Transcript tab) */}
@@ -332,6 +335,11 @@ export function ContentCard({
         {item.summary_status === 'generating' && (
           <div className="generation-status generating">
             <span>Summarizing…</span>
+          </div>
+        )}
+        {item.summary_audio_status === 'generating' && (
+          <div className="generation-status generating">
+            <span>Generating summary audio…</span>
           </div>
         )}
         {item.summary_status === 'failed' && (

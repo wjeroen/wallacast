@@ -756,11 +756,6 @@ function App() {
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
 
-    if (eligibleItems.length === 0) {
-      alert('No items need a summary.');
-      return;
-    }
-
     const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
     const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
 
@@ -778,9 +773,17 @@ function App() {
         ).map(i => i.id)
       : [];
 
+    // Even with nothing left to summarize, the dialog must still open in its
+    // audio-only shape when existing summaries lack audio, otherwise that pass
+    // is unreachable forever after the first summary run.
+    if (eligibleItems.length === 0 && existingSummaryIds.length === 0) {
+      alert('No items need a summary.');
+      return;
+    }
+
     if (podcastIds.length > 0 || askAudio) {
       setBulkAudioChecked(true);
-      setBulkAudioExistingChecked(false);
+      setBulkAudioExistingChecked(true);
       setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
       return;
     }
@@ -1021,10 +1024,12 @@ function App() {
                   <> The other {w.readyIds.length} item{w.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
                 )}
               </p>
-            ) : (
+            ) : w.readyIds.length > 0 ? (
               <p>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</p>
+            ) : (
+              <p>All matching items already have summaries.</p>
             )}
-            {w.askAudio && (
+            {w.askAudio && (w.readyIds.length > 0 || w.podcastIds.length > 0) && (
               <label className="bulk-audio-checkbox">
                 <input
                   type="checkbox"
@@ -1071,12 +1076,13 @@ function App() {
               ) : (
                 <button
                   className="comment-warning-btn include"
+                  disabled={w.readyIds.length === 0 && !bulkAudioExistingChecked}
                   onClick={() => {
                     setBulkSummaryWarning(null);
                     startBulkSummaries(w.readyIds, [], audioOpts);
                   }}
                 >
-                  Generate summaries
+                  {w.readyIds.length > 0 ? 'Generate summaries' : 'Generate audio'}
                 </button>
               )}
               <button

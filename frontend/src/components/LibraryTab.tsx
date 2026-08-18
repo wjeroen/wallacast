@@ -463,10 +463,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       !item.summary_generated_at &&
       item.summary_status !== 'generating'
     );
-    if (eligible.length === 0) {
-      alert('No selected items are eligible (no summary yet).');
-      return;
-    }
     // Podcasts without a transcript need Whisper first, so ask via the modal instead
     // of silently spending transcription credits
     const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
@@ -485,9 +481,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         ).map(i => i.id)
       : [];
 
+    // Keep the dialog reachable in its audio-only shape when everything selected
+    // already has a summary but some still lack summary audio.
+    if (eligible.length === 0 && existingSummaryIds.length === 0) {
+      alert('No selected items are eligible (no summary yet).');
+      return;
+    }
+
     if (podcastIds.length > 0 || askAudio) {
       setBulkAudioChecked(true);
-      setBulkAudioExistingChecked(false);
+      setBulkAudioExistingChecked(true);
       setTranscriptWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
       return;
     }
@@ -995,14 +998,18 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
             <p>
               {w.podcastIds.length === 0 ? (
-                <>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</>
+                w.readyIds.length > 0 ? (
+                  <>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</>
+                ) : (
+                  <>All selected items already have summaries.</>
+                )
               ) : w.podcastIds.length === 1 && w.readyIds.length === 0 && !w.askAudio ? (
                 <>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</>
               ) : (
                 <><strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> in your selection {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.</>
               )}
             </p>
-            {w.askAudio && (
+            {w.askAudio && (w.readyIds.length > 0 || w.podcastIds.length > 0) && (
               <label className="bulk-audio-checkbox">
                 <input
                   type="checkbox"
@@ -1049,12 +1056,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               ) : (
                 <button
                   className="comment-warning-btn include"
+                  disabled={w.readyIds.length === 0 && !bulkAudioExistingChecked}
                   onClick={() => {
                     setTranscriptWarning(null);
                     runSummaryBatch(w.readyIds, [], audioOpts);
                   }}
                 >
-                  Generate summaries
+                  {w.readyIds.length > 0 ? 'Generate summaries' : 'Generate audio'}
                 </button>
               )}
               <button

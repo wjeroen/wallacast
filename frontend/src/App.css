@@ -1815,6 +1815,11 @@
   opacity: 0.8;
 }
 
+.comment-warning-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .feed-tab,
