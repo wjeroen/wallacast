@@ -100,6 +100,9 @@ interface FullscreenPlayerProps {
   playingVariant?: 'original' | 'summary' | null;
   preferSummaryAudio?: boolean;
   onTogglePreferSummaryAudio?: () => void;
+  // Per-item variant pick from the Summary tab banner (does not touch the setting).
+  // autoplay true = an explicit Play press; false = switch keeping play/pause state.
+  onSelectAudioVariant?: (variant: 'original' | 'summary', autoplay: boolean) => void;
   onMinimize: () => void;
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
@@ -381,6 +384,7 @@ export function FullscreenPlayer({
   playingVariant = null,
   preferSummaryAudio = false,
   onTogglePreferSummaryAudio,
+  onSelectAudioVariant,
   onMinimize,
   onClose,
   onTranscriptWordClick,
@@ -1616,8 +1620,42 @@ export function FullscreenPlayer({
         };
         const articleTweets = toParagraphs(content.summary);
         const commentTweets = toParagraphs(content.comment_summary);
+        // Top banner, only when summary audio exists: Play switches to the summary
+        // audio for THIS item (a temporary override, the global toggle is untouched);
+        // while the summary is playing it flips into a switch-back to the full audio.
+        const summaryAudioBanner = content.summary_audio_url && onSelectAudioVariant ? (
+          <div className="summary-audio-banner">
+            {playingVariant === 'summary' ? (
+              content.audio_url ? (
+                <>
+                  <span className="summary-audio-label"><Volume2 size={15} /> Playing summary audio</span>
+                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('original', false)}>
+                    Switch to full audio
+                  </button>
+                </>
+              ) : isPlaying ? (
+                <span className="summary-audio-label"><Volume2 size={15} /> Playing summary audio</span>
+              ) : (
+                <>
+                  <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
+                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                    <Play size={13} /> Play
+                  </button>
+                </>
+              )
+            ) : (
+              <>
+                <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
+                <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                  <Play size={13} /> Play
+                </button>
+              </>
+            )}
+          </div>
+        ) : null;
         return (
           <div className="tab-content-display">
+            {summaryAudioBanner}
             <div className="summary-thread">
               {articleTweets.map((tweet, i) => (
                 <p key={`a-${i}`} className="summary-tweet">{tweet}</p>

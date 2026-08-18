@@ -4476,6 +4476,55 @@ blockquote.twitter-tweet.tweet-quoted {
   color: #9a3412;
 }
 
+/* Summary tab: top banner shown only when summary audio exists. Play switches
+   to the summary audio for this item without touching the global preference. */
+.summary-audio-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  max-width: 640px;
+  margin-bottom: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+}
+
+.summary-audio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--t2);
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.summary-audio-label svg {
+  flex-shrink: 0;
+  color: var(--t3);
+}
+
+.summary-audio-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid #3b82f6;
+  border-radius: 999px;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.summary-audio-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
 /* Summary tab. Each paragraph reads like a tweet */
 .summary-thread {
   display: flex;

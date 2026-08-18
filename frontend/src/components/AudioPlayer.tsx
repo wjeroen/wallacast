@@ -3,7 +3,7 @@ import type { ContentItem } from '../types';
 import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
-import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasAnyAudio } from '../format';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasAnyAudio, type AudioVariant } from '../format';
 
 function getStoredSpeed(): number {
   try {
@@ -62,10 +62,21 @@ export function AudioPlayer({
   autoPlayToken = 0, onPlayQueueItem,
   preferSummaryAudio = false, onSetPreferSummaryAudio,
 }: AudioPlayerProps) {
+  // Per-item variant override (the Summary tab's Play / Switch-back banner): wins
+  // over the global mode for THIS item only, without touching the persisted setting.
+  // Keyed by item id so it naturally expires when the track changes, with no reset
+  // effect (which would briefly load the wrong src on item change).
+  const [overrideForId, setOverrideForId] = useState<{ id: number; variant: AudioVariant } | null>(null);
+
   // Which audio this item effectively plays under the current mode. 'summary' means
   // the whisper timestamps and read-along data (which belong to the ORIGINAL audio)
-  // must not drive any highlighting.
-  const effectiveVariant = content ? getEffectiveAudio(content, preferSummaryAudio) : null;
+  // must not drive any highlighting. The override only applies while its target
+  // audio actually exists (it could have been removed since).
+  const requestedOverride = overrideForId && content && overrideForId.id === content.id ? overrideForId.variant : null;
+  const effectiveVariant: AudioVariant | null =
+    requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
+    : requestedOverride === 'original' && content?.audio_url ? 'original'
+    : content ? getEffectiveAudio(content, preferSummaryAudio) : null;
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -663,6 +674,7 @@ export function AudioPlayer({
   // Flip the global "Prefer summary audio" mode. When the current item actually has
   // both audios, the swap happens live: save the outgoing variant's position first
   // (the src change would otherwise lose it) and remember to resume playback.
+  // Any per-item override is dropped so the toggle always visibly takes effect.
   const handleTogglePreferSummaryAudio = () => {
     if (!onSetPreferSummaryAudio) return;
     const audio = audioRef.current;
@@ -676,7 +688,35 @@ export function AudioPlayer({
         }).catch(() => {});
       }
     }
+    setOverrideForId(null);
     onSetPreferSummaryAudio(!preferSummaryAudio);
+  };
+
+  // Per-item variant selection from the Summary tab banner. `autoplay` true = an
+  // explicit Play press (start playback even if paused); false = a switch that
+  // keeps the current playing/paused state. Does NOT touch the global setting.
+  const handleSelectAudioVariant = (variant: AudioVariant, autoplay: boolean) => {
+    if (!content) return;
+    const audio = audioRef.current;
+    const targetExists = variant === 'summary' ? !!content.summary_audio_url : !!content.audio_url;
+    if (!targetExists) return;
+    if (variant === effectiveVariant) {
+      // Nothing to swap; an explicit Play press just plays.
+      if (autoplay && audio && audio.paused) {
+        userPausedRef.current = false;
+        appPlayRef.current = true;
+        audio.play().catch(() => { appPlayRef.current = false; });
+      }
+      return;
+    }
+    if (audio && pendingResumeSeekRef.current === 0) {
+      contentAPI.update(content.id, {
+        [positionFieldRef.current]: Math.floor(audio.currentTime),
+        last_played_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    resumePlayAfterVariantSwapRef.current = autoplay || !!(audio && !audio.paused);
+    setOverrideForId({ id: content.id, variant });
   };
 
   // ---------------------------------------------------------------------------
@@ -817,6 +857,7 @@ export function AudioPlayer({
           playingVariant={effectiveVariant}
           preferSummaryAudio={preferSummaryAudio}
           onTogglePreferSummaryAudio={handleTogglePreferSummaryAudio}
+          onSelectAudioVariant={handleSelectAudioVariant}
           onMinimize={handleMinimize}
           onClose={onClose}
           onTranscriptWordClick={handleTranscriptClick}
