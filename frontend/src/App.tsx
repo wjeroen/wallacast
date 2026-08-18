@@ -688,20 +688,27 @@ function App() {
     if (!confirmed) return;
 
     let started = 0;
+    let failedStarts = 0;
     for (const item of eligibleItems) {
       try {
         await contentAPI.generateAudio(item.id, false);
         started++;
         refreshItem(item.id);
       } catch (error) {
+        failedStarts++;
         console.error(`Failed to start audio generation for item ${item.id}:`, error);
       }
     }
 
-    if (started > 0) {
-      let summary = `Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`;
+    if (started > 0 || failedStarts > 0) {
+      let summary = started > 0
+        ? `Started audio generation for ${started} article${started !== 1 ? 's' : ''}.`
+        : 'Nothing was started.';
       if (skippedItems.length > 0) {
         summary += ` Skipped ${skippedItems.length} with ${COMMENT_THRESHOLD}+ comments.`;
+      }
+      if (failedStarts > 0) {
+        summary += ` ${failedStarts} item${failedStarts !== 1 ? 's' : ''} could not be started (server unreachable?). Run this again to retry them.`;
       }
       alert(summary);
     }
@@ -718,12 +725,14 @@ function App() {
   ) => {
     const podcastSet = new Set(podcastIds);
     let started = 0;
+    let failed = 0;
     for (const id of [...readyIds, ...podcastIds]) {
       try {
         await contentAPI.generateSummary(id, false, podcastSet.has(id), opts?.generateAudio);
         started++;
         refreshItem(id);
       } catch (error) {
+        failed++;
         console.error(`Failed to start summary generation for item ${id}:`, error);
       }
     }
@@ -734,14 +743,21 @@ function App() {
         audioStarted++;
         refreshItem(id);
       } catch (error) {
+        failed++;
         console.error(`Failed to start summary audio generation for item ${id}:`, error);
       }
     }
-    if (started > 0 || audioStarted > 0) {
+    // Failed STARTS must be reported loudly: a server restart mid-batch once made 84
+    // start requests fail with nothing but console errors, which read as items being
+    // silently skipped (the items stay idle, so no red error box appears either).
+    if (started > 0 || audioStarted > 0 || failed > 0) {
       const parts: string[] = [];
       if (started > 0) parts.push(`summary generation for ${started} item${started !== 1 ? 's' : ''}`);
       if (audioStarted > 0) parts.push(`summary audio for ${audioStarted} existing summar${audioStarted !== 1 ? 'ies' : 'y'}`);
-      alert(`Started ${parts.join(' and ')}.`);
+      const failNote = failed > 0
+        ? ` ${failed} item${failed !== 1 ? 's' : ''} could not be started (server unreachable?). Run this again to retry them.`
+        : '';
+      alert(`${parts.length > 0 ? `Started ${parts.join(' and ')}.` : 'Nothing was started.'}${failNote}`);
     }
   };
 
