@@ -769,6 +769,74 @@ export function FullscreenPlayer({
     highlightedElRef.current = next;
   });
 
+  // --- Podcast transcript performance (stage 2, 2026-08-18) -----------------
+  // Same recipe as the read-along memos above, applied to the word-by-word
+  // podcast transcript: the ~18k word spans of a 2h episode used to be rebuilt
+  // by React on every playback tick just to color one newly spoken word.
+  // The tree below renders once per transcript with no read state and no
+  // per-word handlers; an imperative effect paints the .read class on only the
+  // words that changed since the previous tick.
+  const onTranscriptWordClickRef = useRef(onTranscriptWordClick);
+  onTranscriptWordClickRef.current = onTranscriptWordClick;
+
+  const transcriptDisplayWords = useMemo(() => {
+    if (content.type !== 'podcast_episode') return null;
+    if (transcriptWords.length > 0) {
+      return transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''));
+    }
+    const fallbackText = cleanHtml(content.transcript || content.content || '');
+    return fallbackText.split(/\s+/).filter(w => w.length > 0);
+  }, [content.type, transcriptWords, content.transcript, content.content]);
+
+  const transcriptTree = useMemo(() => {
+    if (!transcriptDisplayWords || transcriptDisplayWords.length === 0) return null;
+    // One delegated click handler instead of 18k closures
+    const handleWordClick = (e: React.MouseEvent<HTMLParagraphElement>) => {
+      const span = (e.target as HTMLElement).closest('span.transcript-word');
+      if (!span) return;
+      const index = Number(span.id.slice('word-'.length));
+      if (Number.isFinite(index)) onTranscriptWordClickRef.current(index);
+    };
+    return (
+      <p className="read-along-text" onClick={handleWordClick}>
+        {transcriptDisplayWords.map((word, index) => (
+          <span key={index} id={`word-${index}`} className="transcript-word">
+            {word}{' '}
+          </span>
+        ))}
+      </p>
+    );
+  }, [transcriptDisplayWords]);
+
+  // Paint the read state imperatively. Runs after every render; when the active
+  // word hasn't moved it does a single probe and no DOM writes. Fresh spans
+  // (tab switch, item change) render unmarked, which the probe detects, and the
+  // whole range is then re-applied from scratch.
+  const appliedReadUpToRef = useRef(-1);
+  useEffect(() => {
+    const isWordView = activeTab === 'read-along' && !isLLMAlignment && content.type === 'podcast_episode';
+    if (!isWordView) {
+      appliedReadUpToRef.current = -1;
+      return;
+    }
+    const target = activeWordIndex;
+    let applied = appliedReadUpToRef.current;
+    if (applied >= 0) {
+      const probe = document.getElementById(`word-${applied}`);
+      if (!probe || !probe.classList.contains('read')) applied = -1;
+    }
+    if (target > applied) {
+      for (let i = applied + 1; i <= target; i++) {
+        document.getElementById(`word-${i}`)?.classList.add('read');
+      }
+    } else if (target < applied) {
+      for (let i = target + 1; i <= applied; i++) {
+        document.getElementById(`word-${i}`)?.classList.remove('read');
+      }
+    }
+    appliedReadUpToRef.current = target;
+  });
+
   // Determine which tabs are available.
   // Articles/texts get an editable "Content" tab (current text) plus a read-only
   // "Read-along" tab (synced to the audio version) once audio/alignment exists, so the
@@ -887,12 +955,26 @@ export function FullscreenPlayer({
     }
   }, [activeTab]);
 
-  // Auto-scroll as audio plays (only when autoScroll is on)
+  // Auto-scroll as audio plays (only when autoScroll is on). Aligned articles
+  // scroll every tick (progressive intra-element scrolling needs currentTime);
+  // the podcast word view only scrolls when the active word changes, since
+  // restarting the smooth scroll 4x/s against an 18k-span paragraph forces a
+  // layout flush per tick and re-launches the animation before it can finish.
+  const lastAutoScrolledWordRef = useRef(-1);
   useEffect(() => {
-    if (activeTab === 'read-along' && autoScroll) {
+    lastAutoScrolledWordRef.current = -1;
+  }, [content.id]);
+  useEffect(() => {
+    if (activeTab !== 'read-along' || !autoScroll) return;
+    if (isLLMAlignment) {
+      scrollToActive();
+      return;
+    }
+    if (activeWordIndex >= 0 && activeWordIndex !== lastAutoScrolledWordRef.current) {
+      lastAutoScrolledWordRef.current = activeWordIndex;
       scrollToActive();
     }
-  }, [activeTab, currentTime, autoScroll, scrollToActive]);
+  }, [activeTab, currentTime, autoScroll, scrollToActive, isLLMAlignment, activeWordIndex]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
@@ -1352,18 +1434,13 @@ export function FullscreenPlayer({
         const hasAudio = !!content.audio_url;
         const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
 
-        const hasWhisperWords = transcriptWords.length > 0;
-        const fallbackTranscript = content.transcript || content.content || '';
-        const fallbackText = cleanHtml(fallbackTranscript);
-        const displayWords = hasWhisperWords
-          ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
-          : fallbackText.split(/\s+/).filter(w => w.length > 0);
-
         // For articles/texts: if we have LLM alignment, use it (with read-along features).
         // If not, show the raw content + comments (like the old Content tab) without timestamps.
         // For podcasts: show transcript words or status messages.
         if (isPodcast) {
-          // Podcast: show word-by-word transcript or status messages
+          // Podcast: show word-by-word transcript or status messages.
+          // The word spans come from the memoized transcriptTree (built once per
+          // transcript); read-state and clicks are handled imperatively above.
           let podcastMessage: string | null = null;
           if (!hasAudio && isGenerating) {
             podcastMessage = 'Audio is being generated...';
@@ -1377,23 +1454,8 @@ export function FullscreenPlayer({
             <div className="tab-read-along-display">
               {podcastMessage ? (
                 <p className="no-content">{podcastMessage}</p>
-              ) : displayWords.length > 0 ? (
-                <p className="read-along-text">
-                  {displayWords.map((word, index) => {
-                    const isRead = index <= activeWordIndex;
-                    return (
-                      <span
-                        key={index}
-                        id={`word-${index}`}
-                        className={`transcript-word ${isRead ? 'read' : ''}`}
-                        style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
-                        onClick={() => onTranscriptWordClick(index)}
-                      >
-                        {word}{' '}
-                      </span>
-                    );
-                  })}
-                </p>
+              ) : transcriptTree ? (
+                transcriptTree
               ) : (
                 <p className="no-content">No transcript available</p>
               )}

@@ -1548,6 +1548,12 @@
   color: #60a5fa;
 }
 
+/* Read state is applied imperatively (classList) during playback, so the
+   memoized span tree never re-renders; color must live here, not inline. */
+.transcript-word.read {
+  color: #60a5fa;
+}
+
 /* Comments Section */
 .comments-header {
   display: flex;

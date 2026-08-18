@@ -633,26 +633,31 @@ export function AudioPlayer({
   // SYNC LOGIC (The Fix: NO Normalization)
   // ---------------------------------------------------------------------------
 
+  // Numeric start times, converted once per transcript instead of once per word
+  // per playback tick (a 2h podcast has ~18k words and this memo re-runs ~4x/s).
+  const transcriptWordStarts = useMemo(
+    () => parsedTranscriptWords.map((w: { start: number | string }) => Number(w.start)),
+    [parsedTranscriptWords]
+  );
+
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
 
     // Method 1: Whisper Timestamps (TRUSTED)
     // We ignore the browser's duration estimate completely for sync.
-    if (parsedTranscriptWords.length > 0) {
+    // Binary search for the last word whose start <= currentTime, same answer as
+    // a linear scan since Whisper timestamps are non-decreasing.
+    if (transcriptWordStarts.length > 0) {
+      let lo = 0;
+      let hi = transcriptWordStarts.length - 1;
       let idx = -1;
-      
-      // Optimization: Start search from the last known index if available (omitted for simplicity)
-      // Binary search could be better, but linear is fine for <10k words
-      for (let i = 0; i < parsedTranscriptWords.length; i++) {
-        const wordStart = Number(parsedTranscriptWords[i].start);
-        
-        // Strict comparison against RAW timestamps
-        if (wordStart <= currentTime) {
-          idx = i;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (transcriptWordStarts[mid] <= currentTime) {
+          idx = mid;
+          lo = mid + 1;
         } else {
-          // As soon as we find a word in the future, we stop.
-          // The current 'idx' is the last word that passed the check.
-          break;
+          hi = mid - 1;
         }
       }
       return idx;
@@ -682,7 +687,7 @@ export function AudioPlayer({
     }
 
     return -1;
-  }, [currentTime, content, duration, parsedTranscriptWords, parsedTTSChunks]);
+  }, [currentTime, content, duration, transcriptWordStarts, parsedTTSChunks]);
 
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
