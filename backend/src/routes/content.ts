@@ -13,6 +13,7 @@ import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
+import { summaryAudioKey, generateSummaryAudioForContent } from '../services/summary-audio.js';
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
@@ -43,7 +44,7 @@ router.get('/', async (req, res) => {
 
     // Exclude large columns (html_content, comments, transcript) for performance
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -103,7 +104,7 @@ router.post('/status', async (req, res) => {
       return res.json([]);
     }
     const result = await query(
-      `SELECT id, generation_status, generation_progress, generation_error, current_operation, summary_status
+      `SELECT id, generation_status, generation_progress, generation_error, current_operation, summary_status, summary_audio_status
          FROM content_items
         WHERE user_id = $1 AND id = ANY($2::int[])`,
       [req.user!.userId, safeIds]
@@ -220,13 +221,19 @@ router.post('/bulk', async (req, res) => {
     }
 
     if (action === 'remove_summary') {
+      // Summary audio narrates the summary, so it goes with it (columns + disk file).
       const r = await query(
         `UPDATE content_items
          SET summary = NULL, comment_summary = NULL, summary_status = 'idle',
-             summary_generated_at = NULL, updated_at = NOW()
-         WHERE user_id = $1 AND id = ANY($2::int[])`,
+             summary_generated_at = NULL,
+             summary_audio_url = NULL, summary_audio_duration = NULL, summary_audio_status = 'idle',
+             summary_audio_error = NULL, summary_audio_generated_at = NULL, summary_playback_position = 0,
+             updated_at = NOW()
+         WHERE user_id = $1 AND id = ANY($2::int[])
+         RETURNING id`,
         [userId, ids]
       );
+      await Promise.allSettled(r.rows.map((row) => deleteAudioFile(summaryAudioKey(row.id))));
       affected = r.rowCount ?? 0;
     }
 
@@ -246,7 +253,10 @@ router.post('/bulk', async (req, res) => {
       // Delete each item's on-disk audio file too, otherwise the mp3s orphan on the /data volume.
       // Run the unlinks in parallel instead of one-at-a-time. allSettled so a single failed
       // deletion never aborts the others or fails the request (deleteAudioFile is best-effort).
-      await Promise.allSettled(r.rows.map((row) => deleteAudioFile(row.id)));
+      await Promise.allSettled(r.rows.flatMap((row) => [
+        deleteAudioFile(row.id),
+        deleteAudioFile(summaryAudioKey(row.id)),
+      ]));
       if (wb.rows.length > 0) {
         const { deleteFromWallabag } = await import('../services/wallabag-sync.js');
         for (const row of wb.rows) {
@@ -269,7 +279,7 @@ router.post('/bulk', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, COALESCE(comment_count_total, 0) AS comment_count, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -617,6 +627,7 @@ router.patch('/:id', async (req, res) => {
       'is_starred',
       'is_archived',
       'playback_position',
+      'summary_playback_position',
       'playback_speed',
       'last_played_at',
       'title',
@@ -678,12 +689,29 @@ router.patch('/:id', async (req, res) => {
     }
 
     // Remove summary (mirrors audio removal): frontend sends { summary: null } to clear it.
+    // Summary audio narrates the summary, so it is removed along with it. Ownership is
+    // checked BEFORE the file unlink: the main UPDATE below is user-scoped, but a file
+    // deletion issued here would otherwise fire even for someone else's item id.
     if (updates.summary === null) {
-      updates.comment_summary = null;
-      updates.summary_status = 'idle';
-      updates.summary_generated_at = null;
-      updates.summary_error = null;
-      allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at', 'summary_error');
+      const owned = await query(
+        'SELECT id FROM content_items WHERE id = $1 AND user_id = $2',
+        [id, req.user!.userId]
+      );
+      if (owned.rows.length > 0) {
+        updates.comment_summary = null;
+        updates.summary_status = 'idle';
+        updates.summary_generated_at = null;
+        updates.summary_error = null;
+        updates.summary_audio_url = null;
+        updates.summary_audio_duration = null;
+        updates.summary_audio_status = 'idle';
+        updates.summary_audio_error = null;
+        updates.summary_audio_generated_at = null;
+        updates.summary_playback_position = 0;
+        allowedFields.push('summary', 'comment_summary', 'summary_status', 'summary_generated_at', 'summary_error',
+          'summary_audio_url', 'summary_audio_duration', 'summary_audio_status', 'summary_audio_error', 'summary_audio_generated_at');
+        await deleteAudioFile(summaryAudioKey(id));
+      }
     }
 
     // Dismiss a failed-generation / failed-summary error from the UI: reset the failed status
@@ -701,6 +729,12 @@ router.patch('/:id', async (req, res) => {
       updates.summary_error = null;
       allowedFields.push('summary_status', 'summary_error');
       delete updates.dismiss_summary_error;
+    }
+    if (updates.dismiss_summary_audio_error === true) {
+      updates.summary_audio_status = 'idle';
+      updates.summary_audio_error = null;
+      allowedFields.push('summary_audio_status', 'summary_audio_error');
+      delete updates.dismiss_summary_audio_error;
     }
 
     // Set in the regenerate_transcript branch, STARTED only after the route's main
@@ -897,7 +931,7 @@ router.patch('/:id', async (req, res) => {
     const values = [];
     let paramCount = 1;
 
-    const playbackOnlyFields = ['playback_position', 'playback_speed', 'last_played_at'];
+    const playbackOnlyFields = ['playback_position', 'summary_playback_position', 'playback_speed', 'last_played_at'];
     const updatingContentFields = Object.keys(updates).some(
       key => allowedFields.includes(key) && !playbackOnlyFields.includes(key)
     );
@@ -931,8 +965,8 @@ router.patch('/:id', async (req, res) => {
     // during playback (saves every 10s). For playback-only updates, return minimal data.
     // For content updates, return the same columns as the list endpoint.
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error'
-      : 'RETURNING id, playback_position, playback_speed, last_played_at';
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position'
+      : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
     const result = await query(sql, values);
@@ -980,6 +1014,7 @@ router.delete('/:id', async (req, res) => {
     );
 
     await deleteAudioFile(req.params.id); // remove the on-disk audio file, if any
+    await deleteAudioFile(summaryAudioKey(req.params.id)); // and the summary audio file
 
     res.json({ message: 'Content deleted successfully' });
   } catch (error) {
@@ -1005,7 +1040,9 @@ router.get('/:id/export', async (req, res) => {
               COALESCE(comment_count_total, 0) AS comment_count,
               content_source, content_fetched_at, audio_generated_at,
               images_processed, image_alt_text_data,
-              summary, comment_summary, summary_status, summary_generated_at,
+              summary, comment_summary, summary_status, summary_generated_at, summary_error,
+              summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error,
+              summary_audio_generated_at, summary_playback_position,
               created_at, updated_at, user_id
        FROM content_items WHERE id = $1 AND user_id = $2`,
       [id, req.user!.userId]
@@ -1379,6 +1416,9 @@ router.post('/:id/generate-summary', async (req, res) => {
   try {
     const { id } = req.params;
     const generateTranscript = req.body?.generate_transcript === true;
+    // Optional explicit answer from the bulk dialogs: true/false override the
+    // auto_generate_summary_audio setting, absent (undefined) follows it.
+    const generateAudio = typeof req.body?.generate_audio === 'boolean' ? req.body.generate_audio : undefined;
 
     const contentResult = await query(
       'SELECT id, type, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
@@ -1423,7 +1463,7 @@ router.post('/:id/generate-summary', async (req, res) => {
     );
 
     const runSummary = () =>
-      generateSummaryForContent(parseInt(id))
+      generateSummaryForContent(parseInt(id), { generateAudio })
         .then(() => console.log(`Summary generation finished for ${id}`))
         .catch(async (error) => {
           console.error('Background summary generation error:', error);
@@ -1471,6 +1511,57 @@ router.post('/:id/generate-summary', async (req, res) => {
   } catch (error) {
     console.error('Error starting summary generation:', error);
     res.status(500).json({ error: 'Failed to start summary generation' });
+  }
+});
+
+// Generate (or regenerate) TTS audio of the item's summary (comment summary included).
+// Requires an existing summary. Runs on its own summary_audio_status column, so it can
+// overlap main audio generation and summary text generation. No transcription and no
+// alignment are chained (the summary tab has no read-along by design).
+router.post('/:id/generate-summary-audio', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contentResult = await query(
+      'SELECT id, summary, summary_audio_status FROM content_items WHERE id = $1 AND user_id = $2',
+      [id, req.user!.userId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content not found' });
+    }
+
+    const contentItem = contentResult.rows[0];
+
+    if (!(contentItem.summary || '').trim()) {
+      return res.status(400).json({
+        error: 'This item has no summary yet. Generate a summary first.',
+        code: 'no_summary',
+      });
+    }
+
+    if (contentItem.summary_audio_status === 'generating') {
+      return res.status(409).json({
+        error: 'Summary audio generation already in progress',
+        summary_audio_status: 'generating',
+      });
+    }
+
+    // Set the status before responding so the frontend's next status poll sees it
+    // even if the background job has not started yet.
+    await query(
+      'UPDATE content_items SET summary_audio_status = $1, summary_audio_error = NULL WHERE id = $2',
+      ['generating', id]
+    );
+
+    generateSummaryAudioForContent(parseInt(id))
+      .then(() => console.log(`Summary audio generation finished for ${id}`))
+      .catch((error) => console.error('Background summary audio generation error:', error));
+
+    res.json({ message: 'Summary audio generation started', summary_audio_status: 'generating' });
+  } catch (error) {
+    console.error('Error starting summary audio generation:', error);
+    res.status(500).json({ error: 'Failed to start summary audio generation' });
   }
 });
 

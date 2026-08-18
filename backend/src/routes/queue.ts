@@ -19,7 +19,9 @@ router.get('/', async (req, res) => {
               c.last_played_at, c.created_at, c.updated_at, c.generation_status, c.generation_progress,
               c.generation_error, c.current_operation, c.tts_chunks, c.transcript_words, c.karma,
               c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
-              c.summary_error, COALESCE(c.comment_count_total, 0) AS comment_count
+              c.summary_error, c.summary_audio_url, c.summary_audio_duration, c.summary_audio_status,
+              c.summary_audio_generated_at, c.summary_playback_position,
+              COALESCE(c.comment_count_total, 0) AS comment_count
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id AND c.user_id = q.user_id
        WHERE q.user_id = $1

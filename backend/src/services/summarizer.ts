@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getChatClientForJob, getUserSetting, chatCreateWithRetry, chatInputCharCap } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
+import { clearSummaryAudio, generateSummaryAudioForContent } from './summary-audio.js';
 
 /**
  * Article + comment summaries ("Twitter thread" style).
@@ -247,12 +248,16 @@ const ARTICLE_CONTEXT_CAP = 50000;      // chars of article context for the comm
 /**
  * Generate (or regenerate) the article + comment summaries for a content item.
  * Sets `summary_status` to 'completed' or 'failed' when done. Safe to fire-and-forget.
+ * options.generateAudio: explicit true/false decides whether summary audio is chained
+ * afterwards (bulk dialogs pass the user's answer); undefined follows the
+ * auto_generate_summary_audio setting. Regeneration always clears existing summary
+ * audio first, since it would keep narrating the replaced text.
  */
-export async function generateSummaryForContent(contentId: number): Promise<void> {
+export async function generateSummaryForContent(contentId: number, options: { generateAudio?: boolean } = {}): Promise<void> {
   console.log(`[Summary] ===== Generating summary for content ${contentId} =====`);
   try {
     const result = await query(
-      'SELECT id, type, title, author, description, html_content, content, comments, transcript, podcast_show_name, user_id FROM content_items WHERE id = $1',
+      'SELECT id, type, title, author, description, html_content, content, comments, transcript, podcast_show_name, user_id, summary_audio_url FROM content_items WHERE id = $1',
       [contentId]
     );
     if (result.rows.length === 0) {
@@ -372,6 +377,23 @@ export async function generateSummaryForContent(contentId: number): Promise<void
       [summary, commentSummary, contentId]
     );
     console.log(`[Summary] ===== Done for content ${contentId} (article + ${commentSummary ? 'comment' : 'no comment'} summary) =====`);
+
+    // Existing summary audio narrates the text this run just replaced, so it goes.
+    if (item.summary_audio_url) {
+      await clearSummaryAudio(contentId).catch((e) =>
+        console.warn(`[Summary] Failed to clear stale summary audio for ${contentId}:`, e?.message || e));
+    }
+
+    // Chain summary-audio TTS: an explicit answer from a bulk dialog wins, otherwise
+    // the auto_generate_summary_audio setting decides. Fire-and-forget, it has its
+    // own summary_audio_status/error columns.
+    const wantAudio = options.generateAudio !== undefined
+      ? options.generateAudio
+      : (await getUserSetting(userId, 'auto_generate_summary_audio')) === 'true';
+    if (wantAudio && summary) {
+      generateSummaryAudioForContent(contentId).catch((e) =>
+        console.error(`[Summary] Chained summary-audio generation failed for ${contentId}:`, e?.message || e));
+    }
   } catch (error: any) {
     console.error(`[Summary] Failed for content ${contentId}:`, error?.message || error);
     const errMsg = (error?.message || 'Summary generation failed').toString().slice(0, 500);

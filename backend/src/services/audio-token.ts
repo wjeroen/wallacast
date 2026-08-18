@@ -29,14 +29,21 @@ export function verifyAudioToken(id: number, token: string): boolean {
 // the frontend's existing `content.audio_url` playback keeps working with NO frontend change.
 // The DB always stores a token-LESS audio_url; the token is added here at serialization time.
 // Podcasts (external CDN audio_url) and items without our endpoint URL are returned unchanged.
-export function withAudioToken<T extends { id: number; type?: string; audio_url?: string | null }>(item: T): T {
+// summary_audio_url is decorated for ALL types: unlike podcast episode audio (public CDN),
+// summary audio is always OUR generated TTS of the user's summary, so it is always private.
+export function withAudioToken<T extends { id: number; type?: string; audio_url?: string | null; summary_audio_url?: string | null }>(item: T): T {
+  let result = item;
   if (
     (item.type === 'article' || item.type === 'text') &&
     item.audio_url &&
     item.audio_url.includes('/api/content/')
   ) {
     const sep = item.audio_url.includes('?') ? '&' : '?';
-    return { ...item, audio_url: `${item.audio_url}${sep}t=${audioToken(item.id)}` };
+    result = { ...result, audio_url: `${item.audio_url}${sep}t=${audioToken(item.id)}` };
   }
-  return item;
+  if (item.summary_audio_url && item.summary_audio_url.includes('/api/content/')) {
+    const sep = item.summary_audio_url.includes('?') ? '&' : '?';
+    result = { ...result, summary_audio_url: `${item.summary_audio_url}${sep}t=${audioToken(item.id)}` };
+  }
+  return result;
 }

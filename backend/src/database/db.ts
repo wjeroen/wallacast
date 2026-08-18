@@ -255,6 +255,11 @@ export async function initializeDatabase() {
     const commentsInAudioMigration = await fs.readFile(commentsInAudioMigrationPath, 'utf-8');
     await client.query(commentsInAudioMigration);
 
+    // Run migration to add summary-audio columns (TTS of the summary as a second audio)
+    const summaryAudioMigrationPath = path.join(__dirname, 'migrations', '026_add_summary_audio.sql');
+    const summaryAudioMigration = await fs.readFile(summaryAudioMigrationPath, 'utf-8');
+    await client.query(summaryAudioMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
@@ -290,6 +295,22 @@ export async function initializeDatabase() {
       `);
       if (summaryResetResult.rowCount && summaryResetResult.rowCount > 0) {
         console.log(`Reset ${summaryResetResult.rowCount} stuck summary task(s) to failed`);
+      }
+    } catch (e) {
+      // Column might not exist yet on a very old/odd schema, safe to skip
+    }
+
+    // Reset any stuck summary-audio statuses (server restart during summary-audio TTS).
+    // Same rationale and same column-missing guard as the summary reset above.
+    try {
+      const summaryAudioResetResult = await client.query(`
+        UPDATE content_items
+        SET summary_audio_status = 'failed',
+            summary_audio_error = 'Server restarted during summary audio generation'
+        WHERE summary_audio_status = 'generating'
+      `);
+      if (summaryAudioResetResult.rowCount && summaryAudioResetResult.rowCount > 0) {
+        console.log(`Reset ${summaryAudioResetResult.rowCount} stuck summary-audio task(s) to failed`);
       }
     } catch (e) {
       // Column might not exist yet on a very old/odd schema, safe to skip

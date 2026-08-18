@@ -49,6 +49,8 @@ const VALID_SETTING_KEYS = [
   'auto_transcribe_podcasts',
   'auto_generate_audio_for_articles',
   'auto_generate_summary',      // Auto-generate a summary when an article/text is added
+  'auto_generate_summary_audio', // Chain TTS audio of the summary after every summary generation (default: false)
+  'prefer_summary_audio',       // Player mode: play summary audio over the original when both exist (default: false)
   'summarize_comments',         // Also generate a summary of the comment discussion (default: true)
   'summary_tiers',              // JSON: sorted list of { maxChars, maxTweets } tiers (Infinity stored as null)
   'summary_max_words',          // Max words per summary paragraph ("tweet"); default 40
