@@ -391,6 +391,13 @@ export async function generateSummaryForContent(contentId: number, options: { ge
       ? options.generateAudio
       : (await getUserSetting(userId, 'auto_generate_summary_audio')) === 'true';
     if (wantAudio && summary) {
+      // Mark 'generating' BEFORE firing, so a frontend poll that sees the summary
+      // completed in this instant already knows audio work is coming (otherwise it
+      // would stop polling and miss the chained job entirely).
+      await query(
+        `UPDATE content_items SET summary_audio_status = 'generating', summary_audio_error = NULL WHERE id = $1`,
+        [contentId]
+      ).catch(() => { /* the job sets it again anyway */ });
       generateSummaryAudioForContent(contentId).catch((e) =>
         console.error(`[Summary] Chained summary-audio generation failed for ${contentId}:`, e?.message || e));
     }

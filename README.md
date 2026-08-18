@@ -24,6 +24,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
 - **Read-Along**: Every audio item gets a synced read-along view with per-paragraph highlighting and auto-scroll
+- **Summaries → Audio**: Twitter-thread style summaries (articles and podcast episodes) can get their own short audio; a "Prefer summary audio" toggle in the player's playback options plays the summary instead of the full audio when both exist
 
 ## Tech Stack
 

@@ -11,7 +11,7 @@ export const ONBOARDING_HTML = `
 <p>Wallacast is a read-it-later app that turns your reading list into a podcast. You save an article, Wallacast fetches the text, an AI rewrites it into a script that sounds natural when spoken, a text-to-speech voice reads it aloud, and the app highlights each paragraph as it is spoken. You can listen while walking or doing dishes, and glance at your phone whenever you want to see where you are in the text.</p>
 
 <h2>How to use this demo</h2>
-<p>This demo library has three items. This guide is a text item. Next to it there is a real article from the EA Forum, including the community's comments, and a real episode of the 80,000 Hours Podcast with a full transcript. Open any of them, press play, and watch the text follow the audio. The Summary tab shows an AI-written summary in short, tweet-style paragraphs.</p>
+<p>This demo library has three items. This guide is a text item. Next to it there is a real article from the EA Forum, including the community's comments, and a real episode of the 80,000 Hours Podcast with a full transcript. Open any of them, press play, and watch the text follow the audio. The Summary tab shows an AI-written summary in short, tweet-style paragraphs. Summaries can also get their own short audio version, and a "Prefer summary audio" toggle in the player's playback options plays that instead of the full audio, handy for triaging a long backlog by ear.</p>
 <p>The demo is read-only. Buttons that would change or generate something will tell you so when you press them. In your own account they all work.</p>
 
 <h2>What was generated, and by what</h2>

@@ -111,6 +111,30 @@ export function toTweets(text: string): string[] {
   return parts;
 }
 
+// ---- Audio variant selection (summary audio) ----------------------------------
+// One shared rule for "which audio does this item play": the "Prefer summary audio"
+// mode only matters when BOTH audios exist; with a single audio, that one plays
+// regardless of the mode. Used by the player (src selection), the play flow in
+// App.tsx, and the queue's playability checks, so they can never disagree.
+
+export type AudioVariant = 'original' | 'summary';
+
+export function hasAnyAudio(item: { audio_url?: string | null; summary_audio_url?: string | null }): boolean {
+  return !!item.audio_url || !!item.summary_audio_url;
+}
+
+export function getEffectiveAudio(
+  item: { audio_url?: string | null; summary_audio_url?: string | null },
+  preferSummaryAudio: boolean
+): AudioVariant | null {
+  const hasOriginal = !!item.audio_url;
+  const hasSummary = !!item.summary_audio_url;
+  if (hasOriginal && hasSummary) return preferSummaryAudio ? 'summary' : 'original';
+  if (hasSummary) return 'summary';
+  if (hasOriginal) return 'original';
+  return null;
+}
+
 // NOTE: htmlToMarkdown moved to ./markdown.ts (now turndown-based, with full inline
 // formatting, images, links, tables, and LLM-block/tweet callouts) and is paired
 // there with markdownToHtml for the editor. Import it from '../markdown'.

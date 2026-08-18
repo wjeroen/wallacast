@@ -5,7 +5,8 @@ import {
   RotateCcw,
   RotateCw,
   Gauge,
-  Clock,
+  Check,
+  SlidersHorizontal,
   Type,
   Sun,
   Moon,
@@ -47,7 +48,7 @@ import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
-import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
+import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
@@ -90,7 +91,12 @@ interface FullscreenPlayerProps {
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
   onToggleSpeed: () => void;
-  onToggleSleepTimer: () => void;
+  onSetSleepTimer: (minutes: number | null) => void;
+  // Which audio the player is effectively playing ('summary' disables all
+  // read-along highlighting/seeking, whose timestamps belong to the original).
+  playingVariant?: 'original' | 'summary' | null;
+  preferSummaryAudio?: boolean;
+  onTogglePreferSummaryAudio?: () => void;
   onMinimize: () => void;
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
@@ -99,6 +105,7 @@ interface FullscreenPlayerProps {
   onRemoveAudio?: () => void;
   onGenerateSummary?: (regenerate: boolean) => void;
   onRemoveSummary?: () => void;
+  onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
@@ -363,7 +370,10 @@ export function FullscreenPlayer({
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
-  onToggleSleepTimer,
+  onSetSleepTimer,
+  playingVariant = null,
+  preferSummaryAudio = false,
+  onTogglePreferSummaryAudio,
   onMinimize,
   onClose,
   onTranscriptWordClick,
@@ -372,6 +382,7 @@ export function FullscreenPlayer({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onGenerateSummaryAudio,
   onRegenerateTranscript,
   onContentUpdated,
   themeMode,
@@ -425,6 +436,9 @@ export function FullscreenPlayer({
   const [fontScale, setFontScale] = useState<number>(getStoredFontScale);
   const [showDisplayPanel, setShowDisplayPanel] = useState(false);
   const displayPanelRef = useRef<HTMLDivElement>(null);
+  // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
+  const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
+  const playbackPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
   // Delayed-archive state (player-only): pending + deferred both render as Undo
@@ -480,6 +494,18 @@ export function FullscreenPlayer({
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showDisplayPanel]);
+
+  // Close playback-options panel when clicking outside (same pattern as above)
+  useEffect(() => {
+    if (!showPlaybackPanel) return;
+    function handleClick(e: MouseEvent) {
+      if (playbackPanelRef.current && !playbackPanelRef.current.contains(e.target as Node)) {
+        setShowPlaybackPanel(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showPlaybackPanel]);
 
   // Sync font scale from backend on mount (cross-device persistence)
   useEffect(() => {
@@ -579,14 +605,21 @@ export function FullscreenPlayer({
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
 
+  // Everything read-along describes the ORIGINAL audio. While the summary audio
+  // plays, its clock means nothing to those timestamps, so highlighting, the
+  // timeline comments marker, and click-to-seek are all disabled.
+  const playingSummaryAudio = playingVariant === 'summary';
+
   // Calculate marker position as percentage
   const commentsMarkerPosition = useMemo(() => {
+    if (playingSummaryAudio) return null;
     if (!commentsStartTime || !duration || duration === 0) return null;
     return (commentsStartTime / duration) * 100;
-  }, [commentsStartTime, duration]);
+  }, [commentsStartTime, duration, playingSummaryAudio]);
 
   // Find active element index for LLM alignment
   const activeElementIndex = useMemo(() => {
+    if (playingSummaryAudio) return -1;
     if (!isLLMAlignment || !parsedAlignment?.elements) return -1;
     const elements = parsedAlignment.elements as LLMAlignmentElement[];
 
@@ -600,7 +633,7 @@ export function FullscreenPlayer({
       }
     }
     return activeIdx;
-  }, [isLLMAlignment, parsedAlignment, currentTime]);
+  }, [isLLMAlignment, parsedAlignment, currentTime, playingSummaryAudio]);
 
   // --- Read-along performance (2026-07-29) ----------------------------------
   // The read-along used to compute the active-highlight class inline in JSX,
@@ -609,8 +642,11 @@ export function FullscreenPlayer({
   // Instead, the element trees below are memoized per alignment WITHOUT any
   // active class, and a tiny effect moves the ra-active class between the two
   // affected DOM nodes as playback advances. Same DOM, same CSS, same behavior.
+  // While summary audio plays, element/word clicks must not seek it to original-audio
+  // timestamps: the memoized trees call these refs, so swapping in a no-op disables
+  // seeking without touching the trees.
   const onSeekRef = useRef(onSeek);
-  onSeekRef.current = onSeek;
+  onSeekRef.current = playingSummaryAudio ? () => {} : onSeek;
 
   const readAlongParts = useMemo(() => {
     if (!isLLMAlignment || !parsedAlignment?.elements) return null;
@@ -777,7 +813,7 @@ export function FullscreenPlayer({
   // per-word handlers; an imperative effect paints the .read class on only the
   // words that changed since the previous tick.
   const onTranscriptWordClickRef = useRef(onTranscriptWordClick);
-  onTranscriptWordClickRef.current = onTranscriptWordClick;
+  onTranscriptWordClickRef.current = playingSummaryAudio ? () => {} : onTranscriptWordClick;
 
   const transcriptDisplayWords = useMemo(() => {
     if (content.type !== 'podcast_episode') return null;
@@ -867,9 +903,10 @@ export function FullscreenPlayer({
     // Queue is a listening feature: audio-less items hide it (the queue only
     // lists audio items and autoplay skips them, while the prev/next buttons
     // walk everything, so showing it there would just contradict the buttons).
-    if (content.audio_url) tabs.push('queue');
+    // Summary audio counts: a summary-audio-only item is a playable audio item.
+    if (hasAnyAudio(content)) tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
+  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
   // Auto-select first available tab if current one disappeared
   useEffect(() => {
@@ -886,6 +923,27 @@ export function FullscreenPlayer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, initialTab]);
+
+  // The default tab follows the audio actually PLAYING (user decision 2026-08-18):
+  // opening or advancing into an item whose effective audio is the summary snaps to
+  // the Summary tab (overriding tab persistence, since the read-along views would
+  // show text the playing audio does not narrate). Toggling the mode on an item
+  // with both audios flips between Summary and the item's normal default. Items
+  // playing their original audio keep the existing persistence behavior.
+  const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
+  useEffect(() => {
+    const prev = prevTabFollowRef.current;
+    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
+    if (playingVariant === 'summary') {
+      if (prev.id !== content.id || prev.variant !== 'summary') setActiveTab('summary');
+      return;
+    }
+    // Mode toggled back to the original audio on the SAME item: return to its default.
+    if (prev.id === content.id && prev.variant === 'summary' && playingVariant === 'original') {
+      setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id, playingVariant]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -1938,6 +1996,20 @@ export function FullscreenPlayer({
                         Remove summary
                       </button>
                     )}
+                    {/* Summary audio: TTS of the summary, only offered once a summary exists.
+                        Removal rides on Remove summary (the audio narrates the summary). */}
+                    {onGenerateSummaryAudio && content.summary && content.summary_audio_status === 'generating' && (
+                      <button disabled>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        Generating summary audio…
+                      </button>
+                    )}
+                    {onGenerateSummaryAudio && content.summary && content.summary_status !== 'generating' && content.summary_audio_status !== 'generating' && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummaryAudio(); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        {content.summary_audio_url ? 'Regenerate summary audio' : 'Generate summary audio'}
+                      </button>
+                    )}
                   </>
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
@@ -2022,7 +2094,7 @@ export function FullscreenPlayer({
       {/* Player Controls. Without audio there is no timeline, no play/seek, and no
           speed/sleep: the row reduces to previous track, display settings, next track. */}
       <div className="fullscreen-player-controls">
-        {content.audio_url && (
+        {playingVariant !== null && (
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
@@ -2056,7 +2128,7 @@ export function FullscreenPlayer({
         </div>
         )}
 
-        {content.audio_url && (
+        {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
           <button
             onClick={() => onSkipPrevTrack?.()}
@@ -2103,18 +2175,11 @@ export function FullscreenPlayer({
         )}
 
         <div className="fullscreen-player-options">
-          {content.audio_url ? (
-            <>
-              <button onClick={onToggleSpeed} className="option-toggle">
-                <Gauge size={20} />
-                <span>{playbackSpeed}x</span>
-              </button>
-
-              <button onClick={onToggleSleepTimer} className="option-toggle">
-                <Clock size={20} />
-                <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-              </button>
-            </>
+          {playingVariant !== null ? (
+            <button onClick={onToggleSpeed} className="option-toggle">
+              <Gauge size={20} />
+              <span>{playbackSpeed}x</span>
+            </button>
           ) : (
             // No audio: previous and next flank the display button in this single row.
             <button
@@ -2171,7 +2236,47 @@ export function FullscreenPlayer({
             )}
           </div>
 
-          {!content.audio_url && (
+          {playingVariant !== null ? (
+            <div ref={playbackPanelRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowPlaybackPanel(p => !p)}
+                className={`option-toggle ${sleepTimer || preferSummaryAudio ? 'active' : ''}`}
+                title="Playback options"
+              >
+                <SlidersHorizontal size={20} />
+                <span>{sleepTimer ? `${sleepTimer}m` : 'Options'}</span>
+              </button>
+              {showPlaybackPanel && (
+                <div className="display-panel playback-panel">
+                  <div className="display-panel-label">Sleep timer</div>
+                  <div className="sleep-preset-row">
+                    <button
+                      className={`sleep-preset ${sleepTimer === null ? 'active' : ''}`}
+                      onClick={() => onSetSleepTimer(null)}
+                    >Off</button>
+                    {[5, 10, 15, 30, 45, 60].map((m) => (
+                      <button
+                        key={m}
+                        className={`sleep-preset ${sleepTimer === m ? 'active' : ''}`}
+                        onClick={() => onSetSleepTimer(m)}
+                      >{m}m</button>
+                    ))}
+                  </div>
+                  {onTogglePreferSummaryAudio && (
+                    <div className="display-panel-section">
+                      <button
+                        className={`display-panel-toggle prefer-summary-toggle ${preferSummaryAudio ? 'active' : ''}`}
+                        onClick={onTogglePreferSummaryAudio}
+                      >
+                        <span>Prefer summary audio</span>
+                        {preferSummaryAudio && <Check size={14} className="prefer-summary-check" />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
             <button
               onClick={() => onSkipNextTrack?.()}
               title="Next track"

@@ -11,7 +11,7 @@ import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
-import { isVeryLongArticle } from './format';
+import { isVeryLongArticle, hasAnyAudio } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -39,8 +39,12 @@ function App() {
   const [commentWarning, setCommentWarning] = useState<{ regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
   // Podcast summaries need a transcript first. Confirm before running Whisper + summary
   const [summaryTranscriptWarning, setSummaryTranscriptWarning] = useState(false);
-  // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts
-  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
+  // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts.
+  // askAudio: the auto_generate_summary_audio setting is on, so the dialog also asks whether
+  // summary audio should be generated (with an opt-in for items that already have summaries).
+  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio: boolean; existingSummaryIds: number[] } | null>(null);
+  const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
+  const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
 
   // Toast shown when the read-only demo account hits a blocked write (the api.ts
   // interceptor broadcasts the event on any 403 with { demo: true }).
@@ -97,6 +101,22 @@ function App() {
       .then(res => setAutoplayOnOpen(res.data.value === 'true'))
       .catch(() => { /* keep default off */ });
   }, [isAuthenticated, currentPage]);
+
+  // Global "Prefer summary audio" playback mode: when an item has both the full
+  // narration/episode AND summary audio, the summary plays. The toggle lives in the
+  // fullscreen player's playback-options panel; persisted as a user setting so it
+  // syncs across devices like autoplay/shuffle.
+  const [preferSummaryAudio, setPreferSummaryAudioState] = useState(false);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    userSettingsAPI.get('prefer_summary_audio')
+      .then(res => setPreferSummaryAudioState(res.data.value === 'true'))
+      .catch(() => { /* keep default off */ });
+  }, [isAuthenticated]);
+  const setPreferSummaryAudio = (value: boolean) => {
+    setPreferSummaryAudioState(value);
+    userSettingsAPI.set('prefer_summary_audio', value ? 'true' : 'false').catch(() => {});
+  };
 
   // Get addItem and fetchContent from store
   const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
@@ -252,7 +272,7 @@ function App() {
     useQueueStore.getState().setLibraryContext({ typeFilter, facets, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setCurrentContent(content);
-    if (autoplayOnOpen && content.audio_url) setAutoPlayToken(t => t + 1);
+    if (autoplayOnOpen && hasAnyAudio(content)) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
@@ -260,7 +280,7 @@ function App() {
   // without audio trigger the generate-or-skip prompt (only manuals can be
   // in this state, non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
-    if (item.audio_url) {
+    if (hasAnyAudio(item)) {
       try {
         const res = await contentAPI.getById(item.id);
         setCurrentContent(res.data);
@@ -316,7 +336,7 @@ function App() {
       if (!nextItem) {
         return;
       }
-      if (nextItem.audio_url) {
+      if (hasAnyAudio(nextItem)) {
         try {
           const res = await contentAPI.getById(nextItem.id);
           setCurrentContent(res.data);
@@ -395,7 +415,7 @@ function App() {
     setCurrentContent(item);
     // Only try to play when there is something to play (prev can now land on
     // an audio-less item, which just opens for reading).
-    if (item.audio_url) setAutoPlayToken(t => t + 1);
+    if (hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?
@@ -520,7 +540,11 @@ function App() {
           const statuses = await contentAPI.getStatuses([id]);
           const status = statuses.data[0];
           if (status) useContentStore.getState().updateItem(id, status);
-          if (status && status.summary_status === 'generating' && tries < maxTries) {
+          // Keep polling through a chained summary-audio TTS too (the
+          // auto_generate_summary_audio setting fires it right after the text).
+          const stillWorking = !!status &&
+            (status.summary_status === 'generating' || status.summary_audio_status === 'generating');
+          if (stillWorking && tries < maxTries) {
             // Reflect the cheap status fields so the UI keeps animating, keep polling.
             setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
             setTimeout(poll, 3000);
@@ -540,6 +564,45 @@ function App() {
       console.error('Failed to generate summary:', error);
       alert(error?.response?.data?.error || 'Failed to generate summary');
     }
+  };
+
+  // TTS of the summary (a second, independent audio). Same lean-poll shape as
+  // startSummaryGeneration; short job, so a lower try cap suffices.
+  const startSummaryAudioGeneration = async (id: number) => {
+    try {
+      await contentAPI.generateSummaryAudio(id);
+      setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_audio_status: 'generating' as const } : prev));
+      useContentStore.getState().updateItem(id, { summary_audio_status: 'generating' });
+      let tries = 0;
+      const maxTries = 60;
+      const poll = async () => {
+        tries++;
+        try {
+          const statuses = await contentAPI.getStatuses([id]);
+          const status = statuses.data[0];
+          if (status) useContentStore.getState().updateItem(id, status);
+          if (status && status.summary_audio_status === 'generating' && tries < maxTries) {
+            setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
+            setTimeout(poll, 3000);
+          } else {
+            const response = await contentAPI.getById(id);
+            setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+            useContentStore.getState().updateItem(id, response.data);
+          }
+        } catch {
+          /* stop polling on error */
+        }
+      };
+      setTimeout(poll, 3000);
+    } catch (error: any) {
+      console.error('Failed to generate summary audio:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary audio');
+    }
+  };
+
+  const handleGenerateSummaryAudio = () => {
+    if (!currentContent) return;
+    startSummaryAudioGeneration(currentContent.id);
   };
 
   const handleGenerateSummary = async (regenerate: boolean) => {
@@ -646,20 +709,39 @@ function App() {
 
   // Kick off summaries for a mixed batch: readyIds summarize directly; podcastIds get
   // a transcript first (generate_transcript=true), then the summary chains server-side.
-  const startBulkSummaries = async (readyIds: number[], podcastIds: number[]) => {
+  // opts.generateAudio: explicit answer from the dialog (overrides the setting per item);
+  // opts.existingSummaryAudioIds: items that already have a summary and only need its audio.
+  const startBulkSummaries = async (
+    readyIds: number[],
+    podcastIds: number[],
+    opts?: { generateAudio?: boolean; existingSummaryAudioIds?: number[] }
+  ) => {
     const podcastSet = new Set(podcastIds);
     let started = 0;
     for (const id of [...readyIds, ...podcastIds]) {
       try {
-        await contentAPI.generateSummary(id, false, podcastSet.has(id));
+        await contentAPI.generateSummary(id, false, podcastSet.has(id), opts?.generateAudio);
         started++;
         refreshItem(id);
       } catch (error) {
         console.error(`Failed to start summary generation for item ${id}:`, error);
       }
     }
-    if (started > 0) {
-      alert(`Started summary generation for ${started} item${started !== 1 ? 's' : ''}.`);
+    let audioStarted = 0;
+    for (const id of opts?.existingSummaryAudioIds || []) {
+      try {
+        await contentAPI.generateSummaryAudio(id);
+        audioStarted++;
+        refreshItem(id);
+      } catch (error) {
+        console.error(`Failed to start summary audio generation for item ${id}:`, error);
+      }
+    }
+    if (started > 0 || audioStarted > 0) {
+      const parts: string[] = [];
+      if (started > 0) parts.push(`summary generation for ${started} item${started !== 1 ? 's' : ''}`);
+      if (audioStarted > 0) parts.push(`summary audio for ${audioStarted} existing summar${audioStarted !== 1 ? 'ies' : 'y'}`);
+      alert(`Started ${parts.join(' and ')}.`);
     }
   };
 
@@ -682,8 +764,24 @@ function App() {
     const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
     const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
 
-    if (podcastIds.length > 0) {
-      setBulkSummaryWarning({ podcastIds, readyIds });
+    // The audio question only appears when the auto_generate_summary_audio setting
+    // is on; off keeps this flow exactly as before.
+    let askAudio = false;
+    try {
+      const res = await userSettingsAPI.get('auto_generate_summary_audio');
+      askAudio = res.data.value === 'true';
+    } catch { /* keep false */ }
+    const existingSummaryIds = askAudio
+      ? allContent.filter(item =>
+          (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
+          !!item.summary_generated_at && !item.summary_audio_url && item.summary_audio_status !== 'generating'
+        ).map(i => i.id)
+      : [];
+
+    if (podcastIds.length > 0 || askAudio) {
+      setBulkAudioChecked(true);
+      setBulkAudioExistingChecked(false);
+      setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
       return;
     }
 
@@ -827,7 +925,10 @@ function App() {
             onRemoveAudio={handleRemoveAudio}
             onGenerateSummary={handleGenerateSummary}
             onRemoveSummary={handleRemoveSummary}
+            onGenerateSummaryAudio={handleGenerateSummaryAudio}
             onRegenerateTranscript={handleRegenerateTranscript}
+            preferSummaryAudio={preferSummaryAudio}
+            onSetPreferSummaryAudio={setPreferSummaryAudio}
             onContentUpdated={(updated) => setCurrentContent(updated)}
             initialTab={initialPlayerTab}
             isDark={isDark}
@@ -903,36 +1004,79 @@ function App() {
         </div>
       )}
 
-      {bulkSummaryWarning && (
+      {bulkSummaryWarning && (() => {
+        const w = bulkSummaryWarning;
+        // The dialog's audio answers only apply when the audio question is shown
+        // (auto_generate_summary_audio on); otherwise the per-item setting decides.
+        const audioOpts = w.askAudio
+          ? { generateAudio: bulkAudioChecked, existingSummaryAudioIds: bulkAudioExistingChecked ? w.existingSummaryIds : [] }
+          : undefined;
+        return (
         <div className="comment-warning-overlay" onClick={() => setBulkSummaryWarning(null)}>
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
-            <p>
-              <strong>{bulkSummaryWarning.podcastIds.length} podcast episode{bulkSummaryWarning.podcastIds.length > 1 ? 's' : ''}</strong> {bulkSummaryWarning.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.
-              {bulkSummaryWarning.readyIds.length > 0 && (
-                <> The other {bulkSummaryWarning.readyIds.length} item{bulkSummaryWarning.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
-              )}
-            </p>
+            {w.podcastIds.length > 0 ? (
+              <p>
+                <strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.
+                {w.readyIds.length > 0 && (
+                  <> The other {w.readyIds.length} item{w.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
+                )}
+              </p>
+            ) : (
+              <p>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</p>
+            )}
+            {w.askAudio && (
+              <label className="bulk-audio-checkbox">
+                <input
+                  type="checkbox"
+                  checked={bulkAudioChecked}
+                  onChange={e => setBulkAudioChecked(e.target.checked)}
+                />
+                <span>Also generate summary audio (uses your TTS API credits)</span>
+              </label>
+            )}
+            {w.askAudio && w.existingSummaryIds.length > 0 && (
+              <label className="bulk-audio-checkbox">
+                <input
+                  type="checkbox"
+                  checked={bulkAudioExistingChecked}
+                  onChange={e => setBulkAudioExistingChecked(e.target.checked)}
+                />
+                <span>Also generate audio for {w.existingSummaryIds.length} item{w.existingSummaryIds.length !== 1 ? 's' : ''} that already {w.existingSummaryIds.length !== 1 ? 'have' : 'has'} a summary</span>
+              </label>
+            )}
             <div className="comment-warning-buttons">
-              <button
-                className="comment-warning-btn include"
-                onClick={() => {
-                  const w = bulkSummaryWarning;
-                  setBulkSummaryWarning(null);
-                  startBulkSummaries(w.readyIds, w.podcastIds);
-                }}
-              >
-                Generate transcripts + summaries
-              </button>
-              {bulkSummaryWarning.readyIds.length > 0 && (
+              {w.podcastIds.length > 0 ? (
+                <>
+                  <button
+                    className="comment-warning-btn include"
+                    onClick={() => {
+                      setBulkSummaryWarning(null);
+                      startBulkSummaries(w.readyIds, w.podcastIds, audioOpts);
+                    }}
+                  >
+                    Generate transcripts + summaries
+                  </button>
+                  {w.readyIds.length > 0 && (
+                    <button
+                      className="comment-warning-btn exclude"
+                      onClick={() => {
+                        setBulkSummaryWarning(null);
+                        startBulkSummaries(w.readyIds, [], audioOpts);
+                      }}
+                    >
+                      Skip episodes without transcript
+                    </button>
+                  )}
+                </>
+              ) : (
                 <button
-                  className="comment-warning-btn exclude"
+                  className="comment-warning-btn include"
                   onClick={() => {
-                    const w = bulkSummaryWarning;
                     setBulkSummaryWarning(null);
-                    startBulkSummaries(w.readyIds, []);
+                    startBulkSummaries(w.readyIds, [], audioOpts);
                   }}
                 >
-                  Skip episodes without transcript
+                  Generate summaries
                 </button>
               )}
               <button
@@ -944,7 +1088,8 @@ function App() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {summaryTranscriptWarning && (
         <div className="comment-warning-overlay" onClick={() => setSummaryTranscriptWarning(false)}>

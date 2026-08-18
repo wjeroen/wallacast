@@ -3,7 +3,7 @@ import type { ContentItem } from '../types';
 import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
-import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasAnyAudio } from '../format';
 
 function getStoredSpeed(): number {
   try {
@@ -27,6 +27,7 @@ interface AudioPlayerProps {
   onRemoveAudio?: () => void;
   onGenerateSummary?: (regenerate: boolean) => void;
   onRemoveSummary?: () => void;
+  onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
@@ -47,15 +48,24 @@ interface AudioPlayerProps {
   autoPlayToken?: number;
   onPlayQueueItem?: (item: ContentItem) => void;
   initialTab?: string;
+  // Global "Prefer summary audio" mode (persisted user setting owned by App).
+  // Decides which audio plays when an item has both; see getEffectiveAudio.
+  preferSummaryAudio?: boolean;
+  onSetPreferSummaryAudio?: (value: boolean) => void;
 }
 
 export function AudioPlayer({
   content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onGenerateSummary, onRemoveSummary,
-  onRegenerateTranscript, initialTab,
+  onGenerateSummaryAudio, onRegenerateTranscript, initialTab,
   onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
   autoPlayToken = 0, onPlayQueueItem,
+  preferSummaryAudio = false, onSetPreferSummaryAudio,
 }: AudioPlayerProps) {
+  // Which audio this item effectively plays under the current mode. 'summary' means
+  // the whisper timestamps and read-along data (which belong to the ORIGINAL audio)
+  // must not drive any highlighting.
+  const effectiveVariant = content ? getEffectiveAudio(content, preferSummaryAudio) : null;
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -102,6 +112,14 @@ export function AudioPlayer({
   // every save is suppressed and the seek keeps retrying (canplay/progress/play)
   // until it sticks or the user seeks manually.
   const pendingResumeSeekRef = useRef<number>(0);
+  // Which position column the LOADED audio saves to. Set alongside audio.src, so a
+  // variant swap can never write the summary position into playback_position or
+  // vice versa (card progress must stay original-audio-only).
+  const positionFieldRef = useRef<'playback_position' | 'summary_playback_position'>('playback_position');
+  const lastContentIdRef = useRef<number | null>(null);
+  // Keep playing across a "Prefer summary audio" toggle on the same item: the swap
+  // replaces audio.src (which pauses), so the loadedmetadata handler resumes.
+  const resumePlayAfterVariantSwapRef = useRef(false);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -251,10 +269,25 @@ export function AudioPlayer({
     if (!audioRef.current) return;
 
     const audio = audioRef.current;
-    const startPosition = content.playback_position || 0;
+
+    // A variant-swap resume (keep playing across a Prefer-summary-audio toggle) is
+    // only valid within the same item; a genuine track change clears it.
+    if (content.id !== lastContentIdRef.current) {
+      lastContentIdRef.current = content.id;
+      resumePlayAfterVariantSwapRef.current = false;
+    }
+
+    const playingSummary = effectiveVariant === 'summary';
+    const startPosition = (playingSummary ? content.summary_playback_position : content.playback_position) || 0;
 
     let audioSrc: string;
-    if (content.type === 'podcast_episode') {
+    if (playingSummary && content.summary_audio_url) {
+      // Summary audio wins over the podcast proxy branch: the proxy serves the
+      // EPISODE, the summary variant URL serves our generated TTS file.
+      const cacheBuster = `${content.summary_audio_generated_at ? new Date(content.summary_audio_generated_at).getTime() : 0}`;
+      const separator = content.summary_audio_url.includes('?') ? '&' : '?';
+      audioSrc = `${content.summary_audio_url}${separator}v=${cacheBuster}`;
+    } else if (content.type === 'podcast_episode') {
       const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
       audioSrc = `${apiBase}/content/${content.id}/audio`;
     } else if (content.audio_url) {
@@ -290,6 +323,10 @@ export function AudioPlayer({
       return;
     }
     lastAudioSrcRef.current = audioSrc;
+    // Route position saves to the loaded variant's column from here on, and reset
+    // the save debounce so the new variant's first save is never suppressed.
+    positionFieldRef.current = playingSummary ? 'summary_playback_position' : 'playback_position';
+    lastSavedPositionRef.current = -1;
     pendingResumeSeekRef.current = startPosition > 0 ? startPosition : 0;
     resumeAttemptsRef.current = 0;
     setResumeFailedAt(0);
@@ -308,7 +345,9 @@ export function AudioPlayer({
         // aborts the seek and snaps back to ~0, so reading it back here proves
         // nothing (that false success re-enabled saves and wiped real positions).
       }
-      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+      // The write-back below describes the ORIGINAL audio; a loaded summary audio is
+      // always shorter and would clobber the item's real duration.
+      if (!playingSummary && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
         // Only auto-correct upwards if the DB has no duration. Don't override
         // an existing duration based on the browser reading, the backend now
@@ -322,7 +361,8 @@ export function AudioPlayer({
           contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
         }
       }
-      if (shouldAutoPlay) {
+      if (shouldAutoPlay || resumePlayAfterVariantSwapRef.current) {
+        resumePlayAfterVariantSwapRef.current = false;
         userPausedRef.current = false;
         appPlayRef.current = true;
         audio.play().catch(() => { appPlayRef.current = false; });
@@ -334,7 +374,7 @@ export function AudioPlayer({
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
     };
-  }, [content, autoPlayToken]);
+  }, [content, autoPlayToken, effectiveVariant]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -492,7 +532,7 @@ export function AudioPlayer({
     lastSavedPositionRef.current = floored;
     try {
       await contentAPI.update(content.id, {
-        playback_position: floored,
+        [positionFieldRef.current]: floored,
         last_played_at: new Date().toISOString(),
       });
     } catch { /* silent */ }
@@ -522,7 +562,7 @@ export function AudioPlayer({
         // Force save on unmount regardless of debounce
         const floored = Math.floor(audioRef.current.currentTime);
         contentAPI.update(content.id, {
-          playback_position: floored,
+          [positionFieldRef.current]: floored,
           last_played_at: new Date().toISOString(),
         }).catch(() => {});
       }
@@ -595,38 +635,42 @@ export function AudioPlayer({
     handleSpeedChange(next);
   };
 
-  const toggleSleepTimer = () => {
+  // Direct sleep-timer setter for the playback-options panel (which shows all the
+  // presets at once, so no cycling is needed anymore). null = off.
+  const setSleepTimerTo = (minutes: number | null) => {
     if (sleepTimerRef.current) {
       clearTimeout(sleepTimerRef.current);
       sleepTimerRef.current = null;
     }
-
-    const timerOptions = [5, 10, 15, 30, 45, 60];
-    if (sleepTimer === null) {
-      setSleepTimer(5);
+    setSleepTimer(minutes);
+    if (minutes !== null) {
       sleepTimerRef.current = setTimeout(() => {
         if (audioRef.current) {
           audioRef.current.pause();
           setIsPlaying(false);
         }
         setSleepTimer(null);
-      }, 5 * 60 * 1000);
-    } else {
-      const currentIndex = timerOptions.indexOf(sleepTimer);
-      if (currentIndex === timerOptions.length - 1) {
-        setSleepTimer(null);
-      } else {
-        const nextTimer = timerOptions[currentIndex + 1];
-        setSleepTimer(nextTimer);
-        sleepTimerRef.current = setTimeout(() => {
-          if (audioRef.current) {
-            audioRef.current.pause();
-            setIsPlaying(false);
-          }
-          setSleepTimer(null);
-        }, nextTimer * 60 * 1000);
+      }, minutes * 60 * 1000);
+    }
+  };
+
+  // Flip the global "Prefer summary audio" mode. When the current item actually has
+  // both audios, the swap happens live: save the outgoing variant's position first
+  // (the src change would otherwise lose it) and remember to resume playback.
+  const handleTogglePreferSummaryAudio = () => {
+    if (!onSetPreferSummaryAudio) return;
+    const audio = audioRef.current;
+    const bothAudios = !!(content?.audio_url && content?.summary_audio_url);
+    if (audio && bothAudios) {
+      resumePlayAfterVariantSwapRef.current = !audio.paused;
+      if (content && pendingResumeSeekRef.current === 0) {
+        contentAPI.update(content.id, {
+          [positionFieldRef.current]: Math.floor(audio.currentTime),
+          last_played_at: new Date().toISOString(),
+        }).catch(() => {});
       }
     }
+    onSetPreferSummaryAudio(!preferSummaryAudio);
   };
 
   // ---------------------------------------------------------------------------
@@ -642,6 +686,9 @@ export function AudioPlayer({
 
   const activeWordIndex = useMemo(() => {
     if (!content) return -1;
+    // Whisper timestamps describe the ORIGINAL audio. While the summary audio is
+    // playing, its clock means nothing to them, so no word is "active".
+    if (effectiveVariant === 'summary') return -1;
 
     // Method 1: Whisper Timestamps (TRUSTED)
     // We ignore the browser's duration estimate completely for sync.
@@ -687,7 +734,7 @@ export function AudioPlayer({
     }
 
     return -1;
-  }, [currentTime, content, duration, transcriptWordStarts, parsedTTSChunks]);
+  }, [currentTime, content, duration, transcriptWordStarts, parsedTTSChunks, effectiveVariant]);
 
   const handleTranscriptClick = (wordIndex: number) => {
     if (!content) return;
@@ -733,14 +780,16 @@ export function AudioPlayer({
   // audio item) kicks in the moment generated audio arrives, collapsing the view
   // to the mini player mid-read. Guarded setState during render converges in one
   // pass (React's sanctioned "adjusting state when props change" pattern).
-  if (!content.audio_url && !isExpanded) setIsExpanded(true);
+  // "Audio" here includes summary audio: a summary-audio-only item is playable
+  // and gets the mini player like any other audio item.
+  if (!hasAnyAudio(content) && !isExpanded) setIsExpanded(true);
 
   return (
     <>
       <audio ref={audioRef} />
       {/* Items without audio only exist in fullscreen, the mini player is pure
           playback chrome (timeline, play button) and would be dead UI for them */}
-      {isExpanded || !content.audio_url ? (
+      {isExpanded || !hasAnyAudio(content) ? (
         <FullscreenPlayer
           content={content}
           isPlaying={isPlaying}
@@ -757,7 +806,10 @@ export function AudioPlayer({
           onSkipForward={handleSkipForward}
           onSpeedChange={handleSpeedChange}
           onToggleSpeed={toggleSpeed}
-          onToggleSleepTimer={toggleSleepTimer}
+          onSetSleepTimer={setSleepTimerTo}
+          playingVariant={effectiveVariant}
+          preferSummaryAudio={preferSummaryAudio}
+          onTogglePreferSummaryAudio={handleTogglePreferSummaryAudio}
           onMinimize={handleMinimize}
           onClose={onClose}
           onTranscriptWordClick={handleTranscriptClick}
@@ -766,6 +818,7 @@ export function AudioPlayer({
           onRemoveAudio={onRemoveAudio}
           onGenerateSummary={onGenerateSummary}
           onRemoveSummary={onRemoveSummary}
+          onGenerateSummaryAudio={onGenerateSummaryAudio}
           onRegenerateTranscript={onRegenerateTranscript}
           onContentUpdated={onContentUpdated}
           themeMode={themeMode || (isDark ? 'dark' : 'light')}

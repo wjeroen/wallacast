@@ -62,6 +62,13 @@ export interface ContentItem {
   summary_status?: 'idle' | 'generating' | 'completed' | 'failed';
   summary_generated_at?: string; // When the summary was last generated
   summary_error?: string; // Error message when summary_status === 'failed' (shown on cards)
+  // Summary audio: TTS of the summary as a second independent audio (no read-along).
+  summary_audio_url?: string; // Our audio endpoint with ?variant=summary (+ token, added at serialization)
+  summary_audio_duration?: number; // Seconds
+  summary_audio_status?: 'idle' | 'generating' | 'completed' | 'failed';
+  summary_audio_error?: string; // Error message when summary_audio_status === 'failed'
+  summary_audio_generated_at?: string; // Also the cache-buster for the summary audio URL
+  summary_playback_position?: number; // Separate saved position, never mixed with playback_position
   versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 

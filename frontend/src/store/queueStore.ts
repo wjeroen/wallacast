@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { queueAPI, userSettingsAPI, contentAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type LibraryFilter } from './contentStore';
+import { hasAnyAudio } from '../format';
 import type { ContentItem, QueueItem } from '../types';
 
 /**
@@ -143,10 +144,11 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     let pivot = currentId != null ? streamIds.indexOf(currentId) : -1;
     if (pivot < 0) pivot = streamIds.indexOf(libraryContext.capturedFromId);
 
-    // Items that match the captured library filter AND have audio. Used by the
-    // visible "Up next" list and autoplay continuation (listening features).
+    // Items that match the captured library filter AND have audio (original or
+    // summary audio both count: a summary-audio-only item is playable). Used by
+    // the visible "Up next" list and autoplay continuation (listening features).
     const matches = (item: ContentItem | undefined): item is ContentItem =>
-      !!item && !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
+      !!item && hasAnyAudio(item) && itemMatchesFilter(item, libraryContext.filter);
 
     // Filter-only variant for the prev/next BUTTONS: they navigate every
     // matching item, audio or not, so reading flows item-to-item too

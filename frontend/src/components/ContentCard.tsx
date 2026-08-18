@@ -28,7 +28,8 @@ interface ContentCardProps {
   onRemoveAudio: (id: number) => void;
   onGenerateSummary: (id: number, regenerate: boolean) => void;
   onRemoveSummary: (id: number) => void;
-  onDismissError: (id: number, kind: 'generation' | 'summary') => void;
+  onGenerateSummaryAudio: (id: number) => void;
+  onDismissError: (id: number, kind: 'generation' | 'summary' | 'summary_audio') => void;
   onRegenerateTranscript: (id: number) => void;
   onRefetch: (id: number) => void;
   onAddToQueue: (item: ContentItem) => void;
@@ -56,6 +57,7 @@ export function ContentCard({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onGenerateSummaryAudio,
   onDismissError,
   onRegenerateTranscript,
   onRefetch,
@@ -356,6 +358,30 @@ export function ContentCard({
             </span>
           </div>
         )}
+        {item.summary_audio_status === 'failed' && (
+          <div className="generation-status error">
+            <span className="error-message">
+              Summary audio failed
+              {item.summary_audio_error && <span className="error-detail">: {item.summary_audio_error}</span>}
+            </span>
+            <span className="error-actions">
+              <button
+                className="error-retry-btn"
+                onClick={(e) => { e.stopPropagation(); onGenerateSummaryAudio(item.id); }}
+                title="Retry summary audio generation"
+              >
+                Retry
+              </button>
+              <button
+                className="error-dismiss-btn"
+                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary_audio'); }}
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </span>
+          </div>
+        )}
       </div>
       {/* Star/archive stay visible in bulk mode. They show each item's state
           (filled star, highlighted archive) and still work as toggles.
@@ -446,6 +472,19 @@ export function ContentCard({
                           <MessageSquareOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Remove summary
                         </button>
+                        {/* Summary audio, only offered once a summary exists. Removal
+                            rides on Remove summary (the audio narrates the summary). */}
+                        {item.summary_audio_status === 'generating' ? (
+                          <button disabled>
+                            <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                            Generating summary audio…
+                          </button>
+                        ) : (
+                          <button onClick={() => onGenerateSummaryAudio(item.id)}>
+                            <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                            {item.summary_audio_url ? 'Regenerate summary audio' : 'Generate summary audio'}
+                          </button>
+                        )}
                       </>
                     )}
                   </>

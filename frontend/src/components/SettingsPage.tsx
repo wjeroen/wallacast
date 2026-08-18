@@ -213,6 +213,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     generate_read_along: 'true',
     // Summaries
     auto_generate_summary: 'false',
+    auto_generate_summary_audio: 'false',
     summarize_comments: 'true',
     summary_max_words: '40',
     library_show_summary: 'false',
@@ -336,6 +337,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
+        auto_generate_summary_audio: loaded.auto_generate_summary_audio !== undefined && loaded.auto_generate_summary_audio !== null ? loaded.auto_generate_summary_audio : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
@@ -507,6 +509,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
+        'auto_generate_summary_audio',
         'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
@@ -842,6 +845,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               />
               Auto-generate a summary when an article is added
             </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.auto_generate_summary_audio === 'true'}
+                onChange={(e) => handleChange('auto_generate_summary_audio', e.target.checked ? 'true' : 'false')}
+              />
+              Auto-generate audio for summaries
+            </label>
+            <small className="settings-hint indent">
+              Turns every new summary into a short audio version. The player's playback options have a "Prefer summary audio" toggle to play it instead of the full audio.
+            </small>
           </div>
 
           <div className="form-group checkbox-group">

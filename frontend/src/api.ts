@@ -97,6 +97,7 @@ export const contentAPI = {
       generation_error: ContentItem['generation_error'];
       current_operation: ContentItem['current_operation'];
       summary_status: ContentItem['summary_status'];
+      summary_audio_status: ContentItem['summary_audio_status'];
     }>>('/content/status', { ids }),
 
   create: (data: Partial<ContentItem>) => api.post<ContentItem>('/content', data),
@@ -125,9 +126,20 @@ export const contentAPI = {
     api.post<{ message: string; generation_status: string; generation_progress: number }>(`/content/${id}/generate-audio`, { regenerate, exclude_comments: excludeComments }),
 
   // generateTranscript: for podcast episodes without a transcript, runs Whisper first,
-  // then summarizes (the UI confirms with the user before setting this)
-  generateSummary: (id: number, regenerate: boolean = false, generateTranscript: boolean = false) =>
-    api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, { regenerate, generate_transcript: generateTranscript }),
+  // then summarizes (the UI confirms with the user before setting this).
+  // generateAudio: explicit true/false overrides the auto_generate_summary_audio setting
+  // for the chained summary-audio TTS; undefined follows the setting.
+  generateSummary: (id: number, regenerate: boolean = false, generateTranscript: boolean = false, generateAudio?: boolean) =>
+    api.post<{ message: string; summary_status: string }>(`/content/${id}/generate-summary`, {
+      regenerate,
+      generate_transcript: generateTranscript,
+      ...(generateAudio !== undefined ? { generate_audio: generateAudio } : {}),
+    }),
+
+  // TTS audio of the item's summary (requires an existing summary). Independent
+  // summary_audio_status, so it can overlap other generation jobs.
+  generateSummaryAudio: (id: number) =>
+    api.post<{ message: string; summary_audio_status: string }>(`/content/${id}/generate-summary-audio`, {}),
 
   bulkAction: (action: 'star' | 'unstar' | 'archive' | 'unarchive' | 'delete' | 'remove_audio' | 'remove_summary', ids: number[]) =>
     api.post<{ affected: number }>('/content/bulk', { action, ids }),
