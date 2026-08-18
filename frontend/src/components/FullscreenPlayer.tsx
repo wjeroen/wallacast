@@ -6,6 +6,7 @@ import {
   RotateCw,
   Gauge,
   Check,
+  Clock,
   SlidersHorizontal,
   Type,
   Sun,
@@ -159,6 +160,9 @@ function versionSourceLabel(source: ContentVersion['source']): string {
 }
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
+
+// Sleep-timer stepper values for the playback-options panel (null = off)
+const SLEEP_TIMER_STEPS: Array<number | null> = [null, 5, 10, 15, 30, 45, 60];
 
 function getStoredFontScale(): number {
   const stored = localStorage.getItem('readerFontScale');
@@ -2249,18 +2253,28 @@ export function FullscreenPlayer({
               {showPlaybackPanel && (
                 <div className="display-panel playback-panel">
                   <div className="display-panel-label">Sleep timer</div>
-                  <div className="sleep-preset-row">
+                  {/* Same stepper look as the display panel's Text size control */}
+                  <div className="font-scale-control sleep-timer-control">
+                    <Clock size={16} className="sleep-timer-icon" />
                     <button
-                      className={`sleep-preset ${sleepTimer === null ? 'active' : ''}`}
-                      onClick={() => onSetSleepTimer(null)}
-                    >Off</button>
-                    {[5, 10, 15, 30, 45, 60].map((m) => (
-                      <button
-                        key={m}
-                        className={`sleep-preset ${sleepTimer === m ? 'active' : ''}`}
-                        onClick={() => onSetSleepTimer(m)}
-                      >{m}m</button>
-                    ))}
+                      className="font-scale-btn"
+                      onClick={() => {
+                        const idx = SLEEP_TIMER_STEPS.indexOf(sleepTimer);
+                        if (idx > 0) onSetSleepTimer(SLEEP_TIMER_STEPS[idx - 1]);
+                      }}
+                      disabled={SLEEP_TIMER_STEPS.indexOf(sleepTimer) <= 0}
+                      aria-label="Shorter sleep timer"
+                    >−</button>
+                    <span className="font-scale-value">{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
+                    <button
+                      className="font-scale-btn"
+                      onClick={() => {
+                        const idx = SLEEP_TIMER_STEPS.indexOf(sleepTimer);
+                        if (idx < SLEEP_TIMER_STEPS.length - 1) onSetSleepTimer(SLEEP_TIMER_STEPS[idx + 1]);
+                      }}
+                      disabled={SLEEP_TIMER_STEPS.indexOf(sleepTimer) === SLEEP_TIMER_STEPS.length - 1}
+                      aria-label="Longer sleep timer"
+                    >+</button>
                   </div>
                   {onTogglePreferSummaryAudio && (
                     <div className="display-panel-section">
