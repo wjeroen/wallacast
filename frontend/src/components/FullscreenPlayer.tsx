@@ -81,6 +81,8 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
+  // Deadline (ms timestamp) of the armed sleep timer, for the live countdown
+  sleepTimerEndAt?: number | null;
   // When > 0, the automatic resume-seek permanently failed at this position:
   // show a manual "Resume at MM:SS" chip (clicking it is a normal user seek).
   resumeTargetTime?: number;
@@ -161,8 +163,8 @@ function versionSourceLabel(source: ContentVersion['source']): string {
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
-// Sleep-timer stepper values for the playback-options panel (null = off)
-const SLEEP_TIMER_STEPS: Array<number | null> = [null, 5, 10, 15, 30, 45, 60];
+// Sleep-timer durations for the playback-options panel (Off is its own chip)
+const SLEEP_TIMER_OPTIONS = [5, 10, 15, 30, 45, 60];
 
 function getStoredFontScale(): number {
   const stored = localStorage.getItem('readerFontScale');
@@ -366,6 +368,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
+  sleepTimerEndAt = null,
   resumeTargetTime = 0,
   activeWordIndex = -1,
   transcriptWords = [],
@@ -510,6 +513,18 @@ export function FullscreenPlayer({
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showPlaybackPanel]);
+
+  // Live countdown for the armed sleep timer on the playback-options button.
+  // Playback re-renders keep it fresh while playing; this slow tick covers pause.
+  const [, setSleepTick] = useState(0);
+  useEffect(() => {
+    if (!sleepTimerEndAt) return;
+    const iv = setInterval(() => setSleepTick(t => t + 1), 15000);
+    return () => clearInterval(iv);
+  }, [sleepTimerEndAt]);
+  const sleepRemainingLabel = sleepTimerEndAt
+    ? `${Math.max(1, Math.ceil((sleepTimerEndAt - Date.now()) / 60000))}m`
+    : null;
 
   // Sync font scale from backend on mount (cross-device persistence)
   useEffect(() => {
@@ -2247,34 +2262,35 @@ export function FullscreenPlayer({
                 className={`option-toggle ${sleepTimer || preferSummaryAudio ? 'active' : ''}`}
                 title="Playback options"
               >
-                <SlidersHorizontal size={20} />
-                <span>{sleepTimer ? `${sleepTimer}m` : 'Options'}</span>
+                {sleepRemainingLabel ? (
+                  <>
+                    <Clock size={20} />
+                    <span>{sleepRemainingLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    <SlidersHorizontal size={20} />
+                    <Clock size={20} />
+                  </>
+                )}
               </button>
               {showPlaybackPanel && (
                 <div className="display-panel playback-panel">
-                  <div className="display-panel-label">Sleep timer</div>
-                  {/* Same stepper look as the display panel's Text size control */}
-                  <div className="font-scale-control sleep-timer-control">
-                    <Clock size={16} className="sleep-timer-icon" />
+                  <div className="display-panel-label">
+                    <Clock size={12} className="sleep-label-icon" /> Sleep timer
+                  </div>
+                  <div className="sleep-preset-row">
                     <button
-                      className="font-scale-btn"
-                      onClick={() => {
-                        const idx = SLEEP_TIMER_STEPS.indexOf(sleepTimer);
-                        if (idx > 0) onSetSleepTimer(SLEEP_TIMER_STEPS[idx - 1]);
-                      }}
-                      disabled={SLEEP_TIMER_STEPS.indexOf(sleepTimer) <= 0}
-                      aria-label="Shorter sleep timer"
-                    >−</button>
-                    <span className="font-scale-value">{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-                    <button
-                      className="font-scale-btn"
-                      onClick={() => {
-                        const idx = SLEEP_TIMER_STEPS.indexOf(sleepTimer);
-                        if (idx < SLEEP_TIMER_STEPS.length - 1) onSetSleepTimer(SLEEP_TIMER_STEPS[idx + 1]);
-                      }}
-                      disabled={SLEEP_TIMER_STEPS.indexOf(sleepTimer) === SLEEP_TIMER_STEPS.length - 1}
-                      aria-label="Longer sleep timer"
-                    >+</button>
+                      className={`sleep-preset ${sleepTimer === null ? 'active' : ''}`}
+                      onClick={() => onSetSleepTimer(null)}
+                    >Off</button>
+                    {SLEEP_TIMER_OPTIONS.map((m) => (
+                      <button
+                        key={m}
+                        className={`sleep-preset ${sleepTimer === m ? 'active' : ''}`}
+                        onClick={() => onSetSleepTimer(m)}
+                      >{m}m</button>
+                    ))}
                   </div>
                   {onTogglePreferSummaryAudio && (
                     <div className="display-panel-section">

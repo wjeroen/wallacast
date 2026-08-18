@@ -76,6 +76,9 @@ export function AudioPlayer({
   const resumeAttemptsRef = useRef(0);
   const [resumeFailedAt, setResumeFailedAt] = useState(0);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
+  // Deadline timestamp of the armed sleep timer, drives the live countdown on
+  // the playback-options button (sleepTimer alone is the static chosen duration)
+  const [sleepTimerEndAt, setSleepTimerEndAt] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -636,13 +639,15 @@ export function AudioPlayer({
   };
 
   // Direct sleep-timer setter for the playback-options panel (which shows all the
-  // presets at once, so no cycling is needed anymore). null = off.
+  // presets at once, so no cycling is needed anymore). null = off, which also
+  // cancels a running timer.
   const setSleepTimerTo = (minutes: number | null) => {
     if (sleepTimerRef.current) {
       clearTimeout(sleepTimerRef.current);
       sleepTimerRef.current = null;
     }
     setSleepTimer(minutes);
+    setSleepTimerEndAt(minutes !== null ? Date.now() + minutes * 60 * 1000 : null);
     if (minutes !== null) {
       sleepTimerRef.current = setTimeout(() => {
         if (audioRef.current) {
@@ -650,6 +655,7 @@ export function AudioPlayer({
           setIsPlaying(false);
         }
         setSleepTimer(null);
+        setSleepTimerEndAt(null);
       }, minutes * 60 * 1000);
     }
   };
@@ -798,6 +804,7 @@ export function AudioPlayer({
           playbackSpeed={playbackSpeed}
           resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
+          sleepTimerEndAt={sleepTimerEndAt}
           activeWordIndex={activeWordIndex}
           transcriptWords={parsedTranscriptWords}
           onPlayPause={togglePlay}
