@@ -655,7 +655,12 @@ function App() {
       if (res.data.value) COMMENT_THRESHOLD = parseInt(res.data.value, 10) || 50;
     } catch { /* use default */ }
 
-    const allEligible = allContent.filter(
+    // Deliberately the WHOLE library, not the filtered view: an active filter is easy
+    // to forget and silently shrank these batches (user decision 2026-08-18, after an
+    // audio-facet filter made the bulk flows skip most of the library). Archived items
+    // stay excluded. The select-mode bulk actions remain selection-scoped, of course.
+    const libraryItems = useContentStore.getState().allItems;
+    const allEligible = libraryItems.filter(
       item => (item.type === 'article' || item.type === 'text') && !item.is_archived && !item.audio_url &&
               (!item.generation_status || item.generation_status === 'idle' || item.generation_status === 'failed')
     );
@@ -767,7 +772,11 @@ function App() {
     // No comment cutoff for summaries. Eligible = articles/texts/podcasts without a
     // summary and not already generating one. Podcasts summarize their transcript,
     // episodes without one get the transcript-first warning below.
-    const eligibleItems = allContent.filter(
+    // Whole library, not the filtered view (same decision as bulk audio above):
+    // the run that looked like it "skipped" 84 items was really an audio-facet
+    // filter quietly feeding this flow only the 55 items that matched it.
+    const libraryItems = useContentStore.getState().allItems;
+    const eligibleItems = libraryItems.filter(
       item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
@@ -783,7 +792,7 @@ function App() {
       askAudio = res.data.value === 'true';
     } catch { /* keep false */ }
     const existingSummaryIds = askAudio
-      ? allContent.filter(item =>
+      ? libraryItems.filter(item =>
           (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
           !!item.summary_generated_at && !item.summary_audio_url && item.summary_audio_status !== 'generating'
         ).map(i => i.id)
@@ -1043,7 +1052,7 @@ function App() {
             ) : w.readyIds.length > 0 ? (
               <p>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</p>
             ) : (
-              <p>All matching items already have summaries.</p>
+              <p>All items already have summaries.</p>
             )}
             {w.askAudio && (w.readyIds.length > 0 || w.podcastIds.length > 0) && (
               <label className="bulk-audio-checkbox">
