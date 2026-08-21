@@ -119,7 +119,7 @@ function App() {
   };
 
   // Get addItem and fetchContent from store
-  const { items: allContent, addItem, fetchContent, refreshItem } = useContentStore();
+  const { addItem, fetchContent, refreshItem } = useContentStore();
 
   // Queue state (subscribed so hasNext/hasPrev stay reactive across queue edits,
   // library-context changes, shuffle/autoplay toggles, and the setting toggle)
