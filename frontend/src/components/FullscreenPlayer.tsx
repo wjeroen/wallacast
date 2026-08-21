@@ -1029,6 +1029,33 @@ export function FullscreenPlayer({
     scrollToActiveRef.current = scrollToActive;
   }, [scrollToActive]);
 
+  // Land the tab content at a sensible spot for the new item. This scroll
+  // container is never unmounted between items (same DOM node, only props
+  // change), so without this its scrollTop just carries over from whatever
+  // the previous item was scrolled to (reported 2026-08-21, worst on the
+  // Summary tab, where you always want to start reading from the top).
+  // Every tab defaults to the top. The Transcript tab is the one exception:
+  // with auto-scroll on, it jumps DIRECTLY to the currently playing
+  // highlight instead (matching what continuous auto-scroll already does
+  // during playback), skipping the top entirely rather than flashing there
+  // first. With auto-scroll off, Transcript behaves like every other tab.
+  useEffect(() => {
+    const jumpToHighlight = activeTab === 'read-along' && autoScroll;
+    if (jumpToHighlight) {
+      setTimeout(() => scrollToActiveRef.current(), 100);
+    } else {
+      requestAnimationFrame(() => {
+        if (tabContentRef.current) {
+          tabContentRef.current.scrollTop = 0;
+        }
+      });
+    }
+    // Deliberately keyed on content.id only: activeTab/autoScroll are read
+    // fresh (both are already declared above this effect), we don't want
+    // this to re-fire just because the user toggles auto-scroll mid-item.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id]);
+
   // Trigger scroll once when switching to read-along tab
   useEffect(() => {
     if (activeTab === 'read-along') {

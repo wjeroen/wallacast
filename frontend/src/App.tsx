@@ -11,7 +11,7 @@ import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
-import { isVeryLongArticle, hasAnyAudio } from './format';
+import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -407,10 +407,20 @@ function App() {
     }
     // If the track was nearly or fully finished, restart from the beginning.
     // 10 seconds is the industry-standard threshold (Apple Podcasts, Pocket Casts).
-    const pos = item.playback_position || 0;
-    const dur = item.duration || 0;
+    // Checks whichever audio would actually play: summary audio has its OWN
+    // position/duration, entirely separate from the original's, so reusing the
+    // original fields here silently skipped this reset for summary audio and
+    // bounced straight back to the item you were trying to leave (reported
+    // 2026-08-21). The card's progress percentage stays original-only by
+    // design, so only summary_playback_position is reset here, never
+    // playback_position, when the summary is the effective audio.
+    const variant = getEffectiveAudio(item, preferSummaryAudio);
+    const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
+    const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
     if (dur > 0 && pos > 0 && (dur - pos) < 10) {
-      item = { ...item, playback_position: 0 };
+      item = variant === 'summary'
+        ? { ...item, summary_playback_position: 0 }
+        : { ...item, playback_position: 0 };
     }
     setCurrentContent(item);
     // Only try to play when there is something to play (prev can now land on
