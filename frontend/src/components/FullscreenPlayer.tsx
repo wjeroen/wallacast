@@ -2127,9 +2127,12 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
-          {/* No minimize without audio. The mini player is playback chrome, so
-              audio-less items live in fullscreen only (close is the way out) */}
-          {content.audio_url && (
+          {/* No minimize without audio (original OR summary). The mini player is
+              playback chrome, so audio-less items live in fullscreen only (close
+              is the way out). Missed the summary-audio case until 2026-08-21:
+              a summary-audio-only item's button had vanished since this still
+              checked content.audio_url alone. */}
+          {hasAnyAudio(content) && (
             <button onClick={onMinimize} className="header-button" title="Minimize">
               <Minimize2 size={20} />
             </button>
