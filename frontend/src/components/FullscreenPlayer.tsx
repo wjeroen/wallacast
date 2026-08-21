@@ -99,10 +99,11 @@ interface FullscreenPlayerProps {
   // read-along highlighting/seeking, whose timestamps belong to the original).
   playingVariant?: 'original' | 'summary' | null;
   preferSummaryAudio?: boolean;
-  onTogglePreferSummaryAudio?: () => void;
-  // Per-item variant pick from the Summary tab banner (does not touch the setting).
-  // autoplay true = an explicit Play press; false = switch keeping play/pause state.
-  onSelectAudioVariant?: (variant: 'original' | 'summary', autoplay: boolean) => void;
+  // The ONE control for which audio plays, used by both the playback-options
+  // panel toggle and the Summary tab's Play / Switch-back banner. forcePlay
+  // true = start playback even if paused (an explicit Play press); omitted =
+  // plain toggle that keeps the current playing/paused state.
+  onTogglePreferSummaryAudio?: (forcePlay?: boolean) => void;
   onMinimize: () => void;
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
@@ -384,7 +385,6 @@ export function FullscreenPlayer({
   playingVariant = null,
   preferSummaryAudio = false,
   onTogglePreferSummaryAudio,
-  onSelectAudioVariant,
   onMinimize,
   onClose,
   onTranscriptWordClick,
@@ -1647,16 +1647,17 @@ export function FullscreenPlayer({
         };
         const articleTweets = toParagraphs(content.summary);
         const commentTweets = toParagraphs(content.comment_summary);
-        // Top banner, only when summary audio exists: Play switches to the summary
-        // audio for THIS item (a temporary override, the global toggle is untouched);
-        // while the summary is playing it flips into a switch-back to the full audio.
-        const summaryAudioBanner = content.summary_audio_url && onSelectAudioVariant ? (
+        // Top banner, only when summary audio exists. Play and "Switch to full
+        // audio" both just flip the SAME global "Prefer summary audio" setting
+        // the playback-options panel uses (no separate per-item state), so the
+        // two controls can never disagree about which audio is playing.
+        const summaryAudioBanner = content.summary_audio_url && onTogglePreferSummaryAudio ? (
           <div className="summary-audio-banner">
             {playingVariant === 'summary' ? (
               content.audio_url ? (
                 <>
                   <span className="summary-audio-label"><Volume2 size={15} /> Playing summary audio</span>
-                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('original', false)}>
+                  <button className="summary-audio-btn" onClick={() => onTogglePreferSummaryAudio(false)}>
                     Switch to full audio
                   </button>
                 </>
@@ -1665,7 +1666,8 @@ export function FullscreenPlayer({
               ) : (
                 <>
                   <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
-                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                  {/* No second audio to prefer here, just start playing what's already loaded */}
+                  <button className="summary-audio-btn" onClick={onPlayPause}>
                     <Play size={13} /> Play
                   </button>
                 </>
@@ -1673,7 +1675,7 @@ export function FullscreenPlayer({
             ) : (
               <>
                 <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
-                <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                <button className="summary-audio-btn" onClick={() => onTogglePreferSummaryAudio(true)}>
                   <Play size={13} /> Play
                 </button>
               </>
@@ -2361,7 +2363,7 @@ export function FullscreenPlayer({
                     <div className="display-panel-section">
                       <button
                         className={`display-panel-toggle prefer-summary-toggle ${preferSummaryAudio ? 'active' : ''}`}
-                        onClick={onTogglePreferSummaryAudio}
+                        onClick={() => onTogglePreferSummaryAudio()}
                       >
                         <span>Prefer summary audio</span>
                         {preferSummaryAudio && <Check size={14} className="prefer-summary-check" />}
