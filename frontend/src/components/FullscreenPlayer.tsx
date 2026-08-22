@@ -931,7 +931,9 @@ export function FullscreenPlayer({
     return tabs;
   }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
-  // Auto-select first available tab if current one disappeared
+  // Auto-select first available tab if current one disappeared.
+  // NOTE: this condition is mirrored in the scroll-reset effect below (it
+  // can't just read activeTab there, see that effect's comment). Keep both in sync.
   useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
       setActiveTab(availableTabs[0]);
@@ -940,6 +942,9 @@ export function FullscreenPlayer({
 
   // Honor a requested initial tab (e.g. "Read more" in the library → Summary tab).
   // Runs after the auto-select effect so it wins when both fire on a new item.
+  // App.tsx only sets initialTab on the click that opens the player, next/prev/
+  // autoplay never touch it, so this keeps firing on every later item too as
+  // long as it has a summary. NOTE: mirrored in the scroll-reset effect below.
   useEffect(() => {
     if (initialTab === 'summary' && (content.summary || '').trim()) {
       setActiveTab('summary');
@@ -953,6 +958,8 @@ export function FullscreenPlayer({
   // show text the playing audio does not narrate). Toggling the mode on an item
   // with both audios flips between Summary and the item's normal default. Items
   // playing their original audio keep the existing persistence behavior.
+  // NOTE: the item-change branch below (playingVariant === 'summary') is
+  // mirrored in the scroll-reset effect below. Keep both in sync.
   const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
   useEffect(() => {
     const prev = prevTabFollowRef.current;
@@ -1039,8 +1046,25 @@ export function FullscreenPlayer({
   // highlight instead (matching what continuous auto-scroll already does
   // during playback), skipping the top entirely rather than flashing there
   // first. With auto-scroll off, Transcript behaves like every other tab.
+  //
+  // `activeTab` state can still be showing the PREVIOUS item's tab here: the
+  // three effects above that pick the new item's tab (auto-select-first-
+  // available, honor-initialTab, follow-playing-summary) call setActiveTab(),
+  // but that update hasn't committed yet when this effect runs in the same
+  // pass (reported 2026-08-22: advancing from Transcript into an item
+  // playing its summary correctly flipped the visible tab to Summary, but
+  // this effect still saw the old "read-along" tab, tried to jump to a
+  // highlighted word that doesn't exist on the Summary tab, found nothing,
+  // and left the old scroll position in place). So the actual landing tab is
+  // resolved fresh below, mirroring those three effects' conditions.
+  // KEEP THIS IN SYNC with the three NOTE comments above marking them.
   useEffect(() => {
-    const jumpToHighlight = activeTab === 'read-along' && autoScroll;
+    let landingTab = activeTab;
+    if (availableTabs.length > 0 && !availableTabs.includes(landingTab)) landingTab = availableTabs[0];
+    if (initialTab === 'summary' && (content.summary || '').trim()) landingTab = 'summary';
+    if (playingVariant === 'summary') landingTab = 'summary';
+
+    const jumpToHighlight = landingTab === 'read-along' && autoScroll;
     if (jumpToHighlight) {
       setTimeout(() => scrollToActiveRef.current(), 100);
     } else {
@@ -1050,9 +1074,9 @@ export function FullscreenPlayer({
         }
       });
     }
-    // Deliberately keyed on content.id only: activeTab/autoScroll are read
-    // fresh (both are already declared above this effect), we don't want
-    // this to re-fire just because the user toggles auto-scroll mid-item.
+    // Deliberately keyed on content.id only: everything else above is read
+    // fresh, we don't want this to re-fire just because the user toggles
+    // auto-scroll or switches tabs mid-item.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id]);
 
