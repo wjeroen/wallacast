@@ -64,8 +64,6 @@ export function AudioPlayer({
 }: AudioPlayerProps) {
   // Per-item variant override (the Summary tab's Play / Switch-back banner): wins
   // over the global mode for THIS item only, without touching the persisted setting.
-  // Keyed by item id so it naturally expires when the track changes, with no reset
-  // effect (which would briefly load the wrong src on item change).
   const [overrideForId, setOverrideForId] = useState<{ id: number; variant: AudioVariant } | null>(null);
 
   // Which audio this item effectively plays under the current mode. 'summary' means
@@ -151,6 +149,19 @@ export function AudioPlayer({
   // Reset user-pause intent when switching to a new item
   useEffect(() => {
     userPausedRef.current = false;
+  }, [content?.id]);
+
+  // Clear the per-item override on every genuine track change. Its own render-time
+  // check (overrideForId.id === content.id) already ignores it while on any OTHER
+  // item, so this doesn't change what plays right now, it only stops the override
+  // from silently reviving if you navigate back to that exact item later in the
+  // same session, which used to make the prev button's "restart if nearly
+  // finished" check (App.tsx) read the wrong audio's position again (found
+  // 2026-08-22, same bug class that 64f3363 already fixed once for the global
+  // setting). Deliberately its own tiny effect, not folded into the src-loading
+  // effect below, so clearing it can never itself trigger a second src swap.
+  useEffect(() => {
+    setOverrideForId(null);
   }, [content?.id]);
 
   // Hook up the OS MediaSession API so headset / lock-screen / bluetooth
@@ -532,8 +543,16 @@ export function AudioPlayer({
     };
   }, []);
 
+  // Reads contentRef, not the closed-over content prop: handleEnded (registered
+  // once with [] deps, see the big effect above) holds whichever savePlaybackPosition
+  // existed at mount forever, so a plain `content` reference here would make every
+  // later track's "ended near the finish" reset write to whatever item was on
+  // screen when the player first mounted, not the one that actually just ended
+  // (found 2026-08-22). Reading the ref instead makes every caller, old closure
+  // or new, always target the CURRENT item.
   const savePlaybackPosition = async (position: number) => {
-    if (!content) return;
+    const c = contentRef.current;
+    if (!c) return;
     // Never persist anything while the resume-seek hasn't been applied: the
     // element is sitting at the wrong spot (usually 0:00) through no fault of
     // the user, and saving would wipe the real stored position.
@@ -545,7 +564,7 @@ export function AudioPlayer({
     }
     lastSavedPositionRef.current = floored;
     try {
-      await contentAPI.update(content.id, {
+      await contentAPI.update(c.id, {
         [positionFieldRef.current]: floored,
         last_played_at: new Date().toISOString(),
       });
@@ -888,6 +907,7 @@ export function AudioPlayer({
           onSeek={handleSeek}
           onExpand={handleExpand}
           onClose={onClose}
+          playingVariant={effectiveVariant}
         />
       )}
     </>

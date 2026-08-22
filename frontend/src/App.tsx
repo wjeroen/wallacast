@@ -680,9 +680,12 @@ function App() {
       return;
     }
 
-    // Split into generateable and skipped (too many comments, or very long article)
-    const notTooChatty = allEligible.filter(item => !item.comment_count || item.comment_count < COMMENT_THRESHOLD);
-    const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count >= COMMENT_THRESHOLD);
+    // Split into generateable and skipped (too many comments, or very long article).
+    // <= not <, matching LibraryTab's selection-scoped version of this same check:
+    // an item with EXACTLY the threshold count should generate, not skip (found
+    // 2026-08-22, the two flows had drifted onto opposite sides of that boundary).
+    const notTooChatty = allEligible.filter(item => !item.comment_count || item.comment_count <= COMMENT_THRESHOLD);
+    const skippedItems = allEligible.filter(item => item.comment_count && item.comment_count > COMMENT_THRESHOLD);
     const eligibleItems = notTooChatty.filter(item => !isVeryLongArticle(item));
     const skippedLong = notTooChatty.length - eligibleItems.length;
 

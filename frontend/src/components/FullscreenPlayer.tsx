@@ -1359,7 +1359,7 @@ export function FullscreenPlayer({
                 <div
                   id={`ra-el-${indexByEl.get(titleEl)!}`}
                   className="read-along-element"
-                  onClick={() => onSeek(titleEl.startTime)}
+                  onClick={() => onSeekRef.current(titleEl.startTime)}
                 >
                   <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
                 </div>
@@ -1374,7 +1374,7 @@ export function FullscreenPlayer({
                   key={`meta-${i}`}
                   id={`ra-el-${indexByEl.get(el)!}`}
                   className="read-along-element"
-                  onClick={() => onSeek(el.startTime)}
+                  onClick={() => onSeekRef.current(el.startTime)}
                 >
                   <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
                 </div>
