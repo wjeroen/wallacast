@@ -287,6 +287,56 @@ function formatDateForNarration(dateString: string): string {
   }
 }
 
+export interface NarrationIntroSource {
+  type?: string | null;
+  title?: string | null;
+  author?: string | null;
+  published_at?: string | null;
+  karma?: number | null;
+  url?: string | null;
+  podcast_show_name?: string | null;
+}
+
+// The spoken header an audio opens with. Both the full audio and the summary audio
+// build it here, so the two narrations can never drift apart when the format changes.
+// The only difference is the opening clause: the full audio announces the item
+// ("Title: ..."), the summary audio announces what it is a summary of.
+//
+// Podcasts are a special case. Their full audio IS the episode, so it never announces
+// anything, but a summary of an episode still has to say which episode, so the summary
+// mode names the show in the same sentence.
+//
+// Returns '' for untitled items (nothing useful to announce), otherwise a block ending
+// in a blank line so the narration text can be concatenated directly.
+export function buildNarrationIntro(content: NarrationIntroSource, mode: 'full' | 'summary'): string {
+  if (!content.title) return '';
+  const author = (content.author || '')
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+    .trim();
+
+  if (mode === 'summary' && content.type === 'podcast_episode') {
+    let podcastIntro = content.podcast_show_name
+      ? `Summary of ${content.title}, an episode of ${content.podcast_show_name}. `
+      : `Summary of ${content.title}. `;
+    if (content.published_at) podcastIntro += `Published on ${formatDateForNarration(content.published_at)}. `;
+    return podcastIntro + '\n\n';
+  }
+
+  let intro = mode === 'summary' ? `Summary of ${content.title}. ` : `Title: ${content.title}. `;
+  if (author) intro += `Written by ${author}. `;
+  if (content.published_at) intro += `Published on ${formatDateForNarration(content.published_at)}. `;
+  if (content.karma !== undefined && content.karma !== null) {
+    // Substack calls them likes; forums call them upvotes. Matches the
+    // comment narration (formatReactionsForNarration) and the player UI.
+    const isSubstackSrc = (content.url || '').includes('substack.com');
+    const karmaLabel = isSubstackSrc
+      ? (content.karma === 1 ? 'like' : 'likes')
+      : (content.karma === 1 ? 'upvote' : 'upvotes');
+    intro += `It has ${content.karma} ${karmaLabel}. `;
+  }
+  return intro + '\n\n';
+}
+
 function formatReactionsForNarration(karma?: number, extendedScore?: Record<string, number>, isLessWrong: boolean = false, isSubstack: boolean = false): string {
   const parts: string[] = [];
 
@@ -1090,21 +1140,8 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
 
     await query('UPDATE content_items SET generation_progress = $1 WHERE id = $2', [30, contentId]);
 
-    let fullScript = '';
-
-    if (content.title) {
-      fullScript += `Title: ${content.title}. `;
-      if (content.author) fullScript += `Written by ${content.author.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim()}. `;
-      if (content.published_at) fullScript += `Published on ${formatDateForNarration(content.published_at)}. `;
-      if (content.karma !== undefined && content.karma !== null) {
-        // Substack calls them likes; forums call them upvotes. Matches the
-        // comment narration (formatReactionsForNarration) and the player UI.
-        const isSubstackSrc = (content.url || '').includes('substack.com');
-        const karmaLabel = isSubstackSrc ? (content.karma === 1 ? 'like' : 'likes') : (content.karma === 1 ? 'upvote' : 'upvotes');
-        fullScript += `It has ${content.karma} ${karmaLabel}. `;
-      }
-      fullScript += '\n\n';
-    }
+    // Shared with the summary audio's header, see buildNarrationIntro above.
+    let fullScript = buildNarrationIntro(content, 'full');
 
     fullScript += articleBodyScript;
 

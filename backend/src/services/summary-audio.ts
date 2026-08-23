@@ -4,7 +4,7 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { getAudioDuration } from './audio-utils.js';
 import { saveAudioFile, deleteAudioFile } from './audio-storage.js';
-import { generateArticleAudio } from './openai-tts.js';
+import { generateArticleAudio, buildNarrationIntro } from './openai-tts.js';
 
 // TTS audio of the item's stored summary text, a second independent audio per item.
 // Deliberately minimal compared to the main pipeline: the summary is already plain
@@ -41,14 +41,19 @@ export async function generateSummaryAudioForContent(contentId: number): Promise
   }
   activeSummaryAudioGenerations.add(contentId);
   try {
+    // The metadata columns feed the spoken header. Read fresh on every run, so
+    // regenerating after a title or author edit narrates the corrected version.
     const result = await query(
-      'SELECT user_id, summary, comment_summary FROM content_items WHERE id = $1',
+      `SELECT user_id, type, title, author, published_at, karma, url, podcast_show_name,
+              summary, comment_summary, comment_count_total
+         FROM content_items WHERE id = $1`,
       [contentId]
     );
     if (result.rows.length === 0) {
       throw new Error('Content not found');
     }
-    const { user_id: userId, summary, comment_summary: commentSummary } = result.rows[0];
+    const item = result.rows[0];
+    const { user_id: userId, summary, comment_summary: commentSummary } = item;
     if (!summary || !summary.trim()) {
       throw new Error('No summary to generate audio from');
     }
@@ -58,11 +63,24 @@ export async function generateSummaryAudioForContent(contentId: number): Promise
       [contentId]
     );
 
+    // Same spoken header the full audio uses, with "Summary of" in place of the
+    // "Title:" announcement. Untitled items get no header at all.
+    const parts: string[] = [];
+    const intro = buildNarrationIntro(item, 'summary').trim();
+    if (intro) parts.push(intro);
+    parts.push(summary.trim());
+
     // Comment summary rides along with a short spoken divider, mirroring the
-    // "Comments" label the summary tab shows between the two summaries.
-    const parts = [summary.trim()];
+    // "Comments" label the summary tab shows between the two summaries. The count
+    // is comment_count_total, the same number the full audio announces at its own
+    // comments divider (both include nested replies).
     if (commentSummary && commentSummary.trim()) {
-      parts.push('Comments summary.');
+      const commentCount = Number(item.comment_count_total) || 0;
+      parts.push(
+        commentCount > 0
+          ? `Summary of ${commentCount} ${commentCount === 1 ? 'comment' : 'comments'}.`
+          : 'Summary of the comments.'
+      );
       parts.push(commentSummary.trim());
     }
     const narrationText = parts.join('\n\n');
