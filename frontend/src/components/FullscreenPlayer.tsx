@@ -142,6 +142,10 @@ const TAB_LABELS: Record<TabType, string> = {
   'queue': 'Queue',
 };
 
+// Summary-tab auto-scroll: fraction of the remaining distance covered per frame.
+// See the movement loop for why this value and not a faster one.
+const SUMMARY_SCROLL_EASING = 0.08;
+
 const TAB_ICONS: Record<TabType, LucideIcon> = {
   'content': AlignLeft,
   'description': Info,
@@ -1049,26 +1053,47 @@ export function FullscreenPlayer({
   // end whatever the summary length, since audio duration and page height both scale
   // with the amount of text. No hand-tuned delay is needed on top.
   //
-  // The motion is the legacy fallback's motion, not a new one. scrollIntoView with
-  // block 'center' is defined as "scroll the container so the target sits in the middle,
-  // clamped to the scroll range", which is exactly the target computed below, so a
-  // smooth scrollTo reproduces it without anchoring to any element. Assigning scrollTop
-  // directly instead would step 4x/s and read as choppy. The read-along tall-element
-  // branch above scrolls the same way.
-  const scrollSummaryToProgress = useCallback(() => {
+  // Two deliberately different rates, which is the whole trick:
+  //
+  //  - The TARGET (where the page should end up) is recomputed only when the audio
+  //    position changes, about 4x/s. This is the step that MEASURES the page
+  //    (scrollHeight/clientHeight), the only part with any real cost.
+  //  - The MOVEMENT runs once per screen refresh, easing the page toward that target.
+  //    Per frame that is one subtraction, one multiply and one property write. No
+  //    measuring, no React render, no DOM lookup.
+  //
+  // Moving the page only 4x/s reads as a hop however it is done, and the browser's own
+  // smooth scroll cannot rescue it: a fresh destination arrives before each animation
+  // finishes, so it restarts from a standstill forever. The read-along tabs get away
+  // with the browser's animation because their destination stays put for seconds at a
+  // time (the same element stays active), which is not true of a continuous position.
+  const summaryTargetRef = useRef<number | null>(null);
+  const summaryScrollPosRef = useRef<number | null>(null);
+
+  const computeSummaryTarget = useCallback(() => {
     const container = tabContentRef.current;
-    if (!container || !duration) return;
+    if (!container || !duration) return null;
     const maxScroll = container.scrollHeight - container.clientHeight;
-    if (maxScroll <= 0) return;
+    if (maxScroll <= 0) return null;
     const readingPoint = (currentTime / duration) * container.scrollHeight;
-    const target = readingPoint - container.clientHeight / 2;
-    container.scrollTo({ top: Math.max(0, Math.min(maxScroll, target)), behavior: 'smooth' });
+    return Math.max(0, Math.min(maxScroll, readingPoint - container.clientHeight / 2));
   }, [currentTime, duration]);
 
-  const scrollSummaryRef = useRef(scrollSummaryToProgress);
+  // Land straight on the right spot with no easing. Used when arriving on the tab,
+  // where a glide from the previous item's scroll position would be wrong.
+  const snapSummaryToProgress = useCallback(() => {
+    const container = tabContentRef.current;
+    const target = computeSummaryTarget();
+    if (!container || target === null) return;
+    summaryTargetRef.current = target;
+    summaryScrollPosRef.current = target;
+    container.scrollTop = target;
+  }, [computeSummaryTarget]);
+
+  const snapSummaryRef = useRef(snapSummaryToProgress);
   useEffect(() => {
-    scrollSummaryRef.current = scrollSummaryToProgress;
-  }, [scrollSummaryToProgress]);
+    snapSummaryRef.current = snapSummaryToProgress;
+  }, [snapSummaryToProgress]);
 
   // Land the tab content at a sensible spot for the new item. This scroll
   // container is never unmounted between items (same DOM node, only props
@@ -1104,7 +1129,7 @@ export function FullscreenPlayer({
     if (jumpToHighlight) {
       setTimeout(() => scrollToActiveRef.current(), 100);
     } else if (jumpToSummaryProgress) {
-      setTimeout(() => scrollSummaryRef.current(), 100);
+      setTimeout(() => snapSummaryRef.current(), 100);
     } else {
       requestAnimationFrame(() => {
         if (tabContentRef.current) {
@@ -1148,12 +1173,43 @@ export function FullscreenPlayer({
 
   // Summary tab equivalent, sharing the same auto-scroll switch. Gated on the summary
   // audio actually playing: the full audio's clock says nothing about where you are in
-  // a 90-second summary of it. Also fires on entering the tab, so switching to Summary
-  // mid-playback lands at the right spot.
+  // a 90-second summary of it.
+  const summaryAutoScrollOn = activeTab === 'summary' && playingSummaryAudio && autoScroll;
+
+  // Target refresh, at the audio's own update rate (~4x/s). The page measuring lives
+  // here and nowhere else.
   useEffect(() => {
-    if (activeTab !== 'summary' || !playingSummaryAudio || !autoScroll) return;
-    scrollSummaryToProgress();
-  }, [activeTab, playingSummaryAudio, autoScroll, scrollSummaryToProgress]);
+    summaryTargetRef.current = summaryAutoScrollOn ? computeSummaryTarget() : null;
+  }, [summaryAutoScrollOn, computeSummaryTarget]);
+
+  // Movement loop. Each frame closes a fixed fraction of the remaining distance, which
+  // turns the target's 4x/s staircase into steady motion without needing to know the
+  // playback rate. At 0.08 the response time is ~200ms, longer than the 250ms between
+  // target updates, so consecutive steps blend instead of pulsing; the resulting lag
+  // behind the target is a few pixels. Once converged (audio paused, or parked in an
+  // end dead zone) every frame is a compare and a return. requestAnimationFrame also
+  // stops itself while the app is backgrounded.
+  useEffect(() => {
+    if (!summaryAutoScrollOn) return;
+    const container = tabContentRef.current;
+    if (!container) return;
+    summaryScrollPosRef.current = container.scrollTop;
+    let frame = requestAnimationFrame(function step() {
+      frame = requestAnimationFrame(step);
+      const target = summaryTargetRef.current;
+      if (target === null) return;
+      const current = summaryScrollPosRef.current ?? container.scrollTop;
+      const delta = target - current;
+      if (Math.abs(delta) < 0.25) return;
+      const next = current + delta * SUMMARY_SCROLL_EASING;
+      summaryScrollPosRef.current = next;
+      container.scrollTop = next;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      summaryScrollPosRef.current = null;
+    };
+  }, [summaryAutoScrollOn]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
