@@ -1049,9 +1049,12 @@ export function FullscreenPlayer({
   // end whatever the summary length, since audio duration and page height both scale
   // with the amount of text. No hand-tuned delay is needed on top.
   //
-  // scrollTop is set directly rather than animated: the position updates ~4x/s and each
-  // step is a few pixels, which reads as a crawl, while a smooth animation would restart
-  // before it ever finished.
+  // The motion is the legacy fallback's motion, not a new one. scrollIntoView with
+  // block 'center' is defined as "scroll the container so the target sits in the middle,
+  // clamped to the scroll range", which is exactly the target computed below, so a
+  // smooth scrollTo reproduces it without anchoring to any element. Assigning scrollTop
+  // directly instead would step 4x/s and read as choppy. The read-along tall-element
+  // branch above scrolls the same way.
   const scrollSummaryToProgress = useCallback(() => {
     const container = tabContentRef.current;
     if (!container || !duration) return;
@@ -1059,7 +1062,7 @@ export function FullscreenPlayer({
     if (maxScroll <= 0) return;
     const readingPoint = (currentTime / duration) * container.scrollHeight;
     const target = readingPoint - container.clientHeight / 2;
-    container.scrollTop = Math.max(0, Math.min(maxScroll, target));
+    container.scrollTo({ top: Math.max(0, Math.min(maxScroll, target)), behavior: 'smooth' });
   }, [currentTime, duration]);
 
   const scrollSummaryRef = useRef(scrollSummaryToProgress);
