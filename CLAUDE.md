@@ -19,6 +19,7 @@ Do **NOT** propose, implement, or use any form of:
 - Fuzzy text matching (string similarity, Levenshtein distance, etc.)
 - Algorithmic sequence alignment (Needleman-Wunsch, Smith-Waterman, etc.)
 - Any algorithm that tries to match text between content elements and transcript
+- Anchoring scroll or highlighting to specific words, sentences, or paragraphs of the on-screen text, even when driven by real Whisper timestamps. Whisper's transcript never matches the source text exactly, and that mismatch is the root cause of every past failure. Without LLM alignment, the only permitted behaviour is a linear map from audio progress to scroll position.
 
 This has been tried **multiple times** and **always fails**. The alignment between content elements and Whisper timestamps is done **exclusively by the LLM** (in `llm-alignment.ts`). The LLM understands context, meaning, and intent, algorithms don't.
 
