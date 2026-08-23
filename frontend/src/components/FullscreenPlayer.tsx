@@ -1036,16 +1036,48 @@ export function FullscreenPlayer({
     scrollToActiveRef.current = scrollToActive;
   }, [scrollToActive]);
 
+  // Summary tab auto-scroll. Summary audio deliberately has no timestamps of its own
+  // (no Whisper, no alignment), so the only available signal is how far through the
+  // clip we are. That fraction is mapped straight onto the page height and centred in
+  // the viewport, which is the same thing the legacy word-index scroll does, minus the
+  // per-word lookup that has nothing to look up here.
+  //
+  // The centring IS the start and end delay: while the reading point is still inside
+  // the top half-screen of content the container cannot scroll up, so it stays pinned
+  // at the top and the opening words stay put. The same happens at the bottom, so the
+  // closing words stay readable. That dead zone lands at roughly 15-20 seconds at each
+  // end whatever the summary length, since audio duration and page height both scale
+  // with the amount of text. No hand-tuned delay is needed on top.
+  //
+  // scrollTop is set directly rather than animated: the position updates ~4x/s and each
+  // step is a few pixels, which reads as a crawl, while a smooth animation would restart
+  // before it ever finished.
+  const scrollSummaryToProgress = useCallback(() => {
+    const container = tabContentRef.current;
+    if (!container || !duration) return;
+    const maxScroll = container.scrollHeight - container.clientHeight;
+    if (maxScroll <= 0) return;
+    const readingPoint = (currentTime / duration) * container.scrollHeight;
+    const target = readingPoint - container.clientHeight / 2;
+    container.scrollTop = Math.max(0, Math.min(maxScroll, target));
+  }, [currentTime, duration]);
+
+  const scrollSummaryRef = useRef(scrollSummaryToProgress);
+  useEffect(() => {
+    scrollSummaryRef.current = scrollSummaryToProgress;
+  }, [scrollSummaryToProgress]);
+
   // Land the tab content at a sensible spot for the new item. This scroll
   // container is never unmounted between items (same DOM node, only props
   // change), so without this its scrollTop just carries over from whatever
   // the previous item was scrolled to (reported 2026-08-21, worst on the
   // Summary tab, where you always want to start reading from the top).
-  // Every tab defaults to the top. The Transcript tab is the one exception:
-  // with auto-scroll on, it jumps DIRECTLY to the currently playing
-  // highlight instead (matching what continuous auto-scroll already does
-  // during playback), skipping the top entirely rather than flashing there
-  // first. With auto-scroll off, Transcript behaves like every other tab.
+  // Every tab defaults to the top. Two exceptions, both only with auto-scroll
+  // on, and both jumping DIRECTLY to where the audio already is (matching what
+  // continuous auto-scroll does during playback) instead of flashing at the top
+  // first: the Transcript tab jumps to the playing highlight, and the Summary
+  // tab jumps to its progress position when the summary audio is what is
+  // playing. With auto-scroll off, both behave like every other tab.
   //
   // `activeTab` state can still be showing the PREVIOUS item's tab here: the
   // three effects above that pick the new item's tab (auto-select-first-
@@ -1065,8 +1097,11 @@ export function FullscreenPlayer({
     if (playingVariant === 'summary') landingTab = 'summary';
 
     const jumpToHighlight = landingTab === 'read-along' && autoScroll;
+    const jumpToSummaryProgress = landingTab === 'summary' && autoScroll && playingVariant === 'summary';
     if (jumpToHighlight) {
       setTimeout(() => scrollToActiveRef.current(), 100);
+    } else if (jumpToSummaryProgress) {
+      setTimeout(() => scrollSummaryRef.current(), 100);
     } else {
       requestAnimationFrame(() => {
         if (tabContentRef.current) {
@@ -1107,6 +1142,15 @@ export function FullscreenPlayer({
       scrollToActive();
     }
   }, [activeTab, currentTime, autoScroll, scrollToActive, isLLMAlignment, activeWordIndex]);
+
+  // Summary tab equivalent, sharing the same auto-scroll switch. Gated on the summary
+  // audio actually playing: the full audio's clock says nothing about where you are in
+  // a 90-second summary of it. Also fires on entering the tab, so switching to Summary
+  // mid-playback lands at the right spot.
+  useEffect(() => {
+    if (activeTab !== 'summary' || !playingSummaryAudio || !autoScroll) return;
+    scrollSummaryToProgress();
+  }, [activeTab, playingSummaryAudio, autoScroll, scrollSummaryToProgress]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
@@ -2185,7 +2229,9 @@ export function FullscreenPlayer({
             );
           })}
         </div>
-        {activeTab === 'read-along' && (
+        {/* One shared auto-scroll preference, shown on both tabs that can follow the
+            audio. The Summary tab only shows it when there is summary audio to follow. */}
+        {(activeTab === 'read-along' || (activeTab === 'summary' && !!content.summary_audio_url)) && (
           <button
             className={`autoscroll-toggle ${autoScroll ? 'active' : ''}`}
             onClick={() => setAutoScroll(!autoScroll)}
