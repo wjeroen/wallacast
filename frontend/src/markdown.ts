@@ -606,12 +606,14 @@ export function splitExportedComments(markdown: string): { body: string; comment
 // The byline/link that used to sit under the title now live in the frontmatter, so
 // an import of this text round-trips them as fields instead of body paragraphs.
 export interface CopyContentOptions {
-  // Put the item's summary (and comment summary) at the very top, right under the
-  // properties block and before the title, each inside a fenced code block.
-  // `summaryCodeLabel` is the text after the opening backticks, so an Obsidian Admonition
-  // user can set e.g. "ad-summary"; empty = a plain unlabeled block.
+  // Put the item's summary at the very top, right under the properties block and before
+  // the title, inside a fenced code block. `summaryCodeLabel` is the text after the
+  // opening backticks (some Obsidian plugins style blocks by it); empty = a plain block.
   includeSummary?: boolean;
   summaryCodeLabel?: string;
+  // Also the comment summary, as a second block right after (default true; only used
+  // when includeSummary is on).
+  includeCommentSummary?: boolean;
   // Append the "## Comments" section (default true).
   includeComments?: boolean;
 }
@@ -633,7 +635,7 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
   if (opts.includeSummary && item.summary?.trim()) {
     const label = opts.summaryCodeLabel || '';
     lines.push('', fencedBlock(label, item.summary));
-    if (item.comment_summary?.trim()) {
+    if (opts.includeCommentSummary !== false && item.comment_summary?.trim()) {
       lines.push('', fencedBlock(label, `${COMMENT_SUMMARY_MARKER}\n\n${item.comment_summary.trim()}`));
     }
   }

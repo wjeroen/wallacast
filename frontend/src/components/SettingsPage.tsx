@@ -218,6 +218,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summary_max_words: '40',
     library_show_summary: 'false',
     copy_include_summary: 'false',
+    copy_include_comment_summary: 'true',
     copy_summary_code_label: '',
     copy_include_comments: 'true',
     narrate_ea_forum_comments: 'true',
@@ -345,6 +346,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
         copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
+        copy_include_comment_summary: loaded.copy_include_comment_summary !== undefined && loaded.copy_include_comment_summary !== null ? loaded.copy_include_comment_summary : 'true',
         copy_summary_code_label: loaded.copy_summary_code_label || '',
         copy_include_comments: loaded.copy_include_comments !== undefined && loaded.copy_include_comments !== null ? loaded.copy_include_comments : 'true',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
@@ -516,7 +518,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'auto_generate_summary_audio',
-        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
+        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_include_comment_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
@@ -895,50 +897,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </small>
           </div>
 
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.copy_include_summary === 'true'}
-                onChange={(e) => handleChange('copy_include_summary', e.target.checked ? 'true' : 'false')}
-              />
-              Include summaries in "Copy content"
-            </label>
-            <small className="settings-hint indent">
-              Puts the summary (and the comment summary) at the very top of the copied Markdown, right below the properties block, each inside a triple-backtick code block.
-            </small>
-          </div>
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.copy_include_comments === 'true'}
-                onChange={(e) => handleChange('copy_include_comments', e.target.checked ? 'true' : 'false')}
-              />
-              Include comments in "Copy content"
-            </label>
-            <small className="settings-hint indent">
-              Appends the article's comment thread as a "## Comments" section at the end of the copied Markdown.
-            </small>
-          </div>
-          {formData.copy_include_summary === 'true' && (
-            <div className="form-group indent">
-              <label htmlFor="copy_summary_code_label">Code block label</label>
-              <input
-                id="copy_summary_code_label"
-                type="text"
-                value={formData.copy_summary_code_label}
-                onChange={(e) => handleChange('copy_summary_code_label', e.target.value)}
-                placeholder="none, e.g. ad-summary"
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
-              <small className="settings-hint">
-                The text after the opening backticks, so Obsidian plugins can style the block (Admonition users: <code>ad-summary</code>). Leave empty for a plain code block.
-              </small>
-            </div>
-          )}
-
           <button
             type="button"
             className="settings-collapse-toggle"
@@ -1015,6 +973,71 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </div>
             </div>
           )}
+
+          <h4 className="settings-subheading">Copy content</h4>
+          <p className="section-description">
+            What the "Copy content" action adds to the article text.
+          </p>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.copy_include_summary === 'true'}
+                onChange={(e) => handleChange('copy_include_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Summary
+            </label>
+            <small className="settings-hint indent">
+              At the top, in a code block.
+            </small>
+          </div>
+          {formData.copy_include_summary === 'true' && (
+            <div className="settings-indent">
+              <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={formData.copy_include_comment_summary === 'true'}
+                    onChange={(e) => handleChange('copy_include_comment_summary', e.target.checked ? 'true' : 'false')}
+                  />
+                  Comment summary
+                </label>
+                <small className="settings-hint indent">
+                  A second code block, right after the summary.
+                </small>
+              </div>
+              <div className="form-group">
+                <label htmlFor="copy_summary_code_label">Code block label</label>
+                <input
+                  id="copy_summary_code_label"
+                  type="text"
+                  value={formData.copy_summary_code_label}
+                  onChange={(e) => handleChange('copy_summary_code_label', e.target.value)}
+                  placeholder="none"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                />
+                <small className="settings-hint">
+                  The word after the opening backticks. Some note apps style a code block by this word. Leave it empty for a plain block.
+                </small>
+              </div>
+            </div>
+          )}
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.copy_include_comments === 'true'}
+                onChange={(e) => handleChange('copy_include_comments', e.target.checked ? 'true' : 'false')}
+              />
+              Comments
+            </label>
+            <small className="settings-hint indent">
+              The full comment thread at the end.
+            </small>
+          </div>
 
         </section>
 

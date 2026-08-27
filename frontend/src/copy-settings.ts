@@ -9,6 +9,7 @@ export async function loadCopyContentOptions(): Promise<CopyContentOptions> {
     const s = res.data.settings || {};
     return {
       includeSummary: s.copy_include_summary === 'true',
+      includeCommentSummary: s.copy_include_comment_summary !== 'false',
       summaryCodeLabel: (s.copy_summary_code_label || '').trim(),
       includeComments: s.copy_include_comments !== 'false',
     };

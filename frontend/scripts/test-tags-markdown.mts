@@ -71,6 +71,8 @@ assert.ok(!md.includes('By Scott Alexander'), 'old meta line gone');
 const noComments = contentToMarkdown(item, comments, { includeComments: false });
 assert.ok(!noComments.includes('## Comments'), 'comments toggle off');
 assert.ok(noComments.includes('comments: 3'), 'count property stays');
+const noCommentSummary = contentToMarkdown(item, comments, { includeSummary: true, includeCommentSummary: false });
+assert.ok(noCommentSummary.includes('Tweet one.') && !noCommentSummary.includes('Comments summary:'), 'comment summary toggle off keeps the summary');
 
 // ---- import -------------------------------------------------------------
 const fm = parseFrontmatter(md);

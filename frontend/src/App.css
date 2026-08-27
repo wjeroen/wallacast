@@ -2715,6 +2715,18 @@
 .settings-section .settings-hint.indent {
   margin-left: 1.5rem;
 }
+/* A named group of related options inside a section (e.g. "Copy content" under
+   Summaries), and the indented block of sub-options that only apply while the
+   parent checkbox is on. */
+.settings-section .settings-subheading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--t2);
+  margin: 1.5rem 0 0.25rem;
+}
+.settings-section .settings-indent {
+  margin-left: 1.5rem;
+}
 
 /* Inline checkbox + label (e.g. "Use the same model as Narration"): keep them
    together on the left. Without this the checkbox inherits width:100% from the
@@ -4932,19 +4944,14 @@ blockquote.twitter-tweet.tweet-quoted {
   gap: 0.05rem;
 }
 
-/* Player header: thinner chips. Under the author row when there are tags,
-   inline at the end of the author row (no extra row) when there are none. */
+/* Player header: the same chips as the cards. Under the author row when there
+   are tags, inline at the end of the author row (no extra row) when there are none. */
 .fullscreen-tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.3rem;
   margin-top: 0.3rem;
-}
-.fullscreen-tags .tag-chip,
-.fullscreen-author .tag-chip {
-  padding: 0.1rem 0.35rem;
-  font-size: 0.7rem;
 }
 .fullscreen-author .tag-chip {
   margin-left: 0.5rem;
