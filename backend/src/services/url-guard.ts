@@ -77,6 +77,12 @@ export async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
   return u;
 }
 
+// Podcast audio URLs route through long measurement chains (seen live 2026-07-26: pdst.fm ->
+// pscrb.fm -> mgln.ai -> claritaspod.com -> podderapp.com -> mgln.ai -> flightcast, ~7 hops),
+// so the default cap of 5 blocks legitimate episodes. Audio call sites (the proxy and the
+// transcription download) pass this higher cap; every hop is still SSRF-validated.
+export const AUDIO_REDIRECT_HOPS = 12;
+
 // node-fetch wrapper that validates the initial URL and re-validates every redirect Location,
 // then follows up to `maxHops` redirects manually. node-fetch's automatic redirect following
 // would skip our per-hop check, so we set redirect:'manual' and drive it ourselves. Drop-in

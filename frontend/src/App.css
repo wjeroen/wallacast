@@ -755,24 +755,6 @@
   align-items: center;
 }
 
-.select-mode-btn {
-  padding: 0.5rem 1rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--bg-hover);
-  border-radius: 0.375rem;
-  color: var(--t1);
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 0.875rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.select-mode-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--t4);
-}
-
 .filter-buttons {
   display: flex;
   gap: 0.5rem;
@@ -1566,6 +1548,12 @@
   color: #60a5fa;
 }
 
+/* Read state is applied imperatively (classList) during playback, so the
+   memoized span tree never re-renders; color must live here, not inline. */
+.transcript-word.read {
+  color: #60a5fa;
+}
+
 /* Comments Section */
 .comments-header {
   display: flex;
@@ -1786,6 +1774,25 @@
   margin: 0 0 1.25rem 0;
 }
 
+/* Checkbox rows inside the bulk-summaries dialog (summary-audio questions) */
+.bulk-audio-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0 0.875rem 0;
+  color: var(--t1);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: left;
+}
+
+.bulk-audio-checkbox input {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+}
+
 .comment-warning-buttons {
   display: flex;
   flex-direction: column;
@@ -1806,6 +1813,11 @@
 
 .comment-warning-btn:active {
   opacity: 0.8;
+}
+
+.comment-warning-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Responsive Design */
@@ -3455,7 +3467,9 @@
   color: var(--t1);
 }
 
-.article-content blockquote.twitter-tweet img {
+/* Legacy avatar imgs inside old stored tweet embeds stay 24px circles.
+   tweet-photo (real photos in the canonical card) is excluded below. */
+.article-content blockquote.twitter-tweet img:not(.tweet-photo) {
   width: 24px !important;
   height: 24px !important;
   border-radius: 50% !important;
@@ -3465,20 +3479,23 @@
   object-fit: cover;
 }
 
-.article-content blockquote.twitter-tweet p {
+.article-content blockquote.twitter-tweet p,
+.read-along-element blockquote.twitter-tweet p {
   margin: 0.5em 0;
   color: var(--t1);
   font-style: normal;
   line-height: 1.5;
 }
 
-.article-content blockquote.twitter-tweet > a {
+.article-content blockquote.twitter-tweet > a,
+.read-along-element blockquote.twitter-tweet > a {
   color: #60a5fa;
   font-size: 0.85rem;
   text-decoration: none;
 }
 
-.article-content blockquote.twitter-tweet > a:hover {
+.article-content blockquote.twitter-tweet > a:hover,
+.read-along-element blockquote.twitter-tweet > a:hover {
   text-decoration: underline;
 }
 
@@ -3494,13 +3511,59 @@
   color: var(--t1);
 }
 
-.read-along-element blockquote.twitter-tweet img {
+.read-along-element blockquote.twitter-tweet img:not(.tweet-photo) {
   width: 24px !important;
   height: 24px !important;
   border-radius: 50% !important;
   display: inline-block !important;
   vertical-align: middle;
   margin: 0 8px 0 0 !important;
+}
+
+/* Canonical tweet card children (normalizeTweetEmbeds in the backend fetcher):
+   author line on top, full-size photos, muted footer with date + counts.
+   Scope-free selectors so the card looks identical in the Content tab, the
+   read-along, and comments. */
+blockquote.twitter-tweet .tweet-author {
+  margin: 0 0 0.5em 0;
+  font-style: normal;
+}
+
+blockquote.twitter-tweet .tweet-handle {
+  color: var(--t3);
+  font-size: 0.85em;
+}
+
+blockquote.twitter-tweet img.tweet-photo {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 8px !important;
+  margin: 0.5em 0 !important;
+  object-fit: contain;
+}
+
+blockquote.twitter-tweet .tweet-footer {
+  color: var(--t3);
+  font-size: 0.85rem;
+  margin: 0.5em 0 0 0;
+}
+
+blockquote.twitter-tweet .tweet-footer a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+blockquote.twitter-tweet .tweet-footer a:hover {
+  text-decoration: underline;
+}
+
+/* A quoted tweet nested inside a tweet: smaller inner card */
+blockquote.twitter-tweet.tweet-quoted {
+  margin: 0.75em 0 0 0;
+  max-width: 100%;
+  padding: 12px;
 }
 
 .article-content a {
@@ -3915,6 +3978,68 @@
 
 .display-panel-toggle:hover {
   color: var(--t0);
+}
+
+/* Playback-options panel (sleep timer presets + Prefer summary audio). It hangs
+   off the RIGHTMOST options button, so it anchors to that button's right edge
+   instead of centering, otherwise it would overflow the phone screen. */
+.playback-panel {
+  left: auto;
+  right: 0;
+  transform: none;
+  min-width: 232px;
+}
+
+/* Small clock inline with the "Sleep timer" heading */
+.sleep-label-icon {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+
+.sleep-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.sleep-preset {
+  background: var(--bg-raised);
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  color: var(--t2);
+  font-size: 0.8rem;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.sleep-preset:hover {
+  color: var(--t0);
+}
+
+.sleep-preset.active {
+  color: #60a5fa;
+  border-color: #60a5fa;
+}
+
+/* Prefer-summary-audio toggle row: label left, checkmark right with a soft
+   fade-in (the library filter-menu checkmark style, mirrored to the right). */
+.display-panel-toggle.prefer-summary-toggle {
+  justify-content: space-between;
+}
+
+.display-panel-toggle.prefer-summary-toggle.active {
+  color: #60a5fa;
+}
+
+.prefer-summary-check {
+  flex-shrink: 0;
+  animation: check-fade-in 0.18s ease;
+}
+
+@keyframes check-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .no-content {
@@ -4356,6 +4481,55 @@
   color: #9a3412;
 }
 
+/* Summary tab: top banner shown only when summary audio exists. Play switches
+   to the summary audio for this item without touching the global preference. */
+.summary-audio-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  max-width: 640px;
+  margin-bottom: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.5rem;
+}
+
+.summary-audio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--t2);
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.summary-audio-label svg {
+  flex-shrink: 0;
+  color: var(--t3);
+}
+
+.summary-audio-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid #3b82f6;
+  border-radius: 999px;
+  color: #60a5fa;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.summary-audio-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
 /* Summary tab. Each paragraph reads like a tweet */
 .summary-thread {
   display: flex;
@@ -4641,18 +4815,13 @@
   overflow: hidden;
   text-align: left;
 }
-.continue-card img,
-.continue-card-art {
+.continue-card img {
   width: 32px;
   height: 32px;
   border-radius: 0.35rem;
   object-fit: cover;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: var(--bg-raised);
-  color: var(--t3);
 }
 .continue-card-title {
   flex: 1;

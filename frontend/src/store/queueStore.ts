@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { queueAPI, userSettingsAPI, contentAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type LibraryFilter } from './contentStore';
+import { hasAnyAudio } from '../format';
 import type { ContentItem, QueueItem } from '../types';
 
 /**
@@ -143,11 +144,19 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     let pivot = currentId != null ? streamIds.indexOf(currentId) : -1;
     if (pivot < 0) pivot = streamIds.indexOf(libraryContext.capturedFromId);
 
-    // Items that match the captured library filter AND have audio
+    // Items that match the captured library filter AND have audio (original or
+    // summary audio both count: a summary-audio-only item is playable). Used by
+    // the visible "Up next" list and autoplay continuation (listening features).
     const matches = (item: ContentItem | undefined): item is ContentItem =>
-      !!item && !!item.audio_url && itemMatchesFilter(item, libraryContext.filter);
+      !!item && hasAnyAudio(item) && itemMatchesFilter(item, libraryContext.filter);
 
-    return { streamIds, byId, pivot, matches };
+    // Filter-only variant for the prev/next BUTTONS: they navigate every
+    // matching item, audio or not, so reading flows item-to-item too
+    // (user decision 2026-07-26). Autoplay and the queue keep `matches`.
+    const matchesAnyAudio = (item: ContentItem | undefined): item is ContentItem =>
+      !!item && itemMatchesFilter(item, libraryContext.filter);
+
+    return { streamIds, byId, pivot, matches, matchesAnyAudio };
   };
 
   return {
@@ -395,8 +404,10 @@ export const useQueueStore = create<QueueStore>((set, get) => {
 
   peekNextItem: (currentId) => {
     // Same ordering rules as getNextItem, but ignores autoplay /
-    // manualAlwaysAutoplay gating. Used by the manual Skip Next button
-    // so the user can always advance even when autoplay is off.
+    // manualAlwaysAutoplay gating AND does not require audio: the skip
+    // button walks the whole filtered stream so reading can flow from one
+    // audio-less article to the next (autoplay + the visible queue keep
+    // requiring audio).
     const { manualItems } = get();
     const manualIdx = manualItems.findIndex(m => m.id === currentId);
     if (manualIdx >= 0 && manualIdx + 1 < manualItems.length) {
@@ -405,8 +416,17 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     if (manualIdx < 0 && manualItems.length > 0) {
       return manualItems[0];
     }
-    const nonManual = get().getNonManualItems(currentId);
-    return nonManual.length > 0 ? nonManual[0] : null;
+    const stream = getStream(currentId);
+    if (!stream) return null;
+    const manualIds = new Set(manualItems.map(m => m.id));
+    const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
+    for (const id of after) {
+      const item = stream.byId.get(id);
+      if (stream.matchesAnyAudio(item) && !manualIds.has(item.id) && item.id !== currentId) {
+        return item;
+      }
+    }
+    return null;
   },
 
   getPrevItem: (currentId) => {
@@ -414,12 +434,13 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     const manualIdx = manualItems.findIndex(m => m.id === currentId);
     if (manualIdx > 0) return manualItems[manualIdx - 1];
 
-    // Step back through the non-manual stream to the nearest playable item.
+    // Step back through the non-manual stream to the nearest item, audio
+    // or not (same navigate-everything rule as peekNextItem).
     const stream = getStream(currentId);
     if (!stream || stream.pivot <= 0) return null;
     for (let i = stream.pivot - 1; i >= 0; i--) {
       const item = stream.byId.get(stream.streamIds[i]);
-      if (stream.matches(item)) return item;
+      if (stream.matchesAnyAudio(item)) return item;
     }
     return null;
   },

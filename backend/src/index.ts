@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { safeFetch } from './services/url-guard.js';
+import { safeFetch, AUDIO_REDIRECT_HOPS } from './services/url-guard.js';
 import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
 import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
@@ -133,14 +133,58 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
     const { type, audio_url: audioUrl } = metaResult.rows[0];
 
+    // Summary audio: TTS of the item's summary, a second file per item on the
+    // volume (`<id>-summary.mp3`). Served like PATH B below, never proxied and
+    // never in the DB. Private for EVERY type (podcast episode audio is public
+    // CDN media, but a podcast's summary audio is our generated TTS), so the
+    // token check below applies to it unconditionally.
+    const isSummaryVariant = req.query.variant === 'summary';
+
     // Private generated audio (article/text narration of the user's saved/pasted text) must not
     // be enumerable by sequential id. Require the unguessable per-item token (see audio-token.ts).
     // Podcast episodes proxy already-public CDN audio, so they stay open.
-    if (type === 'article' || type === 'text') {
+    if (isSummaryVariant || type === 'article' || type === 'text') {
       const t = typeof req.query.t === 'string' ? req.query.t : '';
       if (!verifyAudioToken(Number(req.params.id), t)) {
         return res.status(403).json({ error: 'Missing or invalid audio token' });
       }
+    }
+
+    if (isSummaryVariant) {
+      const summaryKey = `${req.params.id}-summary`;
+      const summarySize = await getAudioFileSize(summaryKey);
+      if (summarySize === null) {
+        return res.status(404).json({ error: 'Summary audio not found' });
+      }
+      const onSummaryStreamError = (err: Error) => {
+        console.error('[Audio] Summary audio stream error:', err.message);
+        if (!res.writableEnded) res.end();
+      };
+      if (range) {
+        const parsed = parseAudioRange(range, summarySize, 2 * 1024 * 1024);
+        if (!parsed) {
+          res.setHeader('Content-Range', `bytes */${summarySize}`);
+          return res.status(416).end();
+        }
+        const { start, end } = parsed;
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${summarySize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': end - start + 1,
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'public, max-age=31536000',
+        });
+        createAudioReadStream(summaryKey, start, end).on('error', onSummaryStreamError).pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Length': summarySize,
+          'Accept-Ranges': 'bytes',
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'public, max-age=31536000',
+        });
+        createAudioReadStream(summaryKey).on('error', onSummaryStreamError).pipe(res);
+      }
+      return;
     }
 
     // -------------------------------------------------------------------------
@@ -193,7 +237,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
 
       console.log(`[AudioProxy:${req.params.id}] ${range || 'no-range'} → ${audioUrl.substring(0, 100)}`);
 
-      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders });
+      const upstreamRes = await safeFetch(audioUrl, { headers: upstreamHeaders }, AUDIO_REDIRECT_HOPS);
 
       // Log what upstream ACTUALLY answered: a 200 to a ranged request means the
       // CDN ignored the Range header, which breaks browser seeking silently.

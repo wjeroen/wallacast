@@ -18,9 +18,20 @@ import { getAudioDir } from '../config/storage.js';
  * LRU (oldest mtime deleted first; serving touches mtime).
  */
 
-// Suffix-matched hosts whose files are known to seek badly. Grow as drift is
-// noticed with other hosters.
-const CACHEABLE_HOSTS = ['soundcloud.com'];
+// Suffix-matched hosts whose files are known to seek badly OR to serve
+// dynamically ad-stitched audio (AdsWizz-style: every listening session can be
+// a different file, so transcript timestamps only line up when playback is
+// pinned to the exact bytes Whisper heard). The stored audio_url's FIRST host
+// is what matches here, and ad-inserted feeds start at a tracker, hence the
+// tracker domains alongside the file hosts. Grow as drift is noticed.
+const CACHEABLE_HOSTS = [
+  'soundcloud.com',
+  // NYT/Simplecast + AdsWizz chains (Hard Fork off-sync, diagnosed 2026-07-26)
+  'podtrac.com',
+  'pdst.fm',
+  'pscrb.fm',
+  'simplecastaudio.com',
+];
 
 const CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 

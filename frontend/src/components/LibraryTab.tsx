@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -62,10 +62,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     typeFilter,
     facets,
     searchQuery,
+    sortDir,
     loading,
     setTypeFilter,
     setFacet,
     setFacets,
+    setSortDir,
     setSearchQuery,
     fetchContent,
     toggleStarred,
@@ -98,7 +100,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [commentWarning, setCommentWarning] = useState<{ id: number; regenerate: boolean; commentCount: number; maxComments: number } | null>(null);
   // Podcasts need a transcript before a summary can be generated, so this modal asks first.
   // readyIds = items that can summarize right away; podcastIds = need transcript first.
-  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[] } | null>(null);
+  // askAudio (bulk select-mode only): the auto_generate_summary_audio setting is on, so the
+  // dialog also asks whether summary audio should be generated, plus an opt-in checkbox for
+  // selected items that already have summaries. Single-item flows chain audio silently.
+  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio?: boolean; existingSummaryIds?: number[] } | null>(null);
+  const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
+  const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
   // "Continue listening" strip under the filters (Settings toggle, default on).
@@ -228,7 +235,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     const generatingItems = content.filter(
       item =>
         (item.generation_status && ['starting', 'extracting_content', 'content_ready', 'generating_audio', 'generating_transcript', 'ready'].includes(item.generation_status)) ||
-        item.summary_status === 'generating'
+        item.summary_status === 'generating' ||
+        item.summary_audio_status === 'generating'
     );
 
     if (generatingItems.length === 0) return;
@@ -256,9 +264,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           const summaryJustFinished =
             before.summary_status === 'generating' &&
             (status.summary_status === 'completed' || status.summary_status === 'failed');
+          const summaryAudioJustFinished =
+            before.summary_audio_status === 'generating' &&
+            (status.summary_audio_status === 'completed' || status.summary_audio_status === 'failed');
 
           // Pull the FULL item once, now that it's done (transcript, alignment, summary text)
-          if (audioJustCompleted || summaryJustFinished) {
+          if (audioJustCompleted || summaryJustFinished || summaryAudioJustFinished) {
             setTimeout(() => refreshItem(status.id), 500);
           }
 
@@ -298,6 +309,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const continueTypeIcon = (t: string) =>
     t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
+
+  // The progress bar carries the type identity (icon stays muted), using the
+  // same trio as the card type pills.
+  const TYPE_BAR_COLORS: Record<string, string> = {
+    article: '#3b82f6',
+    text: '#10b981',
+    podcast_episode: '#a855f7',
+  };
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
     try {
@@ -444,16 +463,35 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       !item.summary_generated_at &&
       item.summary_status !== 'generating'
     );
-    if (eligible.length === 0) {
-      alert('No selected items are eligible (no summary yet).');
-      return;
-    }
     // Podcasts without a transcript need Whisper first, so ask via the modal instead
     // of silently spending transcription credits
     const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
     const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
-    if (podcastIds.length > 0) {
-      setTranscriptWarning({ podcastIds, readyIds });
+
+    // The audio question only appears when the auto_generate_summary_audio setting
+    // is on; off keeps this flow exactly as before.
+    let askAudio = false;
+    try {
+      const res = await userSettingsAPI.get('auto_generate_summary_audio');
+      askAudio = res.data.value === 'true';
+    } catch { /* keep false */ }
+    const existingSummaryIds = askAudio
+      ? selectedContentItems().filter(item =>
+          !!item.summary_generated_at && !item.summary_audio_url && item.summary_audio_status !== 'generating'
+        ).map(i => i.id)
+      : [];
+
+    // Keep the dialog reachable in its audio-only shape when everything selected
+    // already has a summary but some still lack summary audio.
+    if (eligible.length === 0 && existingSummaryIds.length === 0) {
+      alert('No selected items are eligible (no summary yet).');
+      return;
+    }
+
+    if (podcastIds.length > 0 || askAudio) {
+      setBulkAudioChecked(true);
+      setBulkAudioExistingChecked(true);
+      setTranscriptWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
       return;
     }
     if (!confirm(`Generate summaries for ${readyIds.length} item(s)? This uses your LLM API credits.`)) return;
@@ -539,12 +577,25 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   // Kick off summaries for a mixed batch: readyIds summarize directly; podcastIds get
   // a transcript first (generate_transcript=true), then the summary chains server-side.
-  const runSummaryBatch = async (readyIds: number[], podcastIds: number[]) => {
+  // opts.generateAudio: explicit dialog answer overriding the setting per item;
+  // opts.existingSummaryAudioIds: items that already have a summary and only need its audio.
+  const runSummaryBatch = async (
+    readyIds: number[],
+    podcastIds: number[],
+    opts?: { generateAudio?: boolean; existingSummaryAudioIds?: number[] }
+  ) => {
     const podcastSet = new Set(podcastIds);
     const ids = [...readyIds, ...podcastIds];
-    if (ids.length === 0) return;
-    await runSequentialBulk('Starting summaries', ids, async (id) => {
-      await contentAPI.generateSummary(id, false, podcastSet.has(id));
+    const audioOnlyIds = opts?.existingSummaryAudioIds || [];
+    if (ids.length === 0 && audioOnlyIds.length === 0) return;
+    const audioOnlySet = new Set(audioOnlyIds);
+    await runSequentialBulk('Starting summaries', [...ids, ...audioOnlyIds], async (id) => {
+      if (audioOnlySet.has(id)) {
+        await contentAPI.generateSummaryAudio(id);
+        updateItem(id, { summary_audio_status: 'generating' });
+        return;
+      }
+      await contentAPI.generateSummary(id, false, podcastSet.has(id), opts?.generateAudio);
       // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
       updateItem(id, { summary_status: 'generating' });
     });
@@ -561,11 +612,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
+  const handleGenerateSummaryAudio = async (id: number) => {
+    setOpenDropdown(null);
+    try {
+      await contentAPI.generateSummaryAudio(id);
+      // Mark as generating immediately so the poll kicks in without waiting for a refetch
+      updateItem(id, { summary_audio_status: 'generating' });
+    } catch (error: any) {
+      console.error('Failed to generate summary audio:', error);
+      alert(error?.response?.data?.error || 'Failed to generate summary audio');
+    }
+  };
+
   // Dismiss a failed-generation or failed-summary error from a card (the X button).
   // Optimistically clears the status so the red box vanishes instantly, then persists it.
-  const handleDismissError = async (id: number, kind: 'generation' | 'summary') => {
+  const handleDismissError = async (id: number, kind: 'generation' | 'summary' | 'summary_audio') => {
     try {
-      if (kind === 'summary') {
+      if (kind === 'summary_audio') {
+        updateItem(id, { summary_audio_status: 'idle', summary_audio_error: undefined });
+        await contentAPI.update(id, { dismiss_summary_audio_error: true } as any);
+      } else if (kind === 'summary') {
         updateItem(id, { summary_status: 'idle', summary_error: undefined });
         await contentAPI.update(id, { dismiss_summary_error: true } as any);
       } else {
@@ -669,12 +735,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           </div>
         )}
         <div className="header-top">
-          <button
-            onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
-            className="select-mode-btn"
-          >
-            {bulkMode ? 'Cancel' : 'Select'}
-          </button>
           <div className="filter-buttons">
             <button
               className={searchOpen || searchQuery.trim() ? 'active' : ''}
@@ -690,6 +750,26 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               title="Search library"
             >
               <Search size={16} />
+            </button>
+            {/* Bulk-select mode toggle, styled like its toolbar neighbors
+                (replaces the old wide standalone Select/Cancel text button) */}
+            <button
+              className={bulkMode ? 'active' : ''}
+              onClick={() => { setBulkMode(!bulkMode); setSelectedItems(new Set()); }}
+              title={bulkMode ? 'Exit selection' : 'Select items'}
+            >
+              {bulkMode ? <X size={16} /> : <ListChecks size={16} />}
+              <span className="filter-label">{bulkMode ? 'Cancel' : 'Select'}</span>
+            </button>
+            {/* Sort by date added: newest first (default) or oldest first.
+                Sorting lives in the store, so the queue's "Up next" follows. */}
+            <button
+              className={sortDir === 'asc' ? 'active' : ''}
+              onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+              title={sortDir === 'asc' ? 'Oldest added first, tap for newest first' : 'Newest added first, tap for oldest first'}
+            >
+              {sortDir === 'asc' ? <ArrowUpNarrowWide size={16} /> : <ArrowDownWideNarrow size={16} />}
+              <span className="filter-label">{sortDir === 'asc' ? 'Oldest' : 'Newest'}</span>
             </button>
             <div className="dropdown-container" ref={statusMenuRef}>
               {/* Facet filter: the button shows the icon of every selected facet
@@ -842,16 +922,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 onClick={() => handlePlayContent(item)}
                 title={item.title}
               >
-                {item.preview_picture ? (
+                {/* No image = no placeholder: the type icon already sits right of
+                    the title, so the title just gets the extra width instead */}
+                {item.preview_picture && (
                   <img src={item.preview_picture} alt="" loading="lazy" />
-                ) : (
-                  <span className="continue-card-art">{continueTypeIcon(item.type)}</span>
                 )}
                 <span className="continue-card-title">{item.title}</span>
                 <span className="continue-card-type">{continueTypeIcon(item.type)}</span>
                 <span
                   className="continue-card-progress"
-                  style={{ width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%` }}
+                  style={{
+                    width: `${Math.round(((item.playback_position || 0) / (item.duration || 1)) * 100)}%`,
+                    background: TYPE_BAR_COLORS[item.type] || '#3b82f6',
+                  }}
                 />
               </button>
             ))}
@@ -893,6 +976,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onRemoveAudio={handleRemoveAudio}
               onGenerateSummary={handleGenerateSummary}
               onRemoveSummary={handleRemoveSummary}
+              onGenerateSummaryAudio={handleGenerateSummaryAudio}
               onDismissError={handleDismissError}
               onRegenerateTranscript={handleRegenerateTranscript}
               onRefetch={handleRefetchContent}
@@ -904,37 +988,81 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         </div>
       )}
 
-      {transcriptWarning && (
+      {transcriptWarning && (() => {
+        const w = transcriptWarning;
+        const audioOpts = w.askAudio
+          ? { generateAudio: bulkAudioChecked, existingSummaryAudioIds: bulkAudioExistingChecked ? (w.existingSummaryIds || []) : [] }
+          : undefined;
+        return (
         <div className="comment-warning-overlay" onClick={() => setTranscriptWarning(null)}>
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
             <p>
-              {transcriptWarning.podcastIds.length === 1 && transcriptWarning.readyIds.length === 0 ? (
+              {w.podcastIds.length === 0 ? (
+                w.readyIds.length > 0 ? (
+                  <>Generate summaries for <strong>{w.readyIds.length}</strong> item{w.readyIds.length !== 1 ? 's' : ''}? This uses your LLM API credits.</>
+                ) : (
+                  <>All selected items already have summaries.</>
+                )
+              ) : w.podcastIds.length === 1 && w.readyIds.length === 0 && !w.askAudio ? (
                 <>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</>
               ) : (
-                <><strong>{transcriptWarning.podcastIds.length} podcast episode{transcriptWarning.podcastIds.length > 1 ? 's' : ''}</strong> in your selection {transcriptWarning.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.</>
+                <><strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> in your selection {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.</>
               )}
             </p>
+            {w.askAudio && (w.readyIds.length > 0 || w.podcastIds.length > 0) && (
+              <label className="bulk-audio-checkbox">
+                <input
+                  type="checkbox"
+                  checked={bulkAudioChecked}
+                  onChange={e => setBulkAudioChecked(e.target.checked)}
+                />
+                <span>Also generate summary audio (uses your TTS API credits)</span>
+              </label>
+            )}
+            {w.askAudio && (w.existingSummaryIds || []).length > 0 && (
+              <label className="bulk-audio-checkbox">
+                <input
+                  type="checkbox"
+                  checked={bulkAudioExistingChecked}
+                  onChange={e => setBulkAudioExistingChecked(e.target.checked)}
+                />
+                <span>Also generate audio for {(w.existingSummaryIds || []).length} selected item{(w.existingSummaryIds || []).length !== 1 ? 's' : ''} that already {(w.existingSummaryIds || []).length !== 1 ? 'have' : 'has'} a summary</span>
+              </label>
+            )}
             <div className="comment-warning-buttons">
-              <button
-                className="comment-warning-btn include"
-                onClick={() => {
-                  const w = transcriptWarning;
-                  setTranscriptWarning(null);
-                  runSummaryBatch(w.readyIds, w.podcastIds);
-                }}
-              >
-                Generate transcript{transcriptWarning.podcastIds.length > 1 ? 's' : ''} + summar{transcriptWarning.podcastIds.length + transcriptWarning.readyIds.length > 1 ? 'ies' : 'y'}
-              </button>
-              {transcriptWarning.readyIds.length > 0 && (
+              {w.podcastIds.length > 0 ? (
+                <>
+                  <button
+                    className="comment-warning-btn include"
+                    onClick={() => {
+                      setTranscriptWarning(null);
+                      runSummaryBatch(w.readyIds, w.podcastIds, audioOpts);
+                    }}
+                  >
+                    Generate transcript{w.podcastIds.length > 1 ? 's' : ''} + summar{w.podcastIds.length + w.readyIds.length > 1 ? 'ies' : 'y'}
+                  </button>
+                  {w.readyIds.length > 0 && (
+                    <button
+                      className="comment-warning-btn exclude"
+                      onClick={() => {
+                        setTranscriptWarning(null);
+                        runSummaryBatch(w.readyIds, [], audioOpts);
+                      }}
+                    >
+                      Skip episodes without transcript
+                    </button>
+                  )}
+                </>
+              ) : (
                 <button
-                  className="comment-warning-btn exclude"
+                  className="comment-warning-btn include"
+                  disabled={w.readyIds.length === 0 && !bulkAudioExistingChecked}
                   onClick={() => {
-                    const w = transcriptWarning;
                     setTranscriptWarning(null);
-                    runSummaryBatch(w.readyIds, []);
+                    runSummaryBatch(w.readyIds, [], audioOpts);
                   }}
                 >
-                  Skip episodes without transcript
+                  {w.readyIds.length > 0 ? 'Generate summaries' : 'Generate audio'}
                 </button>
               )}
               <button
@@ -946,7 +1074,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {commentWarning && (
         <div className="comment-warning-overlay" onClick={() => setCommentWarning(null)}>

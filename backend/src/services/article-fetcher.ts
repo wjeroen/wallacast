@@ -118,17 +118,22 @@ function parseExtendedScore(score: any): { agree?: number; disagree?: number; ra
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<ArticleContent> {
-  const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/);
+  // The post id appears as /posts/<id>/<slug> on normal links and as /s/<sequenceId>/p/<id>
+  // on sequence-navigation links (both Forum Magnum forums use both shapes; a sequence URL
+  // used to fail here, silently fall back to the standard scraper, and store a random
+  // comment as the article body).
+  const idMatch = url.match(/\/posts\/([a-zA-Z0-9]+)/) || url.match(/\/p\/([a-zA-Z0-9]+)/);
   if (!idMatch) {
-    throw new Error('Post ID extraction failed from URL; check the /posts/ID/slug format');
+    throw new Error('Post ID extraction failed from URL; expected /posts/<id>/<slug> or /s/<seq>/p/<id>');
   }
   const postId = idMatch[1];
   const baseUrl = isEAForum ? 'https://forum.effectivealtruism.org' : 'https://www.lesswrong.com';
   const apiEndpoint = `${baseUrl}/graphql`;
   // Keep the Referer on the same host as Origin/apiEndpoint. The stored link may be the
   // forum-bots mirror, but the GraphQL API lives on the main host, so send a main-host
-  // Referer to preserve the same-origin request shape the API expects.
-  const refererUrl = `${baseUrl}${idMatch[0]}`;
+  // Referer to preserve the same-origin request shape the API expects. Built from the
+  // canonical /posts/<id> form so sequence URLs get a plausible referer too.
+  const refererUrl = `${baseUrl}/posts/${postId}`;
 
   // Randomized wait between 1.5 and 4 seconds
   await sleep(1500 + Math.random() * 2500);
@@ -234,6 +239,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
   const dom = new JSDOM(post.htmlBody);
   stripInlineColors(dom.window.document.body);
+  normalizeTweetEmbeds(dom.window.document.body);
   return {
     title: post.title,
     content: dom.window.document.body.textContent || '',
@@ -605,6 +611,184 @@ function cleanSubstackContent(contentEl: Element): void {
 // giant block for the read-along extractor. Gated on the presence of presentation
 // tables, so ordinary articles pass through untouched. Runs at fetch/add time only;
 // already-stored items keep their HTML (refetch to heal them).
+// Normalize tweet embeds into ONE canonical structure so every later stage can
+// rely on it: the reader CSS styles it as a card, the narration scriptwriter
+// announces "A tweet by [author]", and read-along alignment keeps the whole
+// tweet as a single element. Two shapes exist in the wild:
+//  (A) Substack's server-rendered card: <div class="... twitter-embed" data-attrs="{json}">.
+//      The data-attrs JSON carries the full structured tweet (name, username,
+//      full_text, date, photos, like/reply counts, status url), so no fragile
+//      HTML scraping is needed.
+//  (B) The classic oEmbed fallback used by most other sites:
+//      <blockquote class="twitter-tweet"><p>text</p>(dash) Name (@handle) <a>date</a></blockquote>.
+// Both become:
+//   <blockquote class="twitter-tweet">
+//     <p class="tweet-author"><strong>Name</strong> <span class="tweet-handle">@handle</span></p>
+//     <p>tweet text</p>
+//     [<img class="tweet-photo" src="...">]
+//     [nested quoted tweet]
+//     <p class="tweet-footer"><a href="status-url">Month D, YYYY</a> • N likes • N replies</p>
+//   </blockquote>
+// Anything unparseable is left untouched (graceful degradation). Future fetches
+// only, existing items need a refetch.
+export function normalizeTweetEmbeds(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+  const formatDate = (iso: string | undefined): string | null => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  };
+
+  interface TweetData {
+    name?: string;
+    username?: string;
+    text?: string;
+    url?: string;
+    dateIso?: string;
+    dateText?: string;
+    photos?: string[];
+    likeCount?: number;
+    replyCount?: number;
+    quoted?: TweetData | null;
+  }
+
+  const buildTweet = (t: TweetData): HTMLElement | null => {
+    if (!t.text?.trim() || !(t.name || t.username)) return null;
+    const bq = doc.createElement('blockquote');
+    bq.className = 'twitter-tweet';
+
+    // Author line FIRST (like a real tweet card), so both the reader and the
+    // narration lead with who is speaking.
+    const author = doc.createElement('p');
+    author.className = 'tweet-author';
+    if (t.name) {
+      const strong = doc.createElement('strong');
+      strong.textContent = t.name;
+      author.appendChild(strong);
+    }
+    if (t.username) {
+      if (t.name) author.appendChild(doc.createTextNode(' '));
+      const handle = doc.createElement('span');
+      handle.className = 'tweet-handle';
+      handle.textContent = `@${t.username}`;
+      author.appendChild(handle);
+    }
+    bq.appendChild(author);
+
+    for (const line of t.text.split(/\n+/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const p = doc.createElement('p');
+      p.textContent = trimmed; // textContent, so raw tweet text can never inject HTML
+      bq.appendChild(p);
+    }
+
+    for (const src of t.photos || []) {
+      const img = doc.createElement('img');
+      img.className = 'tweet-photo';
+      img.setAttribute('src', src);
+      img.setAttribute('alt', '');
+      bq.appendChild(img);
+    }
+
+    if (t.quoted?.text) {
+      const inner = buildTweet({ name: t.quoted.name, username: t.quoted.username, text: t.quoted.text });
+      if (inner) {
+        inner.className = 'twitter-tweet tweet-quoted';
+        bq.appendChild(inner);
+      }
+    }
+
+    const footerParts: (HTMLElement | string)[] = [];
+    const dateText = t.dateText || formatDate(t.dateIso);
+    if (dateText) {
+      if (t.url) {
+        const a = doc.createElement('a');
+        a.setAttribute('href', t.url);
+        a.textContent = dateText;
+        footerParts.push(a);
+      } else {
+        footerParts.push(dateText);
+      }
+    }
+    if (typeof t.likeCount === 'number' && t.likeCount > 0) {
+      footerParts.push(`${t.likeCount} ${t.likeCount === 1 ? 'like' : 'likes'}`);
+    }
+    if (typeof t.replyCount === 'number' && t.replyCount > 0) {
+      footerParts.push(`${t.replyCount} ${t.replyCount === 1 ? 'reply' : 'replies'}`);
+    }
+    if (footerParts.length > 0) {
+      const footer = doc.createElement('p');
+      footer.className = 'tweet-footer';
+      footerParts.forEach((part, i) => {
+        if (i > 0) footer.appendChild(doc.createTextNode(' • '));
+        if (typeof part === 'string') footer.appendChild(doc.createTextNode(part));
+        else footer.appendChild(part);
+      });
+      bq.appendChild(footer);
+    }
+    return bq;
+  };
+
+  // (A) Substack rich cards (modern "twitter-embed" and older "tweet" class names)
+  root.querySelectorAll('div.twitter-embed[data-attrs], div.tweet[data-attrs]').forEach(el => {
+    try {
+      const attrs = JSON.parse(el.getAttribute('data-attrs') || '');
+      const photos = Array.isArray(attrs.photos)
+        ? attrs.photos
+          .map((p: any) => (typeof p === 'string' ? p : p?.url || p?.media_url_https))
+          .filter((s: any) => typeof s === 'string' && /^https?:\/\//.test(s))
+        : [];
+      const quoted = attrs.quoted_tweet?.full_text
+        ? { name: attrs.quoted_tweet.name, username: attrs.quoted_tweet.username, text: attrs.quoted_tweet.full_text }
+        : null;
+      const bq = buildTweet({
+        name: attrs.name,
+        username: attrs.username,
+        text: attrs.full_text,
+        url: attrs.url,
+        dateIso: attrs.date,
+        photos,
+        likeCount: attrs.like_count,
+        replyCount: attrs.reply_count,
+        quoted,
+      });
+      if (bq) el.replaceWith(bq);
+    } catch {
+      // Malformed data-attrs: leave the original markup in place
+    }
+  });
+
+  // (B) Classic oEmbed blockquotes: restructure so the author leads. The
+  // attribution line looks like "(em/en dash or hyphen) Name (@handle)" with the
+  // status link holding the date.
+  root.querySelectorAll('blockquote.twitter-tweet').forEach(el => {
+    if (el.querySelector('.tweet-author')) return; // already canonical
+    const m = (el.textContent || '').match(/[\u2014\u2013-]\s*([^(\u2014\u2013]+?)\s*\(@([A-Za-z0-9_]+)\)/);
+    if (!m) return; // unknown shape, leave as-is
+    const statusLink = Array.from(el.querySelectorAll('a'))
+      .find(a => /(?:twitter\.com|x\.com)\/[^/]+\/status\//.test(a.getAttribute('href') || ''));
+    const text = Array.from(el.querySelectorAll('p'))
+      .map(p => p.textContent?.trim() || '')
+      .filter(Boolean)
+      .join('\n');
+    if (!text) return;
+    const bq = buildTweet({
+      name: m[1].trim(),
+      username: m[2],
+      text,
+      url: statusLink?.getAttribute('href') || undefined,
+      dateText: statusLink?.textContent?.trim() || undefined,
+    });
+    if (bq) el.replaceWith(bq);
+  });
+}
+
 export function flattenEmailTables(root: Element): void {
   if (!root.querySelector('table[role="presentation"]')) return;
   const doc = root.ownerDocument!;
@@ -994,6 +1178,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     flattenEmailTables(contentEl);
     stripInlineColors(contentEl);
+    normalizeTweetEmbeds(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
 

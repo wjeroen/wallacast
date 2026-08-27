@@ -28,7 +28,8 @@ interface ContentCardProps {
   onRemoveAudio: (id: number) => void;
   onGenerateSummary: (id: number, regenerate: boolean) => void;
   onRemoveSummary: (id: number) => void;
-  onDismissError: (id: number, kind: 'generation' | 'summary') => void;
+  onGenerateSummaryAudio: (id: number) => void;
+  onDismissError: (id: number, kind: 'generation' | 'summary' | 'summary_audio') => void;
   onRegenerateTranscript: (id: number) => void;
   onRefetch: (id: number) => void;
   onAddToQueue: (item: ContentItem) => void;
@@ -56,6 +57,7 @@ export function ContentCard({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onGenerateSummaryAudio,
   onDismissError,
   onRegenerateTranscript,
   onRefetch,
@@ -312,7 +314,10 @@ export function ContentCard({
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
-            <span className="badge summary"><MessageSquareText size={12} /> Summary</span>
+            <span className="badge summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
+              <MessageSquareText size={12} /> Summary
+              {item.summary_audio_url && <Volume2 size={11} />}
+            </span>
           )}
           {/* All types, not just podcasts: articles/texts get a Whisper transcript
               of their generated audio too (it powers the Transcript tab) */}
@@ -332,6 +337,11 @@ export function ContentCard({
             <span>Summarizing…</span>
           </div>
         )}
+        {item.summary_audio_status === 'generating' && (
+          <div className="generation-status generating">
+            <span>Generating summary audio…</span>
+          </div>
+        )}
         {item.summary_status === 'failed' && (
           <div className="generation-status error">
             <span className="error-message">
@@ -349,6 +359,30 @@ export function ContentCard({
               <button
                 className="error-dismiss-btn"
                 onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </span>
+          </div>
+        )}
+        {item.summary_audio_status === 'failed' && (
+          <div className="generation-status error">
+            <span className="error-message">
+              Summary audio failed
+              {item.summary_audio_error && <span className="error-detail">: {item.summary_audio_error}</span>}
+            </span>
+            <span className="error-actions">
+              <button
+                className="error-retry-btn"
+                onClick={(e) => { e.stopPropagation(); onGenerateSummaryAudio(item.id); }}
+                title="Retry summary audio generation"
+              >
+                Retry
+              </button>
+              <button
+                className="error-dismiss-btn"
+                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary_audio'); }}
                 title="Dismiss"
               >
                 <X size={14} />
@@ -446,6 +480,19 @@ export function ContentCard({
                           <MessageSquareOff size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                           Remove summary
                         </button>
+                        {/* Summary audio, only offered once a summary exists. Removal
+                            rides on Remove summary (the audio narrates the summary). */}
+                        {item.summary_audio_status === 'generating' ? (
+                          <button disabled>
+                            <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                            Generating summary audio…
+                          </button>
+                        ) : (
+                          <button onClick={() => onGenerateSummaryAudio(item.id)}>
+                            <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                            {item.summary_audio_url ? 'Regenerate summary audio' : 'Generate summary audio'}
+                          </button>
+                        )}
                       </>
                     )}
                   </>

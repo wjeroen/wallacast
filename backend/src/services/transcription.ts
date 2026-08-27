@@ -1,4 +1,4 @@
-import { safeFetch } from './url-guard.js';
+import { safeFetch, AUDIO_REDIRECT_HOPS } from './url-guard.js';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -53,8 +53,12 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
   return chunkFiles;
 }
 
-// Retry a chunk API call on network errors (ECONNRESET, socket hang up, etc.)
-// Waits 2s, 4s, 8s between attempts. Throws immediately on non-network errors (e.g. auth failures).
+// Retry a chunk API call on transient errors: network drops (ECONNRESET, socket hang up,
+// etc., backoff 2s/4s/8s) AND provider capacity blips (HTTP 429 "Model busy, retry later" /
+// 5xx, backoff 15s/30s/60s, a busy model needs breathing room rather than a quick hammer).
+// Throws immediately on anything else (e.g. auth failures). Seen live 2026-07-27: DeepInfra
+// answered 429 Model busy on whisper-large-v3 and the old network-only classification gave
+// up after one attempt.
 async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRetries = 3): Promise<T> {
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
@@ -67,13 +71,23 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
         error?.constructor?.name === 'APIConnectionError' ||
         (typeof error?.message === 'string' && /connection|socket hang up|network/i.test(error.message));
 
-      if (!isNetworkError || attempt > maxRetries) {
+      // Covers both transports: the OpenAI SDK attaches a numeric status, the DeepInfra
+      // native path throws "DeepInfra transcription HTTP <status> ..." messages.
+      const status = error?.status ?? error?.response?.status;
+      const isCapacityError =
+        status === 429 ||
+        (typeof status === 'number' && status >= 500) ||
+        (typeof error?.message === 'string' && /HTTP (429|5\d\d)/.test(error.message));
+
+      if ((!isNetworkError && !isCapacityError) || attempt > maxRetries) {
         console.error(`${chunkLabel} failed after ${attempt} attempt(s), giving up.`);
         throw error;
       }
 
-      const delayMs = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
-      console.log(`${chunkLabel} network error (${error?.cause?.code || error?.message}), retrying in ${delayMs / 1000}s (attempt ${attempt}/${maxRetries})...`);
+      const delayMs = isCapacityError
+        ? [15000, 30000, 60000][Math.min(attempt - 1, 2)]
+        : Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`${chunkLabel} ${isCapacityError ? 'capacity' : 'network'} error (${error?.cause?.code || error?.message}), retrying in ${delayMs / 1000}s (attempt ${attempt}/${maxRetries})...`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
@@ -84,17 +98,23 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
 // Normalized per-file transcription result (word shape matches what read-along/DB expect).
 type ChunkResult = { text: string; words: Array<{ word: string; start: number; end: number }> };
 
-// Anti-hallucination safety params for DeepInfra's NATIVE Whisper endpoint (v1).
-// condition_on_previous_text=false is the headline fix: it stops Whisper from re-reading its own
-// (possibly repetitive) output for the previous 30s window and snowballing into "even. even. even."
-// loops. The threshold params are Whisper defaults (only bite if DeepInfra runs the temperature
-// fallback loop, harmless no-ops otherwise). vad / no_repeat_ngram_size are deliberately NOT set
-// yet, they're staged follow-ups so we can measure each knob's effect independently.
+// Params for DeepInfra's NATIVE Whisper endpoint (v1).
+//
+// REALITY CHECK (schema-verified 2026-07-26 via GET api.deepinfra.com/models/<model>):
+// the endpoint's documented input fields are ONLY: service_tier, audio, task, initial_prompt,
+// temperature, language, chunk_level, chunk_length_s, webhook. That means several fields below
+// (word_timestamps, condition_on_previous_text, and the three thresholds) are NOT in the schema
+// and are presumably ignored. They are kept for now because the repetition loops ("even. even.
+// even.") demonstrably stopped after the native-endpoint switch and removing anything from a
+// working recipe deserves its own test (the real fix was likely the endpoint's different
+// inference pipeline plus chunk_level=word, not these params). A `vad` param does NOT exist
+// (a staged vad experiment on 2026-07-26 was a no-op and was removed the same day).
+// chunk_length_s (1-30, default 30) is the one REAL spare knob if window-boundary word drops
+// ever need attacking on the cheap.
 const DEEPINFRA_WHISPER_PARAMS: Record<string, string> = {
-  // Read-along needs per-word timestamps. The native endpoint defaults word_timestamps=false and
-  // chunk_level=segment, which returns segment-level text only (no per-word timing). That broke
-  // read-along. chunk_level=word is the switch that emits word-level output, word_timestamps=true
-  // asks each word to carry start/end. The response can put words at the top level OR nested inside
+  // Read-along needs per-word timestamps: chunk_level=word is the switch that makes the native
+  // endpoint emit word-level output (the default chunk_level=segment returns text only, which
+  // broke read-along). The response can put words at the top level OR nested inside
   // segments[].words, so extractDeepInfraWords() below reads both.
   chunk_level: 'word',
   word_timestamps: 'true',
@@ -252,7 +272,7 @@ export async function transcribeWithTimestamps(
       // URL passed, download it (legacy path, used for podcast transcription)
       // Log without the query string: article URLs carry the audio access token.
       console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
-      const response = await safeFetch(audioSource);
+      const response = await safeFetch(audioSource, {}, AUDIO_REDIRECT_HOPS);
       if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
       if (!response.body) throw new Error('No response body');
       await pipeline(response.body, createWriteStream(audioPath));

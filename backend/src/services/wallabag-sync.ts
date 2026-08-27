@@ -2,6 +2,7 @@ import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
 import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
 import { deleteAudioFile } from './audio-storage.js';
+import { summaryAudioKey } from './summary-audio.js';
 import { snapshotContentVersion } from './content-versions.js';
 
 /**
@@ -175,7 +176,10 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
              // Delete the on-disk audio files too, otherwise the mp3s orphan on the /data volume.
              // Run in parallel. deleteAudioFile is best-effort (never throws), and allSettled
              // makes sure one failed unlink cannot abort the rest.
-             await Promise.allSettled(ids.map((id: number) => deleteAudioFile(id)));
+             await Promise.allSettled(ids.flatMap((id: number) => [
+               deleteAudioFile(id),
+               deleteAudioFile(summaryAudioKey(id)),
+             ]));
           }
           
           continue; // Skip processing this entry

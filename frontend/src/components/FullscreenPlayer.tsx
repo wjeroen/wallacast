@@ -5,7 +5,9 @@ import {
   RotateCcw,
   RotateCw,
   Gauge,
+  Check,
   Clock,
+  SlidersHorizontal,
   Type,
   Sun,
   Moon,
@@ -47,7 +49,7 @@ import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
-import { cleanHtml, displayUrl, formatTime, getDomainFromUrl } from '../format';
+import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
@@ -79,6 +81,8 @@ interface FullscreenPlayerProps {
   duration: number;
   playbackSpeed: number;
   sleepTimer: number | null;
+  // Deadline (ms timestamp) of the armed sleep timer, for the live countdown
+  sleepTimerEndAt?: number | null;
   // When > 0, the automatic resume-seek permanently failed at this position:
   // show a manual "Resume at MM:SS" chip (clicking it is a normal user seek).
   resumeTargetTime?: number;
@@ -90,7 +94,15 @@ interface FullscreenPlayerProps {
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
   onToggleSpeed: () => void;
-  onToggleSleepTimer: () => void;
+  onSetSleepTimer: (minutes: number | null) => void;
+  // Which audio the player is effectively playing ('summary' disables all
+  // read-along highlighting/seeking, whose timestamps belong to the original).
+  playingVariant?: 'original' | 'summary' | null;
+  preferSummaryAudio?: boolean;
+  onTogglePreferSummaryAudio?: () => void;
+  // Per-item variant pick from the Summary tab banner (does not touch the setting).
+  // autoplay true = an explicit Play press; false = switch keeping play/pause state.
+  onSelectAudioVariant?: (variant: 'original' | 'summary', autoplay: boolean) => void;
   onMinimize: () => void;
   onClose: () => void;
   onTranscriptWordClick: (wordIndex: number) => void;
@@ -99,6 +111,7 @@ interface FullscreenPlayerProps {
   onRemoveAudio?: () => void;
   onGenerateSummary?: (regenerate: boolean) => void;
   onRemoveSummary?: () => void;
+  onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
@@ -129,6 +142,10 @@ const TAB_LABELS: Record<TabType, string> = {
   'queue': 'Queue',
 };
 
+// Summary-tab auto-scroll: fraction of the remaining distance covered per frame.
+// See the movement loop for why this value and not a faster one.
+const SUMMARY_SCROLL_EASING = 0.08;
+
 const TAB_ICONS: Record<TabType, LucideIcon> = {
   'content': AlignLeft,
   'description': Info,
@@ -152,6 +169,9 @@ function versionSourceLabel(source: ContentVersion['source']): string {
 }
 
 const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
+
+// Sleep-timer durations for the playback-options panel (Off is its own chip)
+const SLEEP_TIMER_OPTIONS = [5, 10, 15, 30, 45, 60];
 
 function getStoredFontScale(): number {
   const stored = localStorage.getItem('readerFontScale');
@@ -355,6 +375,7 @@ export function FullscreenPlayer({
   duration,
   playbackSpeed,
   sleepTimer,
+  sleepTimerEndAt = null,
   resumeTargetTime = 0,
   activeWordIndex = -1,
   transcriptWords = [],
@@ -363,7 +384,11 @@ export function FullscreenPlayer({
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
-  onToggleSleepTimer,
+  onSetSleepTimer,
+  playingVariant = null,
+  preferSummaryAudio = false,
+  onTogglePreferSummaryAudio,
+  onSelectAudioVariant,
   onMinimize,
   onClose,
   onTranscriptWordClick,
@@ -372,6 +397,7 @@ export function FullscreenPlayer({
   onRemoveAudio,
   onGenerateSummary,
   onRemoveSummary,
+  onGenerateSummaryAudio,
   onRegenerateTranscript,
   onContentUpdated,
   themeMode,
@@ -408,16 +434,12 @@ export function FullscreenPlayer({
   const tabScrollPositions = useRef<Record<string, number>>({});
   const tabContentRef = useRef<HTMLDivElement>(null);
 
-  // When switching tracks, reset to the appropriate default tab.
-  // Only the queue tab is preserved across advances; content tabs
-  // reset to the default for the new content type (description for
-  // podcasts, read-along for articles/texts).
+  // When switching tracks, KEEP the active tab (so e.g. Summary stays open
+  // while pressing next to read summary after summary). The auto-select
+  // effect below snaps to the new item's first available tab whenever the
+  // kept tab doesn't exist for it, so a missing tab can never be forced.
   useEffect(() => {
     tabScrollPositions.current = {};
-    setActiveTab(prev => {
-      if (prev === 'queue') return prev;
-      return content.type === 'podcast_episode' ? 'description' : 'read-along';
-    });
   }, [content.id]);
 
   const [autoScroll, setAutoScroll] = useState(() => {
@@ -429,6 +451,9 @@ export function FullscreenPlayer({
   const [fontScale, setFontScale] = useState<number>(getStoredFontScale);
   const [showDisplayPanel, setShowDisplayPanel] = useState(false);
   const displayPanelRef = useRef<HTMLDivElement>(null);
+  // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
+  const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
+  const playbackPanelRef = useRef<HTMLDivElement>(null);
   // Content store for star/archive/delete actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
   // Delayed-archive state (player-only): pending + deferred both render as Undo
@@ -484,6 +509,30 @@ export function FullscreenPlayer({
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showDisplayPanel]);
+
+  // Close playback-options panel when clicking outside (same pattern as above)
+  useEffect(() => {
+    if (!showPlaybackPanel) return;
+    function handleClick(e: MouseEvent) {
+      if (playbackPanelRef.current && !playbackPanelRef.current.contains(e.target as Node)) {
+        setShowPlaybackPanel(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showPlaybackPanel]);
+
+  // Live countdown for the armed sleep timer on the playback-options button.
+  // Playback re-renders keep it fresh while playing; this slow tick covers pause.
+  const [, setSleepTick] = useState(0);
+  useEffect(() => {
+    if (!sleepTimerEndAt) return;
+    const iv = setInterval(() => setSleepTick(t => t + 1), 15000);
+    return () => clearInterval(iv);
+  }, [sleepTimerEndAt]);
+  const sleepRemainingLabel = sleepTimerEndAt
+    ? `${Math.max(1, Math.ceil((sleepTimerEndAt - Date.now()) / 60000))}m`
+    : null;
 
   // Sync font scale from backend on mount (cross-device persistence)
   useEffect(() => {
@@ -583,14 +632,21 @@ export function FullscreenPlayer({
   // Extract comments start time for timeline marker
   const commentsStartTime = parsedAlignment?.commentsStartTime || null;
 
+  // Everything read-along describes the ORIGINAL audio. While the summary audio
+  // plays, its clock means nothing to those timestamps, so highlighting, the
+  // timeline comments marker, and click-to-seek are all disabled.
+  const playingSummaryAudio = playingVariant === 'summary';
+
   // Calculate marker position as percentage
   const commentsMarkerPosition = useMemo(() => {
+    if (playingSummaryAudio) return null;
     if (!commentsStartTime || !duration || duration === 0) return null;
     return (commentsStartTime / duration) * 100;
-  }, [commentsStartTime, duration]);
+  }, [commentsStartTime, duration, playingSummaryAudio]);
 
   // Find active element index for LLM alignment
   const activeElementIndex = useMemo(() => {
+    if (playingSummaryAudio) return -1;
     if (!isLLMAlignment || !parsedAlignment?.elements) return -1;
     const elements = parsedAlignment.elements as LLMAlignmentElement[];
 
@@ -604,7 +660,245 @@ export function FullscreenPlayer({
       }
     }
     return activeIdx;
-  }, [isLLMAlignment, parsedAlignment, currentTime]);
+  }, [isLLMAlignment, parsedAlignment, currentTime, playingSummaryAudio]);
+
+  // --- Read-along performance (2026-07-29) ----------------------------------
+  // The read-along used to compute the active-highlight class inline in JSX,
+  // which made React rebuild EVERY element roughly 4x/second while audio played
+  // (visible lag on phones with very long articles, even with autoscroll off).
+  // Instead, the element trees below are memoized per alignment WITHOUT any
+  // active class, and a tiny effect moves the ra-active class between the two
+  // affected DOM nodes as playback advances. Same DOM, same CSS, same behavior.
+  // While summary audio plays, element/word clicks must not seek it to original-audio
+  // timestamps: the memoized trees call these refs, so swapping in a no-op disables
+  // seeking without touching the trees.
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = playingSummaryAudio ? () => {} : onSeek;
+
+  const readAlongParts = useMemo(() => {
+    if (!isLLMAlignment || !parsedAlignment?.elements) return null;
+    const elements = parsedAlignment.elements as LLMAlignmentElement[];
+    // Precomputed index lookup (elements.indexOf per comment was quadratic on
+    // heavily-commented articles).
+    const indexByEl = new Map<LLMAlignmentElement, number>();
+    elements.forEach((el, i) => indexByEl.set(el, i));
+    return {
+      elements,
+      indexByEl,
+      titleEl: elements.find(e => e.type === 'title'),
+      metaElements: elements.filter(e => e.type === 'meta'),
+      bodyElements: elements.filter(e =>
+        ['heading', 'paragraph', 'image', 'blockquote', 'tweet', 'list', 'code-block', 'llm-block'].includes(e.type)
+      ),
+      commentDivider: elements.find(e => e.type === 'comment-divider'),
+      commentElements: elements.filter(e => e.type === 'comment'),
+    };
+  }, [isLLMAlignment, parsedAlignment]);
+
+  const readAlongBodyTree = useMemo(() => {
+    if (!readAlongParts) return null;
+    const { bodyElements, indexByEl } = readAlongParts;
+    return bodyElements.map((el) => {
+      const globalIndex = indexByEl.get(el)!;
+      return (
+        <div
+          key={`body-${globalIndex}`}
+          id={`ra-el-${globalIndex}`}
+          className="read-along-element"
+          onClick={(e) => {
+            // Read-along taps seek, with two exceptions so links stay usable:
+            //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
+            //    don't seek.
+            //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
+            //    don't open the picture.
+            // Everything else (the plain text of the highlight) seeks.
+            const target = e.target as HTMLElement;
+            const anchor = target.closest('a');
+            const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+            if (anchor && !isImage) return; // real link: open it, don't seek
+            if (isImage) e.preventDefault(); // image link: seek, don't open the image
+            onSeekRef.current(el.startTime);
+          }}
+        >
+          <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+        </div>
+      );
+    });
+  }, [readAlongParts, sanitizedElementHtml]);
+
+  const readAlongCommentsTree = useMemo(() => {
+    if (!readAlongParts || readAlongParts.commentElements.length === 0) return null;
+    const { commentElements, commentDivider, indexByEl } = readAlongParts;
+    const isLW = content.url ? content.url.includes('lesswrong.com') : false;
+    const isSub = content.url ? content.url.includes('substack.com') : false;
+
+    interface CommentNode {
+      element: LLMAlignmentElement;
+      globalIndex: number;
+      children: CommentNode[];
+    }
+    const roots: CommentNode[] = [];
+    const stack: CommentNode[] = [];
+    for (const el of commentElements) {
+      const depth = el.commentMeta?.depth ?? 0;
+      const node: CommentNode = { element: el, globalIndex: indexByEl.get(el)!, children: [] };
+      while (stack.length > depth) stack.pop();
+      if (stack.length === 0) {
+        roots.push(node);
+      } else {
+        stack[stack.length - 1].children.push(node);
+      }
+      stack.push(node);
+    }
+
+    const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
+      const { element: el, globalIndex, children } = node;
+      const isNarrated = el.startTime >= 0;
+      const meta = el.commentMeta;
+      const metaStr = buildCommentMetadata(meta, isLW, isSub);
+      return (
+        // Odd depths get the alternate shade, same rule as the Comments tab.
+        <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
+          <div
+            id={`ra-el-${globalIndex}`}
+            className="read-along-element"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Same rule as the body: a real link opens (no seek), an image link
+              // seeks (no open), everything else seeks.
+              const target = e.target as HTMLElement;
+              const anchor = target.closest('a');
+              const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
+              if (anchor && !isImage) return;
+              if (isImage) e.preventDefault();
+              if (isNarrated) onSeekRef.current(el.startTime);
+            }}
+          >
+            <div className="comment-header">
+              <span className="comment-username">{meta?.username || 'Anonymous'}</span>
+              {meta?.date && (
+                <span className="comment-date">
+                  {' • '}
+                  {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
+                </span>
+              )}
+            </div>
+            {metaStr && (
+              <div className="comment-metadata">
+                <span className="comment-votes">{metaStr}</span>
+              </div>
+            )}
+            <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
+          </div>
+          {children.length > 0 && (
+            <div className="comment-replies">
+              {children.map(child => renderCommentNode(child, nodeDepth + 1))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <>
+        {commentDivider && (
+          <div
+            id={`ra-el-${indexByEl.get(commentDivider)!}`}
+            className="comments-header read-along-element"
+            onClick={() => { if (commentDivider.startTime >= 0) onSeekRef.current(commentDivider.startTime); }}
+          >
+            <h3>Comments ({commentElements.length})</h3>
+          </div>
+        )}
+        <div className="comments-list">
+          {roots.map(node => renderCommentNode(node))}
+        </div>
+      </>
+    );
+  }, [readAlongParts, sanitizedElementHtml, content.url]);
+
+  // Apply the highlight imperatively. Runs after every render (at most two
+  // classList operations), which also self-heals after tab switches and after
+  // the memoized trees rebuild (fresh nodes render without the class).
+  const highlightedElRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const next = isLLMAlignment && activeTab === 'read-along' && activeElementIndex >= 0
+      ? document.getElementById(`ra-el-${activeElementIndex}`)
+      : null;
+    if (highlightedElRef.current && highlightedElRef.current !== next) {
+      highlightedElRef.current.classList.remove('ra-active');
+    }
+    if (next) next.classList.add('ra-active');
+    highlightedElRef.current = next;
+  });
+
+  // --- Podcast transcript performance (stage 2, 2026-08-18) -----------------
+  // Same recipe as the read-along memos above, applied to the word-by-word
+  // podcast transcript: the ~18k word spans of a 2h episode used to be rebuilt
+  // by React on every playback tick just to color one newly spoken word.
+  // The tree below renders once per transcript with no read state and no
+  // per-word handlers; an imperative effect paints the .read class on only the
+  // words that changed since the previous tick.
+  const onTranscriptWordClickRef = useRef(onTranscriptWordClick);
+  onTranscriptWordClickRef.current = playingSummaryAudio ? () => {} : onTranscriptWordClick;
+
+  const transcriptDisplayWords = useMemo(() => {
+    if (content.type !== 'podcast_episode') return null;
+    if (transcriptWords.length > 0) {
+      return transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''));
+    }
+    const fallbackText = cleanHtml(content.transcript || content.content || '');
+    return fallbackText.split(/\s+/).filter(w => w.length > 0);
+  }, [content.type, transcriptWords, content.transcript, content.content]);
+
+  const transcriptTree = useMemo(() => {
+    if (!transcriptDisplayWords || transcriptDisplayWords.length === 0) return null;
+    // One delegated click handler instead of 18k closures
+    const handleWordClick = (e: React.MouseEvent<HTMLParagraphElement>) => {
+      const span = (e.target as HTMLElement).closest('span.transcript-word');
+      if (!span) return;
+      const index = Number(span.id.slice('word-'.length));
+      if (Number.isFinite(index)) onTranscriptWordClickRef.current(index);
+    };
+    return (
+      <p className="read-along-text" onClick={handleWordClick}>
+        {transcriptDisplayWords.map((word, index) => (
+          <span key={index} id={`word-${index}`} className="transcript-word">
+            {word}{' '}
+          </span>
+        ))}
+      </p>
+    );
+  }, [transcriptDisplayWords]);
+
+  // Paint the read state imperatively. Runs after every render; when the active
+  // word hasn't moved it does a single probe and no DOM writes. Fresh spans
+  // (tab switch, item change) render unmarked, which the probe detects, and the
+  // whole range is then re-applied from scratch.
+  const appliedReadUpToRef = useRef(-1);
+  useEffect(() => {
+    const isWordView = activeTab === 'read-along' && !isLLMAlignment && content.type === 'podcast_episode';
+    if (!isWordView) {
+      appliedReadUpToRef.current = -1;
+      return;
+    }
+    const target = activeWordIndex;
+    let applied = appliedReadUpToRef.current;
+    if (applied >= 0) {
+      const probe = document.getElementById(`word-${applied}`);
+      if (!probe || !probe.classList.contains('read')) applied = -1;
+    }
+    if (target > applied) {
+      for (let i = applied + 1; i <= target; i++) {
+        document.getElementById(`word-${i}`)?.classList.add('read');
+      }
+    } else if (target < applied) {
+      for (let i = target + 1; i <= applied; i++) {
+        document.getElementById(`word-${i}`)?.classList.remove('read');
+      }
+    }
+    appliedReadUpToRef.current = target;
+  });
 
   // Determine which tabs are available.
   // Articles/texts get an editable "Content" tab (current text) plus a read-only
@@ -633,11 +927,17 @@ export function FullscreenPlayer({
     }
 
     if ((content.summary || '').trim()) tabs.push('summary');
-    tabs.push('queue');
+    // Queue is a listening feature: audio-less items hide it (the queue only
+    // lists audio items and autoplay skips them, while the prev/next buttons
+    // walk everything, so showing it there would just contradict the buttons).
+    // Summary audio counts: a summary-audio-only item is a playable audio item.
+    if (hasAnyAudio(content)) tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
+  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
 
-  // Auto-select first available tab if current one disappeared
+  // Auto-select first available tab if current one disappeared.
+  // NOTE: this condition is mirrored in the scroll-reset effect below (it
+  // can't just read activeTab there, see that effect's comment). Keep both in sync.
   useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
       setActiveTab(availableTabs[0]);
@@ -646,12 +946,38 @@ export function FullscreenPlayer({
 
   // Honor a requested initial tab (e.g. "Read more" in the library → Summary tab).
   // Runs after the auto-select effect so it wins when both fire on a new item.
+  // App.tsx only sets initialTab on the click that opens the player, next/prev/
+  // autoplay never touch it, so this keeps firing on every later item too as
+  // long as it has a summary. NOTE: mirrored in the scroll-reset effect below.
   useEffect(() => {
     if (initialTab === 'summary' && (content.summary || '').trim()) {
       setActiveTab('summary');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, initialTab]);
+
+  // The default tab follows the audio actually PLAYING (user decision 2026-08-18):
+  // opening or advancing into an item whose effective audio is the summary snaps to
+  // the Summary tab (overriding tab persistence, since the read-along views would
+  // show text the playing audio does not narrate). Toggling the mode on an item
+  // with both audios flips between Summary and the item's normal default. Items
+  // playing their original audio keep the existing persistence behavior.
+  // NOTE: the item-change branch below (playingVariant === 'summary') is
+  // mirrored in the scroll-reset effect below. Keep both in sync.
+  const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
+  useEffect(() => {
+    const prev = prevTabFollowRef.current;
+    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
+    if (playingVariant === 'summary') {
+      if (prev.id !== content.id || prev.variant !== 'summary') setActiveTab('summary');
+      return;
+    }
+    // Mode toggled back to the original audio on the SAME item: return to its default.
+    if (prev.id === content.id && prev.variant === 'summary' && playingVariant === 'original') {
+      setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id, playingVariant]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -714,6 +1040,109 @@ export function FullscreenPlayer({
     scrollToActiveRef.current = scrollToActive;
   }, [scrollToActive]);
 
+  // Summary tab auto-scroll. Summary audio deliberately has no timestamps of its own
+  // (no Whisper, no alignment), so the only available signal is how far through the
+  // clip we are. That fraction is mapped straight onto the page height and centred in
+  // the viewport, which is the same thing the legacy word-index scroll does, minus the
+  // per-word lookup that has nothing to look up here.
+  //
+  // The centring IS the start and end delay: while the reading point is still inside
+  // the top half-screen of content the container cannot scroll up, so it stays pinned
+  // at the top and the opening words stay put. The same happens at the bottom, so the
+  // closing words stay readable. That dead zone lands at roughly 15-20 seconds at each
+  // end whatever the summary length, since audio duration and page height both scale
+  // with the amount of text. No hand-tuned delay is needed on top.
+  //
+  // Two deliberately different rates, which is the whole trick:
+  //
+  //  - The TARGET (where the page should end up) is recomputed only when the audio
+  //    position changes, about 4x/s. This is the step that MEASURES the page
+  //    (scrollHeight/clientHeight), the only part with any real cost.
+  //  - The MOVEMENT runs once per screen refresh, easing the page toward that target.
+  //    Per frame that is one subtraction, one multiply and one property write. No
+  //    measuring, no React render, no DOM lookup.
+  //
+  // Moving the page only 4x/s reads as a hop however it is done, and the browser's own
+  // smooth scroll cannot rescue it: a fresh destination arrives before each animation
+  // finishes, so it restarts from a standstill forever. The read-along tabs get away
+  // with the browser's animation because their destination stays put for seconds at a
+  // time (the same element stays active), which is not true of a continuous position.
+  const summaryTargetRef = useRef<number | null>(null);
+  const summaryScrollPosRef = useRef<number | null>(null);
+
+  const computeSummaryTarget = useCallback(() => {
+    const container = tabContentRef.current;
+    if (!container || !duration) return null;
+    const maxScroll = container.scrollHeight - container.clientHeight;
+    if (maxScroll <= 0) return null;
+    const readingPoint = (currentTime / duration) * container.scrollHeight;
+    return Math.max(0, Math.min(maxScroll, readingPoint - container.clientHeight / 2));
+  }, [currentTime, duration]);
+
+  // Land straight on the right spot with no easing. Used when arriving on the tab,
+  // where a glide from the previous item's scroll position would be wrong.
+  const snapSummaryToProgress = useCallback(() => {
+    const container = tabContentRef.current;
+    const target = computeSummaryTarget();
+    if (!container || target === null) return;
+    summaryTargetRef.current = target;
+    summaryScrollPosRef.current = target;
+    container.scrollTop = target;
+  }, [computeSummaryTarget]);
+
+  const snapSummaryRef = useRef(snapSummaryToProgress);
+  useEffect(() => {
+    snapSummaryRef.current = snapSummaryToProgress;
+  }, [snapSummaryToProgress]);
+
+  // Land the tab content at a sensible spot for the new item. This scroll
+  // container is never unmounted between items (same DOM node, only props
+  // change), so without this its scrollTop just carries over from whatever
+  // the previous item was scrolled to (reported 2026-08-21, worst on the
+  // Summary tab, where you always want to start reading from the top).
+  // Every tab defaults to the top. Two exceptions, both only with auto-scroll
+  // on, and both jumping DIRECTLY to where the audio already is (matching what
+  // continuous auto-scroll does during playback) instead of flashing at the top
+  // first: the Transcript tab jumps to the playing highlight, and the Summary
+  // tab jumps to its progress position when the summary audio is what is
+  // playing. With auto-scroll off, both behave like every other tab.
+  //
+  // `activeTab` state can still be showing the PREVIOUS item's tab here: the
+  // three effects above that pick the new item's tab (auto-select-first-
+  // available, honor-initialTab, follow-playing-summary) call setActiveTab(),
+  // but that update hasn't committed yet when this effect runs in the same
+  // pass (reported 2026-08-22: advancing from Transcript into an item
+  // playing its summary correctly flipped the visible tab to Summary, but
+  // this effect still saw the old "read-along" tab, tried to jump to a
+  // highlighted word that doesn't exist on the Summary tab, found nothing,
+  // and left the old scroll position in place). So the actual landing tab is
+  // resolved fresh below, mirroring those three effects' conditions.
+  // KEEP THIS IN SYNC with the three NOTE comments above marking them.
+  useEffect(() => {
+    let landingTab = activeTab;
+    if (availableTabs.length > 0 && !availableTabs.includes(landingTab)) landingTab = availableTabs[0];
+    if (initialTab === 'summary' && (content.summary || '').trim()) landingTab = 'summary';
+    if (playingVariant === 'summary') landingTab = 'summary';
+
+    const jumpToHighlight = landingTab === 'read-along' && autoScroll;
+    const jumpToSummaryProgress = landingTab === 'summary' && autoScroll && playingVariant === 'summary';
+    if (jumpToHighlight) {
+      setTimeout(() => scrollToActiveRef.current(), 100);
+    } else if (jumpToSummaryProgress) {
+      setTimeout(() => snapSummaryRef.current(), 100);
+    } else {
+      requestAnimationFrame(() => {
+        if (tabContentRef.current) {
+          tabContentRef.current.scrollTop = 0;
+        }
+      });
+    }
+    // Deliberately keyed on content.id only: everything else above is read
+    // fresh, we don't want this to re-fire just because the user toggles
+    // auto-scroll or switches tabs mid-item.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.id]);
+
   // Trigger scroll once when switching to read-along tab
   useEffect(() => {
     if (activeTab === 'read-along') {
@@ -721,12 +1150,66 @@ export function FullscreenPlayer({
     }
   }, [activeTab]);
 
-  // Auto-scroll as audio plays (only when autoScroll is on)
+  // Auto-scroll as audio plays (only when autoScroll is on). Aligned articles
+  // scroll every tick (progressive intra-element scrolling needs currentTime);
+  // the podcast word view only scrolls when the active word changes, since
+  // restarting the smooth scroll 4x/s against an 18k-span paragraph forces a
+  // layout flush per tick and re-launches the animation before it can finish.
+  const lastAutoScrolledWordRef = useRef(-1);
   useEffect(() => {
-    if (activeTab === 'read-along' && autoScroll) {
+    lastAutoScrolledWordRef.current = -1;
+  }, [content.id]);
+  useEffect(() => {
+    if (activeTab !== 'read-along' || !autoScroll) return;
+    if (isLLMAlignment) {
+      scrollToActive();
+      return;
+    }
+    if (activeWordIndex >= 0 && activeWordIndex !== lastAutoScrolledWordRef.current) {
+      lastAutoScrolledWordRef.current = activeWordIndex;
       scrollToActive();
     }
-  }, [activeTab, currentTime, autoScroll, scrollToActive]);
+  }, [activeTab, currentTime, autoScroll, scrollToActive, isLLMAlignment, activeWordIndex]);
+
+  // Summary tab equivalent, sharing the same auto-scroll switch. Gated on the summary
+  // audio actually playing: the full audio's clock says nothing about where you are in
+  // a 90-second summary of it.
+  const summaryAutoScrollOn = activeTab === 'summary' && playingSummaryAudio && autoScroll;
+
+  // Target refresh, at the audio's own update rate (~4x/s). The page measuring lives
+  // here and nowhere else.
+  useEffect(() => {
+    summaryTargetRef.current = summaryAutoScrollOn ? computeSummaryTarget() : null;
+  }, [summaryAutoScrollOn, computeSummaryTarget]);
+
+  // Movement loop. Each frame closes a fixed fraction of the remaining distance, which
+  // turns the target's 4x/s staircase into steady motion without needing to know the
+  // playback rate. At 0.08 the response time is ~200ms, longer than the 250ms between
+  // target updates, so consecutive steps blend instead of pulsing; the resulting lag
+  // behind the target is a few pixels. Once converged (audio paused, or parked in an
+  // end dead zone) every frame is a compare and a return. requestAnimationFrame also
+  // stops itself while the app is backgrounded.
+  useEffect(() => {
+    if (!summaryAutoScrollOn) return;
+    const container = tabContentRef.current;
+    if (!container) return;
+    summaryScrollPosRef.current = container.scrollTop;
+    let frame = requestAnimationFrame(function step() {
+      frame = requestAnimationFrame(step);
+      const target = summaryTargetRef.current;
+      if (target === null) return;
+      const current = summaryScrollPosRef.current ?? container.scrollTop;
+      const delta = target - current;
+      if (Math.abs(delta) < 0.25) return;
+      const next = current + delta * SUMMARY_SCROLL_EASING;
+      summaryScrollPosRef.current = next;
+      container.scrollTop = next;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      summaryScrollPosRef.current = null;
+    };
+  }, [summaryAutoScrollOn]);
 
   const handleTabClick = (tab: TabType) => {
     if (tab === 'read-along' && activeTab === 'read-along') {
@@ -959,21 +1442,10 @@ export function FullscreenPlayer({
   // Renders content EXACTLY like content tab + comments tab, with timestamps
   // --------------------------------------------------------------------------
   const renderLLMReadAlong = () => {
-    if (!parsedAlignment || !isLLMAlignment) return null;
-
-    const elements = parsedAlignment.elements as LLMAlignmentElement[];
-    const isLW = content.url ? content.url.includes('lesswrong.com') : false;
-    const isSub = content.url ? content.url.includes('substack.com') : false;
-
-    // Split elements into categories. Title and author/date meta render as timed
-    // elements in the header below (the TTS speaks them, so they highlight too).
-    const titleEl = elements.find(e => e.type === 'title');
-    const metaElements = elements.filter(e => e.type === 'meta');
-    const bodyElements = elements.filter(e =>
-      ['heading', 'paragraph', 'image', 'blockquote', 'list', 'code-block', 'llm-block'].includes(e.type)
-    );
-    const commentDivider = elements.find(e => e.type === 'comment-divider');
-    const commentElements = elements.filter(e => e.type === 'comment');
+    if (!readAlongParts) return null;
+    // Categorization, body, and comments all live in the memos above; only the
+    // small header (provenance + timed title/meta) renders per pass.
+    const { titleEl, metaElements, indexByEl } = readAlongParts;
 
     return (
       <div className="tab-content-display">
@@ -988,9 +1460,9 @@ export function FullscreenPlayer({
               {/* Title - timestamped, highlights while the TTS speaks it */}
               {titleEl && (
                 <div
-                  id={`ra-el-${elements.indexOf(titleEl)}`}
-                  className={`read-along-element ${elements.indexOf(titleEl) === activeElementIndex ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(titleEl.startTime)}
+                  id={`ra-el-${indexByEl.get(titleEl)!}`}
+                  className="read-along-element"
+                  onClick={() => onSeekRef.current(titleEl.startTime)}
                 >
                   <h2 style={{ margin: '0.75rem 0 0.5rem 0' }}>{content.title}</h2>
                 </div>
@@ -1003,9 +1475,9 @@ export function FullscreenPlayer({
               {metaElements.map((el, i) => (
                 <div
                   key={`meta-${i}`}
-                  id={`ra-el-${elements.indexOf(el)}`}
-                  className={`read-along-element ${elements.indexOf(el) === activeElementIndex ? 'ra-active' : ''}`}
-                  onClick={() => onSeek(el.startTime)}
+                  id={`ra-el-${indexByEl.get(el)!}`}
+                  className="read-along-element"
+                  onClick={() => onSeekRef.current(el.startTime)}
                 >
                   <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
                 </div>
@@ -1016,125 +1488,14 @@ export function FullscreenPlayer({
 
         {/* Article body (same .article-content CSS as content tab), synced to the audio alignment */}
         <div className="article-content">
-          {bodyElements.map((el, i) => {
-            const globalIndex = elements.indexOf(el);
-            const isActive = globalIndex === activeElementIndex;
-            return (
-              <div
-                key={`body-${i}`}
-                id={`ra-el-${globalIndex}`}
-                className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                onClick={(e) => {
-                  // Read-along taps seek, with two exceptions so links stay usable:
-                  //  - a real hyperlink/footnote (an <a> with no image inside): let it open,
-                  //    don't seek.
-                  //  - a click-to-enlarge image (an <img>, or an <a> wrapping one): seek only,
-                  //    don't open the picture.
-                  // Everything else (the plain text of the highlight) seeks.
-                  const target = e.target as HTMLElement;
-                  const anchor = target.closest('a');
-                  const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
-                  if (anchor && !isImage) return; // real link: open it, don't seek
-                  if (isImage) e.preventDefault(); // image link: seek, don't open the image
-                  onSeek(el.startTime);
-                }}
-              >
-                <div dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
-              </div>
-            );
-          })}
+          {readAlongBodyTree}
         </div>
 
         {/* Comments section: timestamped commentElements from the alignment */}
-        {commentElements.length > 0 && (
+        {readAlongCommentsTree && (
           <div className="tab-comments-display" style={{ marginTop: '2rem' }}>
             <div className="read-along-comments-divider" />
-            {(() => {
-                interface CommentNode {
-                  element: LLMAlignmentElement;
-                  globalIndex: number;
-                  children: CommentNode[];
-                }
-                const roots: CommentNode[] = [];
-                const stack: CommentNode[] = [];
-                for (const el of commentElements) {
-                  const depth = el.commentMeta?.depth ?? 0;
-                  const node: CommentNode = { element: el, globalIndex: elements.indexOf(el), children: [] };
-                  while (stack.length > depth) stack.pop();
-                  if (stack.length === 0) {
-                    roots.push(node);
-                  } else {
-                    stack[stack.length - 1].children.push(node);
-                  }
-                  stack.push(node);
-                }
-
-                const renderCommentNode = (node: CommentNode, nodeDepth: number = 0): React.ReactNode => {
-                  const { element: el, globalIndex, children } = node;
-                  const isNarrated = el.startTime >= 0;
-                  const isActive = isNarrated && globalIndex === activeElementIndex;
-                  const meta = el.commentMeta;
-                  const metaStr = buildCommentMetadata(meta, isLW, isSub);
-                  return (
-                    // Odd depths get the alternate shade, same rule as the Comments tab.
-                    <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
-                      <div
-                        id={`ra-el-${globalIndex}`}
-                        className={`read-along-element ${isActive ? 'ra-active' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Same rule as the body: a real link opens (no seek), an image link
-                          // seeks (no open), everything else seeks.
-                          const target = e.target as HTMLElement;
-                          const anchor = target.closest('a');
-                          const isImage = target.tagName === 'IMG' || (!!anchor && !!anchor.querySelector('img'));
-                          if (anchor && !isImage) return;
-                          if (isImage) e.preventDefault();
-                          if (isNarrated) onSeek(el.startTime);
-                        }}
-                      >
-                        <div className="comment-header">
-                          <span className="comment-username">{meta?.username || 'Anonymous'}</span>
-                          {meta?.date && (
-                            <span className="comment-date">
-                              {' \u2022 '}
-                              {(() => { try { return new Date(meta.date).toLocaleDateString('en-GB'); } catch { return meta.date; } })()}
-                            </span>
-                          )}
-                        </div>
-                        {metaStr && (
-                          <div className="comment-metadata">
-                            <span className="comment-votes">{metaStr}</span>
-                          </div>
-                        )}
-                        <div className="comment-content" dangerouslySetInnerHTML={{ __html: sanitizedElementHtml.get(el) ?? '' }} />
-                      </div>
-                      {children.length > 0 && (
-                        <div className="comment-replies">
-                          {children.map(child => renderCommentNode(child, nodeDepth + 1))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                };
-
-                return (
-                  <>
-                    {commentDivider && (
-                      <div
-                        id={`ra-el-${elements.indexOf(commentDivider)}`}
-                        className={`comments-header read-along-element ${commentDivider.startTime >= 0 && elements.indexOf(commentDivider) === activeElementIndex ? 'ra-active' : ''}`}
-                        onClick={() => { if (commentDivider.startTime >= 0) onSeek(commentDivider.startTime); }}
-                      >
-                        <h3>Comments ({commentElements.length})</h3>
-                      </div>
-                    )}
-                    <div className="comments-list">
-                      {roots.map(node => renderCommentNode(node))}
-                    </div>
-                  </>
-                );
-              })()}
+            {readAlongCommentsTree}
           </div>
         )}
       </div>
@@ -1308,18 +1669,13 @@ export function FullscreenPlayer({
         const hasAudio = !!content.audio_url;
         const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
 
-        const hasWhisperWords = transcriptWords.length > 0;
-        const fallbackTranscript = content.transcript || content.content || '';
-        const fallbackText = cleanHtml(fallbackTranscript);
-        const displayWords = hasWhisperWords
-          ? transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''))
-          : fallbackText.split(/\s+/).filter(w => w.length > 0);
-
         // For articles/texts: if we have LLM alignment, use it (with read-along features).
         // If not, show the raw content + comments (like the old Content tab) without timestamps.
         // For podcasts: show transcript words or status messages.
         if (isPodcast) {
-          // Podcast: show word-by-word transcript or status messages
+          // Podcast: show word-by-word transcript or status messages.
+          // The word spans come from the memoized transcriptTree (built once per
+          // transcript); read-state and clicks are handled imperatively above.
           let podcastMessage: string | null = null;
           if (!hasAudio && isGenerating) {
             podcastMessage = 'Audio is being generated...';
@@ -1333,23 +1689,8 @@ export function FullscreenPlayer({
             <div className="tab-read-along-display">
               {podcastMessage ? (
                 <p className="no-content">{podcastMessage}</p>
-              ) : displayWords.length > 0 ? (
-                <p className="read-along-text">
-                  {displayWords.map((word, index) => {
-                    const isRead = index <= activeWordIndex;
-                    return (
-                      <span
-                        key={index}
-                        id={`word-${index}`}
-                        className={`transcript-word ${isRead ? 'read' : ''}`}
-                        style={{ color: isRead ? '#60a5fa' : undefined, cursor: 'pointer' }}
-                        onClick={() => onTranscriptWordClick(index)}
-                      >
-                        {word}{' '}
-                      </span>
-                    );
-                  })}
-                </p>
+              ) : transcriptTree ? (
+                transcriptTree
               ) : (
                 <p className="no-content">No transcript available</p>
               )}
@@ -1433,8 +1774,42 @@ export function FullscreenPlayer({
         };
         const articleTweets = toParagraphs(content.summary);
         const commentTweets = toParagraphs(content.comment_summary);
+        // Top banner, only when summary audio exists: Play switches to the summary
+        // audio for THIS item (a temporary override, the global toggle is untouched);
+        // while the summary is playing it flips into a switch-back to the full audio.
+        const summaryAudioBanner = content.summary_audio_url && onSelectAudioVariant ? (
+          <div className="summary-audio-banner">
+            {playingVariant === 'summary' ? (
+              content.audio_url ? (
+                <>
+                  <span className="summary-audio-label"><Volume2 size={15} /> Playing summary audio</span>
+                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('original', false)}>
+                    Switch to full audio
+                  </button>
+                </>
+              ) : isPlaying ? (
+                <span className="summary-audio-label"><Volume2 size={15} /> Playing summary audio</span>
+              ) : (
+                <>
+                  <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
+                  <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                    <Play size={13} /> Play
+                  </button>
+                </>
+              )
+            ) : (
+              <>
+                <span className="summary-audio-label"><Volume2 size={15} /> Summary audio available</span>
+                <button className="summary-audio-btn" onClick={() => onSelectAudioVariant('summary', true)}>
+                  <Play size={13} /> Play
+                </button>
+              </>
+            )}
+          </div>
+        ) : null;
         return (
           <div className="tab-content-display">
+            {summaryAudioBanner}
             <div className="summary-thread">
               {articleTweets.map((tweet, i) => (
                 <p key={`a-${i}`} className="summary-tweet">{tweet}</p>
@@ -1735,7 +2110,13 @@ export function FullscreenPlayer({
                 </button>
                 <button
                   onClick={async () => {
-                    if (!content.is_archived) {
+                    // The 10s undo window exists to protect generated audio from an
+                    // accidental archive. When archiving deletes nothing (no audio,
+                    // podcast source audio, or a starred item), archive instantly.
+                    const archiveWipesAudio = !!content.audio_url
+                      && (content.type === 'article' || content.type === 'text')
+                      && !content.is_starred;
+                    if (!content.is_archived && archiveWipesAudio) {
                       // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
                       // so it fires even after this player moves on or closes, defers while the
                       // item is still loaded here, and a second press within the window undoes
@@ -1745,8 +2126,9 @@ export function FullscreenPlayer({
                       else store.schedule(content.id);
                       return;
                     }
-                    // Unarchiving stays instant. toggleArchived does the optimistic store
-                    // update + the server PATCH; then fetch the fresh item for the player.
+                    // Unarchiving, and archiving that wipes nothing, stay instant.
+                    // toggleArchived does the optimistic store update + the server
+                    // PATCH; then fetch the fresh item for the player.
                     await toggleArchived(content.id);
                     try {
                       const fresh = await contentAPI.getById(content.id);
@@ -1825,6 +2207,20 @@ export function FullscreenPlayer({
                         Remove summary
                       </button>
                     )}
+                    {/* Summary audio: TTS of the summary, only offered once a summary exists.
+                        Removal rides on Remove summary (the audio narrates the summary). */}
+                    {onGenerateSummaryAudio && content.summary && content.summary_audio_status === 'generating' && (
+                      <button disabled>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        Generating summary audio…
+                      </button>
+                    )}
+                    {onGenerateSummaryAudio && content.summary && content.summary_status !== 'generating' && content.summary_audio_status !== 'generating' && (
+                      <button onClick={() => { setShowDropdown(false); onGenerateSummaryAudio(); }}>
+                        <Volume2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                        {content.summary_audio_url ? 'Regenerate summary audio' : 'Generate summary audio'}
+                      </button>
+                    )}
                   </>
                 )}
                 {(content.type === 'article' || content.type === 'text') && content.audio_url && onRegenerateTranscript && (
@@ -1856,9 +2252,12 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
-          {/* No minimize without audio. The mini player is playback chrome, so
-              audio-less items live in fullscreen only (close is the way out) */}
-          {content.audio_url && (
+          {/* No minimize without audio (original OR summary). The mini player is
+              playback chrome, so audio-less items live in fullscreen only (close
+              is the way out). Missed the summary-audio case until 2026-08-21:
+              a summary-audio-only item's button had vanished since this still
+              checked content.audio_url alone. */}
+          {hasAnyAudio(content) && (
             <button onClick={onMinimize} className="header-button" title="Minimize">
               <Minimize2 size={20} />
             </button>
@@ -1889,7 +2288,9 @@ export function FullscreenPlayer({
             );
           })}
         </div>
-        {activeTab === 'read-along' && (
+        {/* One shared auto-scroll preference, shown on both tabs that can follow the
+            audio. The Summary tab only shows it when there is summary audio to follow. */}
+        {(activeTab === 'read-along' || (activeTab === 'summary' && !!content.summary_audio_url)) && (
           <button
             className={`autoscroll-toggle ${autoScroll ? 'active' : ''}`}
             onClick={() => setAutoScroll(!autoScroll)}
@@ -1909,7 +2310,7 @@ export function FullscreenPlayer({
       {/* Player Controls. Without audio there is no timeline, no play/seek, and no
           speed/sleep: the row reduces to previous track, display settings, next track. */}
       <div className="fullscreen-player-controls">
-        {content.audio_url && (
+        {playingVariant !== null && (
         <div className="fullscreen-progress-bar">
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
@@ -1943,7 +2344,7 @@ export function FullscreenPlayer({
         </div>
         )}
 
-        {content.audio_url && (
+        {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
           <button
             onClick={() => onSkipPrevTrack?.()}
@@ -1990,18 +2391,11 @@ export function FullscreenPlayer({
         )}
 
         <div className="fullscreen-player-options">
-          {content.audio_url ? (
-            <>
-              <button onClick={onToggleSpeed} className="option-toggle">
-                <Gauge size={20} />
-                <span>{playbackSpeed}x</span>
-              </button>
-
-              <button onClick={onToggleSleepTimer} className="option-toggle">
-                <Clock size={20} />
-                <span>{sleepTimer ? `${sleepTimer}m` : 'Off'}</span>
-              </button>
-            </>
+          {playingVariant !== null ? (
+            <button onClick={onToggleSpeed} className="option-toggle">
+              <Gauge size={20} />
+              <span>{playbackSpeed}x</span>
+            </button>
           ) : (
             // No audio: previous and next flank the display button in this single row.
             <button
@@ -2058,7 +2452,58 @@ export function FullscreenPlayer({
             )}
           </div>
 
-          {!content.audio_url && (
+          {playingVariant !== null ? (
+            <div ref={playbackPanelRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowPlaybackPanel(p => !p)}
+                className={`option-toggle ${sleepTimer || preferSummaryAudio ? 'active' : ''}`}
+                title="Playback options"
+              >
+                {sleepRemainingLabel ? (
+                  <>
+                    <Clock size={20} />
+                    <span>{sleepRemainingLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    <SlidersHorizontal size={20} />
+                    <Clock size={20} />
+                  </>
+                )}
+              </button>
+              {showPlaybackPanel && (
+                <div className="display-panel playback-panel">
+                  <div className="display-panel-label">
+                    <Clock size={12} className="sleep-label-icon" /> Sleep timer
+                  </div>
+                  <div className="sleep-preset-row">
+                    <button
+                      className={`sleep-preset ${sleepTimer === null ? 'active' : ''}`}
+                      onClick={() => onSetSleepTimer(null)}
+                    >Off</button>
+                    {SLEEP_TIMER_OPTIONS.map((m) => (
+                      <button
+                        key={m}
+                        className={`sleep-preset ${sleepTimer === m ? 'active' : ''}`}
+                        onClick={() => onSetSleepTimer(m)}
+                      >{m}m</button>
+                    ))}
+                  </div>
+                  {onTogglePreferSummaryAudio && (
+                    <div className="display-panel-section">
+                      <button
+                        className={`display-panel-toggle prefer-summary-toggle ${preferSummaryAudio ? 'active' : ''}`}
+                        onClick={onTogglePreferSummaryAudio}
+                      >
+                        <span>Prefer summary audio</span>
+                        {preferSummaryAudio && <Check size={14} className="prefer-summary-check" />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
             <button
               onClick={() => onSkipNextTrack?.()}
               title="Next track"

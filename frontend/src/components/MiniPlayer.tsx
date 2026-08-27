@@ -12,6 +12,9 @@ interface MiniPlayerProps {
   onSeek: (time: number) => void;
   onExpand: () => void;
   onClose: () => void;
+  // Summary audio has no comments-timeline data of its own (those timestamps
+  // belong to the original audio), so the marker is meaningless while it plays.
+  playingVariant?: 'original' | 'summary' | null;
 }
 
 export function MiniPlayer({
@@ -23,6 +26,7 @@ export function MiniPlayer({
   onSeek,
   onExpand,
   onClose,
+  playingVariant = null,
 }: MiniPlayerProps) {
   // Parse content alignment to get comments start time.
   // NOTE: hooks must run on every render in the same order (rules-of-hooks),
@@ -39,11 +43,13 @@ export function MiniPlayer({
     }
   }, [content?.content_alignment]);
 
-  // Calculate marker position as percentage
+  // Calculate marker position as percentage. Suppressed during summary playback,
+  // see FullscreenPlayer's identical guard on its own timeline marker.
   const commentsMarkerPosition = useMemo(() => {
+    if (playingVariant === 'summary') return null;
     if (!commentsStartTime || !duration || duration === 0) return null;
     return (commentsStartTime / duration) * 100;
-  }, [commentsStartTime, duration]);
+  }, [commentsStartTime, duration, playingVariant]);
 
   if (!content) return null;
 
