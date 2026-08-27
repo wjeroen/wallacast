@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { query } from '../database/db.js';
 import { WallabagService } from '../services/wallabag-service.js';
-import { fullSync, syncFromWallabag, syncToWallabag, hasNosyncTag } from '../services/wallabag-sync.js';
+import { fullSync, syncFromWallabag, syncToWallabag } from '../services/wallabag-sync.js';
+import { hasNosyncTag } from '../services/tags.js';
 import { deleteAudioFile } from '../services/audio-storage.js';
 
 const router = Router();

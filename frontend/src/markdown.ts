@@ -22,7 +22,8 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { marked } from 'marked';
 import type { ContentItem, Comment } from './types';
-import { displayUrl } from './format';
+import { cleanHtml, displayUrl, formatDuration } from './format';
+import { obsidianTag, typeTagFor } from './tags';
 
 // Prefix every line of a block with the Markdown blockquote marker `> ` (used for callouts).
 function quoteLines(text: string): string {
@@ -364,19 +365,247 @@ export function markdownToHtml(markdown: string): string {
   return doc.body.innerHTML.trim();
 }
 
-// Readable Markdown export of an item (title, meta line, link, body, comments).
+// ---------------------------------------------------------------------------
+// Markdown export with Obsidian properties (YAML frontmatter), and the reverse
+// ---------------------------------------------------------------------------
+
+function yamlStr(s: string): string {
+  // A JSON string literal is a valid YAML double-quoted scalar, escapes included.
+  return JSON.stringify(s.replace(/\s+/g, ' ').trim());
+}
+
+function isoDate(value?: string | null): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+/**
+ * The Obsidian-properties block for an item. Only keys Obsidian understands natively get
+ * special treatment (`tags` is a real tag list, ISO dates become Date properties); the rest
+ * are plain text. The first tag is always the item's type tag (article / text / podcast).
+ * `source` is the human URL (the EA Forum bot mirror is rewritten back), never a synthetic
+ * `wallacast://` one. No internal ids: an import creates a NEW item, it never overwrites.
+ */
+export function buildFrontmatter(item: ContentItem, comments: Comment[]): string {
+  const out: string[] = ['---'];
+  out.push(`title: ${yamlStr(item.title || '')}`);
+  if (item.author) out.push(`author: ${yamlStr(item.author)}`);
+  if (item.type === 'podcast_episode' && item.podcast_show_name) {
+    out.push(`show: ${yamlStr(item.podcast_show_name)}`);
+  }
+  if (item.url && !item.url.startsWith('wallacast://')) {
+    out.push(`source: ${yamlStr(displayUrl(item.url))}`);
+  }
+  const published = isoDate(item.published_at);
+  if (published) out.push(`published: ${published}`);
+  const saved = isoDate(item.created_at);
+  if (saved) out.push(`saved: ${saved}`);
+  const tags = [typeTagFor(item.type)];
+  for (const t of item.tags || []) {
+    const o = obsidianTag(t);
+    if (o && !tags.includes(o)) tags.push(o);
+  }
+  out.push('tags:');
+  for (const t of tags) out.push(`  - ${t}`);
+  // A podcast's description IS the body (see contentToMarkdown), so no property for it.
+  if (item.type !== 'podcast_episode' && item.description) {
+    const d = cleanHtml(item.description).replace(/\s+/g, ' ').trim();
+    if (d) out.push(`description: ${yamlStr(d)}`);
+  }
+  if (item.type === 'podcast_episode' && item.duration) {
+    out.push(`duration: ${yamlStr(formatDuration(item.duration))}`);
+  }
+  if (item.karma !== undefined && item.karma !== null) out.push(`upvotes: ${item.karma}`);
+  const commentCount = item.comment_count || comments.length;
+  if (commentCount > 0) out.push(`comments: ${commentCount}`);
+  out.push('---');
+  return out.join('\n');
+}
+
+export interface Frontmatter {
+  meta: Record<string, string | string[]>;
+  body: string; // the Markdown after the closing ---
+}
+
+function unquoteYaml(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return s.slice(1, -1);
+    }
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
+/**
+ * Read a leading YAML frontmatter block (the subset Obsidian writes: `key: value` scalars,
+ * `key:` + `  - item` lists, inline `[a, b]` lists). Keys are lowercased. Returns null when
+ * the text does not start with a `---` block, so callers can treat it as plain Markdown.
+ */
+export function parseFrontmatter(markdown: string): Frontmatter | null {
+  const m = markdown.match(/^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!m) return null;
+  const meta: Record<string, string | string[]> = {};
+  let listKey: string | null = null;
+  for (const line of m[1].split(/\r?\n/)) {
+    const li = line.match(/^\s+-\s*(.*)$/);
+    if (li && listKey) {
+      (meta[listKey] as string[]).push(unquoteYaml(li[1]));
+      continue;
+    }
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].toLowerCase();
+    const val = kv[2].trim();
+    if (val === '') {
+      meta[key] = [];
+      listKey = key;
+      continue;
+    }
+    listKey = null;
+    if (val.startsWith('[') && val.endsWith(']')) {
+      meta[key] = val.slice(1, -1).split(',').map((s) => unquoteYaml(s)).filter(Boolean);
+      continue;
+    }
+    meta[key] = unquoteYaml(val);
+  }
+  return { meta, body: markdown.slice(m[0].length) };
+}
+
+/** Drop a first-line `# Title` that repeats the given title (an export puts one there). */
+export function stripLeadingTitle(body: string, title: string): string {
+  const m = body.match(/^\s*#\s+(.+?)\s*\r?\n/);
+  if (!m) return body;
+  if (m[1].trim().toLowerCase() !== (title || '').trim().toLowerCase()) return body;
+  return body.slice(m[0].length).replace(/^\s*\n/, '');
+}
+
+const COMMENT_HEADER_RE = /^\*\*(.+?)\*\*$/;
+const COMMENTS_HEADING_RE = /^## Comments(?: \(\d+\))?[ \t]*$/m;
+
+// Parse one exported comment header line ("**name • 12 points • 14/03/2026**").
+function parseCommentHeader(text: string): Comment | null {
+  const m = text.trim().match(COMMENT_HEADER_RE);
+  if (!m) return null;
+  const parts = m[1].split(' • ').map((p) => p.trim());
+  const username = parts.shift() || '';
+  if (!username) return null;
+  const c: Comment = { username, content: '' };
+  for (const p of parts) {
+    const pts = p.match(/^(-?\d+) points?$/);
+    if (pts) {
+      c.karma = parseInt(pts[1], 10);
+      continue;
+    }
+    const gb = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (gb) {
+      c.date = `${gb[3]}-${gb[2]}-${gb[1]}`;
+      continue;
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(p)) c.date = p;
+  }
+  return c;
+}
+
+function stripQuoteMarkers(line: string): { depth: number; text: string } {
+  let depth = 0;
+  let text = line;
+  for (;;) {
+    const m = text.match(/^>[ ]?/);
+    if (!m) break;
+    depth++;
+    text = text.slice(m[0].length);
+  }
+  return { depth, text };
+}
+
+// One top-level comment block (between `---` separators): the root comment plus its
+// replies, which the export nests as `> ` quotes one level per depth. A reply starts
+// wherever a header line appears at a deeper quote level; lines that are not headers
+// belong to the comment currently open at their level (extra `>` markers are kept, so a
+// quote inside a comment survives).
+function parseCommentBlock(block: string): Comment[] {
+  interface Node { depth: number; comment: Comment; lines: string[] }
+  const roots: Comment[] = [];
+  const stack: Node[] = [];
+  const finish = (node: Node) => {
+    node.comment.content = markdownToHtml(node.lines.join('\n').trim());
+  };
+  for (const raw of block.split('\n')) {
+    const { depth, text } = stripQuoteMarkers(raw);
+    const header = parseCommentHeader(text);
+    if (header) {
+      while (stack.length > 0 && stack[stack.length - 1].depth >= depth) finish(stack.pop()!);
+      const parent = stack.length > 0 ? stack[stack.length - 1].comment : null;
+      if (parent) (parent.replies ||= []).push(header);
+      else roots.push(header);
+      stack.push({ depth, comment: header, lines: [] });
+      continue;
+    }
+    if (stack.length === 0) continue; // text before any header: not a comment
+    const node = stack[stack.length - 1];
+    const extra = Math.max(0, depth - node.depth);
+    node.lines.push(('> '.repeat(extra) + text).trimEnd());
+  }
+  while (stack.length > 0) finish(stack.pop()!);
+  return roots;
+}
+
+/**
+ * Split an exported "## Comments" section back into structured comments (the reverse of
+ * contentToMarkdown's comment rendering), so an imported export gets real comments again:
+ * shown in the Comments area, counted on the card, and narrated. When the section does
+ * not parse as our format, it is left in the body untouched and no comments are returned.
+ */
+export function splitExportedComments(markdown: string): { body: string; comments: Comment[] } {
+  const idx = markdown.search(COMMENTS_HEADING_RE);
+  if (idx < 0) return { body: markdown, comments: [] };
+  const section = markdown.slice(idx).replace(/^## Comments(?: \(\d+\))?[ \t]*\r?\n?/, '');
+  const comments = section
+    .split(/\r?\n[ \t]*---[ \t]*\r?\n/)
+    .flatMap((block) => parseCommentBlock(block.replace(/\r/g, '')));
+  if (comments.length === 0) return { body: markdown, comments: [] };
+  return { body: markdown.slice(0, idx).trimEnd(), comments };
+}
+
+// Readable Markdown export of an item: Obsidian properties, title, body, comments.
 // What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
 // "Copy content" action in both the fullscreen player and the library dropdown.
 // Needs the FULL item (html_content/transcript), the list payload is not enough.
-export function contentToMarkdown(item: ContentItem, comments: Comment[]): string {
-  const lines: string[] = [`# ${item.title}`];
-  const meta: string[] = [];
-  if (item.author) meta.push(`By ${item.author}`);
-  if (item.type === 'podcast_episode' && item.podcast_show_name) meta.push(item.podcast_show_name);
-  if (item.published_at) meta.push(new Date(item.published_at).toLocaleDateString('en-GB'));
-  if (item.karma !== undefined && item.karma !== null) meta.push(`${item.karma} upvotes`);
-  if (meta.length > 0) lines.push(meta.join(' • '));
-  if (item.url) lines.push(displayUrl(item.url));
+// The byline/link that used to sit under the title now live in the frontmatter, so
+// an import of this text round-trips them as fields instead of body paragraphs.
+export interface CopyContentOptions {
+  // Append the item's summary (and comment summary) right under the title, each inside a
+  // fenced code block. `summaryCodeLabel` is the text after the opening backticks, so an
+  // Obsidian Admonition user can set e.g. "ad-summary"; empty = a plain unlabeled block.
+  includeSummary?: boolean;
+  summaryCodeLabel?: string;
+}
+
+function fencedBlock(label: string, body: string): string {
+  // A body that itself contains a triple backtick would end the fence early, so use a
+  // longer fence in that case (CommonMark allows any length >= 3).
+  const longest = Math.max(2, ...Array.from(body.matchAll(/`{3,}/g), (m) => m[0].length));
+  const fence = '`'.repeat(longest + 1);
+  return `${fence}${label.trim()}\n${body.trim()}\n${fence}`;
+}
+
+export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
+  const lines: string[] = [buildFrontmatter(item, comments), '', `# ${item.title}`];
+
+  if (opts.includeSummary && item.summary?.trim()) {
+    const label = opts.summaryCodeLabel || '';
+    lines.push('', fencedBlock(label, item.summary));
+    if (item.comment_summary?.trim()) {
+      lines.push('', fencedBlock(label, `Comments summary:\n\n${item.comment_summary.trim()}`));
+    }
+  }
 
   // Podcasts: description first, then the transcript, each only when present
   // (the `content` field is deliberately not used for podcasts). Articles/texts

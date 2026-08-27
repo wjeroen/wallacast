@@ -260,6 +260,11 @@ export async function initializeDatabase() {
     const summaryAudioMigration = await fs.readFile(summaryAudioMigrationPath, 'utf-8');
     await client.query(summaryAudioMigration);
 
+    // Run migration converting tags to a TEXT[] array (user tags only, GIN-indexed)
+    const tagsArrayMigrationPath = path.join(__dirname, 'migrations', '027_tags_array.sql');
+    const tagsArrayMigration = await fs.readFile(tagsArrayMigrationPath, 'utf-8');
+    await client.query(tagsArrayMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

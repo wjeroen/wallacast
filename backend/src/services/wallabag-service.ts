@@ -16,7 +16,7 @@ export interface WallabagEntry {
   id: number;
   url: string;
   title: string;
-  content: string;
+  content: string;      // absent/empty when fetched with detail=metadata
   is_archived: number;  // 0 or 1
   is_starred: number;   // 0 or 1
   tags: Array<{ id: number; label: string; slug: string }>;
@@ -409,15 +409,23 @@ export class WallabagService {
    * The caller must not advance its "last sync" cursor on an incomplete pull, otherwise
    * the un-fetched entries would be skipped forever.
    */
-  async fetchEntries(since?: string): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
+  async fetchEntries(
+    since?: string,
+    opts: { detail?: 'full' | 'metadata'; perPage?: number } = {}
+  ): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
     const entries: WallabagEntry[] = [];
     let page = 1;
     let hasMore = true;
     let complete = true;
+    // detail=metadata omits `content` (verified in EntryRestController 2.6.13), which makes a
+    // whole-library pass cheap: the tag reconciliation in wallabag-sync.ts uses it. Wallabag's
+    // controller has no perPage cap (the old "max 30" note was never enforced in code).
+    const detail = opts.detail || 'full';
+    const perPage = opts.perPage || 30;
 
     while (hasMore) {
       // Build URL with pagination
-      let endpoint = `/entries.json?perPage=30&page=${page}&detail=full`;
+      let endpoint = `/entries.json?perPage=${perPage}&page=${page}&detail=${detail}`;
 
       // Add since parameter if provided (unix timestamp)
       if (since) {

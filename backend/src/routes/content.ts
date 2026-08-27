@@ -17,6 +17,7 @@ import { summaryAudioKey, generateSummaryAudioForContent } from '../services/sum
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
+import { normalizeTagList, findReservedTags } from '../services/tags.js';
 
 const router = express.Router();
 
@@ -314,6 +315,8 @@ router.post('/', async (req, res) => {
       audio_url,
       published_at,
       duration,
+      tags,
+      comments,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -341,7 +344,9 @@ router.post('/', async (req, res) => {
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
     // Also clean up broken Obsidian/saved-webpage artifacts (broken markdown image syntax, relative image paths)
-    if (type === 'text' && processedContent && !htmlContent) {
+    // Articles that ARRIVE with content (a Markdown import whose frontmatter names a source
+    // URL) take the same path: the URL is kept for provenance, nothing is fetched.
+    if ((type === 'text' || type === 'article') && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
@@ -484,6 +489,25 @@ router.post('/', async (req, res) => {
       finalTitle = 'Untitled Article';
     }
 
+    // Comments supplied by the caller (a Markdown import round-tripping an exported
+    // "## Comments" section). Only when the fetcher produced none, and only a real array
+    // of { username, content } objects; anything else is ignored rather than stored.
+    if (!extractedComments && Array.isArray(comments) && comments.length > 0) {
+      const valid = comments.every(
+        (c: any) => c && typeof c === 'object' && typeof c.username === 'string' && typeof c.content === 'string'
+      );
+      if (valid) {
+        const countAll = (list: any[]): number =>
+          list.reduce((n: number, c: any) => n + 1 + (Array.isArray(c.replies) ? countAll(c.replies) : 0), 0);
+        extractedComments = JSON.stringify(comments);
+        commentCountTotal = countAll(comments);
+      }
+    }
+
+    // Tags on create (Add tab field or frontmatter import). Same normalization as PATCH;
+    // reserved names are silently dropped here rather than failing the whole add.
+    const initialTags = normalizeTagList(tags);
+
     // Look up podcast show name if podcast_id is provided (for podcast episodes)
     if (podcast_id) {
       const podcastResult = await query(
@@ -502,10 +526,10 @@ router.post('/', async (req, res) => {
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags]
     );
 
     const createdItem = result.rows[0];
@@ -636,6 +660,23 @@ router.patch('/:id', async (req, res) => {
       'description',
       'duration',
     ];
+
+    // Tags: the picker sends the FULL list (replace semantics, same as Wallabag's PATCH).
+    // Normalized like Wallabag (lowercase, trimmed, no commas); reserved names are refused.
+    // Counted as a content change below, so updated_at and wallabag_needs_push get set.
+    if (updates.tags !== undefined) {
+      if (!Array.isArray(updates.tags) || !updates.tags.every((t: unknown) => typeof t === 'string')) {
+        return res.status(400).json({ error: 'tags must be an array of strings' });
+      }
+      const reserved = findReservedTags(updates.tags);
+      if (reserved.length > 0) {
+        return res.status(400).json({
+          error: `Reserved tag(s): ${reserved.join(', ')}. Type tags are set automatically and nosync is managed in Wallabag.`,
+        });
+      }
+      updates.tags = normalizeTagList(updates.tags);
+      allowedFields.push('tags');
+    }
 
     // Manual Markdown/HTML edit of an article/text body. The frontend converts Markdown ->
     // HTML and sends { is_edit: true, html_content, content }. We snapshot the current body

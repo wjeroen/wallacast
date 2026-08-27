@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
+import { TagEditor } from './TagEditor';
+import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
+import { loadCopyContentOptions } from '../copy-settings';
 import { isVeryLongArticle } from '../format';
 import type { ContentItem, Comment } from '../types';
 
@@ -61,12 +64,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     allItems,
     typeFilter,
     facets,
+    tagFilter,
     searchQuery,
     sortDir,
     loading,
     setTypeFilter,
     setFacet,
     setFacets,
+    setTagFilter,
+    toggleTagFilter,
+    setItemTags,
     setSortDir,
     setSearchQuery,
     fetchContent,
@@ -89,6 +96,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Status filter funnel menu (Active / Favorites / Archived)
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusMenuRef = useRef<HTMLDivElement>(null);
+
+  // Tag filter menu (multi-select checklist, "any of") + its search box
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const tagMenuRef = useRef<HTMLDivElement>(null);
+  const [tagMenuQuery, setTagMenuQuery] = useState('');
+  // The item whose tags are being edited in the TagEditor popup (null = closed)
+  const [tagEditorItem, setTagEditorItem] = useState<ContentItem | null>(null);
 
   // Bulk actions overflow menu + sequential progress counter
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
@@ -163,6 +177,21 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     };
   }, [statusMenuOpen]);
 
+  // Close the tag filter menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (tagMenuRef.current && !tagMenuRef.current.contains(event.target as Node)) {
+        setTagMenuOpen(false);
+      }
+    };
+    if (tagMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [tagMenuOpen]);
+
   // Close the bulk overflow menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -221,14 +250,31 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const typeCounts = useMemo(() => {
     const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
     for (const i of allItems) {
-      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, searchQuery: '' })) continue;
+      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery: '' })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
     }
     return counts;
-  }, [allItems, facets]);
+  }, [allItems, facets, tagFilter]);
+
+  // Every tag in the library with its usage count (filter menu + tag editor list)
+  const tagCounts = useMemo(() => collectTagCounts(allItems), [allItems]);
+  const tagMenuRows = useMemo(() => {
+    const q = tagMenuQuery.trim().toLowerCase();
+    return q ? tagCounts.filter(t => t.tag.includes(q)) : tagCounts;
+  }, [tagCounts, tagMenuQuery]);
+
+  // Tag filter changes clear the selection like every other filter change
+  const toggleTag = (tag: string) => {
+    toggleTagFilter(tag);
+    setSelectedItems(new Set());
+  };
+  const clearTagFilter = () => {
+    setTagFilter([]);
+    setSelectedItems(new Set());
+  };
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -682,7 +728,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       } catch {
         comments = [];
       }
-      await navigator.clipboard.writeText(contentToMarkdown(full, comments));
+      await navigator.clipboard.writeText(contentToMarkdown(full, comments, await loadCopyContentOptions()));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -808,6 +854,64 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                       );
                     })
                   )}
+                </div>
+              )}
+            </div>
+            <div className="dropdown-container" ref={tagMenuRef}>
+              {/* Tag filter: multi-select checklist, an item matches ANY selected tag.
+                  The button carries the selection count so the state is visible. */}
+              <button
+                className={tagFilter.length > 0 ? 'active' : ''}
+                onClick={() => setTagMenuOpen(!tagMenuOpen)}
+                title={tagFilter.length > 0 ? `Filtering by ${tagFilter.map(t => '#' + t).join(', ')}` : 'Filter by tag'}
+              >
+                <Tag size={16} />
+                <span className="filter-label">Tags</span>
+                {tagFilter.length > 0 && <span>({tagFilter.length})</span>}
+              </button>
+              {tagMenuOpen && (
+                <div className="dropdown-menu menu-left tag-menu">
+                  {tagCounts.length > 6 && (
+                    <div className="tag-menu-search">
+                      <input
+                        type="search"
+                        placeholder="Find tag…"
+                        value={tagMenuQuery}
+                        onChange={e => setTagMenuQuery(e.target.value)}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                      />
+                    </div>
+                  )}
+                  <div className="tag-menu-list">
+                    {tagFilter.length > 0 && (
+                      <button className="tag-menu-clear" onClick={clearTagFilter}>
+                        <X size={14} />
+                        <span className="tag-menu-label">Clear tag filter</span>
+                      </button>
+                    )}
+                    {tagMenuRows.map(({ tag, count }) => {
+                      const on = tagFilter.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          className={on ? 'selected' : undefined}
+                          onClick={() => toggleTag(tag)}
+                        >
+                          {on ? <SquareCheck size={16} /> : <Square size={16} />}
+                          <span className="tag-menu-label">#{tag}</span>
+                          <span className="tag-menu-count">{count}</span>
+                        </button>
+                      );
+                    })}
+                    {tagMenuRows.length === 0 && (
+                      <div className="tag-menu-empty">
+                        {tagCounts.length === 0
+                          ? 'No tags yet. Tap the tag chip on an item to add one.'
+                          : 'No matching tags.'}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -983,9 +1087,20 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}
               onCopyContent={handleCopyContent}
               onDownloadZip={handleDownloadDataZip}
+              onEditTags={(it) => { setOpenDropdown(null); setTagEditorItem(it); }}
             />
           ))}
         </div>
+      )}
+
+      {tagEditorItem && (
+        <TagEditor
+          itemTitle={tagEditorItem.title}
+          initialTags={tagEditorItem.tags || []}
+          knownTags={tagCounts}
+          onSave={(tags) => setItemTags(tagEditorItem.id, tags)}
+          onClose={() => setTagEditorItem(null)}
+        />
       )}
 
       {transcriptWarning && (() => {

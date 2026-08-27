@@ -38,7 +38,7 @@ export interface ContentItem {
   comment_source?: 'ea_forum' | 'lesswrong' | 'substack' | null;
   is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
-  tags?: string;  // Comma-separated tags (Wallabag style)
+  tags?: string[];  // The user's own tags, normalized (lowercase). Type tags (article/text/podcast) are derived from `type`, never stored
   content_source?: 'wallabag' | 'wallacast';  // Who fetched the content
   wallabag_id?: number;  // ID in Wallabag (for sync)
   wallabag_updated_at?: string;  // Last update in Wallabag (for conflict resolution)

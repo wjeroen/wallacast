@@ -30,6 +30,9 @@ export const DEFAULT_FACETS: FacetFilter = {
 export interface LibraryFilter {
   typeFilter: TypeFilter;
   facets: FacetFilter;
+  // Selected tags. An item matches when it carries ANY of them ("any of", like the
+  // one-of-many facet rows); empty = no tag filter.
+  tags: string[];
   searchQuery: string; // already-debounced value; '' = no search
 }
 
@@ -58,8 +61,15 @@ const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
   transcript: ['transcript', 'no_transcript'],
 };
 
-function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter; sortDir: SortDir } {
-  const fallback = { typeFilter: 'all' as TypeFilter, facets: DEFAULT_FACETS, sortDir: 'desc' as SortDir };
+interface StoredFilters {
+  typeFilter: TypeFilter;
+  facets: FacetFilter;
+  tags: string[];
+  sortDir: SortDir;
+}
+
+function loadStoredFilters(): StoredFilters {
+  const fallback: StoredFilters = { typeFilter: 'all', facets: DEFAULT_FACETS, tags: [], sortDir: 'desc' };
   try {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return fallback;
@@ -72,16 +82,19 @@ function loadStoredFilters(): { typeFilter: TypeFilter; facets: FacetFilter; sor
       const v = parsed?.facets?.[dim];
       facets[dim] = v === null || FACET_VALUES[dim].includes(v) ? v : DEFAULT_FACETS[dim];
     }
+    const tags: string[] = Array.isArray(parsed?.tags)
+      ? parsed.tags.filter((t: unknown): t is string => typeof t === 'string' && t.length > 0)
+      : [];
     const sortDir: SortDir = parsed?.sortDir === 'asc' ? 'asc' : 'desc';
-    return { typeFilter, facets, sortDir };
+    return { typeFilter, facets, tags, sortDir };
   } catch {
     return fallback; // private mode / corrupted JSON
   }
 }
 
-function storeFilters(typeFilter: TypeFilter, facets: FacetFilter, sortDir: SortDir): void {
+function storeFilters(f: StoredFilters): void {
   try {
-    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify({ typeFilter, facets, sortDir }));
+    localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(f));
   } catch { /* private mode */ }
 }
 
@@ -98,13 +111,16 @@ function sortByDateAdded(items: ContentItem[], dir: SortDir): ContentItem[] {
 
 // Fields covered by search, besides the full body text in `content`.
 function metadataFields(item: ContentItem): (string | undefined | null)[] {
-  return [item.title, item.author, item.description, item.tags, item.podcast_show_name];
+  return [item.title, item.author, item.description, item.tags?.join(' '), item.podcast_show_name];
 }
 
 // Check if an item should be visible given the current filter.
 // Search is plain case-insensitive substring matching (no fuzzy matching).
 export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean {
   if (f.typeFilter !== 'all' && item.type !== TYPE_MAP[f.typeFilter]) return false;
+
+  // Tag filter: any selected tag present on the item.
+  if (f.tags.length > 0 && !f.tags.some(t => item.tags?.includes(t))) return false;
 
   // Facets: every non-null row must match. Summary/transcript presence mirrors
   // the library card badges (summary_generated_at / transcript_words, since the
@@ -123,6 +139,12 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;
+  // "#name" searches tags only (substring of a tag), so a hashtag typed into the search
+  // box behaves like a quick tag filter.
+  if (q.startsWith('#') && q.length > 1) {
+    const needle = q.slice(1);
+    return (item.tags || []).some(t => t.includes(needle));
+  }
   return [...metadataFields(item), item.content]
     .some(field => !!field && field.toLowerCase().includes(q));
 }
@@ -147,6 +169,7 @@ interface ContentStore {
   allItems: ContentItem[];    // master list (all items, fetched once)
   typeFilter: TypeFilter;
   facets: FacetFilter;
+  tagFilter: string[];
   searchQuery: string;
   sortDir: SortDir;
   loading: boolean;
@@ -157,6 +180,8 @@ interface ContentStore {
   setTypeFilter: (typeFilter: TypeFilter) => void;
   setFacet: (dim: FacetDim, value: FacetValue | null) => void;
   setFacets: (facets: FacetFilter) => void;
+  setTagFilter: (tags: string[]) => void;
+  toggleTagFilter: (tag: string) => void;
   setSortDir: (sortDir: SortDir) => void;
   setSearchQuery: (searchQuery: string) => void;
   fetchContent: () => Promise<void>;
@@ -165,6 +190,8 @@ interface ContentStore {
   toggleStarred: (id: number) => Promise<void>;
   toggleArchived: (id: number) => Promise<void>;
   deleteItem: (id: number) => Promise<void>;
+  // Replace an item's whole tag list (the picker's Save). Rejects on server error.
+  setItemTags: (id: number, tags: string[]) => Promise<void>;
 
   // For background updates (generation status polling)
   updateItem: (id: number, updates: Partial<ContentItem>) => void;
@@ -178,8 +205,13 @@ interface ContentStore {
 
 export const useContentStore = create<ContentStore>((set, get) => {
   const currentFilter = (): LibraryFilter => {
-    const { typeFilter, facets, searchQuery } = get();
-    return { typeFilter, facets, searchQuery };
+    const { typeFilter, facets, tagFilter, searchQuery } = get();
+    return { typeFilter, facets, tags: tagFilter, searchQuery };
+  };
+
+  const persistFilters = () => {
+    const { typeFilter, facets, tagFilter, sortDir } = get();
+    storeFilters({ typeFilter, facets, tags: tagFilter, sortDir });
   };
 
   // Single source of truth: sort by date added, set allItems, and re-derive the
@@ -203,6 +235,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     allItems: [],
     typeFilter: storedFilters.typeFilter,
     facets: storedFilters.facets,
+    tagFilter: storedFilters.tags,
     searchQuery: '',
     sortDir: storedFilters.sortDir,
     loading: false,
@@ -212,7 +245,7 @@ export const useContentStore = create<ContentStore>((set, get) => {
     // Client-side filtering, no API call needed, instant switch
     setTypeFilter: (typeFilter) => {
       set({ typeFilter });
-      storeFilters(typeFilter, get().facets, get().sortDir);
+      persistFilters();
       commit(get().allItems);
     },
 
@@ -221,20 +254,31 @@ export const useContentStore = create<ContentStore>((set, get) => {
     setFacet: (dim, value) => {
       const facets = { ...get().facets, [dim]: value } as FacetFilter;
       set({ facets });
-      storeFilters(get().typeFilter, facets, get().sortDir);
+      persistFilters();
       commit(get().allItems);
     },
 
     // Replace the whole facet selection at once (double-click "solo" gesture)
     setFacets: (facets) => {
       set({ facets });
-      storeFilters(get().typeFilter, facets, get().sortDir);
+      persistFilters();
       commit(get().allItems);
+    },
+
+    setTagFilter: (tags) => {
+      set({ tagFilter: tags });
+      persistFilters();
+      commit(get().allItems);
+    },
+
+    toggleTagFilter: (tag) => {
+      const cur = get().tagFilter;
+      get().setTagFilter(cur.includes(tag) ? cur.filter(t => t !== tag) : [...cur, tag]);
     },
 
     setSortDir: (sortDir) => {
       set({ sortDir });
-      storeFilters(get().typeFilter, get().facets, sortDir);
+      persistFilters();
       commit(get().allItems);
     },
 
@@ -343,6 +387,27 @@ export const useContentStore = create<ContentStore>((set, get) => {
         console.error('Failed to delete item:', error);
         // Revert on error - add item back (commit() re-sorts it into place)
         commit([...get().allItems, item]);
+      }
+    },
+
+    setItemTags: async (id, tags) => {
+      const item = get().allItems.find(i => i.id === id);
+      if (!item) return;
+      const previous = item.tags || [];
+
+      // Optimistic: chips update instantly, server confirms (or we roll back)
+      commit(get().allItems.map(i => (i.id === id ? { ...i, tags } : i)));
+
+      try {
+        const response = await contentAPI.update(id, { tags });
+        const saved = response.data?.tags;
+        if (Array.isArray(saved)) {
+          commit(get().allItems.map(i => (i.id === id ? { ...i, tags: saved } : i)));
+        }
+      } catch (error) {
+        console.error('Failed to save tags:', error);
+        commit(get().allItems.map(i => (i.id === id ? { ...i, tags: previous } : i)));
+        throw error;
       }
     },
 

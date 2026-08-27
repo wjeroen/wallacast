@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
@@ -35,6 +35,7 @@ interface ContentCardProps {
   onAddToQueue: (item: ContentItem) => void;
   onCopyContent: (item: ContentItem) => void;
   onDownloadZip: (item: ContentItem) => void;
+  onEditTags: (item: ContentItem) => void;
 }
 
 export function ContentCard({
@@ -64,6 +65,7 @@ export function ContentCard({
   onAddToQueue,
   onCopyContent,
   onDownloadZip,
+  onEditTags,
 }: ContentCardProps) {
   // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
   // rest inline on the card (article summary only, never the comment summary)
@@ -330,6 +332,33 @@ export function ContentCard({
             </span>
           )}
           {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
+          {/* Tags as dimmed hashtag chips. Tapping any chip (or the tag+ chip at the end)
+              opens the tag picker. In bulk mode the card click selects, so chips are inert. */}
+          {(item.tags || []).map(tag => (
+            bulkMode ? (
+              <span key={tag} className="tag-chip static">#{tag}</span>
+            ) : (
+              <button
+                key={tag}
+                type="button"
+                className="tag-chip"
+                onClick={(e) => { e.stopPropagation(); onEditTags(item); }}
+                title="Edit tags"
+              >
+                #{tag}
+              </button>
+            )
+          ))}
+          {!bulkMode && (
+            <button
+              type="button"
+              className="tag-chip tag-chip-add"
+              onClick={(e) => { e.stopPropagation(); onEditTags(item); }}
+              title={item.tags && item.tags.length > 0 ? 'Edit tags' : 'Add tags'}
+            >
+              <Tag size={12} /><Plus size={10} />
+            </button>
+          )}
         </div>
         {generationStatusDisplay()}
         {item.summary_status === 'generating' && (
@@ -523,6 +552,10 @@ export function ContentCard({
                     {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>
                 )}
+                <button onClick={() => onEditTags(item)}>
+                  <Tag size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Edit tags
+                </button>
                 <button onClick={() => onAddToQueue(item)}>
                   <ListPlus size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Add to queue

@@ -53,6 +53,10 @@ import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from
 import { useContentStore } from '../store/contentStore';
 import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
+import { TagEditor } from './TagEditor';
+import { collectTagCounts } from '../tags';
+import { loadCopyContentOptions } from '../copy-settings';
+import { Tag as TagIcon, Plus as PlusIcon } from 'lucide-react';
 import type { ContentItem, ContentVersion, Comment } from '../types';
 
 interface TranscriptWord {
@@ -454,8 +458,12 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
-  // Content store for star/archive/delete actions
-  const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
+  // Content store for star/archive/delete/tag actions
+  const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
+  // Tag editor popup + the library-wide tag list it offers
+  const [showTagEditor, setShowTagEditor] = useState(false);
+  const allLibraryItems = useContentStore(s => s.allItems);
+  const knownTags = useMemo(() => collectTagCounts(allLibraryItems), [allLibraryItems]);
   // Delayed-archive state (player-only): pending + deferred both render as Undo
   // (deferred = timer fired while this item is loaded; archives on player-leave).
   const pendingArchives = usePendingArchiveStore(s => s.pending);
@@ -1370,7 +1378,7 @@ export function FullscreenPlayer({
   const handleCopyContent = async () => {
     setShowDropdown(false);
     try {
-      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments));
+      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments, await loadCopyContentOptions()));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -1935,8 +1943,9 @@ export function FullscreenPlayer({
           if (f.facets.transcript === 'transcript') facetLabels.push('Transcribed');
           if (f.facets.transcript === 'no_transcript') facetLabels.push('Untranscribed');
           const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
+          const tagLabel = f.tags.length > 0 ? ` • ${f.tags.map(t => '#' + t).join(' ')}` : '';
           const searchLabel = f.searchQuery.trim() ? ` • “${f.searchQuery.trim()}”` : '';
-          return `Up next from ${facetLabel}${typeLabel}${searchLabel}`;
+          return `Up next from ${facetLabel}${typeLabel}${tagLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
@@ -2061,28 +2070,74 @@ export function FullscreenPlayer({
                 </a>
               </p>
             )}
-            {content.author && (
-              <p className="fullscreen-author">
-                {content.author}
-                {content.published_at && (
-                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                )}
-                {(content.karma !== undefined && content.karma !== null) && (
-                  <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                )}
-                {totalCommentCount > 0 && (
-                  <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                )}
-              </p>
-            )}
-            {content.type === 'podcast_episode' && content.podcast_show_name && (
-              <p className="fullscreen-author">
-                {content.podcast_show_name}
-                {content.published_at && (
-                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                )}
-              </p>
-            )}
+            {(() => {
+              const itemTags = content.tags || [];
+              // The "tag +" chip opens the picker. With no tags it rides at the end of
+              // the author row (no extra row); with tags, the chips get their own
+              // thinner row below and the chip closes that row.
+              const addChip = (
+                <button
+                  type="button"
+                  className="tag-chip tag-chip-add"
+                  onClick={() => setShowTagEditor(true)}
+                  title={itemTags.length > 0 ? 'Edit tags' : 'Add tags'}
+                >
+                  <TagIcon size={11} /><PlusIcon size={9} />
+                </button>
+              );
+              const inlineChip = itemTags.length === 0 ? addChip : null;
+              let authorRow: React.ReactNode = null;
+              if (content.author) {
+                authorRow = (
+                  <p className="fullscreen-author">
+                    {content.author}
+                    {content.published_at && (
+                      <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                    )}
+                    {(content.karma !== undefined && content.karma !== null) && (
+                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+                    )}
+                    {totalCommentCount > 0 && (
+                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
+                    )}
+                    {inlineChip}
+                  </p>
+                );
+              } else if (content.type === 'podcast_episode' && content.podcast_show_name) {
+                authorRow = (
+                  <p className="fullscreen-author">
+                    {content.podcast_show_name}
+                    {content.published_at && (
+                      <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                    )}
+                    {inlineChip}
+                  </p>
+                );
+              } else if (inlineChip) {
+                authorRow = <p className="fullscreen-author">{inlineChip}</p>;
+              }
+              return (
+                <>
+                  {authorRow}
+                  {itemTags.length > 0 && (
+                    <div className="fullscreen-tags">
+                      {itemTags.map(tag => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="tag-chip"
+                          onClick={() => setShowTagEditor(true)}
+                          title="Edit tags"
+                        >
+                          #{tag}
+                        </button>
+                      ))}
+                      {addChip}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
@@ -2154,6 +2209,10 @@ export function FullscreenPlayer({
                 >
                   <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Delete
+                </button>
+                <button onClick={() => { setShowDropdown(false); setShowTagEditor(true); }}>
+                  <TagIcon size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Edit tags
                 </button>
                 {/* Audio / transcript / refetch options */}
                 {(content.type === 'article' || content.type === 'text') && (
@@ -2252,6 +2311,18 @@ export function FullscreenPlayer({
               </div>
             )}
           </div>
+          {showTagEditor && (
+            <TagEditor
+              itemTitle={content.title}
+              initialTags={content.tags || []}
+              knownTags={knownTags}
+              onSave={async (tags) => {
+                await setItemTags(content.id, tags);
+                onContentUpdated?.({ ...content, tags });
+              }}
+              onClose={() => setShowTagEditor(false)}
+            />
+          )}
           {/* No minimize without audio (original OR summary). The mini player is
               playback chrome, so audio-less items live in fullscreen only (close
               is the way out). Missed the summary-audio case until 2026-08-21:

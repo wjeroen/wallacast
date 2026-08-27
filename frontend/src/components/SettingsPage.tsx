@@ -217,6 +217,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summarize_comments: 'true',
     summary_max_words: '40',
     library_show_summary: 'false',
+    copy_include_summary: 'false',
+    copy_summary_code_label: '',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -341,6 +343,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
+        copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
+        copy_summary_code_label: loaded.copy_summary_code_label || '',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -510,7 +514,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'auto_generate_summary_audio',
-        'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
+        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_summary_code_label', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
@@ -888,6 +892,37 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Replaces each library card's description with its article summary. Falls back to the description when no summary exists.
             </small>
           </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.copy_include_summary === 'true'}
+                onChange={(e) => handleChange('copy_include_summary', e.target.checked ? 'true' : 'false')}
+              />
+              Include summaries in "Copy content"
+            </label>
+            <small className="settings-hint indent">
+              Adds the summary (and the comment summary) right under the title of the copied Markdown, each inside a triple-backtick code block.
+            </small>
+          </div>
+          {formData.copy_include_summary === 'true' && (
+            <div className="form-group indent">
+              <label htmlFor="copy_summary_code_label">Code block label</label>
+              <input
+                id="copy_summary_code_label"
+                type="text"
+                value={formData.copy_summary_code_label}
+                onChange={(e) => handleChange('copy_summary_code_label', e.target.value)}
+                placeholder="none, e.g. ad-summary"
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              <small className="settings-hint">
+                The text after the opening backticks, so Obsidian plugins can style the block (Admonition users: <code>ad-summary</code>). Leave empty for a plain code block.
+              </small>
+            </div>
+          )}
 
           <button
             type="button"
@@ -1469,7 +1504,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
             </ol>
             <p style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
-            Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
+            Note: entries tagged nosync in Wallabag are never pulled; a local copy is kept but gets a nosync chip and is never pushed. Tags sync both ways (Wallabag-side tag edits are picked up by a cheap whole-library check on every sync, and merged so a tag added on either side survives). A sync never deletes local items or overwrites content Wallacast fetched itself. A full refresh (see button below) might be required to sync older items.
             </p>
             </>)}
           </div>
