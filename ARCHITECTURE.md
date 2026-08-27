@@ -598,6 +598,8 @@ Field names are aligned with Wallabag API for future bidirectional sync. All con
 4. Add to SELECT queries in content.ts (explicit column list for both list and single-item endpoints)
 5. If it's a large field (text/json), consider excluding from list query for performance
 
+**Dry-run a migration without a Postgres server:** `frontend/scripts/test-migration-027.mjs` runs migration 027 on PGlite (WASM Postgres, `npm i --no-save @electric-sql/pglite` in `frontend/`, then `node scripts/test-migration-027.mjs`) against an "existing database" shape, a fresh `schema.sql`, and a second run for idempotency. Copy the pattern for any migration with a DO block or a data backfill: it catches SQL errors that would otherwise crash `initializeDatabase()` and take the whole backend down.
+
 **Add database indexes:**
 1. Create migration file in `backend/src/database/migrations/`
 2. Use `CREATE INDEX IF NOT EXISTS` for safety
