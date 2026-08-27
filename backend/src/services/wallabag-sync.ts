@@ -561,67 +561,74 @@ async function reconcileTagsFromWallabag(
   const errors: string[] = [];
   let changed = 0;
 
+  // The local side is small (ids + tag arrays), so it is loaded once and looked up by
+  // wallabag_id. The Wallabag side is streamed page by page: only one page of entries is
+  // in memory at a time, so the pass costs the same for a library of 500 or 50,000.
   const local = await query(
     'SELECT id, wallabag_id, tags, wallabag_synced_tags, wallabag_needs_push FROM content_items WHERE user_id = $1 AND wallabag_id IS NOT NULL',
     [userId]
   );
   if (local.rows.length === 0) return { changed, errors };
+  const localByWallabagId = new Map<number, any>();
+  for (const row of local.rows) localByWallabagId.set(row.wallabag_id, row);
 
-  const { entries, complete } = await wallabag.fetchEntries(undefined, { detail: 'metadata', perPage: 100 });
-  if (!complete) {
-    console.warn('[Wallabag Sync] tag reconciliation skipped: metadata fetch incomplete');
-    return { changed, errors };
-  }
-  if (entries.length > 0 && !entries.some(hasTypeTag)) {
-    // Every entry we pushed carries a type tag, so none at all means the response did not
-    // serialize tags. Bail out loudly rather than treat it as "all tags removed".
-    console.warn(`[Wallabag Sync] tag reconciliation skipped: none of ${entries.length} metadata entries carried a type tag (tags missing from the response?)`);
-    return { changed, errors };
-  }
-
-  const byWallabagId = new Map<number, WallabagEntry>();
-  for (const e of entries) byWallabagId.set(e.id, e);
-
+  let checked = 0;
   let skippedNoTypeTag = 0;
   let localEditsKept = 0;
-  for (const row of local.rows) {
-    const entry = byWallabagId.get(row.wallabag_id);
-    if (!entry) continue;
-    try {
-      if (shouldSkip(entry)) {
-        changed += await markLocalItemsNosync(userId, entry);
-        continue;
+  let complete = true;
+  for await (const page of wallabag.iterateEntryPages(undefined, { detail: 'metadata', perPage: 100 })) {
+    if (page === null) {
+      complete = false;
+      break;
+    }
+    if (page.length > 0 && !page.some(hasTypeTag)) {
+      // Every entry we pushed carries a type tag, so a whole page without one means the
+      // response did not serialize tags. Bail out loudly rather than treat it as "all
+      // tags removed".
+      console.warn(`[Wallabag Sync] tag reconciliation stopped: none of ${page.length} metadata entries on this page carried a type tag (tags missing from the response?)`);
+      complete = false;
+      break;
+    }
+    for (const entry of page) {
+      checked++;
+      const row = localByWallabagId.get(entry.id);
+      if (!row) continue;
+      try {
+        if (shouldSkip(entry)) {
+          changed += await markLocalItemsNosync(userId, entry);
+          continue;
+        }
+        if (!hasTypeTag(entry)) {
+          skippedNoTypeTag++;
+          continue;
+        }
+        const remoteTags = userTagsOf(entry);
+        const localTags: string[] = row.tags || [];
+        const base: string[] | null = row.wallabag_synced_tags;
+        const merged = mergeTagSets(base, localTags, remoteTags);
+        const baseCurrent = base !== null && sameTagSet(base, remoteTags);
+        if (sameTagSet(merged, localTags) && baseCurrent) continue;
+        if (!sameTagSet(merged, remoteTags)) localEditsKept++;
+        // Store the merge and record Wallabag's set as the new base. If the merge still
+        // differs from Wallabag's set, the item is dirty (a local tag edit set the flag)
+        // and the push sends the merged list right after this pull.
+        await query(
+          'UPDATE content_items SET tags = $1, wallabag_synced_tags = $2 WHERE id = $3 AND user_id = $4',
+          [merged, remoteTags, row.id, userId]
+        );
+        if (!sameTagSet(merged, localTags)) {
+          console.log(`[Wallabag Sync] tags reconciled for item ${row.id}: [${localTags.join(', ')}] -> [${merged.join(', ')}] (Wallabag has [${remoteTags.join(', ')}])`);
+          changed++;
+        }
+      } catch (error) {
+        const msg = `Tag reconciliation for item ${row.id}: ${error}`;
+        console.error('[Wallabag Sync]', msg);
+        errors.push(msg);
       }
-      if (!hasTypeTag(entry)) {
-        skippedNoTypeTag++;
-        continue;
-      }
-      const remoteTags = userTagsOf(entry);
-      const localTags: string[] = row.tags || [];
-      const base: string[] | null = row.wallabag_synced_tags;
-      const merged = mergeTagSets(base, localTags, remoteTags);
-      const baseCurrent = base !== null && sameTagSet(base, remoteTags);
-      if (sameTagSet(merged, localTags) && baseCurrent) continue;
-      if (!sameTagSet(merged, remoteTags)) localEditsKept++;
-      // Store the merge and record Wallabag's set as the new base. If the merge still
-      // differs from Wallabag's set, the item is dirty (a local tag edit set the flag)
-      // and the push sends the merged list right after this pull.
-      await query(
-        'UPDATE content_items SET tags = $1, wallabag_synced_tags = $2 WHERE id = $3 AND user_id = $4',
-        [merged, remoteTags, row.id, userId]
-      );
-      if (!sameTagSet(merged, localTags)) {
-        console.log(`[Wallabag Sync] tags reconciled for item ${row.id}: [${localTags.join(', ')}] -> [${merged.join(', ')}] (Wallabag has [${remoteTags.join(', ')}])`);
-        changed++;
-      }
-    } catch (error) {
-      const msg = `Tag reconciliation for item ${row.id}: ${error}`;
-      console.error('[Wallabag Sync]', msg);
-      errors.push(msg);
     }
   }
 
-  console.log(`[Wallabag Sync] Tag reconciliation: ${entries.length} entries checked, ${changed} changed, ${localEditsKept} local edits kept for push, ${skippedNoTypeTag} skipped (no type tag)`);
+  console.log(`[Wallabag Sync] Tag reconciliation${complete ? '' : ' (incomplete)'}: ${checked} entries checked, ${changed} changed, ${localEditsKept} local edits kept for push, ${skippedNoTypeTag} skipped (no type tag)`);
   return { changed, errors };
 }
 

@@ -414,12 +414,35 @@ export class WallabagService {
     opts: { detail?: 'full' | 'metadata'; perPage?: number } = {}
   ): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
     const entries: WallabagEntry[] = [];
+    let complete = true;
+    for await (const page of this.iterateEntryPages(since, opts)) {
+      if (page === null) {
+        // A page fetch failed. We may already hold earlier pages, so keep them,
+        // but flag the pull as incomplete so the caller does not advance last_sync.
+        complete = false;
+        break;
+      }
+      entries.push(...page);
+    }
+    return { entries, complete };
+  }
+
+  /**
+   * Page through entries one page at a time, yielding each page's entries as it arrives
+   * (and `null` once when a page fetch fails, after which iteration stops). Callers that
+   * only need to look at each entry once (the tag reconciliation pass) use this directly,
+   * so a large library never has to sit in memory all at once.
+   *
+   * detail=metadata omits `content` (verified in EntryRestController 2.6.13), which makes a
+   * whole-library pass cheap. Wallabag's controller has no perPage cap (the old "max 30"
+   * note was never enforced in code).
+   */
+  async *iterateEntryPages(
+    since?: string,
+    opts: { detail?: 'full' | 'metadata'; perPage?: number } = {}
+  ): AsyncGenerator<WallabagEntry[] | null> {
     let page = 1;
     let hasMore = true;
-    let complete = true;
-    // detail=metadata omits `content` (verified in EntryRestController 2.6.13), which makes a
-    // whole-library pass cheap: the tag reconciliation in wallabag-sync.ts uses it. Wallabag's
-    // controller has no perPage cap (the old "max 30" note was never enforced in code).
     const detail = opts.detail || 'full';
     const perPage = opts.perPage || 30;
 
@@ -435,13 +458,11 @@ export class WallabagService {
 
       const response = await this.apiRequest('GET', endpoint);
       if (!response?._embedded?.items) {
-        // A page fetch failed. We may already hold earlier pages, so keep them,
-        // but flag the pull as incomplete so the caller does not advance last_sync.
-        complete = false;
-        break;
+        yield null;
+        return;
       }
 
-      entries.push(...response._embedded.items);
+      yield response._embedded.items as WallabagEntry[];
       hasMore = page < response.pages;
       page++;
 
@@ -450,8 +471,6 @@ export class WallabagService {
         await this.sleep(100);
       }
     }
-
-    return { entries, complete };
   }
 
   /**

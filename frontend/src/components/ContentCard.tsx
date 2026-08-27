@@ -326,12 +326,16 @@ export function ContentCard({
           {item.transcript_words && (
             <span className="badge transcript"><Captions size={12} /> Transcript</span>
           )}
-          {item.playback_position > 0 && item.duration && item.duration > 0 && (
+          {/* One chip for listening state: "34% • 1h 23m" while in progress, just the
+              length before the first play. Keeps the badge row to chips only. */}
+          {item.duration && item.duration > 0 && (
             <span className="progress">
-              {Math.round((item.playback_position / item.duration) * 100)}% complete
+              {item.playback_position > 0 && (
+                <>{Math.round((item.playback_position / item.duration) * 100)}% &bull; </>
+              )}
+              {formatDuration(item.duration)}
             </span>
           )}
-          {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
           {/* Tags as dimmed hashtag chips. Tapping any chip (or the tag+ chip at the end)
               opens the tag picker. In bulk mode the card click selects, so chips are inert. */}
           {(item.tags || []).map(tag => (
