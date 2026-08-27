@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
-import { markdownToHtml, parseFrontmatter, splitExportedComments, stripLeadingTitle } from '../markdown';
+import { markdownToHtml, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } from '../markdown';
 import { parseTagInput } from '../tags';
 import type { ContentItem } from '../types';
 
@@ -15,7 +15,7 @@ interface AddTabProps {
 // What a leading Obsidian-properties block (YAML frontmatter) contributed: shown as a
 // note under the field and applied on save. A "Copy content" export from Wallacast
 // starts with exactly such a block, so pasting one back re-creates the item with its
-// title, author, date, tags, description, source URL, and comments.
+// title, author, date, tags, description, source URL, summary, and comments.
 interface ImportMeta {
   key: string;            // the raw frontmatter text, so one block is applied only once
   source?: string;        // http(s) URL: the item is created as an article with that URL
@@ -120,6 +120,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     if (source) detected.push('source URL');
     const description = metaString(m.description) || undefined;
     if (description) detected.push('description');
+    if (splitExportedSummary(fm.body).summary) detected.push('summary');
+    if (splitExportedComments(fm.body).comments.length > 0) detected.push('comments');
     setImportMeta({ key, source, description, detected });
   }, [markdownSource]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -130,6 +132,13 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const applyMarkdownImport = (data: Record<string, unknown>, md: string) => {
     const fm = parseFrontmatter(md);
     let body = fm ? fm.body : md;
+    if (fm) {
+      // Summary blocks sit between the properties and the title in an export
+      const s = splitExportedSummary(body);
+      body = s.body;
+      if (s.summary) data.summary = s.summary;
+      if (s.comment_summary) data.comment_summary = s.comment_summary;
+    }
     body = stripLeadingTitle(body, title);
     const { body: bodyWithoutComments, comments } = splitExportedComments(body);
     data.content = markdownToHtml(bodyWithoutComments);
@@ -473,7 +482,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           <li>Articles will be automatically parsed and formatted for easy reading</li>
           <li>Upload HTML or Markdown files to convert them to audio</li>
           <li>Text content can be converted to audio using AI text-to-speech</li>
-          <li>Paste or upload a note with Obsidian properties (or a Wallacast "Copy content" export) and the title, author, date, tags, and comments come along</li>
+          <li>Paste or upload a note with Obsidian properties (or a Wallacast "Copy content" export) and the title, author, date, tags, summary, and comments come along</li>
           <li>For podcasts, use the Feed tab to subscribe to your favorite shows</li>
         </ul>
       </div>

@@ -8,7 +8,7 @@ const dom = new JSDOM('');
 (globalThis as any).DOMParser = dom.window.DOMParser;
 (globalThis as any).document = dom.window.document;
 
-const { contentToMarkdown, parseFrontmatter, splitExportedComments, stripLeadingTitle } =
+const { contentToMarkdown, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } =
   await import('../src/markdown.ts');
 const { obsidianTag, parseTagInput, collectTagCounts } = await import('../src/tags.ts');
 
@@ -64,9 +64,13 @@ assert.ok(md.includes('\ntags:\n  - article\n  - ai-safety\n  - econ\n  - weirdc
 assert.ok(md.includes('published: 2026-03-14'), 'published date');
 assert.ok(md.includes('description: "An HTML description with spaces"'), 'description cleaned');
 assert.ok(md.includes('upvotes: 87') && md.includes('comments: 3'), 'upvotes + comments');
-assert.ok(md.includes('\n````ad-summary\nTweet one.'), 'summary block uses a 4-backtick fence because the summary contains ```');
-assert.ok(md.includes('```ad-summary\nComments summary:\n\nPeople argued.\n```'), 'comment summary block');
+assert.ok(md.includes('---\n\n````ad-summary\nTweet one.'), 'summary block directly under the properties, 4-backtick fence because the summary contains ```');
+assert.ok(md.includes('```ad-summary\nComments summary:\n\nPeople argued.\n```\n\n# The'), 'comment summary block, then the title');
 assert.ok(!md.includes('By Scott Alexander'), 'old meta line gone');
+
+const noComments = contentToMarkdown(item, comments, { includeComments: false });
+assert.ok(!noComments.includes('## Comments'), 'comments toggle off');
+assert.ok(noComments.includes('comments: 3'), 'count property stays');
 
 // ---- import -------------------------------------------------------------
 const fm = parseFrontmatter(md);
@@ -77,7 +81,13 @@ assert.deepEqual(fm!.meta.tags, ['article', 'ai-safety', 'econ', 'weirdchars']);
 assert.equal(fm!.meta.published, '2026-03-14');
 assert.equal(fm!.meta.source, 'https://forum.effectivealtruism.org/posts/abc/some-post');
 
-const body1 = stripLeadingTitle(fm!.body, fm!.meta.title as string);
+const sum = splitExportedSummary(fm!.body);
+assert.equal(sum.summary, 'Tweet one.\n\nTweet two with ```backticks``` inside.', 'summary imported');
+assert.equal(sum.comment_summary, 'People argued.', 'comment summary imported');
+assert.ok(sum.body.startsWith('# The'), 'summary blocks removed, title next');
+assert.deepEqual(splitExportedSummary('# No summary\n\n```js\ncode\n```'), { body: '# No summary\n\n```js\ncode\n```' }, 'a code block that is not first is left alone');
+
+const body1 = stripLeadingTitle(sum.body, fm!.meta.title as string);
 assert.ok(!body1.trimStart().startsWith('# '), 'leading H1 stripped');
 
 const { body, comments: parsed } = splitExportedComments(body1);

@@ -219,6 +219,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     library_show_summary: 'false',
     copy_include_summary: 'false',
     copy_summary_code_label: '',
+    copy_include_comments: 'true',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -345,6 +346,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
         copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
         copy_summary_code_label: loaded.copy_summary_code_label || '',
+        copy_include_comments: loaded.copy_include_comments !== undefined && loaded.copy_include_comments !== null ? loaded.copy_include_comments : 'true',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -514,7 +516,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'auto_generate_summary_audio',
-        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_summary_code_label', 'wallabag_sync_enabled', 'image_alt_text_enabled',
+        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
@@ -903,7 +905,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Include summaries in "Copy content"
             </label>
             <small className="settings-hint indent">
-              Adds the summary (and the comment summary) right under the title of the copied Markdown, each inside a triple-backtick code block.
+              Puts the summary (and the comment summary) at the very top of the copied Markdown, right below the properties block, each inside a triple-backtick code block.
+            </small>
+          </div>
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.copy_include_comments === 'true'}
+                onChange={(e) => handleChange('copy_include_comments', e.target.checked ? 'true' : 'false')}
+              />
+              Include comments in "Copy content"
+            </label>
+            <small className="settings-hint indent">
+              Appends the article's comment thread as a "## Comments" section at the end of the copied Markdown.
             </small>
           </div>
           {formData.copy_include_summary === 'true' && (

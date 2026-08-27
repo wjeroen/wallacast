@@ -317,6 +317,8 @@ router.post('/', async (req, res) => {
       duration,
       tags,
       comments,
+      summary,
+      comment_summary,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -508,6 +510,13 @@ router.post('/', async (req, res) => {
     // reserved names are silently dropped here rather than failing the whole add.
     const initialTags = normalizeTagList(tags);
 
+    // Summary supplied by the caller (a Markdown import round-tripping the summary code
+    // blocks of an export). Stored as a completed summary, so nothing is regenerated.
+    const importedSummary = typeof summary === 'string' && summary.trim() ? summary.trim() : null;
+    const importedCommentSummary = importedSummary && typeof comment_summary === 'string' && comment_summary.trim()
+      ? comment_summary.trim()
+      : null;
+
     // Look up podcast show name if podcast_id is provided (for podcast episodes)
     if (podcast_id) {
       const podcastResult = await query(
@@ -526,10 +535,10 @@ router.post('/', async (req, res) => {
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
     );
 
     const createdItem = result.rows[0];
@@ -573,7 +582,8 @@ router.post('/', async (req, res) => {
 
     // Auto-generate summary for articles/texts (independent of audio, both can run at once).
     // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
-    if ((type === 'article' || type === 'text') && (processedContent || htmlContent)) {
+    // Skipped when the item arrived with its summary (Markdown import).
+    if ((type === 'article' || type === 'text') && (processedContent || htmlContent) && !importedSummary) {
       const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
       if (autoGenerateSummary === 'true') {
         console.log(`Auto-generating summary for ${type} ${createdItem.id}`);

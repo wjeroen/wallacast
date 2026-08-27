@@ -10,6 +10,7 @@ export async function loadCopyContentOptions(): Promise<CopyContentOptions> {
     return {
       includeSummary: s.copy_include_summary === 'true',
       summaryCodeLabel: (s.copy_summary_code_label || '').trim(),
+      includeComments: s.copy_include_comments !== 'false',
     };
   } catch (err) {
     console.error('Failed to load copy settings, copying without summary:', err);

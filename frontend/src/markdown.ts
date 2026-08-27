@@ -486,6 +486,31 @@ export function stripLeadingTitle(body: string, title: string): string {
   return body.slice(m[0].length).replace(/^\s*\n/, '');
 }
 
+/**
+ * The reverse of the summary blocks contentToMarkdown emits: when the text (after the
+ * properties block) STARTS with a fenced code block, that block is the summary, and a
+ * fenced block right after it whose first line is "Comments summary:" is the comment
+ * summary. Any label is accepted (the user picks it in Settings), so callers should only
+ * use this on text that had a properties block, which is what makes a leading code block
+ * unambiguous. Returns the text with the blocks removed.
+ */
+export function splitExportedSummary(markdown: string): { body: string; summary?: string; comment_summary?: string } {
+  const FENCE_RE = /^\s*(`{3,})[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\r?\n|$)/;
+  let rest = markdown;
+  const first = rest.match(FENCE_RE);
+  if (!first) return { body: markdown };
+  const summary = first[2].trim();
+  if (!summary) return { body: markdown };
+  rest = rest.slice(first[0].length);
+  let comment_summary: string | undefined;
+  const second = rest.match(FENCE_RE);
+  if (second && second[2].trimStart().startsWith(COMMENT_SUMMARY_MARKER)) {
+    comment_summary = second[2].trimStart().slice(COMMENT_SUMMARY_MARKER.length).trim() || undefined;
+    rest = rest.slice(second[0].length);
+  }
+  return { body: rest.replace(/^\s*\n/, ''), summary, comment_summary };
+}
+
 const COMMENT_HEADER_RE = /^\*\*(.+?)\*\*$/;
 const COMMENTS_HEADING_RE = /^## Comments(?: \(\d+\))?[ \t]*$/m;
 
@@ -581,12 +606,17 @@ export function splitExportedComments(markdown: string): { body: string; comment
 // The byline/link that used to sit under the title now live in the frontmatter, so
 // an import of this text round-trips them as fields instead of body paragraphs.
 export interface CopyContentOptions {
-  // Append the item's summary (and comment summary) right under the title, each inside a
-  // fenced code block. `summaryCodeLabel` is the text after the opening backticks, so an
-  // Obsidian Admonition user can set e.g. "ad-summary"; empty = a plain unlabeled block.
+  // Put the item's summary (and comment summary) at the very top, right under the
+  // properties block and before the title, each inside a fenced code block.
+  // `summaryCodeLabel` is the text after the opening backticks, so an Obsidian Admonition
+  // user can set e.g. "ad-summary"; empty = a plain unlabeled block.
   includeSummary?: boolean;
   summaryCodeLabel?: string;
+  // Append the "## Comments" section (default true).
+  includeComments?: boolean;
 }
+
+const COMMENT_SUMMARY_MARKER = 'Comments summary:';
 
 function fencedBlock(label: string, body: string): string {
   // A body that itself contains a triple backtick would end the fence early, so use a
@@ -597,15 +627,18 @@ function fencedBlock(label: string, body: string): string {
 }
 
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
-  const lines: string[] = [buildFrontmatter(item, comments), '', `# ${item.title}`];
+  const lines: string[] = [buildFrontmatter(item, comments)];
 
+  // Summary blocks sit at the very top, between the properties and the title.
   if (opts.includeSummary && item.summary?.trim()) {
     const label = opts.summaryCodeLabel || '';
     lines.push('', fencedBlock(label, item.summary));
     if (item.comment_summary?.trim()) {
-      lines.push('', fencedBlock(label, `Comments summary:\n\n${item.comment_summary.trim()}`));
+      lines.push('', fencedBlock(label, `${COMMENT_SUMMARY_MARKER}\n\n${item.comment_summary.trim()}`));
     }
   }
+
+  lines.push('', `# ${item.title}`);
 
   // Podcasts: description first, then the transcript, each only when present
   // (the `content` field is deliberately not used for podcasts). Articles/texts
@@ -620,7 +653,7 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       : (item.content || '');
   if (body.trim()) lines.push('', body.trim());
 
-  if (comments.length > 0) {
+  if (opts.includeComments !== false && comments.length > 0) {
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
       if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
