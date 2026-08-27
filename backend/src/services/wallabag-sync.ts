@@ -581,11 +581,12 @@ async function reconcileTagsFromWallabag(
       complete = false;
       break;
     }
-    if (page.length > 0 && !page.some(hasTypeTag)) {
-      // Every entry we pushed carries a type tag, so a whole page without one means the
-      // response did not serialize tags. Bail out loudly rather than treat it as "all
-      // tags removed".
-      console.warn(`[Wallabag Sync] tag reconciliation stopped: none of ${page.length} metadata entries on this page carried a type tag (tags missing from the response?)`);
+    if (page.length > 0 && page.every(e => !Array.isArray(e.tags))) {
+      // The response did not serialize a `tags` field at all. Bail out loudly rather than
+      // treat that as "all tags removed". (A page whose entries merely have EMPTY tag lists
+      // is normal: older entries saved in Wallabag before Wallacast existed carry no type
+      // tag, and those are skipped one by one below.)
+      console.warn(`[Wallabag Sync] tag reconciliation stopped: the metadata response carries no tags field (${page.length} entries on this page)`);
       complete = false;
       break;
     }
