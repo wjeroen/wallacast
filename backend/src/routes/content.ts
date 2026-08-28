@@ -801,10 +801,27 @@ router.patch('/:id', async (req, res) => {
         [id, req.user!.userId]
       );
 
-      if (contentResult.rows.length > 0) {
+      if (contentResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Content not found' });
+      }
+
+      {
         const { type, audio_url, title, author, published_at, comments } = contentResult.rows[0];
 
-        if (audio_url) {
+        // No audio means nothing to transcribe. Answer with a real reason: this used to
+        // fall through to the generic "No valid fields to update" 400 with no log line,
+        // so pressing the menu item looked like it did nothing at all.
+        if (!audio_url) {
+          console.log(`Transcript regeneration refused for ${type} ${id}: no audio`);
+          return res.status(400).json({
+            code: 'no_audio',
+            error: type === 'podcast_episode'
+              ? 'This episode has no audio URL, so there is nothing to transcribe.'
+              : 'This item has no audio yet. Generate audio first, then the transcript. (Archiving removes the audio of items that are not starred.)',
+          });
+        }
+
+        {
           console.log(`Regenerating transcript for ${type} ${id}`);
 
           // Build Whisper prompt hint for better transcription of key phrases

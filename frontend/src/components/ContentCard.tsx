@@ -556,10 +556,6 @@ export function ContentCard({
                     {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>
                 )}
-                <button onClick={() => onEditTags(item)}>
-                  <Tag size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  Edit tags
-                </button>
                 <button onClick={() => onAddToQueue(item)}>
                   <ListPlus size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Add to queue

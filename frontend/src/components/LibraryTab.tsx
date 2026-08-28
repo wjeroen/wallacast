@@ -709,9 +709,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       setOpenDropdown(null);
       await contentAPI.update(id, { regenerate_transcript: true } as any);
       refreshItem(id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to regenerate transcript:', error);
-      alert('Failed to regenerate transcript');
+      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
     }
   };
 

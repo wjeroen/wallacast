@@ -644,9 +644,9 @@ function App() {
     try {
       await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to regenerate transcript:', error);
-      alert('Failed to regenerate transcript');
+      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
     }
   };
 

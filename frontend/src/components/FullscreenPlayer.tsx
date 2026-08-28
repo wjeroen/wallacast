@@ -2210,10 +2210,6 @@ export function FullscreenPlayer({
                   <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Delete
                 </button>
-                <button onClick={() => { setShowDropdown(false); setShowTagEditor(true); }}>
-                  <TagIcon size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  Edit tags
-                </button>
                 {/* Audio / transcript / refetch options */}
                 {(content.type === 'article' || content.type === 'text') && (
                   <>

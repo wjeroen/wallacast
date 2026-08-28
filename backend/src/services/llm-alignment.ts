@@ -147,6 +147,56 @@ function escapeHtml(text: string): string {
 /**
  * Find image description from alt-text data, trying multiple URL matching strategies
  */
+/**
+ * Split a long <blockquote> into one alignment element per block inside it (paragraph,
+ * heading, list, image), each re-wrapped in its own <blockquote> so the reader still
+ * renders it as a quote. Returns [] when the quote holds fewer than 2 usable blocks, so
+ * a short quote keeps its single element and nothing changes for it.
+ *
+ * The narration announces a quote ONCE ("Quote: ..." / "End quote."), so only the first
+ * piece carries that prefix in its matcher text; the rest match on their own words.
+ * This only shapes the alignment data. The stored html_content is never touched.
+ */
+function splitQuoteIntoParts(
+  quote: Element,
+  imageDescriptions: Record<string, string>,
+  contentUrl?: string
+): ContentElement[] {
+  const parts: ContentElement[] = [];
+
+  for (const child of Array.from(quote.children)) {
+    const childText = (child.textContent || '').trim();
+    const img = child.tagName.toLowerCase() === 'img' ? child : child.querySelector('img');
+
+    // An image (often wrapped in a figure or a caption container) with no text of its own
+    // becomes its own image element, so it gets its own timestamp like a body image does.
+    if (img && !childText) {
+      const src = img.getAttribute('src') || '';
+      const alt = img.getAttribute('alt') || '';
+      const description = findImageDescription(src, imageDescriptions, contentUrl) || alt;
+      img.setAttribute('style', 'max-width: 100%; height: auto; border-radius: 0.5rem;');
+      parts.push({
+        type: 'image',
+        html: `<blockquote>${child.outerHTML}</blockquote>`,
+        text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+      });
+    } else if (childText) {
+      parts.push({
+        type: 'blockquote',
+        html: `<blockquote>${child.outerHTML}</blockquote>`,
+        text: childText,
+      });
+    }
+  }
+
+  // Nothing gained from a split of one block (or none), keep the quote whole.
+  if (parts.length < 2) return [];
+
+  const first = parts[0];
+  if (first.type === 'blockquote') first.text = `Quote: ${first.text}`;
+  return parts;
+}
+
 function findImageDescription(src: string, descriptions: Record<string, string>, contentUrl?: string): string | null {
   if (!src) return null;
 
@@ -194,8 +244,9 @@ function formatDateSpoken(dateString: string): string {
 /**
  * Extract block-level elements from HTML content.
  * Returns elements in document order, filtering out nested duplicates.
+ * Exported so `backend/scripts/test-quote-split.mts` can run it over real article HTML.
  */
-function extractContentElements(
+export function extractContentElements(
   htmlContent: string,
   title?: string,
   author?: string,
@@ -352,7 +403,16 @@ function extractContentElements(
           elements.push({ type: 'blockquote', html: (el as Element).outerHTML, text: `Quote: ${text}` });
         }
       } else if (text) {
-        elements.push({ type: 'blockquote', html: (el as Element).outerHTML, text: `Quote: ${text}` });
+        // A long quote (a quoted thread, a quoted report) used to be ONE element, so the
+        // read-along highlighted the whole thing for as long as it was narrated. Split it
+        // into one element per block inside the quote, the same idea as the per-<li> list
+        // split above. Short quotes (one block) keep their single element.
+        const parts = splitQuoteIntoParts(el as Element, imageDescriptions, url);
+        if (parts.length > 0) {
+          elements.push(...parts);
+        } else {
+          elements.push({ type: 'blockquote', html: (el as Element).outerHTML, text: `Quote: ${text}` });
+        }
       }
     } else if (tagName === 'ul' || tagName === 'ol') {
       // Split the list into ONE element per <li> so read-along highlights item-by-item
