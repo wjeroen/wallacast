@@ -14,7 +14,30 @@ import {
   flattenEmailTables,
   restoreArchivedParagraphs,
   isArchiveMirrorUrl,
+  authorFromJsonLd,
 } from '../src/services/article-fetcher.js';
+
+// --- 0. JSON-LD author fallback ----------------------------------------------------
+const ld = (json: string) =>
+  new JSDOM(`<script type="application/ld+json">${json}</script>`).window.document;
+
+assert.equal(
+  authorFromJsonLd(ld('{"@type":"Article","author":{"@type":"Person","name":"William Thibeau"}}')),
+  'William Thibeau',
+  'a person author on an Article node'
+);
+assert.equal(
+  authorFromJsonLd(ld('{"@graph":[{"@type":"WebSite","name":"Site"},{"@type":"NewsArticle","author":["Ada Lovelace"]}]}')),
+  'Ada Lovelace',
+  'a @graph wrapper, an array author, and a non-article node skipped'
+);
+assert.equal(
+  authorFromJsonLd(ld('{"@type":"WebSite","author":{"name":"Publisher Inc"}}')),
+  undefined,
+  'a non-article node never supplies an author'
+);
+assert.equal(authorFromJsonLd(ld('{ this is not json')), undefined, 'a malformed block is skipped, not thrown');
+assert.equal(authorFromJsonLd(new JSDOM('<p>no script</p>').window.document), undefined, 'no block, no author');
 
 const dir = process.argv[2];
 
@@ -24,6 +47,8 @@ console.log(`Fetching ${COMPACT} ...`);
 const article = await fetchArticleContent(COMPACT);
 const text = (article.content || '').replace(/\s+/g, ' ').trim();
 console.log(`  title: ${article.title}`);
+console.log(`  author: ${article.author || article.byline || '(none)'}`);
+assert.equal(article.author, 'William Thibeau', 'the author comes from the JSON-LD block');
 console.log(`  text length: ${text.length}`);
 console.log(`  first 160 chars: ${text.slice(0, 160)}`);
 

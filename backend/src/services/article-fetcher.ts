@@ -879,6 +879,58 @@ function stripInlineColors(root: Element | Document): void {
   });
 }
 
+/**
+ * Author from the page's schema.org JSON-LD block.
+ *
+ * Used as a last resort, only when no author meta tag and no byline element carried one.
+ * Compact publishes the author ONLY here (`{"@type":"Article","author":{"@type":"Person",
+ * "name":"William Thibeau"}}`, no `meta[name="author"]`), which is why its byline came back
+ * empty. Reading the standard block fixes that site and every other one that follows the
+ * same schema, instead of a selector that only ever works on one domain.
+ *
+ * Only Article-shaped nodes are read and only a name is returned, so a publisher or a
+ * website node can never land in the author field. A malformed block is skipped, never
+ * thrown: a broken script tag must not break the whole fetch.
+ *
+ * MUST be called BEFORE the fetcher strips <script> elements from the document.
+ */
+export function authorFromJsonLd(doc: Document): string | undefined {
+  const ARTICLE_TYPES = new Set([
+    'article', 'newsarticle', 'blogposting', 'report', 'techarticle', 'socialmediaposting',
+  ]);
+
+  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(script.textContent || '');
+    } catch {
+      continue;
+    }
+
+    // A block holds one object, an array of them, or a @graph wrapper.
+    const nodes: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.['@graph'])
+        ? parsed['@graph']
+        : [parsed];
+
+    for (const node of nodes) {
+      const types = [node?.['@type']].flat().filter(Boolean).map((t: any) => String(t).toLowerCase());
+      if (!types.some(t => ARTICLE_TYPES.has(t))) continue;
+
+      for (const candidate of [node?.author].flat().filter(Boolean)) {
+        const name = typeof candidate === 'string'
+          ? candidate
+          : typeof candidate?.name === 'string' ? candidate.name : '';
+        const trimmed = name.trim();
+        if (trimmed && trimmed.length <= 120) return trimmed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 /** archive.is and its mirror domains, which all serve the same rebuilt-page markup. */
 export function isArchiveMirrorUrl(url: string): boolean {
   try {
@@ -961,6 +1013,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
 
+    // Read the schema.org JSON-LD author BEFORE the scripts are stripped below (it lives
+    // in a <script type="application/ld+json">). Only used further down if nothing better
+    // is found.
+    const jsonLdAuthor = authorFromJsonLd(doc);
+
     // Remove scripts and styles globally
     const scripts = doc.querySelectorAll('script');
     scripts.forEach(script => script.remove());
@@ -990,6 +1047,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           break;
         }
       }
+    }
+
+    // Last resort: the schema.org block captured above. Purely additive, it only fills a
+    // byline that would otherwise be empty, so no site that already resolves an author
+    // changes behaviour.
+    if (!author?.trim() && jsonLdAuthor) {
+      console.log(`[Fetcher] Author taken from JSON-LD: ${jsonLdAuthor}`);
+      author = jsonLdAuthor;
     }
 
     const publishedDate =
