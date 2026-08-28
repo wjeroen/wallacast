@@ -789,8 +789,15 @@ export function normalizeTweetEmbeds(root: Element): void {
   });
 }
 
+// Layout tables used by email builders. `role="presentation"` is the standards-based
+// marker, but Mailchimp never sets it: it uses its own ids and classes instead
+// (#bodyTable, .templateContainer, .columnWrapper, and the mcn* block classes). One real
+// campaign page held 31 tables, 29 of which match this list and none of which held data.
+const EMAIL_LAYOUT_TABLES =
+  'table[role="presentation"], table#bodyTable, table.templateContainer, table.columnWrapper, table[class*="mcn"]';
+
 export function flattenEmailTables(root: Element): void {
-  if (!root.querySelector('table[role="presentation"]')) return;
+  if (!root.querySelector(EMAIL_LAYOUT_TABLES)) return;
   const doc = root.ownerDocument!;
 
   // 1. Drop hidden elements FIRST: emails duplicate content in mobile/desktop variants
@@ -818,7 +825,7 @@ export function flattenEmailTables(root: Element): void {
   // div so adjacent cells' inline content stays visually separated. `table.rows` and
   // `row.cells` only cover the table's OWN rows per spec, so a genuine data table
   // nested inside survives intact.
-  const tables = Array.from(root.querySelectorAll('table[role="presentation"]')).reverse();
+  const tables = Array.from(root.querySelectorAll(EMAIL_LAYOUT_TABLES)).reverse();
   for (const table of tables) {
     const container = doc.createElement('div');
     // The email's visual rhythm lived in table padding, which the unwrap discards;
@@ -870,6 +877,44 @@ function stripInlineColors(root: Element | Document): void {
     if (kept.length > 0) el.setAttribute('style', kept.join('; '));
     else el.removeAttribute('style');
   });
+}
+
+/** archive.is and its mirror domains, which all serve the same rebuilt-page markup. */
+export function isArchiveMirrorUrl(url: string): boolean {
+  try {
+    return /(^|\.)archive\.(is|ph|today|li|vn|fo|md)$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild paragraphs in an archive.is-style mirror.
+ *
+ * The mirror keeps the words but throws away the structure: every block becomes a generic
+ * <div> carrying a wall of inline styles (fixed widths, flex, colours), and the copy holds
+ * zero <p> elements. The reader then shows one undivided wall of text, and read-along gets
+ * a single element for the whole article. For these hosts only, the mirror's inline styles
+ * are dropped (our reader supplies its own) and every text-only <div> becomes a <p>.
+ *
+ * UNTESTED beyond one Compact mirror (2026-08-28). Menu lines and captions inside the
+ * mirror become paragraphs too, so expect some leftover noise at the top of such items.
+ */
+export function restoreArchivedParagraphs(root: Element): void {
+  const doc = root.ownerDocument!;
+
+  // The mirror's inline styles fight the reader's own layout, and none of them carry
+  // meaning we want to keep.
+  root.querySelectorAll('[style]').forEach(el => el.removeAttribute('style'));
+
+  const BLOCK_CHILD = 'div, p, section, article, main, ul, ol, table, blockquote, figure, pre, h1, h2, h3, h4, h5, h6';
+  for (const div of Array.from(root.querySelectorAll('div'))) {
+    if (div.querySelector(BLOCK_CHILD)) continue;          // a wrapper, not a leaf
+    if (!(div.textContent || '').trim()) continue;         // empty spacer
+    const p = doc.createElement('p');
+    while (div.firstChild) p.appendChild(div.firstChild);
+    div.replaceWith(p);
+  }
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -969,7 +1014,27 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Fallback to generic selectors
     if (!contentEl) {
-      contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
+      const article = doc.querySelector('article');
+      // Some sites (Compact, for one) put BOTH a page header and the story inside a single
+      // <article>, with the story itself in a <main> within it. Taking the <article> then
+      // drags the header (author line, date, share menu) into the body. Prefer that inner
+      // <main>, but only when it holds most of the article's text: a small inner <main> is
+      // a nav or a teaser, not the story.
+      const innerMain = article?.querySelector('main') || null;
+      const articleTextLen = (article?.textContent || '').trim().length;
+      const innerMainTextLen = (innerMain?.textContent || '').trim().length;
+      const preferInnerMain = !!innerMain && articleTextLen > 0 && innerMainTextLen >= articleTextLen * 0.5;
+      if (preferInnerMain) {
+        console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
+      }
+      contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
+    }
+
+    // archive.is and friends rebuild a page as generic <div>s, so the mirrored copy has no
+    // paragraphs at all. Restore them before the cleanup below runs.
+    if (contentEl && isArchiveMirrorUrl(url)) {
+      console.log('[Fetcher] archive mirror detected, restoring paragraphs');
+      restoreArchivedParagraphs(contentEl);
     }
 
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
@@ -997,6 +1062,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const text = el.textContent?.trim() || '';
         // Match "Previous", "Next", with optional arrows like "← Previous" or "Next →"
         if (/^(←\s*)?previous(\s*→)?$/i.test(text) || /^(←\s*)?next(\s*→)?$/i.test(text)) {
+          el.remove();
+        }
+      });
+
+      // Remove share menus. Many sites render "Share", "Share via X", "Share via email",
+      // "Copy link" as ordinary links inside the article, and they are read aloud as body
+      // text. Same text-based approach as the Previous/Next removal above.
+      contentEl.querySelectorAll('button, a').forEach(el => {
+        const text = (el.textContent || '').trim();
+        if (/^(share|share via .{1,20}|copy link|copy the link)$/i.test(text)) {
           el.remove();
         }
       });
