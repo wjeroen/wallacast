@@ -98,6 +98,15 @@ Element 7 is a comment by BreadLover. Can't find the header in the transcript (W
 Remember: these example timestamps (0.0, 2.8, 5.4, 18.5, etc.) are from DIFFERENT articles. Do NOT use any of these numbers. Find timestamps from the transcript provided below.`;
 
 
+/**
+ * How much of an image's description goes into the text the LLM matches against the
+ * transcript. An article with a dozen images often has several descriptions that open in
+ * a similar way, and at 150 characters two of them were indistinguishable, so the LLM put
+ * two images in the wrong order and the outlier repair had to guess their timestamps.
+ * The narration reads the whole description, so a longer excerpt is still real audio text.
+ */
+const IMAGE_MATCH_CHARS = 400;
+
 interface TranscriptWord {
   word: string;
   start: number;
@@ -177,13 +186,13 @@ function splitQuoteIntoParts(
       img.setAttribute('style', 'max-width: 100%; height: auto; border-radius: 0.5rem;');
       parts.push({
         type: 'image',
-        html: `<blockquote>${child.outerHTML}</blockquote>`,
-        text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+        html: `<blockquote class="quote-part">${child.outerHTML}</blockquote>`,
+        text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
       });
     } else if (childText) {
       parts.push({
         type: 'blockquote',
-        html: `<blockquote>${child.outerHTML}</blockquote>`,
+        html: `<blockquote class="quote-part">${child.outerHTML}</blockquote>`,
         text: childText,
       });
     }
@@ -364,7 +373,7 @@ export function extractContentElements(
       elements.push({
         type: 'image',
         html: (el as Element).outerHTML,
-        text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+        text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
       });
     } else if (tagName === 'figure') {
       const img = el.querySelector('img');
@@ -376,7 +385,7 @@ export function extractContentElements(
         elements.push({
           type: 'image',
           html: (el as Element).outerHTML,
-          text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+          text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
         });
       } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });
@@ -487,7 +496,7 @@ export function extractContentElements(
         elements.push({
           type: 'image',
           html: (el as Element).outerHTML,
-          text: description ? `[Image: ${description.slice(0, 150)}]` : '[Image]',
+          text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
         });
       } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });

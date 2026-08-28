@@ -20,13 +20,13 @@ const els = extractContentElements(longQuote, 'T', 'A');
 const kinds = els.map(e => `${e.type}:${e.text.slice(0, 28)}`);
 console.log(kinds.join('\n'));
 
-const quoteParts = els.filter(e => e.html.startsWith('<blockquote>'));
+const quoteParts = els.filter(e => e.html.startsWith('<blockquote class="quote-part">'));
 assert.equal(quoteParts.length, 4, 'the quote splits into 4 pieces (3 paragraphs + 1 image)');
 assert.ok(quoteParts[0].text.startsWith('Quote: First quoted'), 'only the first piece carries the Quote: prefix');
 assert.ok(!quoteParts[2].text.startsWith('Quote:'), 'later pieces match on their own words');
 assert.equal(quoteParts[1].type, 'image', 'the image inside the quote gets its own element');
 assert.ok(quoteParts[1].text.includes('A chart'), 'the image element uses the alt text');
-assert.ok(quoteParts.every(p => p.html.startsWith('<blockquote>') && p.html.endsWith('</blockquote>')),
+assert.ok(quoteParts.every(p => p.html.startsWith('<blockquote class="quote-part">') && p.html.endsWith('</blockquote>')),
   'every piece is still wrapped as a quote so it renders as one');
 
 // A short quote keeps its single element, exactly as before.

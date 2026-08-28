@@ -166,14 +166,23 @@
   }
 }
 
-@media (max-width: 740px) {
+/* The toolbar labels (Select, Newest, Tags) only appear once the window is wide enough
+   for the whole row: 5 buttons plus the 4 type chips. Measured at 874px with labels on
+   and small counts, so the cut-off sits at 950px to leave room for a four-digit item
+   count on the active chip. They used to appear at 740px, far too early, which forced the
+   chip strip into a sideways scroll on every mid-sized window. */
+@media (max-width: 950px) {
   .filter-label {
     display: none;
   }
 
+  /* Without their labels the toolbar buttons are square icon buttons */
   .filter-buttons button {
     padding: 0.5rem;
   }
+}
+
+@media (max-width: 740px) {
 
   /* Type pill collapses to icon-only on narrow screens (same as .filter-label) */
   .type-label {
@@ -758,7 +767,10 @@
 .filter-buttons {
   display: flex;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  /* NEVER wrap. With wrapping on, the type chips dropped to a second row at some window
+     widths and jumped back up at others, because the row is only a few pixels too wide in
+     that band. The chip strip scrolls sideways instead (see .filter-chips-scroll). */
+  flex-wrap: nowrap;
   align-items: stretch;
   min-width: 0;
   flex: 1;
@@ -770,7 +782,10 @@
 .filter-chips-scroll {
   display: flex;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  /* Only THIS strip scrolls when the toolbar runs out of room. It holds no dropdown, so
+     the overflow cannot clip a menu (the funnel and tag menus live outside it). */
+  flex-wrap: nowrap;
+  overflow-x: auto;
   min-width: 0;
 }
 
@@ -1834,16 +1849,8 @@
     padding-bottom: 5rem;
   }
 
-  .filter-buttons {
-    flex-wrap: nowrap;
-  }
-
-  /* Only the type-chip strip scrolls. Never the row that hosts the funnel
-     dropdown (an overflow container would clip the menu) */
-  .filter-chips-scroll {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-  }
+  /* .filter-buttons and .filter-chips-scroll now carry nowrap + the sideways scroll at
+     EVERY width (see their base rules), so the old overrides here are gone. */
 
   .content-type-selector {
     overflow-x: auto;
@@ -3164,11 +3171,11 @@
 }
 
 .fullscreen-header {
-  display: flex;
-  /* Buttons pin to the top so the title area can grow (author row, tag row)
-     without pulling the controls down the header */
-  align-items: flex-start;
-  justify-content: space-between;
+  /* The buttons are taken OUT of the flow and pinned to the top right, so only the
+     title and the source link have to keep clear of them (via their own padding-right
+     below). The byline and the tag row then get the full width and can run underneath
+     the buttons, instead of every row being squeezed into the leftover column. */
+  position: relative;
   padding: 1rem 1.5rem;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--bg-raised);
@@ -3236,9 +3243,19 @@
 }
 
 .fullscreen-header-buttons {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+/* Only these two rows sit level with the pinned buttons, so only they reserve room for
+   them (3 buttons + gaps at their widest). Everything below runs the full width. */
+.fullscreen-title,
+.fullscreen-source-link {
+  padding-right: 9.5rem;
 }
 
 .header-button {
@@ -4924,17 +4941,21 @@ blockquote.twitter-tweet.tweet-quoted {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  /* Same box as .metadata .badge so a tag chip sits the same height as the Audio,
-     Summary and Transcript badges beside it, in the cards AND in the player. Only the
-     colours are quieter: an outline and muted text instead of a filled pill. */
-  padding: 0.25rem 0.5rem;
+  /* Painted to exactly the same height as .metadata .badge (26px, measured). Three things
+     decide that height, and all three have to be stated here: the badge has NO border, so
+     this 1px border is taken back out of the padding; a chip is a <button>, which the
+     browser gives `line-height: normal` instead of the inherited 1.5, so it is set back;
+     and the icon-only "tag +" chip has no text line at all, so a min-height gives it the
+     same box (1.5em text + 6px padding + 2px border, with border-box sizing). */
+  padding: calc(0.25rem - 1px) calc(0.5rem - 1px);
+  line-height: 1.5;
+  min-height: calc(1.5em + 8px);
   background: transparent;
   border: 1px solid var(--bg-raised);
   border-radius: 0.25rem;
   color: var(--t4);
   font-size: 0.75rem;
   font-family: inherit;
-  line-height: 1;
   white-space: nowrap;
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
@@ -4953,8 +4974,19 @@ blockquote.twitter-tweet.tweet-quoted {
 /* The "tag +" chip: icon only, so it needs less side padding to look square, but the
    same vertical padding as every other chip keeps the row's heights equal. */
 .tag-chip-add {
-  padding: 0.25rem 0.4rem;
+  padding: calc(0.25rem - 1px) calc(0.4rem - 1px);
   gap: 0.05rem;
+}
+
+/* Split quote pieces. One long <blockquote> becomes one read-along element per block
+   inside it, and each piece keeps the quote look. Without this they would each carry the
+   1.5em quote margin, so the quote's blue bar broke into a ladder of separate bars that
+   read as several highlights. Zero margin joins them into ONE continuous bar, and the
+   piece being narrated still stands out through its own tint + lighter bar. */
+.article-content blockquote.quote-part {
+  margin: 0;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
 }
 
 /* Player header: the same chips as the cards. Under the author row when there
