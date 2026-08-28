@@ -1672,7 +1672,13 @@ export function FullscreenPlayer({
       case 'read-along': {
         const isPodcast = content.type === 'podcast_episode';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
-        const isTranscribing = content.current_operation === 'transcribing';
+        // What is actually running. The transcript job reports `current_operation` as
+        // 'transcript' (set by the PATCH route) or 'transcribing' (set by the service), and
+        // `generation_status` as 'generating_transcript'. Without all three, a transcript
+        // regeneration fell through to the generic branch and claimed audio was being made.
+        const isTranscribing = content.current_operation === 'transcribing'
+          || content.current_operation === 'transcript'
+          || content.generation_status === 'generating_transcript';
         const isAligning = content.current_operation === 'aligning_content';
         const hasAudio = !!content.audio_url;
         const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
@@ -1685,10 +1691,12 @@ export function FullscreenPlayer({
           // The word spans come from the memoized transcriptTree (built once per
           // transcript); read-state and clicks are handled imperatively above.
           let podcastMessage: string | null = null;
-          if (!hasAudio && isGenerating) {
-            podcastMessage = 'Audio is being generated...';
-          } else if (isTranscribing) {
+          if (isTranscribing) {
             podcastMessage = 'Transcript is being generated... This may take a minute.';
+          } else if (!hasAudio && isGenerating) {
+            podcastMessage = 'Audio is being generated...';
+          } else if (isAligning) {
+            podcastMessage = 'Aligning content with audio...';
           } else if (!hasTranscript) {
             podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
           }
@@ -1709,9 +1717,11 @@ export function FullscreenPlayer({
         // Article/text: if LLM alignment exists, use the rich read-along view
         if (isLLMAlignment) {
           // Show generating/transcribing status above the content if applicable
-          const statusMsg = isGenerating ? 'Audio is being generated...'
-            : isTranscribing ? 'Transcribing...'
+          // Order matters: the transcript job also sets a busy generation_status, so it
+          // must be checked BEFORE the generic "audio" message.
+          const statusMsg = isTranscribing ? 'Transcript is being generated...'
             : isAligning ? 'Aligning content with audio...'
+            : isGenerating ? 'Audio is being generated...'
             : null;
           return (
             <div className="tab-read-along-display">
@@ -1725,15 +1735,13 @@ export function FullscreenPlayer({
         // This ensures articles are readable even before audio is generated.
         return (
           <div className="tab-read-along-display">
-            {isGenerating && (
-              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
-            )}
-            {isTranscribing && (
-              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcribing... Read-along highlighting will appear once complete.</p>
-            )}
-            {isAligning && (
+            {isTranscribing ? (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcript is being generated... Read-along highlighting will appear once complete.</p>
+            ) : isAligning ? (
               <p className="no-content" style={{ marginBottom: '1rem' }}>Aligning content with audio... Almost done.</p>
-            )}
+            ) : isGenerating ? (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
+            ) : null}
             <div className="tab-content-display">
               <div className="content-header-with-button">
                 <div className="content-header">
@@ -2082,7 +2090,7 @@ export function FullscreenPlayer({
                   onClick={() => setShowTagEditor(true)}
                   title={itemTags.length > 0 ? 'Edit tags' : 'Add tags'}
                 >
-                  <TagIcon size={11} /><PlusIcon size={9} />
+                  <TagIcon size={12} /><PlusIcon size={10} />
                 </button>
               );
               const inlineChip = itemTags.length === 0 ? addChip : null;
@@ -2090,26 +2098,30 @@ export function FullscreenPlayer({
               if (content.author) {
                 authorRow = (
                   <p className="fullscreen-author">
-                    {content.author}
-                    {content.published_at && (
-                      <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                    )}
-                    {(content.karma !== undefined && content.karma !== null) && (
-                      <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                    )}
-                    {totalCommentCount > 0 && (
-                      <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                    )}
+                    <span>
+                      {content.author}
+                      {content.published_at && (
+                        <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                      )}
+                      {(content.karma !== undefined && content.karma !== null) && (
+                        <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+                      )}
+                      {totalCommentCount > 0 && (
+                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
+                      )}
+                    </span>
                     {inlineChip}
                   </p>
                 );
               } else if (content.type === 'podcast_episode' && content.podcast_show_name) {
                 authorRow = (
                   <p className="fullscreen-author">
-                    {content.podcast_show_name}
-                    {content.published_at && (
-                      <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                    )}
+                    <span>
+                      {content.podcast_show_name}
+                      {content.published_at && (
+                        <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                      )}
+                    </span>
                     {inlineChip}
                   </p>
                 );

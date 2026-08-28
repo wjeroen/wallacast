@@ -3220,7 +3220,16 @@
   color: #93c5fd;
 }
 
+/* The byline row. A flex row with wrapping so the "tag +" chip sits to the RIGHT of the
+   author when it fits, and drops to a line of its own FLUSH LEFT when it does not. As an
+   inline element with a left margin it used to land indented on the wrapped line. The
+   byline text itself is one flex item (a span), so it still wraps as normal prose. */
 .fullscreen-author {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
   font-size: 0.875rem;
   color: var(--t3);
   margin: 0.25rem 0 0 0;
@@ -4915,7 +4924,10 @@ blockquote.twitter-tweet.tweet-quoted {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  padding: 0.2rem 0.45rem;
+  /* Same box as .metadata .badge so a tag chip sits the same height as the Audio,
+     Summary and Transcript badges beside it, in the cards AND in the player. Only the
+     colours are quieter: an outline and muted text instead of a filled pill. */
+  padding: 0.25rem 0.5rem;
   background: transparent;
   border: 1px solid var(--bg-raised);
   border-radius: 0.25rem;
@@ -4938,9 +4950,10 @@ blockquote.twitter-tweet.tweet-quoted {
   color: var(--t4);
   border-color: var(--bg-raised);
 }
-/* The "tag +" chip: icon only, same footprint as a short tag */
+/* The "tag +" chip: icon only, so it needs less side padding to look square, but the
+   same vertical padding as every other chip keeps the row's heights equal. */
 .tag-chip-add {
-  padding: 0.2rem 0.35rem;
+  padding: 0.25rem 0.4rem;
   gap: 0.05rem;
 }
 
@@ -4952,10 +4965,6 @@ blockquote.twitter-tweet.tweet-quoted {
   align-items: center;
   gap: 0.3rem;
   margin-top: 0.3rem;
-}
-.fullscreen-author .tag-chip {
-  margin-left: 0.5rem;
-  vertical-align: middle;
 }
 
 /* Library tag filter menu (multi-select, "any of") */

@@ -247,6 +247,11 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             ? mergeTagSets(row.wallabag_synced_tags, localTags, remoteTags)
             : localTags; // tags absent from the response: never treat that as "remove all"
           const syncedTags = hasTypeTag(entry) ? remoteTags : row.wallabag_synced_tags;
+          if (!sameTagSet(tagsToStore, localTags)) {
+            // Logged here as well as in the reconciliation pass, so a tag change is always
+            // traceable to the phase that applied it.
+            console.log(`[Wallabag Sync] tags merged in pull for item ${row.id}: [${localTags.join(', ')}] -> [${tagsToStore.join(', ')}] (Wallabag has [${remoteTags.join(', ')}])`);
+          }
 
           // Body ownership: only bodies that came FROM Wallabag are refreshed from it.
           // Anything our fetcher/editor/importer produced is better than Wallabag's
