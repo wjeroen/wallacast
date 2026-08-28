@@ -787,6 +787,11 @@
   flex-wrap: nowrap;
   overflow-x: auto;
   min-width: 0;
+  /* Hairline between the two halves of the toolbar: the buttons on the left act on the
+     library, the chips on the right choose what it shows. */
+  border-left: 1px solid var(--bg-raised);
+  padding-left: 0.625rem;
+  margin-left: 0.125rem;
 }
 
 /* Dropdown triggers inside the filter row stretch to the row height, like

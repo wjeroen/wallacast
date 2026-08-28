@@ -27,6 +27,17 @@ interface ImageAltTextData {
   descriptions: ImageDescriptions;
   total_images: number;
   decorative_images: number;
+  /**
+   * Images that were sent for description and came back WITHOUT one: the download failed,
+   * or the model answered with nothing usable. These are NOT decorative. They used to be
+   * reported as decorative, which hid the failure completely: the stored data then showed
+   * 13 images, 1 decorative and 11 descriptions, and nothing said where the 13th went.
+   * An image with no description is dropped from the narration and glued onto the previous
+   * read-along element, so a silent failure here is visible to the user as a shared
+   * highlight and an image the audio never mentions.
+   */
+  failed_images?: number;
+  failed_image_urls?: string[];
   cost_usd: number;
   model: string;
   processed_at: string;
@@ -46,6 +57,9 @@ interface ImageAnalysisResult {
   description: string;
   isDecorative: boolean;
   confidence: number;
+  /** True when there is no description because something went wrong, not because the
+   *  image carries no meaning. Kept apart from isDecorative so failures stay countable. */
+  failed?: boolean;
 }
 
 export class ImageAltTextService {
@@ -141,6 +155,9 @@ export class ImageAltTextService {
 
     let newDescriptions: ImageDescriptions = {};
     let costUsd = 0;
+    // Images that were SENT for a description and came back without one. Tracked apart
+    // from the decorative count so the failure cannot hide inside it.
+    const failedUrls: string[] = [];
 
     if (informativeImages.length > 0) {
       // Process each image individually (one API call per image)
@@ -163,12 +180,15 @@ export class ImageAltTextService {
           if (!analysis.isDecorative && analysis.description) {
             const normalized = this.normalizeUrl(analysis.url);
             newDescriptions[normalized] = analysis.description;
+          } else if (analysis.failed) {
+            failedUrls.push(img.url);
           }
 
           // Estimate cost per image
           costUsd += this.estimateCost(1);
         } catch (error) {
           console.error(`[ImageAltText] Failed to process image ${img.url}:`, error);
+          failedUrls.push(img.url);
           // Continue with next image - don't fail entire article
         }
       }
@@ -195,10 +215,27 @@ export class ImageAltTextService {
 
     const decorativeCount = currentImages.length - informativeImages.length;
 
+    if (failedUrls.length > 0) {
+      // Loud on purpose. An image with no description is dropped from the narration and
+      // merged into the previous read-along element, so the listener hears nothing where
+      // the image is and the highlight covers two blocks at once.
+      console.error(
+        `[ImageAltText] ❌ ${failedUrls.length} of ${informativeImages.length} image(s) got NO description. ` +
+        `They will be SILENT in the audio and will share the previous element's highlight. URLs:\n  ` +
+        failedUrls.join('\n  ')
+      );
+    }
+    console.log(
+      `[ImageAltText] Summary: ${currentImages.length} image(s) total, ` +
+      `${decorativeCount} decorative, ${Object.keys(newDescriptions).length} described, ${failedUrls.length} failed`
+    );
+
     return {
       descriptions: mergedDescriptions,
       total_images: currentImages.length,
       decorative_images: decorativeCount,
+      failed_images: failedUrls.length,
+      failed_image_urls: failedUrls,
       cost_usd: forceRegenerate ? costUsd : (existingData?.cost_usd || 0) + costUsd,
       model: await this.getModelName(),
       processed_at: new Date().toISOString()
@@ -291,7 +328,10 @@ export class ImageAltTextService {
     } catch (error: any) {
       const isRetryable = error?.status === 503 || error?.message?.includes('503') ||
                           error?.message?.includes('overloaded') ||
-                          error?.message?.includes('RESOURCE_EXHAUSTED');
+                          error?.message?.includes('RESOURCE_EXHAUSTED') ||
+                          // A download that failed once is usually a CDN hiccup, and an
+                          // undescribed image is silently missing from the narration.
+                          error?.message?.includes('IMAGE_DOWNLOAD_FAILED');
 
       if (!isRetryable || attempt >= PROCESSING_CONFIG.retry.maxAttempts) {
         console.error(`[ImageAltText] Failed after ${attempt} attempt(s):`, error);
@@ -398,13 +438,11 @@ export class ImageAltTextService {
   const imageData = await this.downloadImage(imageUrl);
 
   if (!imageData) {
+    // Thrown, not returned, so analyzeImageWithRetry gets a chance at it: a single image
+    // failing to download among a dozen is usually a CDN hiccup, and the old code gave up
+    // after one try AND reported the image as decorative.
     console.warn(`[ImageAltText] ❌ Could not download image: ${imageUrl}`);
-    return {
-      url: imageUrl,
-      description: "",
-      isDecorative: true,
-      confidence: 0
-    };
+    throw new Error(`IMAGE_DOWNLOAD_FAILED: ${imageUrl}`);
   }
 
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
@@ -427,11 +465,12 @@ export class ImageAltTextService {
 
     // Check for model-reported failure
     if (description.includes("FAILED") || !description || description.length < 10) {
-       console.warn(`[ImageAltText] Invalid or empty description for: ${imageUrl}`);
+       console.warn(`[ImageAltText] ❌ Invalid or empty description for: ${imageUrl}`);
        return {
          url: imageUrl,
          description: "",
-         isDecorative: true,
+         isDecorative: false,
+         failed: true,
          confidence: 0
        };
     }
