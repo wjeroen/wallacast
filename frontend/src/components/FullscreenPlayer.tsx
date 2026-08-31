@@ -22,6 +22,7 @@ import {
   Star,
   Archive,
   ArchiveRestore,
+  Trash2,
   SkipBack,
   SkipForward,
   Repeat,
@@ -454,8 +455,8 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
-  // Content store for star/archive/tag actions
-  const { toggleStarred, toggleArchived, updateItem, setItemTags } = useContentStore();
+  // Content store for star/archive/delete/tag actions
+  const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
   // Tag editor popup + the library-wide tag list it offers
   const [showTagEditor, setShowTagEditor] = useState(false);
   const allLibraryItems = useContentStore(s => s.allItems);
@@ -2183,7 +2184,7 @@ export function FullscreenPlayer({
         </div>
         <div className="fullscreen-header-buttons">
           {/* Star and Archive ride along as their own buttons (the library card
-              shows them inline too). Delete stays a library-card-only action. */}
+              shows them inline too). Delete lives at the bottom of the menu. */}
           <button
             onClick={() => {
               toggleStarred(content.id);
@@ -2203,7 +2204,7 @@ export function FullscreenPlayer({
           >
             {content.is_archived ? <ArchiveRestore size={20} /> : <Archive size={20} />}
           </button>
-          {/* Dropdown menu (same options as a library card's menu, minus Delete) */}
+          {/* Dropdown menu (a library card's menu options, plus Delete at the bottom) */}
           <div className="dropdown-container" ref={showDropdown ? dropdownRef : null} style={{ position: 'relative' }}>
             <button
               onClick={() => setShowDropdown(!showDropdown)}
@@ -2307,6 +2308,13 @@ export function FullscreenPlayer({
                 <button onClick={handleDownloadDataZip}>
                   <FolderDown size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
+                </button>
+                <button
+                  onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
+                  style={{ color: '#ef4444' }}
+                >
+                  <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Delete
                 </button>
               </div>
             )}
