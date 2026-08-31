@@ -3183,8 +3183,10 @@
 }
 
 /* Faint borderless minimize/close control at the start of the header. On
-   artwork items it sits above the artwork (see .fullscreen-leading), so it
-   costs no extra width there. On artwork-less items it simply leads the title. */
+   artwork items it tucks below the artwork (see .fullscreen-leading), so it
+   costs no extra width there. On artwork-less items it simply leads the title.
+   The negative margin cancels the padding, so the icon lines up with the
+   artwork's left edge (and with the header edge when there is no artwork). */
 .fullscreen-close-button {
   background: none;
   border: none;
@@ -3205,8 +3207,8 @@
   color: var(--t1);
 }
 
-/* The header's leading column: the minimize/close control, then the artwork
-   below it when one exists. */
+/* The header's leading column: the artwork first (top-aligned with the title),
+   then the minimize/close control below it. */
 .fullscreen-leading {
   display: flex;
   flex-direction: column;

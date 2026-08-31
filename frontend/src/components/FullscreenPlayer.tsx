@@ -2080,19 +2080,13 @@ export function FullscreenPlayer({
     <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
-          {/* Leading column: the minimize/close control with the artwork tucked
-              below it, so the control costs no extra width on artwork items.
-              A chevron means "minimize to the mini player" (any audio, original
-              or summary, the real close lives on the mini player's X). An X
-              means "close for real" (no audio, so no mini player exists). */}
+          {/* Leading column: the artwork top-aligned with the title, with the
+              minimize/close control tucked below it. Without artwork the
+              control simply leads the title. A chevron means "minimize to the
+              mini player" (any audio, original or summary, the real close
+              lives on the mini player's X). An X means "close for real"
+              (no audio, so no mini player exists). */}
           <div className="fullscreen-leading">
-            <button
-              onClick={hasAnyAudio(content) ? onMinimize : onClose}
-              className="fullscreen-close-button"
-              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
-            >
-              {hasAnyAudio(content) ? <ChevronDown size={18} /> : <X size={18} />}
-            </button>
             {content.preview_picture && (
               <img
                 src={content.preview_picture}
@@ -2100,6 +2094,13 @@ export function FullscreenPlayer({
                 className="fullscreen-thumbnail"
               />
             )}
+            <button
+              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              className="fullscreen-close-button"
+              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+            >
+              {hasAnyAudio(content) ? <ChevronDown size={18} /> : <X size={18} />}
+            </button>
           </div>
           <div>
             {/* Tapping the title also minimizes, the inverse of the mini
