@@ -1513,7 +1513,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag sync (currently partially broken)
+            Wallabag sync
           </h3>
 
           <div style={{
