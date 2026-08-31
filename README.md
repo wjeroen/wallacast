@@ -24,7 +24,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
 - **Tags**: Tag any item from its card or the player (hashtag chips, tap to edit), filter the library by one or more tags, and tags sync both ways with Wallabag
-- **Obsidian round-trip**: "Copy content" exports Markdown with an Obsidian properties block (title, author, source, dates, tags), optionally the summary in a labeled code block and the comment thread; pasting such a note into the Add tab or uploading the `.md` file imports it back, fields, summary, and comments included
+- **Obsidian round-trip**: "Copy content" exports Markdown with an Obsidian properties block (title, author, source, published date, tags), optionally the summary in a labeled code block and the comment thread; pasting such a note into the Add tab or uploading the `.md` file imports it back, fields, summary, and comments included
 - **Read-Along**: Every audio item gets a synced read-along view with per-paragraph highlighting and auto-scroll
 - **Summaries → Audio**: Twitter-thread style summaries (articles and podcast episodes) can get their own short audio; a "Prefer summary audio" toggle in the player's playback options plays the summary instead of the full audio when both exist
 

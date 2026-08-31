@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
 import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
@@ -840,6 +840,81 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
            )}
         </section>
 
+        {/* Playback / Queue Settings */}
+        <section className="settings-section">
+          <h3>Playback</h3>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.manual_queue_always_autoplay === 'true'}
+                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
+              />
+              Manually queued items always autoplay
+            </label>
+            <small className="settings-hint indent">
+              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
+              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.autoplay_on_open === 'true'}
+                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
+              />
+              Start playing when opening an item
+            </label>
+            <small className="settings-hint indent">
+              When on, clicking a library item starts its audio right away instead of waiting for play.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.show_continue_listening === 'true'}
+                onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
+              />
+              Show the continue-listening row in the library
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.warn_archive_removes_audio === 'true'}
+                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
+              />
+              Warn when archiving removes generated audio
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>Speed button options</label>
+            <small className="settings-hint">
+              Which speeds the player's speed button cycles through. None selected = the default set.
+            </small>
+            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
+              {SPEED_CATALOG.map(s => (
+                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={speedOptions.includes(s)}
+                    onChange={() => toggleSpeedOption(s)}
+                  />
+                  {s}x
+                </label>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Summaries Section */}
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
@@ -974,7 +1049,11 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </div>
           )}
 
-          <h4 className="settings-subheading">Copy content</h4>
+        </section>
+
+        {/* Copy & export: what leaves the app through the "Copy content" action */}
+        <section className="settings-section">
+          <h3><Copy size={20} /> Copy & export</h3>
           <p className="section-description">
             What the "Copy content" action adds to the article text.
           </p>
@@ -1037,82 +1116,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             <small className="settings-hint indent">
               The full comment thread at the end.
             </small>
-          </div>
-
-        </section>
-
-        {/* Playback / Queue Settings */}
-        <section className="settings-section">
-          <h3>Playback</h3>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.manual_queue_always_autoplay === 'true'}
-                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
-              />
-              Manually queued items always autoplay
-            </label>
-            <small className="settings-hint indent">
-              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
-              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
-            </small>
-          </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.autoplay_on_open === 'true'}
-                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
-              />
-              Start playing when opening an item
-            </label>
-            <small className="settings-hint indent">
-              When on, clicking a library item starts its audio right away instead of waiting for play.
-            </small>
-          </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.show_continue_listening === 'true'}
-                onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
-              />
-              Show the continue-listening row in the library
-            </label>
-          </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.warn_archive_removes_audio === 'true'}
-                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
-              />
-              Warn when archiving removes generated audio
-            </label>
-          </div>
-
-          <div className="form-group">
-            <label>Speed button options</label>
-            <small className="settings-hint">
-              Which speeds the player's speed button cycles through. None selected = the default set.
-            </small>
-            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
-              {SPEED_CATALOG.map(s => (
-                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={speedOptions.includes(s)}
-                    onChange={() => toggleSpeedOption(s)}
-                  />
-                  {s}x
-                </label>
-              ))}
-            </div>
           </div>
         </section>
 

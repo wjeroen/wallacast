@@ -2727,15 +2727,8 @@
 .settings-section .settings-hint.indent {
   margin-left: 1.5rem;
 }
-/* A named group of related options inside a section (e.g. "Copy content" under
-   Summaries), and the indented block of sub-options that only apply while the
-   parent checkbox is on. */
-.settings-section .settings-subheading {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--t2);
-  margin: 1.5rem 0 0.25rem;
-}
+/* The indented block of sub-options that only apply while the parent checkbox
+   is on (e.g. the comment-summary options in "Copy & export"). */
 .settings-section .settings-indent {
   margin-left: 1.5rem;
 }
@@ -3050,23 +3043,25 @@
   margin-top: 0.125rem;
 }
 
+/* Faint borderless X on the LEFT, matching the fullscreen player's close
+   button. This is the player's real close, the fullscreen X only minimizes
+   while any audio exists. */
 .mini-close-button {
-  background: transparent;
-  border: 1px solid var(--bg-raised);
-  border-radius: 0.375rem;
+  background: none;
+  border: none;
   padding: 0.375rem;
   color: var(--t3);
+  opacity: 0.55;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  transition: opacity 0.2s, color 0.2s;
 }
 
 .mini-close-button:hover {
-  background: var(--bg-hover-soft);
-  border-color: var(--bg-hover);
+  opacity: 1;
   color: var(--t1);
 }
 
@@ -3187,12 +3182,37 @@
   flex-shrink: 0;
 }
 
+/* Faint borderless close/minimize X, pinned top LEFT (the action buttons own
+   the top right). The title area reserves room for it just below. */
+.fullscreen-close-button {
+  position: absolute;
+  top: 1.1rem;
+  left: 0.9rem;
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  color: var(--t3);
+  opacity: 0.55;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.fullscreen-close-button:hover {
+  opacity: 1;
+  color: var(--t1);
+}
+
 .fullscreen-title-area {
   display: flex;
   align-items: center;
   gap: 1rem;
   flex: 1;
   min-width: 0;
+  /* Keeps the thumbnail clear of the pinned close X on the left. */
+  padding-left: 2.5rem;
 }
 
 .fullscreen-thumbnail {

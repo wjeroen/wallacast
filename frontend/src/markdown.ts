@@ -399,8 +399,6 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   }
   const published = isoDate(item.published_at);
   if (published) out.push(`published: ${published}`);
-  const saved = isoDate(item.created_at);
-  if (saved) out.push(`saved: ${saved}`);
   const tags = [typeTagFor(item.type)];
   for (const t of item.tags || []) {
     const o = obsidianTag(t);

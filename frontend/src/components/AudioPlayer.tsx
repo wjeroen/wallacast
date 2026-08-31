@@ -589,11 +589,22 @@ export function AudioPlayer({
   useEffect(() => {
     return () => {
       // Same guard as savePlaybackPosition: if the resume-seek never stuck, the
-      // element still sits at the wrong spot; saving here is what turned "open a
-      // podcast, close it" into wiping its saved position to 0.
+      // element still sits at the wrong spot, and saving here is what turned
+      // "open a podcast, close it" into wiping its saved position to 0.
       if (audioRef.current && content && pendingResumeSeekRef.current === 0) {
+        const audio = audioRef.current;
+        // A track at (or within seconds of) its end counts as finished and keeps
+        // the 0 that handleEnded saved. Without this check, this force-save ran
+        // AFTER that reset on every auto-advance or close and wrote the final
+        // second back, so finished items reopened at their last moment (the
+        // "summary opens at its final seconds" bug, found 2026-08-31). The
+        // thresholds match resetIfNearlyFinished in App.tsx, and the write stays
+        // scoped to the loaded variant's own column via positionFieldRef.
+        const dur = audio.duration;
+        const threshold = positionFieldRef.current === 'summary_playback_position' ? 5 : 10;
+        const nearEnd = isFinite(dur) && dur > 0 && dur - audio.currentTime < threshold;
         // Force save on unmount regardless of debounce
-        const floored = Math.floor(audioRef.current.currentTime);
+        const floored = nearEnd ? 0 : Math.floor(audio.currentTime);
         contentAPI.update(content.id, {
           [positionFieldRef.current]: floored,
           last_played_at: new Date().toISOString(),

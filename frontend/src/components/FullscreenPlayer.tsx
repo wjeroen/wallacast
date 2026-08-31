@@ -13,7 +13,6 @@ import {
   Moon,
   SunMoon,
   X,
-  Minimize2,
   SquareArrowOutUpRight,
   RefreshCw,
   ArrowDownToLine,
@@ -23,8 +22,6 @@ import {
   Star,
   Archive,
   ArchiveRestore,
-  Undo2,
-  Trash2,
   SkipBack,
   SkipForward,
   Repeat,
@@ -51,7 +48,6 @@ import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
-import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
 import { collectTagCounts } from '../tags';
@@ -458,16 +454,12 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
-  // Content store for star/archive/delete/tag actions
-  const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
+  // Content store for star/archive/tag actions
+  const { toggleStarred, toggleArchived, updateItem, setItemTags } = useContentStore();
   // Tag editor popup + the library-wide tag list it offers
   const [showTagEditor, setShowTagEditor] = useState(false);
   const allLibraryItems = useContentStore(s => s.allItems);
   const knownTags = useMemo(() => collectTagCounts(allLibraryItems), [allLibraryItems]);
-  // Delayed-archive state (player-only): pending + deferred both render as Undo
-  // (deferred = timer fired while this item is loaded; archives on player-leave).
-  const pendingArchives = usePendingArchiveStore(s => s.pending);
-  const deferredArchives = usePendingArchiveStore(s => s.deferred);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Markdown editor (Content tab) state
@@ -1373,6 +1365,33 @@ export function FullscreenPlayer({
     target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
+  // Archive/unarchive from the header button. Same behavior as a library card:
+  // one confirm popup when archiving would wipe generated audio (article/text,
+  // not starred, warning toggleable in Settings), instant otherwise. This
+  // replaced the old 10-second undo timer (pendingArchiveStore) on 2026-08-31.
+  const handleArchiveClick = async () => {
+    const archiveWipesAudio = !!content.audio_url
+      && (content.type === 'article' || content.type === 'text')
+      && !content.is_starred;
+    if (!content.is_archived && archiveWipesAudio) {
+      let warn = true;
+      try {
+        const res = await userSettingsAPI.get('warn_archive_removes_audio');
+        warn = res.data.value !== 'false';
+      } catch { /* setting unreadable, keep the warning */ }
+      if (warn && !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")) return;
+    }
+    // toggleArchived does the optimistic store update + the server PATCH,
+    // then fetch the fresh item for the player.
+    await toggleArchived(content.id);
+    try {
+      const fresh = await contentAPI.getById(content.id);
+      onContentUpdated?.(fresh.data);
+    } catch (err) {
+      console.error('Failed to refresh player after archive:', err);
+    }
+  };
+
   // Copy the readable content (title, link, author, date, body, comments) to
   // the clipboard as Markdown, via the shared contentToMarkdown export.
   const handleCopyContent = async () => {
@@ -2060,6 +2079,16 @@ export function FullscreenPlayer({
   return (
     <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
+        {/* With any audio (original or summary) the X minimizes to the mini
+            player, and the real close lives on the mini player's X. Audio-less
+            items have no mini player, so there the X closes for real. */}
+        <button
+          onClick={hasAnyAudio(content) ? onMinimize : onClose}
+          className="fullscreen-close-button"
+          title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+        >
+          <X size={20} />
+        </button>
         <div className="fullscreen-title-area">
           {content.preview_picture && (
             <img
@@ -2153,7 +2182,28 @@ export function FullscreenPlayer({
           </div>
         </div>
         <div className="fullscreen-header-buttons">
-          {/* Dropdown menu (same options as library item) */}
+          {/* Star and Archive ride along as their own buttons (the library card
+              shows them inline too). Delete stays a library-card-only action. */}
+          <button
+            onClick={() => {
+              toggleStarred(content.id);
+              onContentUpdated?.({ ...content, is_starred: !content.is_starred });
+            }}
+            className="header-button"
+            title={content.is_starred ? 'Unstar' : 'Star'}
+            style={content.is_starred ? { color: '#fbbf24' } : undefined}
+          >
+            <Star size={20} fill={content.is_starred ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            onClick={handleArchiveClick}
+            className="header-button"
+            title={content.is_archived ? 'Unarchive' : 'Archive'}
+            style={content.is_archived ? { color: '#60a5fa' } : undefined}
+          >
+            {content.is_archived ? <ArchiveRestore size={20} /> : <Archive size={20} />}
+          </button>
+          {/* Dropdown menu (same options as a library card's menu, minus Delete) */}
           <div className="dropdown-container" ref={showDropdown ? dropdownRef : null} style={{ position: 'relative' }}>
             <button
               onClick={() => setShowDropdown(!showDropdown)}
@@ -2164,64 +2214,6 @@ export function FullscreenPlayer({
             </button>
             {showDropdown && (
               <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
-                {/* Star / Archive / Delete at the top */}
-                <button
-                  onClick={() => {
-                    toggleStarred(content.id);
-                    onContentUpdated?.({ ...content, is_starred: !content.is_starred });
-                  }}
-                  style={content.is_starred ? { color: '#fbbf24' } : undefined}
-                >
-                  <Star size={14} fill={content.is_starred ? 'currentColor' : 'none'} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  {content.is_starred ? 'Unstar' : 'Star'}
-                </button>
-                <button
-                  onClick={async () => {
-                    // The 10s undo window exists to protect generated audio from an
-                    // accidental archive. When archiving deletes nothing (no audio,
-                    // podcast source audio, or a starred item), archive instantly.
-                    const archiveWipesAudio = !!content.audio_url
-                      && (content.type === 'article' || content.type === 'text')
-                      && !content.is_starred;
-                    if (!content.is_archived && archiveWipesAudio) {
-                      // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
-                      // so it fires even after this player moves on or closes, defers while the
-                      // item is still loaded here, and a second press within the window undoes
-                      // it before the server wipes anything.
-                      const store = usePendingArchiveStore.getState();
-                      if (store.pending[content.id] || store.deferred[content.id]) store.cancel(content.id);
-                      else store.schedule(content.id);
-                      return;
-                    }
-                    // Unarchiving, and archiving that wipes nothing, stay instant.
-                    // toggleArchived does the optimistic store update + the server
-                    // PATCH; then fetch the fresh item for the player.
-                    await toggleArchived(content.id);
-                    try {
-                      const fresh = await contentAPI.getById(content.id);
-                      onContentUpdated?.(fresh.data);
-                    } catch (err) {
-                      console.error('Failed to refresh player after archive:', err);
-                    }
-                  }}
-                  style={content.is_archived || pendingArchives[content.id] || deferredArchives[content.id] ? { color: '#60a5fa' } : undefined}
-                >
-                  {content.is_archived
-                    ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    : pendingArchives[content.id] || deferredArchives[content.id]
-                      ? <Undo2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                      : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  }
-                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] || deferredArchives[content.id] ? 'Undo' : 'Archive'}
-                  {!content.is_archived && pendingArchives[content.id] && <span className="pending-archive-bar" />}
-                </button>
-                <button
-                  onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
-                  style={{ color: '#ef4444' }}
-                >
-                  <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  Delete
-                </button>
                 {/* Audio / transcript / refetch options */}
                 {(content.type === 'article' || content.type === 'text') && (
                   <>
@@ -2331,19 +2323,6 @@ export function FullscreenPlayer({
               onClose={() => setShowTagEditor(false)}
             />
           )}
-          {/* No minimize without audio (original OR summary). The mini player is
-              playback chrome, so audio-less items live in fullscreen only (close
-              is the way out). Missed the summary-audio case until 2026-08-21:
-              a summary-audio-only item's button had vanished since this still
-              checked content.audio_url alone. */}
-          {hasAnyAudio(content) && (
-            <button onClick={onMinimize} className="header-button" title="Minimize">
-              <Minimize2 size={20} />
-            </button>
-          )}
-          <button onClick={onClose} className="header-button" title="Close">
-            <X size={20} />
-          </button>
         </div>
       </div>
 
