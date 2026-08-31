@@ -9,7 +9,6 @@ import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
-import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio } from './format';
 import type { ContentItem } from './types';
@@ -134,6 +133,11 @@ function App() {
   // the new track once metadata loads. First-click from the library leaves it
   // at 0 so playback stays user-initiated.
   const [autoPlayToken, setAutoPlayToken] = useState(0);
+
+  // Bumped on every library click so a minimized player pops back to
+  // fullscreen for the newly opened item. Auto-advance leaves it alone,
+  // a track change during background listening must stay in the mini player.
+  const [openToken, setOpenToken] = useState(0);
 
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
@@ -292,6 +296,7 @@ function App() {
     const { typeFilter, facets, tagFilter, searchQuery } = useContentStore.getState();
     useQueueStore.getState().setLibraryContext({ typeFilter, facets, tags: tagFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
+    setOpenToken(t => t + 1);
     const item = resetIfNearlyFinished(content);
     setCurrentContent(item);
     if (autoplayOnOpen && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
@@ -401,13 +406,6 @@ function App() {
       // Loop, try the new "next" after mutation
     }
   };
-
-  // Tell the delayed-archive machinery which item the player holds: a pending
-  // archive that fires while its item is still loaded defers to player-leave,
-  // and leaving the item is exactly this id changing (or becoming null).
-  useEffect(() => {
-    notifyArchivePlayerItem(currentContent?.id ?? null);
-  }, [currentContent?.id]);
 
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');
@@ -966,6 +964,7 @@ function App() {
         {currentContent && (
           <AudioPlayer
             content={currentContent}
+            openToken={openToken}
             onClose={() => {
               setCurrentContent(null);
               // Closing unmounts AudioPlayer, which forgets the last token it

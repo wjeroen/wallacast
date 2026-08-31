@@ -46,6 +46,12 @@ interface AudioPlayerProps {
    * library leave the counter alone, so the first track doesn't auto-play.
    */
   autoPlayToken?: number;
+  /**
+   * Parent increments this on every library click. A minimized player expands
+   * back to fullscreen for the newly opened item. Auto-advance does not bump
+   * it, so background listening stays in the mini player.
+   */
+  openToken?: number;
   onPlayQueueItem?: (item: ContentItem) => void;
   initialTab?: string;
   // Global "Prefer summary audio" mode (persisted user setting owned by App).
@@ -59,7 +65,7 @@ export function AudioPlayer({
   onGenerateSummaryAudio, onRegenerateTranscript, initialTab,
   onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
-  autoPlayToken = 0, onPlayQueueItem,
+  autoPlayToken = 0, openToken = 0, onPlayQueueItem,
   preferSummaryAudio = false, onSetPreferSummaryAudio,
 }: AudioPlayerProps) {
   // Per-item variant override (the Summary tab's Play / Switch-back banner): wins
@@ -150,6 +156,13 @@ export function AudioPlayer({
   useEffect(() => {
     userPausedRef.current = false;
   }, [content?.id]);
+
+  // A library click reopens fullscreen even when the player sat minimized
+  // (see the openToken prop docs). Runs once on mount too, harmlessly, since
+  // isExpanded already starts true.
+  useEffect(() => {
+    if (openToken > 0) setIsExpanded(true);
+  }, [openToken]);
 
   // Clear the per-item override on every genuine track change. Its own render-time
   // check (overrideForId.id === content.id) already ignores it while on any OTHER

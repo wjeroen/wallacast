@@ -1368,8 +1368,7 @@ export function FullscreenPlayer({
 
   // Archive/unarchive from the header button. Same behavior as a library card:
   // one confirm popup when archiving would wipe generated audio (article/text,
-  // not starred, warning toggleable in Settings), instant otherwise. This
-  // replaced the old 10-second undo timer (pendingArchiveStore) on 2026-08-31.
+  // not starred, warning toggleable in Settings), instant otherwise.
   const handleArchiveClick = async () => {
     const archiveWipesAudio = !!content.audio_url
       && (content.type === 'article' || content.type === 'text')
@@ -2080,26 +2079,40 @@ export function FullscreenPlayer({
   return (
     <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
-        {/* With any audio (original or summary) the X minimizes to the mini
-            player, and the real close lives on the mini player's X. Audio-less
-            items have no mini player, so there the X closes for real. */}
-        <button
-          onClick={hasAnyAudio(content) ? onMinimize : onClose}
-          className="fullscreen-close-button"
-          title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
-        >
-          <X size={20} />
-        </button>
         <div className="fullscreen-title-area">
-          {content.preview_picture && (
-            <img
-              src={content.preview_picture}
-              alt={content.title}
-              className="fullscreen-thumbnail"
-            />
-          )}
+          {/* Leading column: the minimize/close control with the artwork tucked
+              below it, so the control costs no extra width on artwork items.
+              A chevron means "minimize to the mini player" (any audio, original
+              or summary, the real close lives on the mini player's X). An X
+              means "close for real" (no audio, so no mini player exists). */}
+          <div className="fullscreen-leading">
+            <button
+              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              className="fullscreen-close-button"
+              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+            >
+              {hasAnyAudio(content) ? <ChevronDown size={18} /> : <X size={18} />}
+            </button>
+            {content.preview_picture && (
+              <img
+                src={content.preview_picture}
+                alt={content.title}
+                className="fullscreen-thumbnail"
+              />
+            )}
+          </div>
           <div>
-            <h2 className="fullscreen-title">{content.title}</h2>
+            {/* Tapping the title also minimizes, the inverse of the mini
+                player's title tap that expands. Better thumb reach than the
+                top-left control. Audio-less items keep a plain title. */}
+            <h2
+              className="fullscreen-title"
+              onClick={hasAnyAudio(content) ? onMinimize : undefined}
+              style={hasAnyAudio(content) ? { cursor: 'pointer' } : undefined}
+              title={hasAnyAudio(content) ? 'Minimize' : undefined}
+            >
+              {content.title}
+            </h2>
             {content.type === 'article' && content.url && (
               <p className="fullscreen-source-link">
                 <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
@@ -2194,7 +2207,7 @@ export function FullscreenPlayer({
             title={content.is_starred ? 'Unstar' : 'Star'}
             style={content.is_starred ? { color: '#fbbf24' } : undefined}
           >
-            <Star size={20} fill={content.is_starred ? 'currentColor' : 'none'} />
+            <Star size={16} fill={content.is_starred ? 'currentColor' : 'none'} />
           </button>
           <button
             onClick={handleArchiveClick}
@@ -2202,7 +2215,7 @@ export function FullscreenPlayer({
             title={content.is_archived ? 'Unarchive' : 'Archive'}
             style={content.is_archived ? { color: '#60a5fa' } : undefined}
           >
-            {content.is_archived ? <ArchiveRestore size={20} /> : <Archive size={20} />}
+            {content.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
           </button>
           {/* Dropdown menu (a library card's menu options, plus Delete at the bottom) */}
           <div className="dropdown-container" ref={showDropdown ? dropdownRef : null} style={{ position: 'relative' }}>
@@ -2211,7 +2224,7 @@ export function FullscreenPlayer({
               className="header-button"
               title="More options"
             >
-              <MoreVertical size={20} />
+              <MoreVertical size={16} />
             </button>
             {showDropdown && (
               <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
