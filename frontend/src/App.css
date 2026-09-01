@@ -1063,7 +1063,9 @@
      that ends where the cards begin), hence its own bottom margin. */
   position: sticky;
   top: 0;
-  z-index: 30;
+  /* Above the cards sliding beneath (their positioned bits are z auto), but
+     BELOW .dropdown-menu at 10, an open filter menu must cover this bar */
+  z-index: 5;
   background: var(--bg-app);
   padding-bottom: 0.25rem;
   margin-bottom: 0.75rem;
