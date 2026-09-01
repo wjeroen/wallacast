@@ -245,19 +245,21 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const allSelectedStarred = selectedObjs.length > 0 && selectedObjs.every(i => i.is_starred);
   const allSelectedArchived = selectedObjs.length > 0 && selectedObjs.every(i => i.is_archived);
 
-  // Per-type counts under the current status, ignoring search (so the number
-  // stays stable while typing). The count is shown on the ACTIVE type chip.
+  // Per-type counts under the current facets, tags, AND search, so the chip
+  // number always agrees with the list below it. Search lands here at the
+  // same debounced pace the list filters at, so the number stays calm while
+  // typing. The count is shown on the ACTIVE type chip.
   const typeCounts = useMemo(() => {
     const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
     for (const i of allItems) {
-      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery: '' })) continue;
+      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
     }
     return counts;
-  }, [allItems, facets, tagFilter]);
+  }, [allItems, facets, tagFilter, searchQuery]);
 
   // Every tag in the library with its usage count (filter menu + tag editor list)
   const tagCounts = useMemo(() => collectTagCounts(allItems), [allItems]);
