@@ -1083,7 +1083,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   Comment summary
                 </label>
                 <small className="settings-hint indent">
-                  A second code block, right after the summary.
+                  Its own code block, just above the comments.
                 </small>
               </div>
               <div className="form-group">

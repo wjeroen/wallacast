@@ -491,12 +491,63 @@ export function stripLeadingTitle(body: string, title: string): string {
 }
 
 /**
- * The reverse of the summary blocks contentToMarkdown emits: when the text (after the
- * properties block) STARTS with a fenced code block, that block is the summary, and a
- * fenced block right after it whose first line is "Comments summary:" is the comment
- * summary. Any label is accepted (the user picks it in Settings), so callers should only
- * use this on text that had a properties block, which is what makes a leading code block
- * unambiguous. Returns the text with the blocks removed.
+ * The comment summary text inside a fenced block's body, or null when the block is not one.
+ *
+ * The current export opens the block with `title: Comments summary`, which Obsidian's
+ * callout plugins read as the callout's own title instead of showing it as a stray line of
+ * body text. Exports made before 2026-09-01 opened it with a plain `Comments summary:`
+ * line, so that spelling is still recognized.
+ */
+function stripCommentSummaryMarker(inner: string): string | null {
+  const text = inner.trimStart();
+  for (const marker of [COMMENT_SUMMARY_TITLE, COMMENT_SUMMARY_MARKER]) {
+    if (text.slice(0, marker.length).toLowerCase() === marker.toLowerCase()) {
+      return text.slice(marker.length).trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Pull the comment-summary fenced block out of a body and return the body without it.
+ *
+ * Only the part ABOVE the Comments heading is searched, which is exactly where an export
+ * puts the block, so a fenced code block quoted inside a comment can never be mistaken for
+ * one. A block is only taken when its first line is the marker, so ordinary code blocks in
+ * the article are left alone.
+ */
+function extractCommentSummaryBlock(markdown: string): { body: string; comment_summary?: string } {
+  const heading = markdown.match(COMMENTS_HEADING_RE);
+  const limit = heading?.index ?? markdown.length;
+  const head = markdown.slice(0, limit);
+  const BLOCK_RE = /(^|\r?\n)[ \t]*(`{3,})[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*\2[ \t]*(?=\r?\n|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = BLOCK_RE.exec(head)) !== null) {
+    const inner = stripCommentSummaryMarker(m[3]);
+    if (inner === null) continue;
+    const before = markdown.slice(0, m.index + m[1].length).replace(/\s+$/, '');
+    const after = markdown.slice(m.index + m[0].length).replace(/^\s+/, '');
+    return {
+      body: [before, after].filter(Boolean).join('\n\n'),
+      comment_summary: inner || undefined,
+    };
+  }
+  return { body: markdown };
+}
+
+/**
+ * The reverse of the summary blocks contentToMarkdown emits.
+ *
+ * The article summary is the fenced block the text STARTS with, right after the properties
+ * block. The comment summary is a fenced block opening with `title: Comments summary`,
+ * which an export places at the end of the body, directly above the Comments heading. Any
+ * fence label is accepted (the user picks it in Settings), so callers should only use this
+ * on text that had a properties block, which is what makes a leading code block unambiguous.
+ *
+ * Exports made before 2026-09-01 put the comment summary directly under the article summary
+ * instead. That layout is still read, so older notes still round-trip.
+ *
+ * Returns the text with both blocks removed.
  */
 export function splitExportedSummary(markdown: string): { body: string; summary?: string; comment_summary?: string } {
   const FENCE_RE = /^\s*(`{3,})[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\r?\n|$)/;
@@ -505,18 +556,28 @@ export function splitExportedSummary(markdown: string): { body: string; summary?
   if (!first) return { body: markdown };
   const summary = first[2].trim();
   if (!summary) return { body: markdown };
-  rest = rest.slice(first[0].length);
-  let comment_summary: string | undefined;
+  rest = rest.slice(first[0].length).replace(/^\s*\n/, '');
+
+  // Older layout: the comment summary is the very next block.
   const second = rest.match(FENCE_RE);
-  if (second && second[2].trimStart().startsWith(COMMENT_SUMMARY_MARKER)) {
-    comment_summary = second[2].trimStart().slice(COMMENT_SUMMARY_MARKER.length).trim() || undefined;
-    rest = rest.slice(second[0].length);
+  if (second) {
+    const marked = stripCommentSummaryMarker(second[2]);
+    if (marked !== null) {
+      return {
+        body: rest.slice(second[0].length).replace(/^\s*\n/, ''),
+        summary,
+        comment_summary: marked || undefined,
+      };
+    }
   }
-  return { body: rest.replace(/^\s*\n/, ''), summary, comment_summary };
+
+  const found = extractCommentSummaryBlock(rest);
+  return { body: found.body, summary, comment_summary: found.comment_summary };
 }
 
 const COMMENT_HEADER_RE = /^\*\*(.+?)\*\*$/;
-const COMMENTS_HEADING_RE = /^## Comments(?: \(\d+\))?[ \t]*$/m;
+// One hash is what an export writes now, two is what it wrote before 2026-09-01.
+const COMMENTS_HEADING_RE = /^#{1,2} Comments(?: \(\d+\))?[ \t]*$/m;
 
 // Parse one exported comment header line ("**name • 12 points • 14/03/2026**").
 function parseCommentHeader(text: string): Comment | null {
@@ -587,7 +648,7 @@ function parseCommentBlock(block: string): Comment[] {
 }
 
 /**
- * Split an exported "## Comments" section back into structured comments (the reverse of
+ * Split an exported "# Comments" section back into structured comments (the reverse of
  * contentToMarkdown's comment rendering), so an imported export gets real comments again:
  * shown in the Comments area, counted on the card, and narrated. When the section does
  * not parse as our format, it is left in the body untouched and no comments are returned.
@@ -595,7 +656,7 @@ function parseCommentBlock(block: string): Comment[] {
 export function splitExportedComments(markdown: string): { body: string; comments: Comment[] } {
   const idx = markdown.search(COMMENTS_HEADING_RE);
   if (idx < 0) return { body: markdown, comments: [] };
-  const section = markdown.slice(idx).replace(/^## Comments(?: \(\d+\))?[ \t]*\r?\n?/, '');
+  const section = markdown.slice(idx).replace(/^#{1,2} Comments(?: \(\d+\))?[ \t]*\r?\n?/, '');
   const comments = section
     .split(/\r?\n[ \t]*---[ \t]*\r?\n/)
     .flatMap((block) => parseCommentBlock(block.replace(/\r/g, '')));
@@ -615,13 +676,19 @@ export interface CopyContentOptions {
   // opening backticks (some Obsidian plugins style blocks by it); empty = a plain block.
   includeSummary?: boolean;
   summaryCodeLabel?: string;
-  // Also the comment summary, as a second block right after (default true; only used
-  // when includeSummary is on).
+  // Also the comment summary, in its own block at the END of the body, directly above the
+  // Comments heading, because that is what it is about (default true; only used when
+  // includeSummary is on).
   includeCommentSummary?: boolean;
-  // Append the "## Comments" section (default true).
+  // Append the "# Comments" section (default true).
   includeComments?: boolean;
 }
 
+// Opens the comment-summary block. Obsidian's callout plugins read a leading `title:` line
+// as the callout's own title, so the words become the block's heading instead of a stray
+// first line of body text.
+const COMMENT_SUMMARY_TITLE = 'title: Comments summary';
+// The same block's opening line in exports made before 2026-09-01. Read on import only.
 const COMMENT_SUMMARY_MARKER = 'Comments summary:';
 
 function fencedBlock(label: string, body: string): string {
@@ -719,13 +786,9 @@ function timestampedTranscript(raw: unknown): string | null {
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
   const lines: string[] = [buildFrontmatter(item, comments)];
 
-  // Summary blocks sit at the very top, between the properties and the title.
+  // The article summary sits at the very top, between the properties and the title.
   if (opts.includeSummary && item.summary?.trim()) {
-    const label = opts.summaryCodeLabel || '';
-    lines.push('', fencedBlock(label, item.summary));
-    if (opts.includeCommentSummary !== false && item.comment_summary?.trim()) {
-      lines.push('', fencedBlock(label, `${COMMENT_SUMMARY_MARKER}\n\n${item.comment_summary.trim()}`));
-    }
+    lines.push('', fencedBlock(opts.summaryCodeLabel || '', item.summary));
   }
 
   lines.push('', `# ${item.title}`);
@@ -745,6 +808,15 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       : (item.content || '');
   if (body.trim()) lines.push('', body.trim());
 
+  // The comment summary belongs with the comments, so it goes directly above the Comments
+  // heading. Without comments in the export it simply closes the note.
+  if (opts.includeSummary && opts.includeCommentSummary !== false && item.comment_summary?.trim()) {
+    lines.push('', fencedBlock(
+      opts.summaryCodeLabel || '',
+      `${COMMENT_SUMMARY_TITLE}\n\n${item.comment_summary.trim()}`
+    ));
+  }
+
   if (opts.includeComments !== false && comments.length > 0) {
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
@@ -758,7 +830,7 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
       return [prefixed, ...replies].join('\n\n');
     };
-    lines.push('', `## Comments (${item.comment_count || comments.length})`, '');
+    lines.push('', `# Comments (${item.comment_count || comments.length})`, '');
     lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
   }
 

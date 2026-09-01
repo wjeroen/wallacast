@@ -65,14 +65,22 @@ assert.ok(md.includes('published: 2026-03-14'), 'published date');
 assert.ok(md.includes('description: "An HTML description with spaces"'), 'description cleaned');
 assert.ok(md.includes('upvotes: 87') && md.includes('comments: 3'), 'upvotes + comments');
 assert.ok(md.includes('---\n\n````ad-summary\nTweet one.'), 'summary block directly under the properties, 4-backtick fence because the summary contains ```');
-assert.ok(md.includes('```ad-summary\nComments summary:\n\nPeople argued.\n```\n\n# The'), 'comment summary block, then the title');
+assert.ok(md.includes('````\n\n# The'), 'the title follows the summary block, nothing between them');
+assert.ok(
+  md.includes('```ad-summary\ntitle: Comments summary\n\nPeople argued.\n```\n\n# Comments (3)'),
+  'comment summary block sits directly above the comments heading, opened by a callout title line'
+);
+assert.ok(!/^## Comments/m.test(md), 'the comments heading uses one hash');
 assert.ok(!md.includes('By Scott Alexander'), 'old meta line gone');
 
 const noComments = contentToMarkdown(item, comments, { includeComments: false });
-assert.ok(!noComments.includes('## Comments'), 'comments toggle off');
+assert.ok(!/^#{1,2} Comments/m.test(noComments), 'comments toggle off');
 assert.ok(noComments.includes('comments: 3'), 'count property stays');
+// With the comments left out, the summary still closes the note rather than disappearing.
+const summaryNoComments = contentToMarkdown(item, comments, { includeSummary: true, includeComments: false });
+assert.ok(summaryNoComments.trimEnd().endsWith('People argued.\n```'), 'comment summary survives without the comments section');
 const noCommentSummary = contentToMarkdown(item, comments, { includeSummary: true, includeCommentSummary: false });
-assert.ok(noCommentSummary.includes('Tweet one.') && !noCommentSummary.includes('Comments summary:'), 'comment summary toggle off keeps the summary');
+assert.ok(noCommentSummary.includes('Tweet one.') && !noCommentSummary.includes('Comments summary'), 'comment summary toggle off keeps the summary');
 
 // ---- import -------------------------------------------------------------
 const fm = parseFrontmatter(md);
@@ -87,13 +95,35 @@ const sum = splitExportedSummary(fm!.body);
 assert.equal(sum.summary, 'Tweet one.\n\nTweet two with ```backticks``` inside.', 'summary imported');
 assert.equal(sum.comment_summary, 'People argued.', 'comment summary imported');
 assert.ok(sum.body.startsWith('# The'), 'summary blocks removed, title next');
+assert.ok(!sum.body.includes('Comments summary'), 'the comment summary block is gone from the body');
+assert.ok(/^# Comments \(3\)$/m.test(sum.body), 'the comments section itself is untouched');
 assert.deepEqual(splitExportedSummary('# No summary\n\n```js\ncode\n```'), { body: '# No summary\n\n```js\ncode\n```' }, 'a code block that is not first is left alone');
+
+// A note exported before 2026-09-01: both summaries at the top, "Comments summary:" marker,
+// "## Comments" heading. Still round-trips, so an old vault note imports correctly.
+const legacy = [
+  '```ad-summary', 'Old summary.', '```', '',
+  '```ad-summary', 'Comments summary:', '', 'Old comment summary.', '```', '',
+  '# Old Title', '', 'Body text.', '',
+  '## Comments (1)', '', '**alice • 3 points • 15/03/2026**', '', 'Hi.',
+].join('\n');
+const legacySplit = splitExportedSummary(legacy);
+assert.equal(legacySplit.summary, 'Old summary.', 'legacy summary imported');
+assert.equal(legacySplit.comment_summary, 'Old comment summary.', 'legacy comment summary imported');
+assert.ok(legacySplit.body.startsWith('# Old Title'), 'legacy body starts at the title');
+assert.equal(splitExportedComments(legacySplit.body).comments.length, 1, 'legacy two-hash comments heading still parses');
+
+// A real code block in the article body must never be taken for the comment summary.
+const codeInBody = '```ad-summary\nReal summary.\n```\n\n# T\n\n```js\nconst x = 1;\n```\n\n# Comments (1)\n\n**a • 1 points • 15/03/2026**\n\nHi.';
+const codeSplit = splitExportedSummary(codeInBody);
+assert.equal(codeSplit.comment_summary, undefined, 'an ordinary code block is not a comment summary');
+assert.ok(codeSplit.body.includes('const x = 1;'), 'the ordinary code block stays in the body');
 
 const body1 = stripLeadingTitle(sum.body, fm!.meta.title as string);
 assert.ok(!body1.trimStart().startsWith('# '), 'leading H1 stripped');
 
 const { body, comments: parsed } = splitExportedComments(body1);
-assert.ok(!body.includes('## Comments'), 'comments section removed from body');
+assert.ok(!/^#{1,2} Comments/m.test(body), 'comments section removed from body');
 assert.ok(body.includes('## Intro') && body.includes('> a quote'), 'body kept');
 assert.equal(parsed.length, 2, 'two top-level comments');
 assert.equal(parsed[0].username, 'alice');

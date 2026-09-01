@@ -126,7 +126,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   }, [markdownSource]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Turn Markdown (possibly a Wallacast export) into the POST payload: strip the
-  // properties block and a repeated "# Title", split an exported "## Comments" section
+  // properties block and a repeated "# Title", split an exported "# Comments" section
   // back into structured comments, convert the rest to HTML. A source URL makes it an
   // article (kept for provenance, nothing is fetched; "Refetch from web" still works).
   const applyMarkdownImport = (data: Record<string, unknown>, md: string) => {
