@@ -89,8 +89,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Search bar (expands above the filter row when the search icon is tapped)
-  const [searchOpen, setSearchOpen] = useState(false);
   const [searchInput, setSearchInput] = useState(''); // immediate value, debounced into the store
 
   // Status filter funnel menu (Active / Favorites / Archived)
@@ -261,12 +259,10 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     return counts;
   }, [allItems, facets, tagFilter, searchQuery]);
 
-  // The item count lives in the search UI (the placeholder on phones, the
-  // toggle button on desktop), not on the type chips, so switching types
-  // never changes a chip's width. It counts the current scope: type, facets,
-  // and tags. Search flows into typeCounts too, but the placeholder only
-  // shows while the box is empty, and on the desktop toggle a live result
-  // count is exactly what should show.
+  // The item count lives in the search box placeholder at every width, not on
+  // the type chips, so switching types never changes a chip's width. It
+  // counts the current scope: type, facets, and tags. Search flows into
+  // typeCounts too, but the placeholder only shows while the box is empty.
   const scopeCount = typeCounts[typeFilter];
   // "Filtered" measures distance from the DEFAULT view, not from "no facets":
   // the funnel starts on Active (non-archived), and that default must not
@@ -773,29 +769,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   return (
     <div className="library-tab">
       <div className="library-header">
-        {searchOpen && (
-          <div className="library-search">
-            <Search size={16} className="library-search-icon" />
-            <input
-              type="search"
-              className="library-search-input"
-              placeholder={searchPlaceholder}
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              autoFocus
-              autoCapitalize="off"
-              autoCorrect="off"
-              enterKeyHint="search"
-            />
-            <button
-              className="library-search-clear"
-              onClick={() => { setSearchInput(''); setSearchQuery(''); setSearchOpen(false); }}
-              title="Close search"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
         <div className="header-top">
           <div className="filter-buttons">
             {/* The two row wrappers dissolve on wide screens (display: contents),
@@ -803,10 +776,11 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 own full-width row: search with Select and Sort on top, every
                 filter (funnel, tags, divider, type chips) below. */}
             <div className="toolbar-search-row">
-            {/* Phone-only permanent search box. Desktop keeps the toggle button
-                plus the drop-down row above, both inputs share searchInput. No
-                autoFocus here, a focused input would pop the phone keyboard on
-                every library visit. */}
+            {/* THE search box, at every width. Full row width on phones. On
+                desktop it sits compact at the row start and widens once on
+                focus (a fixed step, never per keystroke, growing with the
+                text would reflow the toolbar on every letter). No autoFocus,
+                a focused input would pop the phone keyboard on every visit. */}
             <div className="library-search toolbar-inline-search">
               <Search size={16} className="library-search-icon" />
               <input
@@ -829,22 +803,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 </button>
               )}
             </div>
-            <button
-              className={`library-search-toggle ${searchOpen || searchQuery.trim() ? 'active' : ''}`}
-              onClick={() => {
-                if (searchOpen) {
-                  setSearchInput('');
-                  setSearchQuery('');
-                  setSearchOpen(false);
-                } else {
-                  setSearchOpen(true);
-                }
-              }}
-              title="Search library"
-            >
-              <Search size={16} />
-              <span>({scopeCount})</span>
-            </button>
             {/* Bulk-select mode toggle, styled like its toolbar neighbors
                 (replaces the old wide standalone Select/Cancel text button) */}
             <button
@@ -1060,6 +1018,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 </div>
               )}
             </div>
+            {/* The bar is the only always-visible bulk control while scrolled
+                (the toolbar's Select/Cancel scrolls away), so it carries its
+                own exit */}
+            <button
+              className="bulk-exit"
+              onClick={() => { setBulkMode(false); setSelectedItems(new Set()); }}
+              title="Exit selection"
+            >
+              <X size={16} />
+            </button>
           </div>
         )}
         {bulkProgress && (

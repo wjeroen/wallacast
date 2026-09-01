@@ -786,10 +786,19 @@
   display: contents;
 }
 
-/* The permanent inline search box is a phone-only control. Desktop searches
-   through the toggle button + the drop-down row above the toolbar. */
+/* THE search box, at every width. On desktop it sits compact at the row start
+   and widens ONCE on focus. A fixed step, never per keystroke: growing with
+   the text would reflow the toolbar on every letter, and the input scrolls
+   long queries internally anyway. On narrow desktop windows the chip strip
+   absorbs the focus growth by scrolling. */
 .library-search.toolbar-inline-search {
-  display: none;
+  width: 13rem;
+  flex-shrink: 0;
+  transition: width 0.2s;
+}
+
+.library-search.toolbar-inline-search:focus-within {
+  width: min(24rem, 34vw);
 }
 
 /* The type chips live in their own strip so only THEY scroll on small
@@ -830,17 +839,20 @@
     min-width: 0;
   }
   .library-search.toolbar-inline-search {
-    display: flex;
-    flex: 1;
+    flex: 1 1 auto;
     width: auto;
     min-width: 0;
   }
-  /* The desktop search UI (toggle button + drop-down row) is redundant next
-     to the permanent box. The toggle selector carries .filter-buttons so it
-     outweighs the generic `.filter-buttons button` display rule. */
-  .filter-buttons .library-search-toggle,
-  .library-search:not(.toolbar-inline-search) {
-    display: none;
+}
+
+/* Desktop divider between the row-1 controls (search, select, sort) and the
+   filters (funnel, tags, chips), mirroring the mobile two-row split. On
+   phones the line break is the separator, so this only exists above 740px. */
+@media (min-width: 741px) {
+  .toolbar-filter-row > .dropdown-container:first-child {
+    border-left: 1px solid var(--bg-raised);
+    padding-left: 0.625rem;
+    margin-left: 0.125rem;
   }
 }
 
@@ -1032,6 +1044,12 @@
   color: var(--t2);
   font-weight: 500;
   padding-right: 0.5rem;
+}
+
+/* The bar's own exit, pushed to the far right. The toolbar's Select/Cancel
+   scrolls away while the bar stays pinned, so the exit must live here too. */
+.bulk-actions .bulk-exit {
+  margin-left: auto;
 }
 
 .bulk-actions button {
