@@ -767,9 +767,12 @@
 .filter-buttons {
   display: flex;
   gap: 0.5rem;
-  /* NEVER wrap. With wrapping on, the type chips dropped to a second row at some window
-     widths and jumped back up at others, because the row is only a few pixels too wide in
-     that band. The chip strip scrolls sideways instead (see .filter-chips-scroll). */
+  /* One row here, where the chip strip scrolls sideways if it must (see
+     .filter-chips-scroll). The row count is NEVER left to the content: with
+     plain wrapping on, the chips dropped to a second row at some window widths
+     and jumped back at others, because the row was only a few pixels too wide
+     in that band. Below 740px a media query (after .filter-chips-scroll)
+     forces the strip onto its own full-width row at EVERY width instead. */
   flex-wrap: nowrap;
   align-items: stretch;
   min-width: 0;
@@ -792,6 +795,24 @@
   border-left: 1px solid var(--bg-raised);
   padding-left: 0.625rem;
   margin-left: 0.125rem;
+}
+
+/* Below 740px the chips get their own full-width second row, so nothing
+   scrolls and every chip stays visible (a 402px cover screen fits all four
+   with a four-digit count to spare). flex-basis 100% forces the break at
+   every width below the cut-off, so changing counts or facet icons can never
+   flip the layout. The hairline divider belongs to the one-row layout, the
+   line break is the separator here. */
+@media (max-width: 740px) {
+  .filter-buttons {
+    flex-wrap: wrap;
+  }
+  .filter-chips-scroll {
+    flex-basis: 100%;
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
 }
 
 /* Dropdown triggers inside the filter row stretch to the row height, like
