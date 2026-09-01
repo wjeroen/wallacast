@@ -1069,11 +1069,25 @@
   margin-bottom: 0.75rem;
 }
 
-.bulk-count {
-  font-size: 0.875rem;
-  color: var(--t2);
+/* The back pill: exit arrow + selected count in one button, so neither
+   floats bare. Slightly tighter padding than its siblings, a three-digit
+   count must still fit the bar on one row at the 344px floor. */
+.bulk-actions .bulk-back {
+  gap: 0.375rem;
+  padding: 0.5rem;
   font-weight: 500;
-  padding-right: 0.5rem;
+  /* The count text's line box is taller than the 16px icons, without this
+     the pill renders 2px taller than its icon-only siblings */
+  line-height: 1;
+}
+
+/* Hairline between the selection-state cluster and the actions, the same
+   divider language as the toolbar's filter divider */
+.bulk-actions .bulk-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--bg-raised);
+  margin: 0 0.125rem;
 }
 
 .bulk-actions button {

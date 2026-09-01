@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -984,9 +984,31 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           bar would scroll away with the header instead of staying pinned. */}
       {bulkMode && (
           <div className="bulk-actions">
-            <span className="bulk-count">{selectedItems.size} selected</span>
-            <button onClick={selectAll}>All</button>
-            <button onClick={deselectAll}>None</button>
+            {/* Android-style selection bar: the back pill (exit + selected
+                count) and the master toggle on the left, a hairline divider,
+                then the actions. The pill mirrors the fullscreen player's
+                back arrow, leaving selection mode is also a "go back". The
+                toggle is Gmail tri-state: any selection clears, none selects
+                all. */}
+            <button
+              className="bulk-back"
+              onClick={() => { setBulkMode(false); setSelectedItems(new Set()); }}
+              title="Exit selection"
+            >
+              <ArrowLeft size={16} />
+              <span>{selectedItems.size}</span>
+            </button>
+            <button
+              onClick={() => selectedItems.size > 0 ? deselectAll() : selectAll()}
+              title={selectedItems.size > 0 ? 'Select none' : 'Select all'}
+            >
+              {content.length > 0 && selectedItems.size === content.length
+                ? <SquareCheck size={16} />
+                : selectedItems.size > 0
+                  ? <SquareMinus size={16} />
+                  : <Square size={16} />}
+            </button>
+            <span className="bulk-divider" />
             {/* Smart toggles (Gmail-style): star/archive act on the whole selection.
                 Mixed selections get starred/archived, and uniform ones get the inverse. */}
             <button
