@@ -19,7 +19,10 @@ export interface ContentItem {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   audio_url?: string;
   transcript?: string;
-  transcript_words?: string; // JSON string of word timestamps
+  // Word timestamps. The column is JSONB, so the API delivers a parsed ARRAY of
+  // { word, start, end } at runtime. Consumers must accept both shapes (see
+  // AudioPlayer.tsx parsedTranscriptWords and markdown.ts timestampedTranscript).
+  transcript_words?: string | Array<{ word: string; start: number; end: number }>;
   tts_chunks?: string; // JSON string of TTS chunk metadata
   content_alignment?: string; // JSON string of content-to-transcript alignment data
   duration?: number;

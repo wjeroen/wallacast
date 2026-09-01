@@ -656,16 +656,25 @@ function clockTime(seconds: number, withHours: boolean): string {
 // the player keeps its plain transcript. Sentences are the words joined until closing
 // punctuation, the same grouping the backend uses for read-along alignment. This is a
 // pure rebuild from the words themselves, no matching against other text (see the
-// no-fuzzy-matching rule in CLAUDE.md). Returns null when the JSON is missing or
+// no-fuzzy-matching rule in CLAUDE.md). Returns null when the data is missing or
 // unusable, and the caller then falls back to the plain transcript.
-function timestampedTranscript(wordsJson: string): string | null {
-  let words: TranscriptWord[];
-  try {
-    words = JSON.parse(wordsJson);
-  } catch {
-    return null;
+//
+// The transcript_words COLUMN is JSONB, so the API delivers a real array at runtime,
+// whatever the frontend type annotation says. Mirror the player's robust parsing
+// (AudioPlayer.tsx parsedTranscriptWords): accept an array, a JSON string, and a
+// double-stringified JSON string.
+function timestampedTranscript(raw: unknown): string | null {
+  let parsed: unknown = raw;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
   }
-  if (!Array.isArray(words)) return null;
+  if (!Array.isArray(parsed)) return null;
+  const words = parsed as TranscriptWord[];
 
   const sentences: Array<{ start: number; text: string }> = [];
   let current: string[] = [];

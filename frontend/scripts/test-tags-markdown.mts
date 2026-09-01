@@ -144,7 +144,11 @@ const pod: any = {
   duration: 125,
   description: '<p>Episode notes.</p>',
   transcript: 'Welcome to the show. Still minute one. Into minute two.',
-  transcript_words: JSON.stringify(podWords),
+  // The transcript_words column is JSONB, so the real API delivers a parsed ARRAY,
+  // not a JSON string. The array shape is the primary fixture on purpose: the first
+  // release only handled strings and silently fell back to the plain transcript in
+  // production while this test passed on a stringified fixture.
+  transcript_words: podWords,
   tags: [],
 };
 const podMd = contentToMarkdown(pod, []);
@@ -154,6 +158,12 @@ assert.ok(
   'one paragraph per minute, marker shows the real start of its first sentence'
 );
 assert.ok(!md.includes('\naudio:'), 'articles get no audio property');
+
+// A JSON string (and even a double-stringified one) produces the same output.
+const podString = contentToMarkdown({ ...pod, transcript_words: JSON.stringify(podWords) }, []);
+assert.ok(podString.includes('**[00:00]** Welcome to the show. Still minute one.'), 'JSON-string shape works too');
+const podDouble = contentToMarkdown({ ...pod, transcript_words: JSON.stringify(JSON.stringify(podWords)) }, []);
+assert.ok(podDouble.includes('**[00:00]** Welcome to the show. Still minute one.'), 'double-stringified shape works too');
 
 // Without word timestamps the plain transcript is kept, unchanged.
 const podPlain = contentToMarkdown({ ...pod, transcript_words: undefined }, []);
