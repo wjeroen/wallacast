@@ -16,6 +16,7 @@ import {
   SquareArrowOutUpRight,
   RefreshCw,
   ArrowDownToLine,
+  ArrowLeft,
   MoreVertical,
   ArrowUp,
   MessageCircle,
@@ -2081,11 +2082,11 @@ export function FullscreenPlayer({
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {/* Leading column: the artwork top-aligned with the title, with the
-              minimize/close control tucked below it. Without artwork the
-              control simply leads the title. A chevron means "minimize to the
-              mini player" (any audio, original or summary, the real close
-              lives on the mini player's X). An X means "close for real"
-              (no audio, so no mini player exists). */}
+              back control tucked below it. Without artwork the control simply
+              leads the title. Back means "leave this view": with any audio
+              (original or summary) it minimizes to the mini player, whose own
+              X is the real close. Without audio there is no mini player, so
+              back closes for real. Both feel like "back to the library". */}
           <div className="fullscreen-leading">
             {content.preview_picture && (
               <img
@@ -2099,7 +2100,7 @@ export function FullscreenPlayer({
               className="fullscreen-close-button"
               title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
             >
-              {hasAnyAudio(content) ? <ChevronDown size={18} /> : <X size={18} />}
+              <ArrowLeft size={18} />
             </button>
           </div>
           <div>
