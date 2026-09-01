@@ -90,6 +90,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const [searchInput, setSearchInput] = useState(''); // immediate value, debounced into the store
+  // Desktop-only: the search rests as a count button and morphs into the
+  // field on press. Kept open while a query is active (collapsing would hide
+  // the user's own text). Phones ignore this, their field is always there.
+  const [deskSearchOpen, setDeskSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (deskSearchOpen) searchInputRef.current?.focus();
+  }, [deskSearchOpen]);
 
   // Status filter funnel menu (Active / Favorites / Archived)
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
@@ -776,19 +784,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 own full-width row: search with Select and Sort on top, every
                 filter (funnel, tags, divider, type chips) below. */}
             <div className="toolbar-search-row">
-            {/* THE search box, at every width. Full row width on phones. On
-                desktop it sits compact at the row start and widens once on
-                focus (a fixed step, never per keystroke, growing with the
-                text would reflow the toolbar on every letter). No autoFocus,
-                a focused input would pop the phone keyboard on every visit. */}
-            <div className="library-search toolbar-inline-search">
+            {/* THE search box, at every width. Full row width on phones,
+                always visible there. On desktop it rests as the count button
+                below and morphs into this field when pressed, at its full
+                expanded width right away. No autoFocus attribute, a focused
+                input would pop the phone keyboard on every visit (desktop
+                focus comes from the deskSearchOpen effect instead). */}
+            <div className={`library-search toolbar-inline-search ${deskSearchOpen || searchInput !== '' ? 'open' : ''}`}>
               <Search size={16} className="library-search-icon" />
               <input
+                ref={searchInputRef}
                 type="search"
                 className="library-search-input"
                 placeholder={searchPlaceholder}
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
+                onBlur={() => { if (searchInput === '') setDeskSearchOpen(false); }}
+                onKeyDown={e => { if (e.key === 'Escape') { setSearchInput(''); setSearchQuery(''); setDeskSearchOpen(false); } }}
                 autoCapitalize="off"
                 autoCorrect="off"
                 enterKeyHint="search"
@@ -796,13 +808,24 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               {searchInput !== '' && (
                 <button
                   className="library-search-clear"
-                  onClick={() => { setSearchInput(''); setSearchQuery(''); }}
+                  onClick={() => { setSearchInput(''); setSearchQuery(''); setDeskSearchOpen(false); }}
                   title="Clear search"
                 >
                   <X size={16} />
                 </button>
               )}
             </div>
+            {/* Desktop rest state: the count button the field morphs from */}
+            {!(deskSearchOpen || searchInput !== '') && (
+              <button
+                className="desk-search-btn"
+                onClick={() => setDeskSearchOpen(true)}
+                title="Search library"
+              >
+                <Search size={16} />
+                <span>({scopeCount})</span>
+              </button>
+            )}
             {/* Bulk-select mode toggle, styled like its toolbar neighbors
                 (replaces the old wide standalone Select/Cancel text button) */}
             <button
@@ -1018,16 +1041,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 </div>
               )}
             </div>
-            {/* The bar is the only always-visible bulk control while scrolled
-                (the toolbar's Select/Cancel scrolls away), so it carries its
-                own exit */}
-            <button
-              className="bulk-exit"
-              onClick={() => { setBulkMode(false); setSelectedItems(new Set()); }}
-              title="Exit selection"
-            >
-              <X size={16} />
-            </button>
           </div>
         )}
         {bulkProgress && (

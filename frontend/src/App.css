@@ -786,19 +786,20 @@
   display: contents;
 }
 
-/* THE search box, at every width. On desktop it sits compact at the row start
-   and widens ONCE on focus. A fixed step, never per keystroke: growing with
-   the text would reflow the toolbar on every letter, and the input scrolls
-   long queries internally anyway. On narrow desktop windows the chip strip
-   absorbs the focus growth by scrolling. */
+/* THE search box, at every width. On desktop it rests as .desk-search-btn
+   (a count button) and morphs into this field when pressed, at full width
+   right away, so the toolbar reflows exactly once per open and never per
+   keystroke. It stays open while a query is active, collapsing would hide
+   the user's own text. On narrow desktop windows the chip strip absorbs the
+   width by scrolling. */
 .library-search.toolbar-inline-search {
-  width: 13rem;
-  flex-shrink: 0;
-  transition: width 0.2s;
+  display: none;
 }
 
-.library-search.toolbar-inline-search:focus-within {
+.library-search.toolbar-inline-search.open {
+  display: flex;
   width: min(24rem, 34vw);
+  flex-shrink: 0;
 }
 
 /* The type chips live in their own strip so only THEY scroll on small
@@ -838,10 +839,18 @@
     align-items: stretch;
     min-width: 0;
   }
-  .library-search.toolbar-inline-search {
+  /* Phones: the field is simply always there, full row, open or not, and
+     the desktop count button never shows (the count lives in the field's
+     placeholder). Selectors carry .filter-buttons to outweigh the desktop
+     rules and the generic button display rule. */
+  .filter-buttons .library-search.toolbar-inline-search {
+    display: flex;
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
+  }
+  .filter-buttons .desk-search-btn {
+    display: none;
   }
 }
 
@@ -1001,11 +1010,22 @@
 .library-search-clear {
   position: absolute;
   right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   background: transparent;
   border: none;
   color: var(--t3);
   cursor: pointer;
+  padding: 0.25rem;
+}
+
+/* The search box lives inside the toolbar, where the generic
+   `.filter-buttons button` rule would turn its clear X into a full bordered
+   toolbar button hanging over the input's edge. Keep it a naked icon. */
+.filter-buttons .library-search-clear {
+  background: transparent;
+  border: none;
   padding: 0.25rem;
 }
 
@@ -1044,12 +1064,6 @@
   color: var(--t2);
   font-weight: 500;
   padding-right: 0.5rem;
-}
-
-/* The bar's own exit, pushed to the far right. The toolbar's Select/Cancel
-   scrolls away while the bar stays pinned, so the exit must live here too. */
-.bulk-actions .bulk-exit {
-  margin-left: auto;
 }
 
 .bulk-actions button {
