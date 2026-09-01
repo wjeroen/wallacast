@@ -826,7 +826,10 @@
    wrappers forces the break at every width below the cut-off, so changing
    counts or facet icons can never flip the layout. The chip strip keeps its
    sideways-scroll fallback for extremes (several facet icons on the funnel),
-   normally everything fits. */
+   normally everything fits. The 740 cut-off is measured, not arbitrary: the
+   one-row rest state needs ~615px of viewport with typical state and ~715px
+   in the worst case (five facet icons on the funnel plus a four-digit count
+   on the search button), so 740 covers the worst case with margin. */
 @media (max-width: 740px) {
   .filter-buttons {
     flex-wrap: wrap;
@@ -1005,6 +1008,13 @@
 .library-search-input:focus {
   outline: none;
   border-color: #3b82f6;
+}
+
+/* The browser draws its own clear ✕ inside type=search inputs (bright white
+   in dark mode), doubling our .library-search-clear. Ours is the only one. */
+.library-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .library-search-clear {
