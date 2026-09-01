@@ -229,11 +229,6 @@ export function ContentCard({
       className={`content-card ${selected ? 'selected' : ''}`}
       onClick={() => bulkMode ? onToggleSelect(item.id) : onPlay(item)}
     >
-      {bulkMode && (
-        <div className="checkbox">
-          {selected ? <CheckSquare size={20} /> : <Square size={20} />}
-        </div>
-      )}
       <div className="content-info">
         {item.preview_picture && (
           <img src={item.preview_picture} alt={item.title} className="thumbnail" />
@@ -353,7 +348,11 @@ export function ContentCard({
               </button>
             )
           ))}
-          {!bulkMode && (
+          {bulkMode ? (
+            <span className="tag-chip tag-chip-add static">
+              <Tag size={12} /><Plus size={10} />
+            </span>
+          ) : (
             <button
               type="button"
               className="tag-chip tag-chip-add"
@@ -426,7 +425,12 @@ export function ContentCard({
       </div>
       {/* Star/archive stay visible in bulk mode. They show each item's state
           (filled star, highlighted archive) and still work as toggles.
-          Delete and the dropdown are hidden to keep selection taps safe. */}
+          Delete and the dropdown give way to a wide select checkbox at their
+          combined footprint, so entering selection mode moves nothing on the
+          card and destructive taps stay impossible while selecting. Nothing
+          in this cluster shifts layout anyway (it is an absolute overlay),
+          the in-flow left-edge checkbox that used to reflow every card on
+          bulk toggle is gone. */}
       <div className="content-actions" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => onToggleStarred(item.id)}
@@ -572,6 +576,15 @@ export function ContentCard({
             )}
           </div>
           </>
+        )}
+        {bulkMode && (
+          <button
+            className={`bulk-check ${selected ? 'checked' : ''}`}
+            onClick={() => onToggleSelect(item.id)}
+            title={selected ? 'Deselect' : 'Select'}
+          >
+            {selected ? <CheckSquare size={16} /> : <Square size={16} />}
+          </button>
         )}
       </div>
     </div>

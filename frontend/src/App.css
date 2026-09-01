@@ -1015,6 +1015,16 @@
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  /* Pinned while scrolling a long selection (sticky against .app-main, the
+     scroll container), so All/None/star/archive stay reachable mid-list. It
+     renders as a SIBLING of .library-header (sticky cannot escape a parent
+     that ends where the cards begin), hence its own bottom margin. */
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg-app);
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.75rem;
 }
 
 .bulk-count {
@@ -1083,18 +1093,6 @@
   background: color-mix(in srgb, var(--bg-surface) 50%, var(--bg-raised));
   border-color: #3b82f6;
   box-shadow: 0 0 0 1px #3b82f6;
-}
-
-.content-card .checkbox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--t3);
-  flex-shrink: 0;
-}
-
-.content-card.selected .checkbox {
-  color: #3b82f6;
 }
 
 .content-card .thumbnail {
@@ -1198,6 +1196,19 @@
   position: absolute;
   top: 1rem;
   right: 1rem;
+}
+
+/* Bulk-mode stand-in for Delete + the menu at their combined footprint (two
+   buttons plus the gap), so toggling selection mode changes nothing visually
+   in the cluster. Selection state doubles up here (blue check) next to the
+   card's own selected border. */
+.content-actions .bulk-check {
+  width: 76px;
+}
+
+.content-actions .bulk-check.checked {
+  color: #3b82f6;
+  border-color: #3b82f6;
 }
 
 .content-actions button {

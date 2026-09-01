@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
 import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
 import { TagEditor } from './TagEditor';
@@ -260,6 +260,20 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
     return counts;
   }, [allItems, facets, tagFilter, searchQuery]);
+
+  // The item count lives in the search UI (the placeholder on phones, the
+  // toggle button on desktop), not on the type chips, so switching types
+  // never changes a chip's width. It counts the current scope: type, facets,
+  // and tags. Search flows into typeCounts too, but the placeholder only
+  // shows while the box is empty, and on the desktop toggle a live result
+  // count is exactly what should show.
+  const scopeCount = typeCounts[typeFilter];
+  // "Filtered" measures distance from the DEFAULT view, not from "no facets":
+  // the funnel starts on Active (non-archived), and that default must not
+  // make the untouched library read as filtered.
+  const isFiltered = typeFilter !== 'all' || tagFilter.length > 0 ||
+    (Object.keys(DEFAULT_FACETS) as FacetDim[]).some(dim => facets[dim] !== DEFAULT_FACETS[dim]);
+  const searchPlaceholder = `Search ${scopeCount} ${isFiltered ? 'filtered ' : ''}item${scopeCount === 1 ? '' : 's'}`;
 
   // Every tag in the library with its usage count (filter menu + tag editor list)
   const tagCounts = useMemo(() => collectTagCounts(allItems), [allItems]);
@@ -765,7 +779,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             <input
               type="search"
               className="library-search-input"
-              placeholder="Search library…"
+              placeholder={searchPlaceholder}
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
               autoFocus
@@ -798,7 +812,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               <input
                 type="search"
                 className="library-search-input"
-                placeholder="Search library…"
+                placeholder={searchPlaceholder}
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 autoCapitalize="off"
@@ -829,6 +843,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               title="Search library"
             >
               <Search size={16} />
+              <span>({scopeCount})</span>
             </button>
             {/* Bulk-select mode toggle, styled like its toolbar neighbors
                 (replaces the old wide standalone Select/Cancel text button) */}
@@ -955,7 +970,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 className={typeFilter === 'all' ? 'active' : ''}
                 onClick={() => changeTypeFilter('all')}
               >
-                All{typeFilter === 'all' && <span> ({typeCounts.all})</span>}
+                All
               </button>
               <button
                 className={typeFilter === 'articles' ? 'active' : ''}
@@ -963,7 +978,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <Newspaper size={16} />
                 <span className="filter-label">Articles</span>
-                {typeFilter === 'articles' && <span>({typeCounts.articles})</span>}
               </button>
               <button
                 className={typeFilter === 'texts' ? 'active' : ''}
@@ -971,7 +985,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <NotebookPen size={16} />
                 <span className="filter-label">Texts</span>
-                {typeFilter === 'texts' && <span>({typeCounts.texts})</span>}
               </button>
               <button
                 className={typeFilter === 'podcasts' ? 'active' : ''}
@@ -979,13 +992,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <Podcast size={16} />
                 <span className="filter-label">Podcasts</span>
-                {typeFilter === 'podcasts' && <span>({typeCounts.podcasts})</span>}
               </button>
             </div>
             </div>
           </div>
         </div>
-        {bulkMode && (
+      </div>
+      {/* Sibling of the header, not a child: position sticky cannot escape its
+          parent, and the header ends where the cards begin, so inside it the
+          bar would scroll away with the header instead of staying pinned. */}
+      {bulkMode && (
           <div className="bulk-actions">
             <span className="bulk-count">{selectedItems.size} selected</span>
             <button onClick={selectAll}>All</button>
@@ -1049,7 +1065,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         {bulkProgress && (
           <div className="bulk-progress">{bulkProgress.label} {bulkProgress.done}/{bulkProgress.total}…</div>
         )}
-      </div>
 
       {showContinueStrip && !bulkMode && continueItems.length > 0 && (
         <div className="continue-strip">
