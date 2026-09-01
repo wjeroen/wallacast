@@ -105,6 +105,8 @@
 
 - [ ] **Forum URLs whose GraphQL fetch fails: keep the silent standard-scraper fallback, or fail loudly?** Root cause of the 2026-07-29 fumbled EA Forum article: a sequence-style URL broke post-id extraction, and the silent fallback stored a random COMMENT as the article body. The id extraction is fixed (sequence `/s/<seq>/p/<id>` links now work), but the fallback path remains: for these SPAs it near-always produces junk, so failing loudly (like the scriptwriter/alignment now do) may be the better behavior when GraphQL errors for a forum URL. Your call.
 - [ ] **Propagate Wallabag-side deletions?** Today, deleting an entry in Wallabag does nothing locally (the item stays and can even push back). Option A: mirror it (delete locally too), but a Wallabag cleanup spree would destroy local items INCLUDING generated audio you paid for. Option B: leave as-is and document that deletions do not propagate (safest for your audio). Middle path: archive locally instead of delete.
+- [ ] **Move the item count from the type chips into the search placeholder?** Search provably filters within the current type, facets, and tags (`itemMatchesFilter` applies search last), so the phone search box could read "Search 2434 items" and the chips could drop their counts. That removes the chip width jitter on type changes AND makes row 2 fit with ~50px to spare instead of scrolling 11px. Open questions: desktop treatment (chips keep counts there, or same move), and whether losing the count-on-chip glance is acceptable.
+- [ ] **Desktop search treatment.** Keep the toggle + drop-down row (current), or a GitHub-style inline input in the toolbar that expands on focus. Decide together with the placeholder-count question above.
 - [ ] **Startup query-killer scope.** `db.ts` kills any DB session older than 30s touching content_items at boot (added after a real stuck-lock). It is now constrained so it spares VACUUM / ANALYZE / pg_dump. Remaining question: delete it entirely and rely on the 5s lock_timeout + retry loop (reviewer's lean), or keep it as belt-and-suspenders. Current state: constrained version is live.
 
 ### Security, deferred (lower impact or architectural)
@@ -117,6 +119,8 @@
 - `backend/mock-server.mjs` accepts any credentials (local-only dev tool, by design).
 
 ## Completed Recently ✅
+
+- [x] **Mobile toolbar: permanent search row** (2026-09-01): below 740px the library toolbar is two even full-width rows. Row 1 is a permanent search box (no toggle, no keyboard-popping autofocus, live clear button) with Select and Sort beside it. Row 2 holds the funnel, Tags, the hairline divider, and the type chips, which keep a sideways-scroll fallback (11px of scroll at 402px with a count showing, more when several facet icons sit on the funnel). Desktop is unchanged: single row, search behind the toggle button with its drop-down row. Verified headless on the mock at 402, 344, and 900px, including typing (list and counts react, clear button appears). One CSS specificity bug (`.filter-buttons button` beating the mobile hide rule for the toggle) was caught by the headless check and fixed before shipping.
 
 - [x] **Two-row filter bar on phones** (2026-09-01): below 740px the library's type chips move to their own full-width second row, so nothing scrolls sideways and every chip plus its item count stays visible. The media query decides the row count, never the content, so the old width-flip bug cannot return, and the hairline divider only exists in the one-row layout. Verified headless against the mock server: chips row fits with no overflow at 402px (Fold cover) and 344px, and the desktop single row with divider is unchanged at 900px.
 
@@ -243,6 +247,9 @@
 - [x] **Whisper transcript loop + read-along fixes** (2026-07-01): fixed runaway repetition loops and dropped speech on long podcasts (switched the DeepInfra path to its native endpoint with `condition_on_previous_text=false`, added a turbo-vs-large-v3 preset dropdown, sent `word_timestamps=true` + a segment-interpolation fallback). Fixed page-wide horizontal scroll from long links in comments and article bodies (`overflow-wrap: anywhere` + scrollable tables).
 
 ## Future Ideas (Nice to Have)
+
+- Cap the funnel button face at 2 facet icons plus a "+N" overflow marker, so a fully filtered library cannot widen the toolbar (user idea 2026-09-01, deliberately not built yet).
+- Long-press a library card to enter selection mode (the Android-native convention), supplementing the Select button.
 
 - Tag colours / descriptions: a per-user `user_tag_meta (user_id, label, color, ...)` table keyed by label would layer cleanly on the `TEXT[]` column without touching the sync (Wallabag has no colours, so it stays local-only). Deliberately left open on 2026-08-27, not built.
 - Library card actions as a footer row (option C3 from the tag design discussion): move star/archive/delete/tags/more from the absolute top-right block into a row next to the badges, so the title gets the full card width. Bigger visual change, parked.

@@ -772,11 +772,24 @@
      plain wrapping on, the chips dropped to a second row at some window widths
      and jumped back at others, because the row was only a few pixels too wide
      in that band. Below 740px a media query (after .filter-chips-scroll)
-     forces the strip onto its own full-width row at EVERY width instead. */
+     turns the two row wrappers into real rows at EVERY width instead. */
   flex-wrap: nowrap;
   align-items: stretch;
   min-width: 0;
   flex: 1;
+}
+
+/* The toolbar's two row wrappers dissolve on wide screens: every control sits
+   on the parent's single flex row exactly as if the wrappers were not there. */
+.toolbar-search-row,
+.toolbar-filter-row {
+  display: contents;
+}
+
+/* The permanent inline search box is a phone-only control. Desktop searches
+   through the toggle button + the drop-down row above the toolbar. */
+.library-search.toolbar-inline-search {
+  display: none;
 }
 
 /* The type chips live in their own strip so only THEY scroll on small
@@ -797,21 +810,37 @@
   margin-left: 0.125rem;
 }
 
-/* Below 740px the chips get their own full-width second row, so nothing
-   scrolls and every chip stays visible (a 402px cover screen fits all four
-   with a four-digit count to spare). flex-basis 100% forces the break at
-   every width below the cut-off, so changing counts or facet icons can never
-   flip the layout. The hairline divider belongs to the one-row layout, the
-   line break is the separator here. */
+/* Below 740px the toolbar splits into two even full-width rows: the permanent
+   search box with Select and Sort on top, then every filter (funnel, tags,
+   the hairline divider, and the type chips) below. flex-basis 100% on the
+   wrappers forces the break at every width below the cut-off, so changing
+   counts or facet icons can never flip the layout. The chip strip keeps its
+   sideways-scroll fallback for extremes (several facet icons on the funnel),
+   normally everything fits. */
 @media (max-width: 740px) {
   .filter-buttons {
     flex-wrap: wrap;
   }
-  .filter-chips-scroll {
+  .toolbar-search-row,
+  .toolbar-filter-row {
+    display: flex;
     flex-basis: 100%;
-    border-left: none;
-    padding-left: 0;
-    margin-left: 0;
+    gap: 0.5rem;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .library-search.toolbar-inline-search {
+    display: flex;
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+  /* The desktop search UI (toggle button + drop-down row) is redundant next
+     to the permanent box. The toggle selector carries .filter-buttons so it
+     outweighs the generic `.filter-buttons button` display rule. */
+  .filter-buttons .library-search-toggle,
+  .library-search:not(.toolbar-inline-search) {
+    display: none;
   }
 }
 

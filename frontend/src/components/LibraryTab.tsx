@@ -784,8 +784,39 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         )}
         <div className="header-top">
           <div className="filter-buttons">
+            {/* The two row wrappers dissolve on wide screens (display: contents),
+                so every control sits on one row. Below 740px each wrapper is its
+                own full-width row: search with Select and Sort on top, every
+                filter (funnel, tags, divider, type chips) below. */}
+            <div className="toolbar-search-row">
+            {/* Phone-only permanent search box. Desktop keeps the toggle button
+                plus the drop-down row above, both inputs share searchInput. No
+                autoFocus here, a focused input would pop the phone keyboard on
+                every library visit. */}
+            <div className="library-search toolbar-inline-search">
+              <Search size={16} className="library-search-icon" />
+              <input
+                type="search"
+                className="library-search-input"
+                placeholder="Search library…"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                autoCapitalize="off"
+                autoCorrect="off"
+                enterKeyHint="search"
+              />
+              {searchInput !== '' && (
+                <button
+                  className="library-search-clear"
+                  onClick={() => { setSearchInput(''); setSearchQuery(''); }}
+                  title="Clear search"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
             <button
-              className={searchOpen || searchQuery.trim() ? 'active' : ''}
+              className={`library-search-toggle ${searchOpen || searchQuery.trim() ? 'active' : ''}`}
               onClick={() => {
                 if (searchOpen) {
                   setSearchInput('');
@@ -819,6 +850,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               {sortDir === 'asc' ? <ArrowUpNarrowWide size={16} /> : <ArrowDownWideNarrow size={16} />}
               <span className="filter-label">{sortDir === 'asc' ? 'Oldest' : 'Newest'}</span>
             </button>
+            </div>
+            <div className="toolbar-filter-row">
             <div className="dropdown-container" ref={statusMenuRef}>
               {/* Facet filter: the button shows the icon of every selected facet
                   (or a funnel when nothing is selected = show everything) */}
@@ -948,6 +981,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <span className="filter-label">Podcasts</span>
                 {typeFilter === 'podcasts' && <span>({typeCounts.podcasts})</span>}
               </button>
+            </div>
             </div>
           </div>
         </div>
