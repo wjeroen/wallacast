@@ -122,6 +122,55 @@ const inl = parseFrontmatter('﻿---\ntags: [a, "b c", d]\n---\nbody');
 assert.deepEqual(inl!.meta.tags, ['a', 'b c', 'd']);
 assert.equal(inl!.body, 'body');
 
+// ---- podcast export: audio property + timestamped transcript ------------
+const podWords = [
+  { word: 'Welcome', start: 0.0, end: 0.4 },
+  { word: 'to', start: 0.4, end: 0.5 },
+  { word: 'the', start: 0.5, end: 0.6 },
+  { word: 'show.', start: 0.6, end: 1.0 },
+  { word: 'Still', start: 30.0, end: 30.3 },
+  { word: 'minute', start: 30.3, end: 30.6 },
+  { word: 'one.', start: 30.6, end: 31.0 },
+  { word: 'Into', start: 62.5, end: 62.8 },
+  { word: 'minute', start: 62.8, end: 63.1 },
+  { word: 'two.', start: 63.1, end: 63.5 },
+];
+const pod: any = {
+  id: 7,
+  type: 'podcast_episode',
+  title: 'Episode One',
+  podcast_show_name: 'The Show',
+  audio_url: 'https://cdn.example.com/ep1.mp3',
+  duration: 125,
+  description: '<p>Episode notes.</p>',
+  transcript: 'Welcome to the show. Still minute one. Into minute two.',
+  transcript_words: JSON.stringify(podWords),
+  tags: [],
+};
+const podMd = contentToMarkdown(pod, []);
+assert.ok(podMd.includes('audio: "https://cdn.example.com/ep1.mp3"'), 'direct audio link in properties');
+assert.ok(
+  podMd.includes('## Transcript\n\n**[00:00]** Welcome to the show. Still minute one.\n\n**[01:02]** Into minute two.'),
+  'one paragraph per minute, marker shows the real start of its first sentence'
+);
+assert.ok(!md.includes('\naudio:'), 'articles get no audio property');
+
+// Without word timestamps the plain transcript is kept, unchanged.
+const podPlain = contentToMarkdown({ ...pod, transcript_words: undefined }, []);
+assert.ok(podPlain.includes('## Transcript\n\nWelcome to the show. Still minute one. Into minute two.'), 'plain fallback');
+assert.ok(!podPlain.includes('**['), 'no markers without word data');
+
+// Past one hour the markers grow an hour digit.
+const podHour = contentToMarkdown(
+  { ...pod, transcript: 'Late.', transcript_words: JSON.stringify([{ word: 'Late.', start: 3725, end: 3726 }]) },
+  []
+);
+assert.ok(podHour.includes('**[1:02:05]** Late.'), 'h:mm:ss past the first hour');
+
+// Broken JSON falls back instead of crashing.
+const podBroken = contentToMarkdown({ ...pod, transcript_words: 'not json' }, []);
+assert.ok(podBroken.includes('## Transcript\n\nWelcome to the show.'), 'broken word JSON falls back to plain');
+
 // ---- tag helpers --------------------------------------------------------
 assert.equal(obsidianTag('AI Safety'), 'ai-safety');
 assert.equal(obsidianTag('  weird, #chars!  '), 'weird-chars');

@@ -397,6 +397,12 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   if (item.url && !item.url.startsWith('wallacast://')) {
     out.push(`source: ${yamlStr(displayUrl(item.url))}`);
   }
+  // A podcast's direct audio file (the RSS enclosure URL). The stored audio_url for
+  // podcasts IS that public CDN link (the token decorator only touches our own
+  // /api/content/ URLs), but guard on http(s) anyway so a local path can never leak.
+  if (item.type === 'podcast_episode' && item.audio_url && /^https?:\/\//i.test(item.audio_url)) {
+    out.push(`audio: ${yamlStr(item.audio_url)}`);
+  }
   const published = isoDate(item.published_at);
   if (published) out.push(`published: ${published}`);
   const tags = [typeTagFor(item.type)];
@@ -600,7 +606,7 @@ export function splitExportedComments(markdown: string): { body: string; comment
 // Readable Markdown export of an item: Obsidian properties, title, body, comments.
 // What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
 // "Copy content" action in both the fullscreen player and the library dropdown.
-// Needs the FULL item (html_content/transcript), the list payload is not enough.
+// Needs the FULL item (html_content/transcript/transcript_words), the list payload is not enough.
 // The byline/link that used to sit under the title now live in the frontmatter, so
 // an import of this text round-trips them as fields instead of body paragraphs.
 export interface CopyContentOptions {
@@ -626,6 +632,81 @@ function fencedBlock(label: string, body: string): string {
   return `${fence}${label.trim()}\n${body.trim()}\n${fence}`;
 }
 
+// One Whisper word with its timing in seconds (the shape stored in transcript_words).
+interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+// Clock time for a transcript marker: "03:02", or "1:03:02" once the audio passes an hour.
+function clockTime(seconds: number, withHours: boolean): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const two = (n: number) => String(n).padStart(2, '0');
+  return withHours ? `${h}:${two(m)}:${two(s)}` : `${two(m)}:${two(s)}`;
+}
+
+// Rebuild a podcast transcript FROM its word-level timestamps, as one paragraph per
+// minute of audio, each opening with a bold time marker such as `**[03:02]**`. The
+// marker shows the true start time of the paragraph's first sentence, never a rounded
+// minute, so the reader can trust it for seeking. Only the copied export uses this,
+// the player keeps its plain transcript. Sentences are the words joined until closing
+// punctuation, the same grouping the backend uses for read-along alignment. This is a
+// pure rebuild from the words themselves, no matching against other text (see the
+// no-fuzzy-matching rule in CLAUDE.md). Returns null when the JSON is missing or
+// unusable, and the caller then falls back to the plain transcript.
+function timestampedTranscript(wordsJson: string): string | null {
+  let words: TranscriptWord[];
+  try {
+    words = JSON.parse(wordsJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(words)) return null;
+
+  const sentences: Array<{ start: number; text: string }> = [];
+  let current: string[] = [];
+  let sentenceStart = 0;
+  for (const w of words) {
+    const token = String(w?.word ?? '').trim();
+    if (!token || !Number.isFinite(w?.start)) continue;
+    if (current.length === 0) sentenceStart = w.start;
+    current.push(token);
+    if (/[.!?]["')\]]?$/.test(token)) {
+      sentences.push({ start: sentenceStart, text: current.join(' ') });
+      current = [];
+    }
+  }
+  if (current.length > 0) sentences.push({ start: sentenceStart, text: current.join(' ') });
+  if (sentences.length === 0) return null;
+
+  const last = words[words.length - 1];
+  const withHours = (Number(last?.end) || Number(last?.start) || 0) >= 3600;
+
+  // A new paragraph starts at the first sentence that crosses the next whole minute.
+  const paragraphs: string[] = [];
+  let block: string[] = [];
+  let blockStart = 0;
+  let nextBreak = 0;
+  const flush = () => {
+    paragraphs.push(`**[${clockTime(blockStart, withHours)}]** ${block.join(' ')}`);
+    block = [];
+  };
+  for (const s of sentences) {
+    if (block.length > 0 && s.start >= nextBreak) flush();
+    if (block.length === 0) {
+      blockStart = s.start;
+      nextBreak = Math.floor(s.start / 60) * 60 + 60;
+    }
+    block.push(s.text);
+  }
+  if (block.length > 0) flush();
+  return paragraphs.join('\n\n');
+}
+
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
   const lines: string[] = [buildFrontmatter(item, comments)];
 
@@ -646,7 +727,9 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
   const body = item.type === 'podcast_episode'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
-        item.transcript ? `## Transcript\n\n${item.transcript.trim()}` : '',
+        item.transcript
+          ? `## Transcript\n\n${(item.transcript_words && timestampedTranscript(item.transcript_words)) || item.transcript.trim()}`
+          : '',
       ].filter(part => part.trim()).map(part => part.trim()).join('\n\n')
     : item.html_content
       ? htmlToMarkdown(item.html_content)
