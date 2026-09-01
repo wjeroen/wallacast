@@ -2104,14 +2104,15 @@ export function FullscreenPlayer({
             </button>
           </div>
           <div>
-            {/* Tapping the title also minimizes, the inverse of the mini
-                player's title tap that expands. Better thumb reach than the
-                top-left control. Audio-less items keep a plain title. */}
+            {/* Tapping the title does the same as the back control above, the
+                inverse of the mini player's title tap that expands. Better
+                thumb reach than the top-left control. With audio it minimizes,
+                without audio there is no mini player so it closes. */}
             <h2
               className="fullscreen-title"
-              onClick={hasAnyAudio(content) ? onMinimize : undefined}
-              style={hasAnyAudio(content) ? { cursor: 'pointer' } : undefined}
-              title={hasAnyAudio(content) ? 'Minimize' : undefined}
+              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              style={{ cursor: 'pointer' }}
+              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
             >
               {content.title}
             </h2>

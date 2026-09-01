@@ -62,6 +62,52 @@ interface ImageAnalysisResult {
   failed?: boolean;
 }
 
+/**
+ * The image bytes could not be obtained.
+ *
+ * `permanent` means a retry can never succeed: the server states the image is gone or the
+ * request itself is invalid. Those fail immediately instead of walking the whole backoff
+ * ladder, which used to waste about 15 seconds per dead image. Everything else (timeouts,
+ * network errors, rate limits, server errors) stays retryable, because a single failed
+ * download among a dozen is usually a CDN hiccup.
+ */
+class ImageDownloadError extends Error {
+  readonly permanent: boolean;
+  readonly status?: number;
+
+  constructor(message: string, permanent: boolean, status?: number) {
+    super(`IMAGE_DOWNLOAD_FAILED: ${message}`);
+    this.name = 'ImageDownloadError';
+    this.permanent = permanent;
+    this.status = status;
+  }
+}
+
+/**
+ * HTTP statuses where the image will not appear on a retry. 403 is deliberately absent:
+ * bot protection returns it and often lets the same request through moments later.
+ */
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 404, 410, 414, 415, 451]);
+
+/**
+ * Why an error is worth another attempt, or null when it is not. The returned string goes
+ * straight into the retry log line, so the log names the real cause instead of always
+ * claiming the API was overloaded.
+ */
+function retryReason(error: any): string | null {
+  if (error instanceof ImageDownloadError) {
+    return error.permanent ? null : 'image download failed';
+  }
+  const message = String(error?.message || '');
+  if (error?.status === 503 || message.includes('503') || message.includes('overloaded')) {
+    return 'API overloaded';
+  }
+  if (error?.status === 429 || message.includes('RESOURCE_EXHAUSTED') || message.includes('429')) {
+    return 'API rate limit';
+  }
+  return null;
+}
+
 export class ImageAltTextService {
   private userId: number;
   private cachedModel: string | null = null;
@@ -156,8 +202,10 @@ export class ImageAltTextService {
     let newDescriptions: ImageDescriptions = {};
     let costUsd = 0;
     // Images that were SENT for a description and came back without one. Tracked apart
-    // from the decorative count so the failure cannot hide inside it.
+    // from the decorative count so the failure cannot hide inside it. The reasons are for
+    // the log only, so a dead image reads differently from a flaky CDN.
     const failedUrls: string[] = [];
+    const failureReasons = new Map<string, string>();
 
     if (informativeImages.length > 0) {
       // Process each image individually (one API call per image)
@@ -182,13 +230,20 @@ export class ImageAltTextService {
             newDescriptions[normalized] = analysis.description;
           } else if (analysis.failed) {
             failedUrls.push(img.url);
+            failureReasons.set(img.url, 'the model returned no usable description');
           }
 
           // Estimate cost per image
           costUsd += this.estimateCost(1);
-        } catch (error) {
+        } catch (error: any) {
           console.error(`[ImageAltText] Failed to process image ${img.url}:`, error);
           failedUrls.push(img.url);
+          failureReasons.set(
+            img.url,
+            error instanceof ImageDownloadError
+              ? `download ${error.permanent ? 'permanently failed' : 'failed'}${error.status ? ` (HTTP ${error.status})` : ''}`
+              : String(error?.message || error)
+          );
           // Continue with next image - don't fail entire article
         }
       }
@@ -221,8 +276,8 @@ export class ImageAltTextService {
       // the image is and the highlight covers two blocks at once.
       console.error(
         `[ImageAltText] ❌ ${failedUrls.length} of ${informativeImages.length} image(s) got NO description. ` +
-        `They will be SILENT in the audio and will share the previous element's highlight. URLs:\n  ` +
-        failedUrls.join('\n  ')
+        `They will be SILENT in the audio and will share the previous element's highlight:\n  ` +
+        failedUrls.map(u => `${u}\n    reason: ${failureReasons.get(u) || 'unknown'}`).join('\n  ')
       );
     }
     console.log(
@@ -326,14 +381,18 @@ export class ImageAltTextService {
     try {
       return await this.analyzeImage(imageUrl);
     } catch (error: any) {
-      const isRetryable = error?.status === 503 || error?.message?.includes('503') ||
-                          error?.message?.includes('overloaded') ||
-                          error?.message?.includes('RESOURCE_EXHAUSTED') ||
-                          // A download that failed once is usually a CDN hiccup, and an
-                          // undescribed image is silently missing from the narration.
-                          error?.message?.includes('IMAGE_DOWNLOAD_FAILED');
+      // A permanently missing image fails on the first attempt. Walking the backoff ladder
+      // for a 404 only delays the run and tells the log nothing new.
+      if (error instanceof ImageDownloadError && error.permanent) {
+        console.error(
+          `[ImageAltText] Permanent failure${error.status ? ` (HTTP ${error.status})` : ''}, not retrying: ${imageUrl}`
+        );
+        throw error;
+      }
 
-      if (!isRetryable || attempt >= PROCESSING_CONFIG.retry.maxAttempts) {
+      const reason = retryReason(error);
+
+      if (!reason || attempt >= PROCESSING_CONFIG.retry.maxAttempts) {
         console.error(`[ImageAltText] Failed after ${attempt} attempt(s):`, error);
         throw error;
       }
@@ -344,7 +403,7 @@ export class ImageAltTextService {
         PROCESSING_CONFIG.retry.maxDelayMs
       );
 
-      console.log(`[ImageAltText] Retry attempt ${attempt + 1}/${PROCESSING_CONFIG.retry.maxAttempts} after ${delay}ms (API overloaded)`);
+      console.log(`[ImageAltText] Retry attempt ${attempt + 1}/${PROCESSING_CONFIG.retry.maxAttempts} after ${delay}ms (${reason})`);
       await new Promise(resolve => setTimeout(resolve, delay));
 
       return this.analyzeImageWithRetry(imageUrl, attempt + 1);
@@ -354,25 +413,22 @@ export class ImageAltTextService {
   /**
    * Download image and convert to base64 for Gemini.
    * Handles data: URIs directly (from PDF image extraction) without network requests.
+   *
+   * Throws ImageDownloadError on every failure, carrying whether a retry could ever help.
    */
-  private async downloadImage(imageUrl: string): Promise<{ data: string; mimeType: string } | null> {
+  private async downloadImage(imageUrl: string): Promise<{ data: string; mimeType: string }> {
     // Handle data: URIs (from PDF extraction) - already base64, no download needed
     if (imageUrl.startsWith('data:')) {
-      try {
-        const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
-        if (!match) {
-          console.warn(`[ImageAltText] Invalid data URI format`);
-          return null;
-        }
-        const mimeType = match[1];
-        const data = match[2];
-        const sizeMB = (data.length * 0.75) / (1024 * 1024); // base64 → bytes estimate
-        console.log(`[ImageAltText] ✅ Using inline data URI: ${sizeMB.toFixed(2)}MB, type: ${mimeType}`);
-        return { data, mimeType };
-      } catch (e) {
-        console.warn(`[ImageAltText] Failed to parse data URI:`, e);
-        return null;
+      const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!match) {
+        // The URI is part of the stored HTML. It will look exactly the same next time.
+        throw new ImageDownloadError('invalid data URI format', true);
       }
+      const mimeType = match[1];
+      const data = match[2];
+      const sizeMB = (data.length * 0.75) / (1024 * 1024); // base64 → bytes estimate
+      console.log(`[ImageAltText] ✅ Using inline data URI: ${sizeMB.toFixed(2)}MB, type: ${mimeType}`);
+      return { data, mimeType };
     }
 
     try {
@@ -394,8 +450,16 @@ export class ImageAltTextService {
       clearTimeout(timeout);
 
       if (!response.ok) {
-        console.warn(`[ImageAltText] Failed to download ${imageUrl}: ${response.status} ${response.statusText}`);
-        return null;
+        const permanent = PERMANENT_HTTP_STATUSES.has(response.status);
+        console.warn(
+          `[ImageAltText] Failed to download ${imageUrl}: ${response.status} ${response.statusText}` +
+          ` (${permanent ? 'permanent, no retry' : 'retryable'})`
+        );
+        throw new ImageDownloadError(
+          `HTTP ${response.status} ${response.statusText} for ${imageUrl}`,
+          permanent,
+          response.status
+        );
       }
 
       const contentType = response.headers.get('content-type') || 'image/jpeg';
@@ -405,8 +469,8 @@ export class ImageAltTextService {
       // Check file size (max 100MB for Gemini as of Jan 2026)
       const sizeMB = buffer.length / (1024 * 1024);
       if (sizeMB > 100) {
-        console.warn(`[ImageAltText] Image too large: ${sizeMB.toFixed(2)}MB (max 100MB)`);
-        return null;
+        // The file will be the same size on every retry.
+        throw new ImageDownloadError(`image too large: ${sizeMB.toFixed(2)}MB (max 100MB)`, true);
       }
 
       const base64 = buffer.toString('base64');
@@ -418,12 +482,17 @@ export class ImageAltTextService {
       };
 
     } catch (error: any) {
+      // Already classified above, keep the verdict instead of downgrading it to "transient".
+      if (error instanceof ImageDownloadError) throw error;
+
       if (error.name === 'AbortError') {
         console.warn(`[ImageAltText] Download timeout for ${imageUrl}`);
-      } else {
-        console.warn(`[ImageAltText] Download failed for ${imageUrl}:`, error.message);
+        throw new ImageDownloadError(`timeout for ${imageUrl}`, false);
       }
-      return null;
+      // A blocked URL is a rule of ours, not a server hiccup, so retrying is pointless.
+      const blocked = String(error?.message || '').startsWith('Blocked URL:');
+      console.warn(`[ImageAltText] Download failed for ${imageUrl}:`, error.message);
+      throw new ImageDownloadError(`${error.message} for ${imageUrl}`, blocked);
     }
   }
 
@@ -434,16 +503,10 @@ export class ImageAltTextService {
   private async analyzeImage(
   imageUrl: string
 ): Promise<ImageAnalysisResult> {
-  // Download the image ourselves
+  // Download the image ourselves. This throws ImageDownloadError on failure, which
+  // analyzeImageWithRetry retries unless the error is permanent. The old code returned
+  // null here, gave up after one try, AND reported the image as decorative.
   const imageData = await this.downloadImage(imageUrl);
-
-  if (!imageData) {
-    // Thrown, not returned, so analyzeImageWithRetry gets a chance at it: a single image
-    // failing to download among a dozen is usually a CDN hiccup, and the old code gave up
-    // after one try AND reported the image as decorative.
-    console.warn(`[ImageAltText] ❌ Could not download image: ${imageUrl}`);
-    throw new Error(`IMAGE_DOWNLOAD_FAILED: ${imageUrl}`);
-  }
 
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 

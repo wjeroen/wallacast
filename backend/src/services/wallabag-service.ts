@@ -276,24 +276,28 @@ export class WallabagService {
   // ==========================================================================
 
   /**
-   * Make an authenticated API request to Wallabag
-   * Handles token refresh and retries on 401
+   * The outcome of one API call, including the HTTP status.
+   *
+   * `status` is null when the request never reached Wallabag at all (no token, no base URL,
+   * or a network error). Callers must treat a null status as "unknown", never as "no": the
+   * push once read a failed existence check as "the entry was deleted" and created a
+   * duplicate entry after a transient outage.
    */
-  private async apiRequest(
+  private async apiRequestDetailed(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     endpoint: string,
     body?: any,
     retryCount = 0
-  ): Promise<any | null> {
+  ): Promise<{ ok: boolean; status: number | null; data: any | null }> {
     const token = await this.getAccessToken();
     if (!token) {
       console.error('No access token available');
-      return null;
+      return { ok: false, status: null, data: null };
     }
 
     if (!this.baseUrl) {
       console.error('Base URL not configured');
-      return null;
+      return { ok: false, status: null, data: null };
     }
 
     try {
@@ -319,7 +323,7 @@ export class WallabagService {
         console.log('Got 401, attempting token refresh...');
         // Clear the token and try again
         await this.setUserSetting('wallabag_access_token', '', true);
-        return this.apiRequest(method, endpoint, body, retryCount + 1);
+        return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
       }
 
       // Handle 429 - rate limited
@@ -330,7 +334,7 @@ export class WallabagService {
         if (retryCount < 3) {
           console.log(`Rate limited, waiting ${waitTime}ms...`);
           await this.sleep(waitTime);
-          return this.apiRequest(method, endpoint, body, retryCount + 1);
+          return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
         }
       }
 
@@ -339,24 +343,38 @@ export class WallabagService {
         const waitTime = Math.pow(2, retryCount) * 1000;
         console.log(`Server error ${response.status}, retrying in ${waitTime}ms...`);
         await this.sleep(waitTime);
-        return this.apiRequest(method, endpoint, body, retryCount + 1);
+        return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
       }
 
       if (!response.ok) {
         console.error(`Wallabag API error: ${response.status} ${response.statusText}`);
-        return null;
+        return { ok: false, status: response.status, data: null };
       }
 
       // DELETE requests might not return JSON
       if (method === 'DELETE') {
-        return { success: true };
+        return { ok: true, status: response.status, data: { success: true } };
       }
 
-      return response.json();
+      return { ok: true, status: response.status, data: await response.json() };
     } catch (error) {
       console.error('Error making Wallabag API request:', error);
-      return null;
+      return { ok: false, status: null, data: null };
     }
+  }
+
+  /**
+   * Make an authenticated API request to Wallabag
+   * Handles token refresh and retries on 401
+   */
+  private async apiRequest(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    endpoint: string,
+    body?: any,
+    retryCount = 0
+  ): Promise<any | null> {
+    const result = await this.apiRequestDetailed(method, endpoint, body, retryCount);
+    return result.ok ? result.data : null;
   }
 
   // ==========================================================================
@@ -478,6 +496,22 @@ export class WallabagService {
    */
   async fetchEntry(id: number): Promise<WallabagEntry | null> {
     return this.apiRequest('GET', `/entries/${id}.json`);
+  }
+
+  /**
+   * Does this entry still exist in Wallabag?
+   *
+   * Three answers, and the third one matters: true (it is there), false (Wallabag answered
+   * 404, so it is really gone), and null (we could not find out, because the server was
+   * unreachable, the token failed, or Wallabag returned an error). The push must only
+   * re-create an entry on a definite false. Treating null as false is what would turn a
+   * short Wallabag outage into a library full of duplicates.
+   */
+  async entryExists(id: number): Promise<boolean | null> {
+    const result = await this.apiRequestDetailed('GET', `/entries/${id}.json`);
+    if (result.status === 404) return false;
+    if (result.ok && result.data) return true;
+    return null;
   }
 
   /**

@@ -265,6 +265,12 @@ export async function initializeDatabase() {
     const tagsArrayMigration = await fs.readFile(tagsArrayMigrationPath, 'utf-8');
     await client.query(tagsArrayMigration);
 
+    // Run migration storing the last synced star/archive values, so those flags merge
+    // three-way instead of letting Wallabag overwrite a local change
+    const syncedFlagsMigrationPath = path.join(__dirname, 'migrations', '028_wallabag_synced_flags.sql');
+    const syncedFlagsMigration = await fs.readFile(syncedFlagsMigrationPath, 'utf-8');
+    await client.query(syncedFlagsMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

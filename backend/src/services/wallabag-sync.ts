@@ -143,6 +143,26 @@ async function markLocalItemsNosync(userId: number, entry: WallabagEntry): Promi
 }
 
 /**
+ * Three-way merge for one true/false flag (starred, archived).
+ *
+ * `base` is the value both sides agreed on at the last sync (`wallabag_synced_starred` /
+ * `wallabag_synced_archived`). Whichever side moved away from it wins, which is the same
+ * rule the tags use. Two cases fall back to the local value: an unknown base (an item that
+ * predates this bookkeeping) and the two sides already agreeing. A flag has only two
+ * values, so "both sides changed it to something different" cannot happen: if the values
+ * differ, exactly one of them still matches the base.
+ */
+export function mergeFlag(
+  base: boolean | null | undefined,
+  local: boolean,
+  remote: boolean
+): boolean {
+  if (base === null || base === undefined) return local;
+  if (local === remote) return local;
+  return local !== base ? local : remote;
+}
+
+/**
  * Get a user setting from the database
  */
 async function getUserSetting(userId: number, key: string): Promise<string | null> {
@@ -219,7 +239,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
 
         // Check if we already have this item
         const existing = await query(
-          `SELECT id, updated_at, wallabag_updated_at, tags, wallabag_synced_tags, content_source
+          `SELECT id, updated_at, wallabag_updated_at, tags, wallabag_synced_tags, content_source,
+                  is_starred, is_archived, wallabag_synced_starred, wallabag_synced_archived
              FROM content_items WHERE wallabag_id = $1 AND user_id = $2`,
           [entry.id, userId]
         );
@@ -253,6 +274,22 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             console.log(`[Wallabag Sync] tags merged in pull for item ${row.id}: [${localTags.join(', ')}] -> [${tagsToStore.join(', ')}] (Wallabag has [${remoteTags.join(', ')}])`);
           }
 
+          // Star and archive merge the same way tags do, and the result is used by EVERY
+          // branch below. That matters: the branch classification leans on comparing two
+          // clocks that the push comments already call unreliable, so the flags must come
+          // out right whichever branch happens to run.
+          const remoteStarred = entry.is_starred === 1;
+          const remoteArchived = entry.is_archived === 1;
+          const starToStore = mergeFlag(row.wallabag_synced_starred, row.is_starred, remoteStarred);
+          const archivedToStore = mergeFlag(row.wallabag_synced_archived, row.is_archived, remoteArchived);
+          if (starToStore !== row.is_starred || archivedToStore !== row.is_archived) {
+            console.log(`[Wallabag Sync] flags merged in pull for item ${row.id}: starred ${row.is_starred} -> ${starToStore}, archived ${row.is_archived} -> ${archivedToStore} (Wallabag has starred ${remoteStarred}, archived ${remoteArchived})`);
+          }
+          // A merge that kept a local value Wallabag does not have yet must be pushed back.
+          // The local edit normally set the dirty flag already, so this is a safety net for
+          // the case where the flag was cleared by an earlier partial sync.
+          const flagsNeedPush = starToStore !== remoteStarred || archivedToStore !== remoteArchived;
+
           // Body ownership: only bodies that came FROM Wallabag are refreshed from it.
           // Anything our fetcher/editor/importer produced is better than Wallabag's
           // purified copy of it, so those items only take metadata.
@@ -273,14 +310,18 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 is_archived = $2,
                 tags = $3,
                 wallabag_synced_tags = $4,
-                wallabag_updated_at = $5,
+                wallabag_synced_starred = $5,
+                wallabag_synced_archived = $6,
+                wallabag_updated_at = $7,
                 wallabag_needs_push = TRUE
-              WHERE id = $6`,
+              WHERE id = $8`,
               [
-                entry.is_starred === 1,
-                entry.is_archived === 1,
+                starToStore,
+                archivedToStore,
                 tagsToStore,
                 syncedTags,
+                remoteStarred,
+                remoteArchived,
                 entry.updated_at,
                 row.id,
               ]
@@ -295,14 +336,20 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 is_archived = $2,
                 tags = $3,
                 wallabag_synced_tags = $4,
-                wallabag_updated_at = $5
-              WHERE id = $6`,
+                wallabag_synced_starred = $5,
+                wallabag_synced_archived = $6,
+                wallabag_updated_at = $7,
+                wallabag_needs_push = wallabag_needs_push OR $8
+              WHERE id = $9`,
               [
-                entry.is_starred === 1,
-                entry.is_archived === 1,
+                starToStore,
+                archivedToStore,
                 tagsToStore,
                 syncedTags,
+                remoteStarred,
+                remoteArchived,
                 entry.updated_at,
+                flagsNeedPush,
                 row.id,
               ]
             );
@@ -319,19 +366,25 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                   is_archived = $4,
                   tags = $5,
                   wallabag_synced_tags = $6,
-                  preview_picture = $7,
-                  wallabag_updated_at = $8,
+                  wallabag_synced_starred = $7,
+                  wallabag_synced_archived = $8,
+                  preview_picture = $9,
+                  wallabag_updated_at = $10,
+                  wallabag_needs_push = wallabag_needs_push OR $11,
                   updated_at = NOW()
-                WHERE id = $9`,
+                WHERE id = $12`,
                 [
                   entry.title,
                   entry.content,  // Wallabag content → transcript for podcasts
-                  entry.is_starred === 1,
-                  entry.is_archived === 1,
+                  starToStore,
+                  archivedToStore,
                   tagsToStore,
                   syncedTags,
+                  remoteStarred,
+                  remoteArchived,
                   entry.preview_picture,
                   entry.updated_at,
+                  flagsNeedPush,
                   row.id,
                 ]
               );
@@ -357,20 +410,26 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                   is_archived = $5,
                   tags = $6,
                   wallabag_synced_tags = $7,
-                  preview_picture = $8,
-                  wallabag_updated_at = $9,
+                  wallabag_synced_starred = $8,
+                  wallabag_synced_archived = $9,
+                  preview_picture = $10,
+                  wallabag_updated_at = $11,
+                  wallabag_needs_push = wallabag_needs_push OR $12,
                   updated_at = NOW()
-                WHERE id = $10`,
+                WHERE id = $13`,
                 [
                   entry.title,
                   entry.content,
                   entry.content,  // Store in both fields
-                  entry.is_starred === 1,
-                  entry.is_archived === 1,
+                  starToStore,
+                  archivedToStore,
                   tagsToStore,
                   syncedTags,
+                  remoteStarred,
+                  remoteArchived,
                   entry.preview_picture,
                   entry.updated_at,
+                  flagsNeedPush,
                   row.id,
                 ]
               );
@@ -393,9 +452,10 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             await query(
               `INSERT INTO content_items
                 (type, title, url, transcript, is_starred, is_archived, tags, wallabag_synced_tags,
+                 wallabag_synced_starred, wallabag_synced_archived,
                  preview_picture, wallabag_id, wallabag_updated_at, content_source, user_id,
                  author, published_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
               [
                 type,
                 entry.title,
@@ -405,6 +465,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.is_archived === 1,
                 remoteTags,
                 remoteTags,
+                entry.is_starred === 1,
+                entry.is_archived === 1,
                 entry.preview_picture,
                 entry.id,
                 entry.updated_at,
@@ -419,9 +481,10 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             const insertResult = await query(
               `INSERT INTO content_items
                 (type, title, url, content, html_content, is_starred, is_archived, tags, wallabag_synced_tags,
+                 wallabag_synced_starred, wallabag_synced_archived,
                  preview_picture, wallabag_id, wallabag_updated_at, content_source, user_id,
                  author, published_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
               RETURNING id`,
               [
                 type,
@@ -433,6 +496,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.is_archived === 1,
                 remoteTags,
                 remoteTags,
+                entry.is_starred === 1,
+                entry.is_archived === 1,
                 entry.preview_picture,
                 entry.id,
                 entry.updated_at,
@@ -698,7 +763,12 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
         // Determine URL
         let url = item.url;
         if (!url) {
-          // Generate synthetic URL for items without one
+          // Generate a synthetic URL for items without one, then store it BEFORE the push.
+          // A create whose answer never arrives (network drop after Wallabag accepted it)
+          // used to leave the URL unsaved, so the next sync minted a FRESH uuid and created
+          // a second entry for the same item. A stable URL makes the retry point at the same
+          // address. `updated_at` is deliberately not touched: this is bookkeeping, not a
+          // user edit, and bumping it would fake a conflict on the next pull.
           const uuid = crypto.randomUUID();
           if (item.type === 'text') {
             url = `wallacast://text/${uuid}`;
@@ -707,6 +777,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
           } else {
             url = `wallacast://content/${uuid}`;
           }
+          await query('UPDATE content_items SET url = $1 WHERE id = $2 AND url IS NULL', [url, item.id]);
         }
 
         // Determine content to send
@@ -745,15 +816,26 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
             // successfully pushed. wallabag_updated_at is still written because the pull
             // phase reads it.
             await query(
-              'UPDATE content_items SET wallabag_updated_at = $1, wallabag_synced_tags = $2, wallabag_needs_push = FALSE WHERE id = $3',
-              [result.updated_at, userTags, item.id]
+              `UPDATE content_items
+                  SET wallabag_updated_at = $1, wallabag_synced_tags = $2,
+                      wallabag_synced_starred = $3, wallabag_synced_archived = $4,
+                      wallabag_needs_push = FALSE
+                WHERE id = $5`,
+              [result.updated_at, userTags, item.is_starred, item.is_archived, item.id]
             );
             count++;
           } else {
-            // Entry might have been deleted from Wallabag
-            // Check if it exists
-            const exists = await wallabag.fetchEntry(item.wallabag_id);
-            if (!exists) {
+            // The update failed. Before re-creating anything, find out WHY. Only a definite
+            // 404 means the entry was deleted in Wallabag. An unreachable server answers
+            // "unknown", and re-creating on unknown is how a short outage turns into a
+            // duplicate entry for every item in the push.
+            const exists = await wallabag.entryExists(item.wallabag_id);
+
+            if (exists === null) {
+              const msg = `Item ${item.id}: update failed and Wallabag could not confirm whether entry ${item.wallabag_id} still exists. Left unchanged, the next sync retries it.`;
+              console.warn('[Wallabag Sync]', msg);
+              errors.push(msg);
+            } else if (exists === false) {
               // Re-create it
               console.log('[Wallabag Sync] Entry deleted in Wallabag, re-creating:', item.wallabag_id);
               const newEntry = await wallabag.createEntry({
@@ -767,8 +849,12 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
 
               if (newEntry) {
                 await query(
-                  'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = $3, wallabag_synced_tags = $4, wallabag_needs_push = FALSE WHERE id = $5',
-                  [newEntry.id, newEntry.updated_at, url, userTags, item.id]
+                  `UPDATE content_items
+                      SET wallabag_id = $1, wallabag_updated_at = $2, url = $3, wallabag_synced_tags = $4,
+                          wallabag_synced_starred = $5, wallabag_synced_archived = $6,
+                          wallabag_needs_push = FALSE
+                    WHERE id = $7`,
+                  [newEntry.id, newEntry.updated_at, url, userTags, item.is_starred, item.is_archived, item.id]
                 );
                 count++;
               } else {
@@ -796,8 +882,12 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
             // pushed tag set as the merge base, and clear the dirty flag now that this item
             // has been successfully pushed.
             await query(
-              'UPDATE content_items SET wallabag_id = $1, wallabag_updated_at = $2, url = COALESCE(url, $3), wallabag_synced_tags = $4, wallabag_needs_push = FALSE WHERE id = $5',
-              [result.id, result.updated_at, url, userTags, item.id]
+              `UPDATE content_items
+                  SET wallabag_id = $1, wallabag_updated_at = $2, url = COALESCE(url, $3), wallabag_synced_tags = $4,
+                      wallabag_synced_starred = $5, wallabag_synced_archived = $6,
+                      wallabag_needs_push = FALSE
+                WHERE id = $7`,
+              [result.id, result.updated_at, url, userTags, item.is_starred, item.is_archived, item.id]
             );
             count++;
           } else {
