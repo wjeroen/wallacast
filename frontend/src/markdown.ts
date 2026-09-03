@@ -70,6 +70,23 @@ function buildTurndown(): TurndownService {
     },
   });
 
+  // Fenced code blocks sized to their content: turndown's built-in rule always uses three
+  // backticks, so a code block CONTAINING ``` would end its own fence early. Reuses the
+  // fence-sizing helper the summary blocks use.
+  td.addRule('fencedCodeSafeFence', {
+    filter: (node, options) =>
+      options.codeBlockStyle === 'fenced' &&
+      node.nodeName === 'PRE' &&
+      node.firstChild !== null &&
+      node.firstChild.nodeName === 'CODE',
+    replacement: (_content, node) => {
+      const code = (node as HTMLElement).firstChild as HTMLElement;
+      const cls = code.getAttribute('class') || '';
+      const lang = (cls.match(/language-(\S+)/) || [null, ''])[1] || '';
+      return '\n\n' + fencedBlock(lang, code.textContent || '') + '\n\n';
+    },
+  });
+
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
@@ -118,14 +135,101 @@ function imageWidth(el: HTMLElement): number | null {
 
 const turndownService = buildTurndown();
 
+// How big a <figure> may be (in characters of markup) before the export refuses to keep it
+// as a raw HTML island. The keep-figures rule exists for small captioned or width-styled
+// images; page widgets (alignment.anthropic.com builds whole interactive diagrams inside
+// <figure>) blew one note up to 78% raw HTML with single lines of 78k characters that
+// scroll sideways in Obsidian.
+const RAW_FIGURE_MAX_CHARS = 1500;
+
+// Prepare the parsed document for turndown. MUTATES `doc`, like extractFootnotes does.
+// Returns the collected TeX strings; the caller swaps their tokens in AFTER conversion,
+// because turndown escapes backslashes and underscores in text it converts, which would
+// corrupt the TeX.
+// - <math> carrying its original TeX (arXiv's HTML keeps it in an annotation element)
+//   becomes $...$/$$...$$, which Obsidian renders natively.
+// - LaTeX equation tables (pure layout scaffolding around display math) unwrap to a
+//   paragraph, because Obsidian does not render $$ inside a raw HTML island.
+// - A bare <pre> without a <code> child is wrapped in one, so it becomes a real fenced
+//   code block instead of loose text whose indented lines read as accidental code blocks.
+// - A <figure> bigger than RAW_FIGURE_MAX_CHARS is reduced to its images, its data tables
+//   (inline sizing styles dropped), and its caption; when nothing displayable survives, a
+//   short note marks the omission.
+function preprocessForExport(doc: Document): string[] {
+  const mathTexts: string[] = [];
+  doc.querySelectorAll('math').forEach((math) => {
+    const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
+    if (!tex) return;
+    const block = math.getAttribute('display') === 'block';
+    mathTexts.push(block ? `$$${tex}$$` : `$${tex}$`);
+    math.replaceWith(doc.createTextNode(`XWCMATHX${mathTexts.length - 1}X`));
+  });
+
+  doc.querySelectorAll('table.ltx_equation, table.ltx_equationgroup').forEach((table) => {
+    const text = (table.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
+      table.remove();
+      return;
+    }
+    const p = doc.createElement('p');
+    p.textContent = text;
+    table.replaceWith(p);
+  });
+
+  doc.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('code')) return;
+    const code = doc.createElement('code');
+    while (pre.firstChild) code.appendChild(pre.firstChild);
+    pre.appendChild(code);
+  });
+
+  doc.querySelectorAll('figure').forEach((fig) => {
+    if (fig.outerHTML.length <= RAW_FIGURE_MAX_CHARS) return;
+    const parts: Element[] = [];
+    for (const img of Array.from(fig.querySelectorAll('img'))) {
+      const p = doc.createElement('p');
+      p.appendChild(img);
+      parts.push(p);
+    }
+    // Top-level tables only: appending a nested table would rip it out of its parent.
+    for (const table of Array.from(fig.querySelectorAll('table'))) {
+      if (table.parentElement?.closest('table')) continue;
+      table.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
+      table.removeAttribute('style');
+      parts.push(table);
+    }
+    const capText = fig.querySelector('figcaption')?.textContent?.replace(/\s+/g, ' ').trim();
+    if (parts.length === 0) {
+      const p = doc.createElement('p');
+      const em = doc.createElement('em');
+      em.textContent = '[Interactive figure omitted, see the original page]';
+      p.appendChild(em);
+      parts.push(p);
+    }
+    if (capText) {
+      const p = doc.createElement('p');
+      const em = doc.createElement('em');
+      em.textContent = capText;
+      p.appendChild(em);
+      parts.push(p);
+    }
+    const wrap = doc.createElement('div');
+    parts.forEach((el) => wrap.appendChild(el));
+    fig.replaceWith(wrap);
+  });
+
+  return mathTexts;
+}
+
 /**
  * Convert article/comment HTML into readable Markdown (Obsidian-friendly).
  * Preserves headings, lists, blockquotes, bold/italic, links, images, tables, code,
- * and Wallacast's LLM blocks / tweet embeds (as callouts).
+ * math (as $TeX$), and Wallacast's LLM blocks / tweet embeds (as callouts).
  */
 export function htmlToMarkdown(html: string): string {
   if (!html) return '';
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  const mathTexts = preprocessForExport(doc);
   const footnotes = extractFootnotes(doc);
   let md = turndownService.turndown(doc.body.innerHTML).trim();
   // Turn the inline marker tokens left by extractFootnotes into `[^n]`.
@@ -141,6 +245,9 @@ export function htmlToMarkdown(html: string): string {
       })
       .join('\n\n');
   }
+  // Swap the math tokens for their TeX only now, AFTER every turndown pass (the body above
+  // and the footnote bodies inside extractFootnotes), so no pass can escape the TeX.
+  md = md.replace(/XWCMATHX(\d+)X/g, (_m, i) => mathTexts[Number(i)] ?? '');
   return md.trim();
 }
 

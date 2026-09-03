@@ -8,7 +8,7 @@ const dom = new JSDOM('');
 (globalThis as any).DOMParser = dom.window.DOMParser;
 (globalThis as any).document = dom.window.document;
 
-const { contentToMarkdown, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } =
+const { contentToMarkdown, htmlToMarkdown, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } =
   await import('../src/markdown.ts');
 const { obsidianTag, parseTagInput, collectTagCounts } = await import('../src/tags.ts');
 
@@ -210,6 +210,56 @@ assert.ok(podHour.includes('**[1:02:05]** Late.'), 'h:mm:ss past the first hour'
 // Broken JSON falls back instead of crashing.
 const podBroken = contentToMarkdown({ ...pod, transcript_words: 'not json' }, []);
 assert.ok(podBroken.includes('## Transcript\n\nWelcome to the show.'), 'broken word JSON falls back to plain');
+
+// ---- export preprocessing: math, bare <pre>, giant figures ---------------
+// arXiv-style math keeps its original TeX, unescaped (backslashes and underscores intact).
+const mathMd = htmlToMarkdown(
+  '<p>inline <math><semantics><mrow></mrow><annotation encoding="application/x-tex">x_{i}\\dagger</annotation></semantics></math> and</p>' +
+  '<math display="block"><semantics><annotation encoding="application/x-tex">Y=\\sum_{i} x_{i}</annotation></semantics></math>'
+);
+assert.ok(mathMd.includes('$x_{i}\\dagger$'), 'inline math as $TeX$, backslash not escaped');
+assert.ok(mathMd.includes('$$Y=\\sum_{i} x_{i}$$'), 'display math as $$TeX$$');
+
+// A LaTeX equation layout table unwraps so the $$ is not trapped in a raw HTML island.
+const eqMd = htmlToMarkdown(
+  '<table class="ltx_equation"><tbody><tr><td></td><td><math display="block"><semantics><annotation encoding="application/x-tex">a=b</annotation></semantics></math></td><td>(1)</td></tr></tbody></table>'
+);
+assert.ok(eqMd.includes('$$a=b$$'), 'equation table unwraps to display math');
+assert.ok(!eqMd.includes('<table'), 'no raw equation table left');
+
+// A bare <pre> (no <code> child, e.g. arXiv verbatim prompts) becomes a real fenced block,
+// and a fence inside the content grows the outer fence instead of ending it early.
+const preMd = htmlToMarkdown('<pre>line one\n    indented\ncontains ``` fence</pre>');
+assert.ok(
+  preMd.startsWith('````\nline one\n    indented\ncontains ``` fence\n````'),
+  'bare pre fenced with a longer fence'
+);
+
+// A pre>code block keeps working and keeps its language.
+const codeMd = htmlToMarkdown('<pre><code class="language-js">const a = 1;</code></pre>');
+assert.ok(codeMd.includes('```js\nconst a = 1;\n```'), 'pre>code stays a fenced block with language');
+
+// A small captioned figure is still kept as a raw HTML island (the rule it was built for).
+const smallFig = '<figure><img src="https://x.y/i.png"><figcaption>A cat</figcaption></figure>';
+assert.ok(htmlToMarkdown(smallFig).includes('<figure>'), 'small captioned figure stays raw');
+
+// A giant widget figure is reduced to image + caption; the scaffolding never reaches the note.
+const giantFig =
+  '<figure><div class="widget" style="white-space:nowrap">' + '<span>noise</span>'.repeat(120) +
+  '</div><img src="https://x.y/chart.png"><figcaption>Figure 3: results</figcaption></figure>';
+assert.ok(giantFig.length > 1500, 'fixture really is over the cap');
+const giantMd = htmlToMarkdown(giantFig);
+assert.ok(!giantMd.includes('<figure'), 'giant figure not kept raw');
+assert.ok(!giantMd.includes('noise'), 'widget scaffolding dropped');
+assert.ok(giantMd.includes('![](https://x.y/chart.png)'), 'the image survives');
+assert.ok(giantMd.includes('Figure 3: results'), 'the caption survives');
+
+// A giant figure with no image, table, or caption leaves a visible omission note.
+const widgetOnly = '<figure><div>' + '<b>w</b>'.repeat(300) + '</div></figure>';
+assert.ok(
+  htmlToMarkdown(widgetOnly).includes('Interactive figure omitted, see the original page'),
+  'omission note for a widget-only figure'
+);
 
 // ---- tag helpers --------------------------------------------------------
 assert.equal(obsidianTag('AI Safety'), 'ai-safety');
