@@ -109,6 +109,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [tagMenuQuery, setTagMenuQuery] = useState('');
   // The item whose tags are being edited in the TagEditor popup (null = closed)
   const [tagEditorItem, setTagEditorItem] = useState<ContentItem | null>(null);
+  // Bulk tag mode: the TagEditor opened from the selection bar's menu to add tags to or
+  // remove tags from every selected item at once (null = closed)
+  const [bulkTagMode, setBulkTagMode] = useState<'add' | 'remove' | null>(null);
 
   // Bulk actions overflow menu + sequential progress counter
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
@@ -465,6 +468,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       alert('Bulk action failed');
     }
   };
+
+  // Bulk tag add/remove: one request with the whole selection and the picked tags, then
+  // refetch (same reasoning as runInstantBulk). Thrown errors reach the TagEditor's own
+  // catch, which shows the alert.
+  const runBulkTags = async (tags: string[]) => {
+    const ids = content.filter(item => selectedItems.has(item.id)).map(item => item.id);
+    if (ids.length === 0 || tags.length === 0 || !bulkTagMode) return;
+    await contentAPI.bulkTagAction(bulkTagMode === 'add' ? 'add_tags' : 'remove_tags', ids, tags);
+    setSelectedItems(new Set());
+    await fetchContent();
+  };
+
+  // For "Remove tags", only the tags actually present on the selection are offered.
+  const selectedTagCounts = useMemo(
+    () => collectTagCounts(allItems.filter(i => selectedItems.has(i.id))),
+    [allItems, selectedItems]
+  );
 
   // Long-running bulk actions: kick off existing per-item endpoints one by
   // one. The start endpoints return immediately; real progress comes from the
@@ -1057,6 +1077,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <button onClick={() => runInstantBulk('remove_summary', `Remove summaries from ${selectedItems.size} item(s)?`)}>
                     Remove summaries
                   </button>
+                  <button onClick={() => { setBulkMenuOpen(false); setBulkTagMode('add'); }}>
+                    Add tags…
+                  </button>
+                  <button onClick={() => { setBulkMenuOpen(false); setBulkTagMode('remove'); }}>
+                    Remove tags…
+                  </button>
                   <button onClick={handleBulkGenerateAudio}>Generate audio</button>
                   <button onClick={handleBulkGenerateSummaries}>Generate summaries</button>
                   <button onClick={handleBulkRefetch}>Refetch from web</button>
@@ -1154,6 +1180,18 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
           knownTags={tagCounts}
           onSave={(tags) => setItemTags(tagEditorItem.id, tags)}
           onClose={() => setTagEditorItem(null)}
+        />
+      )}
+
+      {bulkTagMode && (
+        <TagEditor
+          itemTitle={`${selectedItems.size} selected item(s)`}
+          initialTags={[]}
+          knownTags={bulkTagMode === 'remove' ? selectedTagCounts : tagCounts}
+          mode={bulkTagMode}
+          saveLabel={bulkTagMode === 'add' ? `Add to ${selectedItems.size}` : `Remove from ${selectedItems.size}`}
+          onSave={runBulkTags}
+          onClose={() => setBulkTagMode(null)}
         />
       )}
 

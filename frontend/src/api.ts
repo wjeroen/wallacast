@@ -143,6 +143,11 @@ export const contentAPI = {
 
   bulkAction: (action: 'star' | 'unstar' | 'archive' | 'unarchive' | 'delete' | 'remove_audio' | 'remove_summary', ids: number[]) =>
     api.post<{ affected: number }>('/content/bulk', { action, ids }),
+  bulkTagAction: (action: 'add_tags' | 'remove_tags', ids: number[], tags: string[]) =>
+    api.post<{ affected: number }>('/content/bulk', { action, ids, tags }),
+  allTags: () => api.get<{ tags: { tag: string; count: number }[] }>('/content/tags/all'),
+  renameTag: (from: string, to: string) => api.post<{ affected: number }>('/content/tags/rename', { from, to }),
+  removeTag: (tag: string) => api.post<{ affected: number }>('/content/tags/remove', { tag }),
 
   cancelGeneration: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/cancel-generation`),

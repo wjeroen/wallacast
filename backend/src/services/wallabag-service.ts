@@ -556,6 +556,16 @@ export class WallabagService {
   }
 
   /**
+   * Delete a tag LABEL everywhere: Wallabag removes it from every entry and drops the tag
+   * itself from its tag list. Used by the library-wide tag rename/delete, where the
+   * per-entry pushes re-assert each entry's new tag set and this cleans up the old label.
+   */
+  async deleteTagLabel(label: string): Promise<boolean> {
+    const response = await this.apiRequest('DELETE', `/tags/label.json?tag=${encodeURIComponent(label)}`);
+    return response !== null;
+  }
+
+  /**
    * Add tags to an entry
    */
   async addTags(entryId: number, tags: string): Promise<boolean> {

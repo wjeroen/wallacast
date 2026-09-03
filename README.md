@@ -23,7 +23,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 - **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
-- **Tags**: Tag any item from its card or the player (hashtag chips, tap to edit), filter the library by one or more tags, and tags sync both ways with Wallabag
+- **Tags**: Tag any item from its card or the player (hashtag chips, tap to edit), filter the library by one or more tags, add or remove tags on a whole selection at once, rename or delete a tag across the library from Settings → Tags, and tags sync both ways with Wallabag
 - **Obsidian round-trip**: "Copy content" exports Markdown with an Obsidian properties block (title, author, source, published date, tags, and for podcasts the direct audio link), optionally the summary in a labeled code block and the comment thread. A podcast transcript is copied as one paragraph per minute of audio, each opening with a bold time marker. Pasting such a note into the Add tab or uploading the `.md` file imports it back, fields, summary, and comments included
 - **Read-Along**: Every audio item gets a synced read-along view with per-paragraph highlighting and auto-scroll
 - **Summaries → Audio**: Twitter-thread style summaries (articles and podcast episodes) can get their own short audio; a "Prefer summary audio" toggle in the player's playback options plays the summary instead of the full audio when both exist

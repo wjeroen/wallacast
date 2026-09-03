@@ -17,7 +17,7 @@ import { summaryAudioKey, generateSummaryAudioForContent } from '../services/sum
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
-import { normalizeTagList, findReservedTags } from '../services/tags.js';
+import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 
 const router = express.Router();
 
@@ -141,7 +141,7 @@ router.post('/bulk', async (req, res) => {
     const userId = req.user!.userId;
     const { action, ids } = req.body as { action?: string; ids?: unknown };
 
-    const ACTIONS = ['star', 'unstar', 'archive', 'unarchive', 'delete', 'remove_audio', 'remove_summary'];
+    const ACTIONS = ['star', 'unstar', 'archive', 'unarchive', 'delete', 'remove_audio', 'remove_summary', 'add_tags', 'remove_tags'];
     if (!action || !ACTIONS.includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
     }
@@ -150,6 +150,47 @@ router.post('/bulk', async (req, res) => {
     }
 
     let affected = 0;
+
+    if (action === 'add_tags' || action === 'remove_tags') {
+      // Same validation as the single-item PATCH: reserved tags rejected, the rest
+      // normalized. Tag changes must reach Wallabag, so the push flag is set (the push
+      // PATCH replaces the entry's whole tag set). `affected` counts only rows that
+      // actually changed: adds skip items already carrying every tag, removes skip items
+      // carrying none of them.
+      const rawTags = (req.body as { tags?: unknown }).tags;
+      if (!Array.isArray(rawTags) || rawTags.length === 0 || rawTags.length > 20) {
+        return res.status(400).json({ error: 'tags must be a non-empty array of strings (max 20)' });
+      }
+      const reserved = findReservedTags(rawTags);
+      if (reserved.length > 0) {
+        return res.status(400).json({
+          error: `Reserved tag(s): ${reserved.join(', ')}. Type tags are set automatically and nosync is managed in Wallabag.`,
+        });
+      }
+      const tagList = normalizeTagList(rawTags);
+      if (tagList.length === 0) {
+        return res.status(400).json({ error: 'No valid tags given' });
+      }
+      if (action === 'add_tags') {
+        const r = await query(
+          `UPDATE content_items
+              SET tags = ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(tags, '{}') || $3::text[]) x ORDER BY x),
+                  updated_at = NOW(), wallabag_needs_push = TRUE
+            WHERE user_id = $1 AND id = ANY($2::int[]) AND NOT (COALESCE(tags, '{}') @> $3::text[])`,
+          [userId, ids, tagList]
+        );
+        affected = r.rowCount ?? 0;
+      } else {
+        const r = await query(
+          `UPDATE content_items
+              SET tags = ARRAY(SELECT x FROM unnest(COALESCE(tags, '{}')) x WHERE NOT (x = ANY($3::text[]))),
+                  updated_at = NOW(), wallabag_needs_push = TRUE
+            WHERE user_id = $1 AND id = ANY($2::int[]) AND COALESCE(tags, '{}') && $3::text[]`,
+          [userId, ids, tagList]
+        );
+        affected = r.rowCount ?? 0;
+      }
+    }
 
     if (action === 'star' || action === 'unstar') {
       // Starred/archived state must reach Wallabag, so set the explicit push flag instead of relying on an updated_at vs wallabag_updated_at comparison (those columns run on different clocks).
@@ -273,6 +314,99 @@ router.post('/bulk', async (req, res) => {
   } catch (error) {
     console.error('Error in bulk action:', error);
     res.status(500).json({ error: 'Failed to perform bulk action' });
+  }
+});
+
+// Every tag in use with its item count, for the Settings "Manage tags" list. Registered
+// before GET /:id so 'tags' is never read as an item id.
+router.get('/tags/all', async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT t AS tag, COUNT(*)::int AS count
+         FROM content_items, unnest(tags) AS t
+        WHERE user_id = $1
+        GROUP BY t
+        ORDER BY count DESC, tag ASC`,
+      [req.user!.userId]
+    );
+    res.json({ tags: r.rows });
+  } catch (error) {
+    console.error('Error listing tags:', error);
+    res.status(500).json({ error: 'Failed to list tags' });
+  }
+});
+
+// Library-wide tag rename. Every item swaps the label (deduplicated in case the target tag
+// was already present), and the push flag re-asserts each entry's new tag set in Wallabag.
+// The old label itself is then removed from Wallabag fire-and-forget, so it does not linger
+// in Wallabag's tag list.
+router.post('/tags/rename', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const from = normalizeTag((req.body as { from?: unknown }).from);
+    const to = normalizeTag((req.body as { to?: unknown }).to);
+    if (!from || !to) {
+      return res.status(400).json({ error: 'Both the current and the new tag name are required' });
+    }
+    if (from === to) {
+      return res.status(400).json({ error: 'The new name is the same as the current one' });
+    }
+    const reserved = findReservedTags([from, to]);
+    if (reserved.length > 0) {
+      return res.status(400).json({ error: `Reserved tag(s): ${reserved.join(', ')}.` });
+    }
+    const r = await query(
+      `UPDATE content_items
+          SET tags = ARRAY(SELECT DISTINCT x FROM unnest(array_replace(tags, $2, $3)) x ORDER BY x),
+              updated_at = NOW(), wallabag_needs_push = TRUE
+        WHERE user_id = $1 AND tags @> ARRAY[$2]::text[]`,
+      [userId, from, to]
+    );
+    const affected = r.rowCount ?? 0;
+    if (affected > 0) {
+      const { deleteTagLabelFromWallabag } = await import('../services/wallabag-sync.js');
+      deleteTagLabelFromWallabag(userId, from).catch((err) => {
+        console.error(`[tags] Wallabag label cleanup failed for "${from}":`, err);
+      });
+    }
+    console.log(`[tags] user=${userId} rename "${from}" -> "${to}" affected=${affected}`);
+    res.json({ affected });
+  } catch (error) {
+    console.error('Error renaming tag:', error);
+    res.status(500).json({ error: 'Failed to rename tag' });
+  }
+});
+
+// Library-wide tag delete: the label leaves every item, the push flag re-asserts each
+// entry's set, and the label is removed from Wallabag fire-and-forget.
+router.post('/tags/remove', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const tag = normalizeTag((req.body as { tag?: unknown }).tag);
+    if (!tag) {
+      return res.status(400).json({ error: 'A tag name is required' });
+    }
+    if (findReservedTags([tag]).length > 0) {
+      return res.status(400).json({ error: `"${tag}" is a reserved tag.` });
+    }
+    const r = await query(
+      `UPDATE content_items
+          SET tags = array_remove(tags, $2), updated_at = NOW(), wallabag_needs_push = TRUE
+        WHERE user_id = $1 AND tags @> ARRAY[$2]::text[]`,
+      [userId, tag]
+    );
+    const affected = r.rowCount ?? 0;
+    if (affected > 0) {
+      const { deleteTagLabelFromWallabag } = await import('../services/wallabag-sync.js');
+      deleteTagLabelFromWallabag(userId, tag).catch((err) => {
+        console.error(`[tags] Wallabag label cleanup failed for "${tag}":`, err);
+      });
+    }
+    console.log(`[tags] user=${userId} delete "${tag}" affected=${affected}`);
+    res.json({ affected });
+  } catch (error) {
+    console.error('Error deleting tag:', error);
+    res.status(500).json({ error: 'Failed to delete tag' });
   }
 });
 

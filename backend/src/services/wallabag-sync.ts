@@ -943,3 +943,14 @@ export async function deleteFromWallabag(
 
   return wallabag.deleteEntry(wallabagId);
 }
+
+// Remove a tag LABEL from Wallabag entirely (every entry loses it and the tag list drops
+// it). Fire-and-forget companion of the library-wide tag rename/delete: the per-entry
+// pushes re-assert each entry's new tag set, this cleans up the old label itself.
+export async function deleteTagLabelFromWallabag(userId: number, label: string): Promise<boolean> {
+  const wallabag = new WallabagService(userId);
+  if (!(await wallabag.isEnabled())) {
+    return false;
+  }
+  return wallabag.deleteTagLabel(label);
+}

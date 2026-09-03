@@ -4831,6 +4831,32 @@ blockquote.twitter-tweet.tweet-quoted {
   padding-left: 0.75rem;
   border-left: 2px solid var(--bg-raised);
 }
+/* Manage tags (Settings): one hairline row per tag with count + rename/delete. */
+.settings-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--bg-raised);
+}
+.settings-tag-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-tag-count {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+.settings-tag-row button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+.settings-tag-delete {
+  color: #ef4444;
+}
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
   /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly

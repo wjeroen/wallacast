@@ -6,15 +6,20 @@ import { normalizeTag, reservedTagReason, type TagCount } from '../tags';
 // Checkbox list of every tag in use (most used first) plus a type-to-filter box
 // that doubles as the "create a new tag" input. Saving sends ONE full tag list
 // (the backend PATCH and Wallabag's PATCH both replace the whole set).
+// Bulk modes: 'add' and 'remove' pick tags for a whole selection instead of
+// editing one item's list. The selection starts empty, onSave receives just the
+// picked tags, and 'remove' hides the create row (only existing tags can leave).
 interface TagEditorProps {
   itemTitle: string;
   initialTags: string[];
   knownTags: TagCount[];
   onSave: (tags: string[]) => Promise<void> | void;
   onClose: () => void;
+  mode?: 'edit' | 'add' | 'remove';
+  saveLabel?: string;
 }
 
-export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose }: TagEditorProps) {
+export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose, mode = 'edit', saveLabel }: TagEditorProps) {
   const [selected, setSelected] = useState<string[]>(initialTags);
   // Tags created in this session that are not (yet) on any other item, so they stay
   // listed after being toggled off instead of vanishing.
@@ -57,7 +62,7 @@ export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose }
   }, [knownTags, initialTags, created, query]);
 
   const exactExists = rows.some((r) => r.tag === query);
-  const canCreate = !!query && !exactExists && !reserved;
+  const canCreate = !!query && !exactExists && !reserved && mode !== 'remove';
 
   const toggle = (tag: string) => {
     setSelected((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
@@ -84,8 +89,9 @@ export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose }
     }
   };
 
-  const changed =
-    selected.length !== initialTags.length || selected.some((t) => !initialTags.includes(t));
+  const changed = mode === 'edit'
+    ? selected.length !== initialTags.length || selected.some((t) => !initialTags.includes(t))
+    : selected.length > 0;
 
   return (
     <div className="comment-warning-overlay" onClick={onClose}>
@@ -101,7 +107,7 @@ export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose }
           ref={inputRef}
           type="text"
           className="tag-editor-input"
-          placeholder="Find or create a tag…"
+          placeholder={mode === 'remove' ? 'Find a tag…' : 'Find or create a tag…'}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -150,7 +156,7 @@ export function TagEditor({ itemTitle, initialTags, knownTags, onSave, onClose }
           </button>
           <button className="comment-warning-btn include" onClick={save} disabled={saving || !changed}>
             <Check size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : (saveLabel || 'Save')}
           </button>
         </div>
       </div>

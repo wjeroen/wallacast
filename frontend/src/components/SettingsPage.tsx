@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
+import { contentAPI, userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
@@ -644,6 +644,49 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       console.error('Full refresh error:', err);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Manage tags: the library-wide tag list with rename/delete, loaded on first expand.
+  const [tagListOpen, setTagListOpen] = useState(false);
+  const [tagList, setTagList] = useState<{ tag: string; count: number }[] | null>(null);
+  const [tagBusy, setTagBusy] = useState(false);
+
+  const loadTagList = async () => {
+    try {
+      const response = await contentAPI.allTags();
+      setTagList(response.data.tags);
+    } catch (err) {
+      console.error('Failed to load tags:', err);
+      setTagList([]);
+    }
+  };
+
+  const handleRenameTag = async (tag: string) => {
+    const to = prompt(`Rename #${tag} to:`, tag);
+    if (to === null || to.trim() === '' || to.trim() === tag) return;
+    setTagBusy(true);
+    try {
+      const response = await contentAPI.renameTag(tag, to);
+      alert(`Renamed on ${response.data.affected} item(s). The change syncs to Wallabag on the next sync.`);
+      await loadTagList();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Rename failed');
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
+  const handleDeleteTag = async (tag: string, count: number) => {
+    if (!confirm(`Remove #${tag} from ${count} item(s)? It is also removed in Wallabag. This cannot be undone.`)) return;
+    setTagBusy(true);
+    try {
+      await contentAPI.removeTag(tag);
+      await loadTagList();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Delete failed');
+    } finally {
+      setTagBusy(false);
     }
   };
 
@@ -1505,6 +1548,44 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </section>
+
+        {/* Manage tags: library-wide rename/delete, mirrored to Wallabag */}
+        <section className="settings-section">
+          <h3><Tag size={20} /> Tags</h3>
+          <small className="settings-hint">Rename or delete a tag across the whole library. Changes reach Wallabag too.</small>
+          <button
+            className="settings-collapse-toggle"
+            onClick={() => {
+              const next = !tagListOpen;
+              setTagListOpen(next);
+              if (next) loadTagList();
+            }}
+            aria-expanded={tagListOpen}
+          >
+            {tagListOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            Manage tags{tagList ? ` (${tagList.length})` : ''}
+          </button>
+          {tagListOpen && (
+            <div className="settings-collapse-body">
+              {tagList === null ? (
+                <p className="settings-hint">Loading…</p>
+              ) : tagList.length === 0 ? (
+                <p className="settings-hint">No tags yet.</p>
+              ) : (
+                <div className="settings-tag-list">
+                  {tagList.map(({ tag, count }) => (
+                    <div key={tag} className="settings-tag-row">
+                      <span className="settings-tag-name">#{tag}</span>
+                      <span className="settings-tag-count">{count}</span>
+                      <button onClick={() => handleRenameTag(tag)} disabled={tagBusy}>Rename</button>
+                      <button className="settings-tag-delete" onClick={() => handleDeleteTag(tag, count)} disabled={tagBusy}>Delete</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </section>
