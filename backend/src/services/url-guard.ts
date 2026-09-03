@@ -96,9 +96,13 @@ export const RESPONSE_HEADERS_TIMEOUT_MS = 30_000;
 // (the image downloader passes one) is forwarded, so either the caller or our timer can
 // cancel. A timer-caused abort is rethrown as a plain Error with a clear message, because
 // node-fetch's own AbortError would read as if the caller cancelled.
-async function fetchWithHeadersTimeout(url: string, options: RequestInit): Promise<Response> {
+async function fetchWithHeadersTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), RESPONSE_HEADERS_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const callerSignal = options.signal;
   const forwardAbort = () => controller.abort();
   if (callerSignal) {
@@ -110,7 +114,7 @@ async function fetchWithHeadersTimeout(url: string, options: RequestInit): Promi
   } catch (error: any) {
     if (error?.name === 'AbortError' && !callerSignal?.aborted) {
       throw new Error(
-        `Fetch timeout: no response from ${new URL(url).hostname} within ${RESPONSE_HEADERS_TIMEOUT_MS / 1000}s`
+        `Fetch timeout: no response from ${new URL(url).hostname} within ${timeoutMs / 1000}s`
       );
     }
     throw error;
@@ -127,14 +131,19 @@ async function fetchWithHeadersTimeout(url: string, options: RequestInit): Promi
 export async function safeFetch(
   rawUrl: string,
   options: RequestInit = {},
-  maxHops = 5
+  maxHops = 5,
+  headersTimeoutMs = RESPONSE_HEADERS_TIMEOUT_MS
 ): Promise<Response> {
   let currentUrl = rawUrl;
   let method = (options.method || 'GET').toUpperCase();
   let body = options.body;
   for (let hop = 0; hop <= maxHops; hop++) {
     await assertPublicHttpUrl(currentUrl);
-    const res = await fetchWithHeadersTimeout(currentUrl, { ...options, method, body, redirect: 'manual' });
+    const res = await fetchWithHeadersTimeout(
+      currentUrl,
+      { ...options, method, body, redirect: 'manual' },
+      headersTimeoutMs
+    );
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location) {
       // Resolve relative Location against the current URL.
@@ -190,4 +199,29 @@ export async function browserHeadersFetch(
     return { statusCode: res.statusCode, body: res.body ?? '', headers: res.headers ?? {} };
   }
   throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
+}
+
+// Last-resort fetch through the r.jina.ai reader proxy, for pages whose bot wall serves a
+// JavaScript challenge that no server-side header set can ever pass (openai.com does this to
+// Railway's datacenter address, verified via cf-mitigated=challenge on 2026-09-03). The proxy
+// opens the page in its own real browser and returns the rendered HTML. Only the public
+// article URL is sent to the proxy, and it is SSRF-validated first so an internal address
+// can never be handed to the proxy either. The proxy needs time to render, so the headers
+// timeout is raised to 90s for this one call.
+export async function readerProxyFetch(rawUrl: string): Promise<string> {
+  await assertPublicHttpUrl(rawUrl);
+  const res = await safeFetch(
+    `https://r.jina.ai/${rawUrl}`,
+    { headers: { 'X-Return-Format': 'html' } },
+    5,
+    90_000
+  );
+  if (!res.ok) {
+    throw new Error(`reader proxy answered HTTP ${res.status}`);
+  }
+  const html = await res.text();
+  if (html.length < 1000) {
+    throw new Error(`reader proxy returned only ${html.length} bytes`);
+  }
+  return html;
 }

@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, browserHeadersFetch } from './url-guard.js';
+import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -1010,10 +1010,22 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
         console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
-        throw new Error(`HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode})`);
+        // Third and last step: the r.jina.ai reader proxy opens the page in its own real
+        // browser (which passes JavaScript challenges) and returns the rendered HTML.
+        console.log('[Fetcher] Trying the reader proxy (r.jina.ai) as a last resort');
+        try {
+          html = await readerProxyFetch(url);
+          console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
+        } catch (proxyError: any) {
+          console.log(`[Fetcher] Reader proxy failed too: ${proxyError.message}`);
+          throw new Error(
+            `HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode}, reader proxy: ${proxyError.message})`
+          );
+        }
+      } else {
+        console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
+        html = retry.body;
       }
-      console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
-      html = retry.body;
     } else {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
