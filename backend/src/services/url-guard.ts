@@ -158,7 +158,7 @@ export async function safeFetch(
 export async function browserHeadersFetch(
   rawUrl: string,
   maxHops = 5
-): Promise<{ statusCode: number; body: string }> {
+): Promise<{ statusCode: number; body: string; headers: Record<string, string | string[] | undefined> }> {
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= maxHops; hop++) {
     await assertPublicHttpUrl(currentUrl);
@@ -174,6 +174,12 @@ export async function browserHeadersFetch(
         locales: ['en-US', 'en'],
         operatingSystems: ['windows', 'macos'],
       },
+      // Explicit navigation headers on top of the generated set, matching what a browser
+      // sends when a person opens a page (the forum GraphQL path also hand-sets its own).
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
       retry: { limit: 0 },
     });
     const location = res.headers?.location;
@@ -181,7 +187,7 @@ export async function browserHeadersFetch(
       currentUrl = new URL(location, currentUrl).toString();
       continue;
     }
-    return { statusCode: res.statusCode, body: res.body ?? '' };
+    return { statusCode: res.statusCode, body: res.body ?? '', headers: res.headers ?? {} };
   }
   throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
 }

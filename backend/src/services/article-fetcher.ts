@@ -1002,7 +1002,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       console.log('[Fetcher] HTTP 403 from simple fetch, retrying once with browser-like headers');
       const retry = await browserHeadersFetch(url);
       if (retry.statusCode < 200 || retry.statusCode >= 300) {
+        // Diagnostic detail for ANY site that blocks both attempts: `cf-mitigated: challenge`
+        // means a Cloudflare JavaScript challenge, which no header set can ever pass (we do
+        // not run JavaScript), so header tuning is pointless for that site.
+        const mitigated = retry.headers['cf-mitigated'] || 'none';
+        const server = retry.headers['server'] || 'unknown';
+        const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
+        console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
         throw new Error(`HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode})`);
       }
       console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
