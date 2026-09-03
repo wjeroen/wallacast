@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch } from './url-guard.js';
+import { safeFetch, browserHeadersFetch } from './url-guard.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -991,12 +991,26 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('[Fetcher] Using simple fetch for standard scraping');
     const response = await safeFetch(url);
 
-    if (!response.ok) {
+    let html: string;
+    if (response.ok) {
+      html = await response.text();
+    } else if (response.status === 403) {
+      // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
+      // does, seen live 2026-09-03). One retry with browser-like headers usually gets the
+      // real page. Only on 403, so the plain fetch stays the first choice for every site
+      // that already works.
+      console.log('[Fetcher] HTTP 403 from simple fetch, retrying once with browser-like headers');
+      const retry = await browserHeadersFetch(url);
+      if (retry.statusCode < 200 || retry.statusCode >= 300) {
+        console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
+        throw new Error(`HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode})`);
+      }
+      console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
+      html = retry.body;
+    } else {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-
-    const html = await response.text();
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
 
     // Log if potential Cloudflare challenge but continue anyway
