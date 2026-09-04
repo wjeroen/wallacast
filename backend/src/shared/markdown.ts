@@ -107,6 +107,40 @@ function buildTurndown(): TurndownService {
     },
   });
 
+  // Anchors are inline in Markdown, but Substack and Instagram wrap a whole embed card in
+  // one. Turndown's built-in link rule would then put [ ... ](url) around block content, and
+  // a Markdown link cannot span a blank line, so the note shows a literal "[" on its own line
+  // and a "](url)" line further down. The HTML parser makes it stranger still: an <a> around
+  // a <blockquote> is reconstructed INSIDE the blockquote (the adoption agency algorithm), so
+  // those brackets land inside the tweet callout, and an empty leftover <a> stays behind.
+  //
+  // So an anchor holding block content emits its content instead, with the address on its own
+  // line after it, unless that address is already linked in the same card (a tweet's footer
+  // links its own status, so repeating it would be noise). An anchor whose content converted
+  // to nothing, typically an avatar image that had no usable src, emits nothing at all rather
+  // than a stray "[](url)".
+  td.addRule('anchor', {
+    filter: (node) => node.nodeName === 'A' && !!(node as HTMLElement).getAttribute('href'),
+    replacement: (content, node) => {
+      const el = node as HTMLElement;
+      const body = content.trim();
+      if (!body) return '';
+      const rawHref = el.getAttribute('href') || '';
+      // The ordinary case: a link whose content is a phrase, or a single image.
+      if (!/\n/.test(body) && !el.querySelector(BLOCK_LEVEL_SELECTOR)) {
+        const href = rawHref.replace(/([()])/g, '\$1');
+        const rawTitle = (el.getAttribute('title') || '').replace(/(\n+\s*)+/g, '\n');
+        const title = rawTitle ? ` "${rawTitle.replace(/"/g, '\\"')}"` : '';
+        return `[${body}](${href}${title})`;
+      }
+      const scope = el.closest('blockquote, figure, li, section, article, aside, table, div') || el.parentElement;
+      const linkedNearby = !!scope && Array.from(scope.querySelectorAll('a[href]'))
+        .some((other) => other !== el && other.getAttribute('href') === rawHref);
+      const address = body.includes(rawHref) || linkedNearby ? '' : `\n\n${rawHref}`;
+      return `\n\n${body}${address}\n\n`;
+    },
+  });
+
   // Keep structures with no clean Markdown equivalent as raw HTML islands (no data loss).
   td.keep(['iframe', 'sup', 'sub', 'kbd', 'video', 'audio']);
 
@@ -141,6 +175,12 @@ function buildTurndown(): TurndownService {
 
   return td;
 }
+
+// The elements that start a new block, so an anchor wrapping one cannot stay an inline link.
+const BLOCK_LEVEL_SELECTOR =
+  'address, article, aside, blockquote, details, div, dl, fieldset, figcaption, figure, ' +
+  'footer, form, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, ' +
+  'table, ul';
 
 // Read an integer pixel width from an <img>'s width attribute or inline style. Returns null
 // when there's no explicit width (or it's a percentage).

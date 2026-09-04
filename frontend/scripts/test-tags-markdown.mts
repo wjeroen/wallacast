@@ -252,6 +252,28 @@ assert.ok(
 const codeMd = htmlToMarkdown('<pre><code class="language-js">const a = 1;</code></pre>');
 assert.ok(codeMd.includes('```js\nconst a = 1;\n```'), 'pre>code stays a fenced block with language');
 
+// A whole embed card wrapped in one <a>: the brackets of an inline link cannot span a blank
+// line, so the card must emit its content instead. The parser reconstructs the anchor inside
+// the blockquote and leaves an empty one behind, so this fixture uses the real markup.
+const wrappedCard = htmlToMarkdown(
+  '<a href="https://x.com/MicahCarroll/status/2095023282051563835" class="pencraft">' +
+  '<blockquote class="twitter-tweet">' +
+  '<p class="tweet-author"><strong>Micah Carroll</strong> <span class="tweet-handle">@MicahCarroll</span></p>' +
+  '<p>A race to the bottom.</p>' +
+  '<p class="tweet-footer"><a href="https://x.com/MicahCarroll/status/2095023282051563835">September 2, 2026</a> • 462 likes</p>' +
+  '</blockquote></a>'
+);
+assert.match(wrappedCard, /^> \[!tweet\]$/m, 'the tweet callout survives the wrapping anchor');
+assert.match(wrappedCard, /^> \*\*Micah Carroll\*\* @MicahCarroll$/m, 'author line');
+assert.match(wrappedCard, /^> \[September 2, 2026\]\(https:\/\/x\.com\/[^)]+\) • 462 likes$/m, 'footer keeps its link and counts');
+for (const line of wrappedCard.split('\n')) {
+  const bare = line.replace(/^(\s*>\s?)+/, '').trim();
+  assert.notEqual(bare, '[', 'no lone opening bracket');
+  assert.ok(!/^\]\(\S+\)$/.test(bare), 'no lone closing bracket');
+  assert.ok(!/\[\]\(/.test(line), 'no empty link');
+}
+assert.ok(!/\[\]\(/.test(htmlToMarkdown('<p>a <a href="https://x.com/u"><img alt=""></a> b</p>')), 'a dropped avatar leaves no empty link');
+
 // Substack hangs the footnote id on the little number link, not on the note itself, so
 // reading that element gives the digit and leaves the note loose in the body.
 const substackFn = htmlToMarkdown(

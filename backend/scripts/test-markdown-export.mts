@@ -259,6 +259,91 @@ for (const [name, html, expectations] of FOOTNOTE_SHAPES) {
 }
 console.log(`✅ ${FOOTNOTE_SHAPES.length} footnote shapes convert correctly in both copies`);
 
+// ---- 2c. embed cards wrapped in an anchor -------------------------------------------------
+// Substack and Instagram wrap a whole embed card in one <a>. Markdown links cannot span a
+// blank line, so the built-in link rule left a literal "[" line and a "](url)" line in the
+// note. The HTML parser also reconstructs such an anchor INSIDE the blockquote and leaves an
+// empty one behind, which is where the stray "[](url)" came from. Fixtures use the markup as
+// the sites really serve it, so the parser reproduces that shape.
+const ANCHOR_CASES: Array<[string, string, RegExp[]]> = [
+  [
+    'substack tweet card',
+    '<p>Before.</p>' +
+    '<a href="https://x.com/MicahCarroll/status/2095023282051563835" target="_blank" rel="noopener noreferrer" data-component-name="Twitter2ToDOM" class="pencraft pc-display-contents pc-reset">' +
+    '<blockquote class="twitter-tweet">' +
+    '<p class="tweet-author"><strong>Micah Carroll</strong> <span class="tweet-handle">@MicahCarroll</span></p>' +
+    '<p>A race to the bottom in monitorability would be incredibly stupid</p>' +
+    '<blockquote class="twitter-tweet tweet-quoted">' +
+    '<p class="tweet-author"><strong>Jakub Pachocki</strong> <span class="tweet-handle">@merettm</span></p>' +
+    '<p>I want to prevent a race into unmonitorability.</p></blockquote>' +
+    '<p class="tweet-footer"><a href="https://x.com/MicahCarroll/status/2095023282051563835">September 2, 2026</a> • 462 likes • 12 replies</p>' +
+    '</blockquote></a><p>After.</p>',
+    [
+      /^> \[!tweet\]$/m,
+      /^> \*\*Micah Carroll\*\* @MicahCarroll$/m,
+      /^> A race to the bottom in monitorability would be incredibly stupid$/m,
+      /^> > \[!tweet\]$/m,
+      /^> > \*\*Jakub Pachocki\*\* @merettm$/m,
+      /^> \[September 2, 2026\]\(https:\/\/x\.com\/MicahCarroll\/status\/2095023282051563835\) • 462 likes • 12 replies$/m,
+    ],
+  ],
+  [
+    'instagram embed',
+    '<blockquote class="instagram-media" data-instgrm-permalink="https://www.instagram.com/reel/DboGRisxC2E/">' +
+    '<div style="padding:16px"><a href="https://www.instagram.com/reel/DboGRisxC2E/" target="_blank">' +
+    '<div style="display:flex"><div style="border-radius:50%"></div><div><div></div><div></div></div></div>' +
+    '<div style="padding: 19% 0"></div><div>View this post on Instagram</div></a>' +
+    '<p><a href="https://www.instagram.com/reel/DboGRisxC2E/">A post shared by Nate Soares (@nateasoares)</a></p>' +
+    '</div></blockquote>',
+    [
+      /^> View this post on Instagram$/m,
+      /^> \[A post shared by Nate Soares \(@nateasoares\)\]\(https:\/\/www\.instagram\.com\/reel\/DboGRisxC2E\/\)$/m,
+    ],
+  ],
+  [
+    // The card link nothing else points at: the address earns its own line.
+    'card with no other link to the same address',
+    '<div><a href="https://example.com/card"><h3>Card title</h3><p>Card body.</p></a></div>',
+    [/^### Card title$/m, /^Card body\.$/m, /^https:\/\/example\.com\/card$/m],
+  ],
+];
+
+for (const [name, html, expectations] of ANCHOR_CASES) {
+  const viaFrontend = frontend.htmlToMarkdown(html);
+  const viaBackend = sharedMarkdown.htmlToMarkdown(html);
+  assert.equal(viaBackend, viaFrontend, `${name}: the two copies disagree`);
+  for (const re of expectations) assert.match(viaBackend, re, `${name}: ${re}`);
+  // The three shapes the report named, checked on every line, blockquote markers stripped.
+  for (const line of viaBackend.split('\n')) {
+    const bare = line.replace(/^(\s*>\s?)+/, '').trim();
+    assert.notEqual(bare, '[', `${name}: a line is a lone opening bracket`);
+    assert.ok(!/^\]\(\S+\)$/.test(bare), `${name}: a line is a lone closing bracket + address`);
+    assert.ok(!/\[\]\(/.test(line), `${name}: an empty link survived`);
+  }
+}
+
+// An anchor whose only child is an image we could not keep (no usable src, e.g. a lazy-loaded
+// avatar) must vanish rather than leave "[](url)" behind.
+const droppedAvatar = sharedMarkdown.htmlToMarkdown(
+  '<p>Before <a href="https://x.com/MicahCarroll"><img alt=""></a> after.</p>'
+);
+assert.ok(!/\[\]\(/.test(droppedAvatar), 'an anchor around a dropped image leaves nothing');
+assert.match(droppedAvatar, /^Before {1,2}after\.$/m, 'the surrounding sentence is untouched');
+
+// An image that DID survive stays a linked image, the shape a tweet photo wants.
+assert.equal(
+  sharedMarkdown.htmlToMarkdown('<p><a href="https://x.com/i/status/1/photo/1"><img src="https://pbs.twimg.com/media/x.jpg" alt="photo"></a></p>'),
+  '[![photo](https://pbs.twimg.com/media/x.jpg)](https://x.com/i/status/1/photo/1)',
+  'a linked image round-trips as a linked image'
+);
+// Ordinary inline links keep working, title and escaping included.
+assert.equal(
+  sharedMarkdown.htmlToMarkdown('<p><a href="https://example.com/a(b)" title="Home">Example</a></p>'),
+  '[Example](https://example.com/a\(b\) "Home")',
+  'an inline link keeps its title and escapes brackets in the address'
+);
+console.log(`✅ ${ANCHOR_CASES.length} anchor-wrapped embeds, plus dropped avatar, linked image and inline link`);
+
 // ---- 3. copy options and the index description -------------------------------------------
 assert.deepEqual(backend.copyOptionsFromSettings({}), {
   includeSummary: false, includeCommentSummary: true, summaryCodeLabel: '', includeComments: true,
