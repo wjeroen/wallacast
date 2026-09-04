@@ -288,4 +288,24 @@ assert.match(hashApiToken(tok), /^[0-9a-f]{64}$/, 'sha256 hex');
 assert.notEqual(generateApiToken(), tok, 'random');
 console.log('✅ read-token allow-list and token format');
 
+// ---- 6. file names inside the bulk Copy content zip ----------------------------------------
+const { markdownFileName, uniqueFileName } = backend;
+assert.equal(markdownFileName('Plain title'), 'Plain title.md');
+assert.equal(
+  markdownFileName('Café: "quoted" / slashed * star? [x] #y ^z | pipe <b>'),
+  'Café quoted slashed star x y z pipe b.md',
+  'forbidden characters dropped, Unicode kept'
+);
+assert.equal(markdownFileName('   '), 'Untitled.md');
+assert.equal(markdownFileName(null), 'Untitled.md');
+assert.equal(markdownFileName('Ends with dots...'), 'Ends with dots.md');
+assert.equal(markdownFileName('x'.repeat(200)).length, 120 + 3, 'capped at 120 characters plus .md');
+const used = new Set<string>();
+assert.equal(uniqueFileName('A.md', used), 'A.md');
+assert.equal(uniqueFileName('a.md', used), 'a (2).md', 'case-insensitive duplicates');
+assert.equal(uniqueFileName('A.md', used), 'A (3).md');
+assert.equal(uniqueFileName('A (2).md', used), 'A (2) (2).md', 'a real title that looks like a suffix still gets its own name');
+assert.equal(uniqueFileName('B.md', used), 'B.md');
+console.log('✅ zip file names');
+
 console.log('\nALL MARKDOWN EXPORT / URL MATCH / TOKEN TESTS PASSED');

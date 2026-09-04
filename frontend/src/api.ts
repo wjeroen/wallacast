@@ -161,6 +161,11 @@ export const contentAPI = {
   exportZip: (id: number) =>
     api.get(`/content/${id}/export`, { responseType: 'arraybuffer' }),
 
+  // Bulk Copy content: one zip with a Markdown file per id, each rendered server-side exactly
+  // like the Copy content button (the caller's Copy & export settings apply).
+  markdownZip: (ids: number[]) =>
+    api.get('/content/markdown-zip', { params: { ids: ids.join(',') }, responseType: 'arraybuffer' }),
+
   logAudioError: (data: {
     contentId?: number;
     contentType?: string;

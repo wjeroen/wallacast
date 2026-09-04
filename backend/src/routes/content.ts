@@ -19,7 +19,7 @@ import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/pod
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { humanUrl, pickItemByUrl } from '../services/url-match.js';
-import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription } from '../services/markdown-export.js';
+import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
 
@@ -206,6 +206,63 @@ router.get('/markdown', async (req, res) => {
   } catch (error) {
     console.error('Error rendering content markdown by URL:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
+  }
+});
+
+// GET /markdown-zip?ids=1,2,3 - Bulk Copy content: one zip with one Markdown file per selected
+// item, each byte-identical to that item's Copy content. Used by the library's bulk bar. A GET
+// with the ids in the query, so the read-only demo can use it too: it reads and changes
+// nothing. Items are fetched a few at a time and appended as they render, so a 500-item
+// selection never sits in memory at once. Ids that are not the caller's are skipped.
+// Defined before GET /:id so 'markdown-zip' is never read as an id.
+router.get('/markdown-zip', async (req, res) => {
+  try {
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const ids = Array.from(new Set(
+      raw.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
+    ));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a comma-separated list of content ids' });
+    }
+    if (ids.length > 500) {
+      return res.status(400).json({ error: 'At most 500 items per zip' });
+    }
+    const userId = req.user!.userId;
+    const opts = await loadCopyContentOptions(userId);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="wallacast-copy-content-${new Date().toISOString().slice(0, 10)}.zip"`);
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      console.error('[markdown-zip] archive error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to build the zip' });
+      else res.end();
+    });
+    archive.pipe(res);
+
+    const used = new Set<string>();
+    let added = 0;
+    const CHUNK = 10;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const result = await query(
+        `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, chunk]
+      );
+      const byId = new Map<number, any>(result.rows.map((r: any) => [r.id, r]));
+      for (const id of chunk) {
+        const row = byId.get(id);
+        if (!row) continue;
+        archive.append(renderItemMarkdown(row, opts), { name: uniqueFileName(markdownFileName(row.title), used) });
+        added++;
+      }
+    }
+    console.log(`[markdown-zip] user=${userId} requested=${ids.length} added=${added}`);
+    await archive.finalize();
+  } catch (error) {
+    console.error('Error building markdown zip:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to build the zip' });
+    else res.end();
   }
 });
 

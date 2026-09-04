@@ -94,3 +94,38 @@ export function shortDescription(raw: string | null | undefined, max = 300): str
   if (!text) return null;
   return text.length > max ? text.slice(0, max) : text;
 }
+
+/**
+ * The file name of an item inside a bulk Copy content zip: the title with the characters
+ * Windows, macOS and Obsidian refuse in a file name taken out (`\ / : * ? " < > |`, plus
+ * `# ^ [ ]`, which break Obsidian links), control characters and whitespace collapsed,
+ * trailing dots dropped (illegal on Windows), capped at 120 characters. Unicode letters
+ * stay, so "Café" is still "Café". Matches the link names the Obsidian inbox builds from
+ * the same titles.
+ */
+export function markdownFileName(title: string | null | undefined): string {
+  const cleaned = (title || '')
+    .replace(/[\/:*?"<>|#^\[\]]/g, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.+$/, '')
+    .trim();
+  const base = (cleaned || 'Untitled').slice(0, 120).trim();
+  return `${base}.md`;
+}
+
+/**
+ * Make a file name unique within one zip: the second "Title.md" becomes "Title (2).md", the
+ * third "Title (3).md". Compared case-insensitively, because most file systems are.
+ * `used` is the set of lower-cased names already handed out, updated in place.
+ */
+export function uniqueFileName(name: string, used: Set<string>): string {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let candidate = name;
+  for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${stem} (${n})${ext}`;
+  used.add(candidate.toLowerCase());
+  return candidate;
+}
