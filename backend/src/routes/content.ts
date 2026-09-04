@@ -18,6 +18,8 @@ import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
+import { humanUrl, pickItemByUrl } from '../services/url-match.js';
+import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription } from '../services/markdown-export.js';
 
 const router = express.Router();
 
@@ -114,6 +116,110 @@ router.post('/status', async (req, res) => {
   } catch (error) {
     console.error('Error fetching content statuses:', error);
     res.status(500).json({ error: 'Failed to fetch content statuses' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Read surface for outside tools (the Obsidian "Wallacast inbox" and "Import from
+// wallacast" commands, see implementation-plans/obsidian-article-import.md). These three
+// routes are the ONLY ones a read-only API token may call (services/api-tokens.ts). They
+// change nothing and trigger nothing: no audio, no summary, no fetch.
+// ---------------------------------------------------------------------------
+
+// Lean library index: one small row per item, every item, newest first. Obsidian groups
+// and filters on its side. As lean as POST /status on purpose: GET / ships each item's full
+// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every inbox
+// refresh (the 80GB-incident class of problem). Never content, html_content, comments,
+// transcript, transcript_words, tts_chunks, or content_alignment here. `url` is the human
+// URL, the form Copy content writes into `source` (null for synthetic wallacast:// ones),
+// and `description` is plain text cut to 300 characters.
+// Defined before GET /:id so 'index' is never read as an id.
+router.get('/index', async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
+              is_starred, is_archived, summary_status, karma,
+              COALESCE(comment_count_total, 0) AS comment_count,
+              LEFT(description, 1500) AS description
+         FROM content_items
+        WHERE user_id = $1
+        ORDER BY created_at DESC`,
+      [req.user!.userId]
+    );
+    res.json(result.rows.map((row) => ({
+      ...row,
+      url: humanUrl(row.url),
+      description: shortDescription(row.description),
+    })));
+  } catch (error) {
+    console.error('Error building content index:', error);
+    res.status(500).json({ error: 'Failed to build content index' });
+  }
+});
+
+// "Copy content" as JSON: the item's small fields plus `markdown`, rendered server-side with
+// the caller's Copy & export settings, byte-identical to the Copy content button (see
+// services/markdown-export.ts). Shared by the two Markdown routes below.
+async function sendItemMarkdown(res: express.Response, userId: number, id: number) {
+  const result = await query(
+    `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE id = $1 AND user_id = $2`,
+    [id, userId]
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'Content not found' });
+  }
+  const row = result.rows[0];
+  const opts = await loadCopyContentOptions(userId);
+  res.json({
+    id: row.id,
+    title: row.title,
+    author: row.author,
+    published_at: row.published_at,
+    url: humanUrl(row.url),
+    tags: row.tags || [],
+    is_starred: row.is_starred,
+    is_archived: row.is_archived,
+    summary_status: row.summary_status,
+    markdown: renderItemMarkdown(row, opts),
+  });
+}
+
+// GET /markdown?url=... - The Copy content Markdown of the library item with this URL. The
+// vault identifies an item by URL, never by id. Exact match first, then the normalised
+// forms (see services/url-match.ts). An article added twice resolves to the copy that is
+// not archived, then the newest. Defined before GET /:id so 'markdown' is never read as an id.
+router.get('/markdown', async (req, res) => {
+  try {
+    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!url) {
+      return res.status(400).json({ error: 'A url query parameter is required' });
+    }
+    const candidates = await query(
+      'SELECT id, url, is_archived, created_at FROM content_items WHERE user_id = $1 AND url IS NOT NULL',
+      [req.user!.userId]
+    );
+    const match = pickItemByUrl(candidates.rows, url);
+    if (!match) {
+      return res.status(404).json({ error: 'No item in your library has this URL' });
+    }
+    await sendItemMarkdown(res, req.user!.userId, match.id);
+  } catch (error) {
+    console.error('Error rendering content markdown by URL:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
+  }
+});
+
+// GET /:id/markdown - The same, by id.
+router.get('/:id/markdown', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid content id' });
+    }
+    await sendItemMarkdown(res, req.user!.userId, id);
+  } catch (error) {
+    console.error('Error rendering content markdown:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
   }
 });
 

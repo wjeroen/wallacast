@@ -271,6 +271,11 @@ export async function initializeDatabase() {
     const syncedFlagsMigration = await fs.readFile(syncedFlagsMigrationPath, 'utf-8');
     await client.query(syncedFlagsMigration);
 
+    // Run migration adding the api_tokens table (read-only API tokens for outside readers)
+    const apiTokensMigrationPath = path.join(__dirname, 'migrations', '029_api_tokens.sql');
+    const apiTokensMigration = await fs.readFile(apiTokensMigrationPath, 'utf-8');
+    await client.query(apiTokensMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`
@@ -332,7 +337,7 @@ export async function initializeDatabase() {
     // planner to choose slow sequential scans instead of fast index lookups.
     // ANALYZE is fast (reads a sample, not the whole table) and safe to run.
     // Wrapped in try/catch: missing tables should NOT crash initialization.
-    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'feed_items'];
+    const tablesToAnalyze = ['content_items', 'users', 'user_sessions', 'user_settings', 'podcasts', 'feed_items', 'api_tokens'];
     for (const table of tablesToAnalyze) {
       try {
         await client.query(`ANALYZE ${table}`);

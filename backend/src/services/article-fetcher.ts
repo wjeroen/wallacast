@@ -8,8 +8,8 @@ import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js
 // NOTE: "forum-bots.effectivealtruism.org" does NOT contain the substring
 // "forum.effectivealtruism.org" (the "-bots" breaks it), so EA-Forum detection must check
 // for BOTH hosts. Always detect with isEAForumUrl() rather than a bare .includes() check.
-const EA_FORUM_HOST = 'forum.effectivealtruism.org';
-const EA_FORUM_BOTS_HOST = 'forum-bots.effectivealtruism.org';
+export const EA_FORUM_HOST = 'forum.effectivealtruism.org';
+export const EA_FORUM_BOTS_HOST = 'forum-bots.effectivealtruism.org';
 
 /** True for both the main EA Forum host and its bot-friendly mirror. */
 export function isEAForumUrl(url: string | null | undefined): boolean {
