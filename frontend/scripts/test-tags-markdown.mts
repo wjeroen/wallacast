@@ -60,6 +60,19 @@ console.log('----- EXPORT -----\n' + md + '\n------------------');
 
 assert.ok(md.startsWith('---\ntitle: "The \\"Quoted\\" Title: with a colon"\n'), 'title quoted/escaped');
 assert.ok(md.includes('source: "https://forum.effectivealtruism.org/posts/abc/some-post"'), 'human host in source');
+assert.ok(!md.includes('alt-source:'), 'an ordinary article gets no alt-source');
+
+// An item read through an archive mirror exports the real article as `source` and the
+// mirror as `alt-source`, and both survive the import round trip.
+const archived = contentToMarkdown(
+  { ...item, url: 'https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled' },
+  comments
+);
+assert.ok(archived.includes('source: "https://www.wsj.com/paywalled"'), 'real article as source');
+assert.ok(archived.includes('alt-source: "https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled"'), 'mirror as alt-source');
+const archivedFm = parseFrontmatter(archived);
+assert.equal(archivedFm!.meta.source, 'https://www.wsj.com/paywalled');
+assert.equal(archivedFm!.meta['alt-source'], 'https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled', 'the hyphenated key parses');
 assert.ok(md.includes('\ntags:\n  - article\n  - ai-safety\n  - econ\n  - weirdchars\n'), 'tags list');
 assert.ok(md.includes('published: 2026-03-14'), 'published date');
 assert.ok(md.includes('description: "An HTML description with spaces"'), 'description cleaned');
@@ -238,6 +251,56 @@ assert.ok(
 // A pre>code block keeps working and keeps its language.
 const codeMd = htmlToMarkdown('<pre><code class="language-js">const a = 1;</code></pre>');
 assert.ok(codeMd.includes('```js\nconst a = 1;\n```'), 'pre>code stays a fenced block with language');
+
+// A whole embed card wrapped in one <a>: the brackets of an inline link cannot span a blank
+// line, so the card must emit its content instead. The parser reconstructs the anchor inside
+// the blockquote and leaves an empty one behind, so this fixture uses the real markup.
+const wrappedCard = htmlToMarkdown(
+  '<a href="https://x.com/MicahCarroll/status/2095023282051563835" class="pencraft">' +
+  '<blockquote class="twitter-tweet">' +
+  '<p class="tweet-author"><strong>Micah Carroll</strong> <span class="tweet-handle">@MicahCarroll</span></p>' +
+  '<p>A race to the bottom.</p>' +
+  '<p class="tweet-footer"><a href="https://x.com/MicahCarroll/status/2095023282051563835">September 2, 2026</a> • 462 likes</p>' +
+  '</blockquote></a>'
+);
+assert.match(wrappedCard, /^> \[!tweet\]$/m, 'the tweet callout survives the wrapping anchor');
+assert.match(wrappedCard, /^> \*\*Micah Carroll\*\* @MicahCarroll$/m, 'author line');
+assert.match(wrappedCard, /^> \[September 2, 2026\]\(https:\/\/x\.com\/[^)]+\) • 462 likes$/m, 'footer keeps its link and counts');
+for (const line of wrappedCard.split('\n')) {
+  const bare = line.replace(/^(\s*>\s?)+/, '').trim();
+  assert.notEqual(bare, '[', 'no lone opening bracket');
+  assert.ok(!/^\]\(\S+\)$/.test(bare), 'no lone closing bracket');
+  assert.ok(!/\[\]\(/.test(line), 'no empty link');
+}
+assert.ok(!/\[\]\(/.test(htmlToMarkdown('<p>a <a href="https://x.com/u"><img alt=""></a> b</p>')), 'a dropped avatar leaves no empty link');
+
+// Substack hangs the footnote id on the little number link, not on the note itself, so
+// reading that element gives the digit and leaves the note loose in the body.
+const substackFn = htmlToMarkdown(
+  '<p>A claim<a href="#footnote-1" id="footnote-anchor-1" class="footnote-anchor">1</a>.</p>' +
+  '<div data-component-name="FootnoteToDOM" class="footnote">' +
+  '<a id="footnote-1" href="#footnote-anchor-1" class="footnote-number">1</a>' +
+  '<div class="footnote-content"><p><span> Notes to a future self.</span></p></div></div>'
+);
+assert.match(substackFn, /^A claim\[\^1\]\.$/m, 'substack inline marker');
+assert.match(substackFn, /^\[\^1\]: Notes to a future self\.$/m, 'substack definition carries the note, not the digit');
+
+// Tufte-style sidenotes keep the note inside the sentence behind an empty number label and a
+// hidden checkbox, so an item stored before the fetcher learned to rewrite them still has it.
+const sidenote = htmlToMarkdown(
+  '<p>These AIs colluded.' +
+  '<label for="fn-9" class="margin-toggle sidenote-number" data-n="1"></label>' +
+  '<input type="checkbox" id="fn-9" class="margin-toggle">' +
+  '<span class="sidenote" data-n="1">However, we believe this is distinct.</span>' +
+  ' And they kept going.</p>'
+);
+assert.match(sidenote, /^These AIs colluded\.\[\^1\] And they kept going\.$/m, 'a marker replaces the note in the sentence');
+assert.match(sidenote, /^\[\^1\]: However, we believe this is distinct\.$/m, 'the note becomes a real definition');
+
+// Distill-style articles have no marker and no anchor, just an inline custom element.
+const distillFn = htmlToMarkdown('<p>We fixed them<d-footnote>All have since been removed.</d-footnote>.</p>');
+assert.match(distillFn, /^We fixed them\[\^1\]\.$/m, 'a marker is created where the element sat');
+assert.match(distillFn, /^\[\^1\]: All have since been removed\.$/m, 'and the note becomes a real definition');
 
 // A small captioned figure is still kept as a raw HTML island (the rule it was built for).
 const smallFig = '<figure><img src="https://x.y/i.png"><figcaption>A cat</figcaption></figure>';

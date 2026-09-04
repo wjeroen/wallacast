@@ -13,6 +13,7 @@ import {
   fetchArticleContent,
   flattenEmailTables,
   restoreArchivedParagraphs,
+  normalizeSidenotes,
   isArchiveMirrorUrl,
   authorFromJsonLd,
 } from '../src/services/article-fetcher.js';
@@ -40,6 +41,51 @@ assert.equal(authorFromJsonLd(ld('{ this is not json')), undefined, 'a malformed
 assert.equal(authorFromJsonLd(new JSDOM('<p>no script</p>').window.document), undefined, 'no block, no author');
 
 const dir = process.argv[2];
+
+// --- 0b. Tufte sidenotes become a real footnote section ----------------------------
+// collusion.wiki holds the whole note inside the sentence and hides the machinery with its
+// own stylesheet, which we do not keep: the reader showed bare checkboxes and the note text
+// spliced mid-sentence. The markup below is exactly what the page serves.
+{
+  const body = new JSDOM(
+    '<div id="root"><p>These AIs colluded.' +
+    '<label for="fn-intro-9" class="margin-toggle sidenote-number" data-n="1"></label>' +
+    '<input type="checkbox" id="fn-intro-9" class="margin-toggle">' +
+    '<span class="sidenote" data-n="1">However, we believe this is distinct.</span>' +
+    ' And they kept going.</p>' +
+    '<p>A second claim.' +
+    '<label for="fn-intro-4" class="margin-toggle sidenote-number" data-n="†"></label>' +
+    '<input type="checkbox" id="fn-intro-4" class="margin-toggle">' +
+    '<span class="marginnote">An unnumbered margin note.</span></p></div>'
+  ).window.document.querySelector('#root')!;
+
+  normalizeSidenotes(body);
+  const html = body.innerHTML;
+
+  assert.equal((html.match(/<input/g) || []).length, 0, 'the toggle checkboxes are gone');
+  assert.equal((html.match(/<label/g) || []).length, 0, 'the empty number labels are gone');
+  assert.equal((html.match(/class="sidenote"|class="marginnote"/g) || []).length, 0, 'no note is left inline');
+  assert.match(
+    html,
+    /These AIs colluded\.<sup class="footnote-ref" id="fnref-side-1"><a href="#fn-side-1">\[1\]<\/a><\/sup> And they kept going\./,
+    'a numbered marker sits where the note was, and the sentence is intact'
+  );
+  assert.match(html, /<sup class="footnote-ref" id="fnref-side-2">/, 'a dagger note is renumbered like any other');
+  assert.match(html, /<section class="footnotes"><hr><ol>/, 'the notes collect into a footnotes section');
+  assert.match(
+    html,
+    /<li id="fn-side-1">However, we believe this is distinct\. <a href="#fnref-side-1" class="footnote-backref">↩<\/a><\/li>/,
+    'the note keeps its text and gains a back-link'
+  );
+  assert.match(html, /<li id="fn-side-2">An unnumbered margin note\./, 'the margin note becomes a footnote too');
+
+  // Nothing to do on a page without sidenotes, and no empty section left behind.
+  const plain = new JSDOM('<div id="root"><p>Just prose.</p></div>').window.document.querySelector('#root')!;
+  normalizeSidenotes(plain);
+  assert.equal(plain.innerHTML, '<p>Just prose.</p>', 'a page without sidenotes is untouched');
+
+  console.log('✅ Tufte sidenotes: 2 notes converted, toggles removed, sentence intact');
+}
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------
 const COMPACT = 'https://www.compactmag.com/article/misanthropic-altruism/';

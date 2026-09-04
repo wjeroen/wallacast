@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
-import { contentAPI, userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
+import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
@@ -690,6 +690,69 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
+  // Read-only API tokens (for the Obsidian import). The list loads once with the page. A
+  // freshly created token is shown once, in `createdToken`, until the user dismisses it.
+  const [apiTokens, setApiTokens] = useState<ApiToken[] | null>(null);
+  const [newTokenName, setNewTokenName] = useState('');
+  const [createdToken, setCreatedToken] = useState<{ name: string; token: string } | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+
+  const loadApiTokens = async () => {
+    try {
+      const response = await authAPI.listTokens();
+      setApiTokens(response.data.tokens);
+    } catch (err) {
+      console.error('Failed to load API tokens:', err);
+      setApiTokens([]);
+    }
+  };
+
+  useEffect(() => {
+    loadApiTokens();
+  }, []);
+
+  const handleCreateToken = async () => {
+    const name = newTokenName.trim();
+    if (!name) return;
+    setTokenBusy(true);
+    try {
+      const response = await authAPI.createToken(name);
+      setCreatedToken({ name: response.data.name, token: response.data.token });
+      setTokenCopied(false);
+      setNewTokenName('');
+      await loadApiTokens();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Could not create the token');
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
+  const handleCopyToken = async () => {
+    if (!createdToken) return;
+    try {
+      await navigator.clipboard.writeText(createdToken.token);
+      setTokenCopied(true);
+    } catch (err) {
+      console.error('Failed to copy token:', err);
+      alert('Could not copy. Select the token text and copy it by hand.');
+    }
+  };
+
+  const handleRevokeToken = async (token: ApiToken) => {
+    if (!confirm(`Revoke the token "${token.name}"? Anything still using it stops working right away.`)) return;
+    setTokenBusy(true);
+    try {
+      await authAPI.revokeToken(token.id);
+      await loadApiTokens();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Could not revoke the token');
+    } finally {
+      setTokenBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="settings-page">
@@ -1160,6 +1223,61 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               The full comment thread at the end.
             </small>
           </div>
+        </section>
+
+        {/* Read-only API tokens: the credential outside tools (the Obsidian import) use to
+            read the library index and the Copy content Markdown, and nothing else. */}
+        <section className="settings-section">
+          <h3><KeyRound size={20} /> Read-only API tokens</h3>
+          <p className="section-description">
+            For tools that read your library from outside the app, such as the Obsidian import. A token can list your library and fetch the "Copy content" text of an item, nothing more: it cannot add, change, or delete anything, and it cannot read your settings or API keys.
+          </p>
+          <div className="settings-token-create">
+            <input
+              type="text"
+              value={newTokenName}
+              onChange={(e) => setNewTokenName(e.target.value)}
+              placeholder="Name, e.g. Obsidian on my phone"
+              maxLength={100}
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+            <button type="button" onClick={handleCreateToken} disabled={tokenBusy || !newTokenName.trim()}>
+              Create token
+            </button>
+          </div>
+          {createdToken && (
+            <div className="settings-token-reveal">
+              <p>Token for "{createdToken.name}". Copy it now, it is shown only this once.</p>
+              <code>{createdToken.token}</code>
+              <div className="settings-token-reveal-actions">
+                <button type="button" onClick={handleCopyToken}>
+                  {tokenCopied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy</>}
+                </button>
+                <button type="button" onClick={() => setCreatedToken(null)}>Done</button>
+              </div>
+            </div>
+          )}
+          {apiTokens === null ? (
+            <p className="settings-hint">Loading…</p>
+          ) : apiTokens.length === 0 ? (
+            <p className="settings-hint">No tokens yet.</p>
+          ) : (
+            <div className="settings-token-list">
+              {apiTokens.map((t) => (
+                <div key={t.id} className="settings-token-row">
+                  <div className="settings-token-info">
+                    <span className="settings-token-name">{t.name}</span>
+                    <span className="settings-token-meta">
+                      Created {new Date(t.created_at).toLocaleDateString()}
+                      {t.last_used_at ? `, last used ${new Date(t.last_used_at).toLocaleDateString()}` : ', never used'}
+                    </span>
+                  </div>
+                  <button type="button" className="settings-token-revoke" onClick={() => handleRevokeToken(t)} disabled={tokenBusy}>Revoke</button>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* API Keys Section */}
