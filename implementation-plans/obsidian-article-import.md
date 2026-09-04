@@ -69,6 +69,23 @@ So the note carries `source` (the article's own address) and optionally `alt-sou
 - Copy content fills the pair in automatically **for archive mirrors only**: an address of the form `https://archive.ph/<snapshot>/https://real.url` yields `source: https://real.url` and `alt-source: <the mirror>`. A short-code snapshot (`archive.is/aBc12`) names no original and stays the `source`, so that one is still a manual edit in the vault. Matching resolves archive addresses the same way, so a note whose `source` is the real article finds the item even before anyone writes an `alt-source`.
 - A **crosspost's** second address cannot be filled in automatically: Wallacast stores one URL per item and keeps no canonical or crosspost link. Write `alt-source` by hand in the vault; the lookup then finds the item from either side.
 
+### Podcast episodes and pasted texts have no URL
+
+Which property identifies an item depends on what the item is, and the vault's three note shapes each need their own key:
+
+| Item | Note properties | Identifier |
+|---|---|---|
+| Article | `source`, sometimes `alt-source` | the article URL |
+| Podcast episode | `show`, `audio`, `duration`, no `source` | the `audio` media file |
+| Pasted text | `title`, `author`, no `source`, no `audio` | the title only |
+
+Wallacast stores a podcast episode with **`url` NULL**: an episode arrives from an RSS feed as a title plus an enclosure, and the enclosure is what the code already dedupes on (`podcast_id` + `audio_url`). So the episode's media file is its address, and it is exactly what an exported note carries as `audio`. A pasted text has neither, so only its title is left.
+
+Both sides handle all three:
+
+- `GET /markdown` takes `?url=`, `?audio=` and `?title=`, each repeatable, all combinable. Send everything the note has. They are tried url, then audio, then title, and `matched_by` in the response says which one answered, so the command can warn when only the title matched (two items can share a title; the not-archived, newest one wins).
+- `GET /index` returns `url`, `alt_url` and `audio_url` per item, plus `podcast_show_name`, so the "already in Sources" check compares a note's `source` / `alt-source` against `url` / `alt_url`, a podcast note's `audio` against `audio_url`, and falls back to the title for texts.
+
 ### A third command: save images to the vault
 
 Wanted, and entirely vault-side, so nothing here blocks it. An imported note's images are remote `![](https://...)` links, which break when the source disappears or the phone is offline. The command walks the note's image links, downloads each with Obsidian's `requestUrl` into the attachments folder, names them after the note plus an index, and rewrites the link to the vault path. No Wallacast change is needed for public images. If some host refuses the download (hotlink protection keyed on `Referer`, or a login wall), the fallback is a small read-only image-proxy endpoint here, which would then join the read-token allow-list. Do not build that until an image actually fails.

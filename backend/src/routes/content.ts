@@ -18,7 +18,7 @@ import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
-import { pickItemByUrls } from '../services/url-match.js';
+import { findItem } from '../services/url-match.js';
 import { sourceUrls } from '../shared/format.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
@@ -139,7 +139,7 @@ router.get('/index', async (req, res) => {
   try {
     const result = await query(
       `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
-              is_starred, is_archived, summary_status, karma,
+              is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
               COALESCE(comment_count_total, 0) AS comment_count,
               LEFT(description, 1500) AS description
          FROM content_items
@@ -153,6 +153,13 @@ router.get('/index', async (req, res) => {
         ...row,
         url: source,
         alt_url: altSource,
+        // A podcast episode has no article URL, so its media file IS its address, and it is
+        // the `audio` property of an exported note. Same guard as buildFrontmatter, so the
+        // two always carry the same value. Our own generated narration (articles and texts,
+        // an internal /api/content/... path) is never exposed here.
+        audio_url: row.type === 'podcast_episode' && /^https?:\/\//i.test(row.audio_url || '')
+          ? row.audio_url
+          : null,
         description: shortDescription(row.description),
       };
     }));
@@ -165,7 +172,12 @@ router.get('/index', async (req, res) => {
 // "Copy content" as JSON: the item's small fields plus `markdown`, rendered server-side with
 // the caller's Copy & export settings, byte-identical to the Copy content button (see
 // services/markdown-export.ts). Shared by the two Markdown routes below.
-async function sendItemMarkdown(res: express.Response, userId: number, id: number, matchedUrl?: string) {
+async function sendItemMarkdown(
+  res: express.Response,
+  userId: number,
+  id: number,
+  match?: { by: string; value: string }
+) {
   const result = await query(
     `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE id = $1 AND user_id = $2`,
     [id, userId]
@@ -183,9 +195,13 @@ async function sendItemMarkdown(res: express.Response, userId: number, id: numbe
     published_at: row.published_at,
     url: source,
     alt_url: altSource,
-    // Which of the given URLs found this item, so the caller can tell whether the note's
-    // `source` or its `alt-source` resolved. Absent on the by-id route.
-    ...(matchedUrl ? { matched_url: matchedUrl } : {}),
+    audio_url: row.type === 'podcast_episode' && /^https?:\/\//i.test(row.audio_url || '')
+      ? row.audio_url
+      : null,
+    // Which identifier found this item ('url', 'audio' or 'title') and the exact value that
+    // did, so the caller can tell whether the note's `source`, its `alt-source`, its `audio`
+    // or merely its title resolved, and warn on that last one. Absent on the by-id route.
+    ...(match ? { matched_by: match.by, matched_value: match.value } : {}),
     tags: row.tags || [],
     is_starred: row.is_starred,
     is_archived: row.is_archived,
@@ -194,40 +210,58 @@ async function sendItemMarkdown(res: express.Response, userId: number, id: numbe
   });
 }
 
-// GET /markdown?url=... - The Copy content Markdown of the library item with this URL. The
-// vault identifies an item by URL, never by id. Exact match first, then the normalised
-// forms (see services/url-match.ts). An article added twice resolves to the copy that is
-// not archived, then the newest.
+// GET /markdown?url=... - The Copy content Markdown of the library item a note describes.
+// The vault identifies an item by what the note carries, never by an internal id, and which
+// property that is depends on the item:
 //
-// `url` may be repeated (`?url=<source>&url=<alt-source>`, at most 10). A note can hold two
-// addresses for one article: a crosspost that lives on both the EA Forum and Substack, or a
-// real article in `source` with the archive mirror Wallacast read in `alt-source`. The
-// URLs are tried in the given order, so the note's `source` wins when both find something.
+//   ?url=<source>&url=<alt-source>   an article. `url` may be repeated (at most 10) because
+//                                    a note can hold two addresses for one article: a
+//                                    crosspost living on both the EA Forum and Substack, or
+//                                    the real article with the archive mirror Wallacast read.
+//   ?audio=<audio>                   a podcast episode. Episodes are stored with NO url at
+//                                    all, so the media file from the note's `audio` property
+//                                    is the only address they have.
+//   ?title=<title>                   a pasted text, which has neither. The weak last resort,
+//                                    an exact title match.
+//
+// All three may be combined and repeated: send everything the note has. They are tried
+// url, then audio, then title, and in the given order within each kind, so `source` wins
+// over `alt-source`. The response says which one answered (`matched_by`, `matched_value`).
+// Exact match first, then the normalised forms (see services/url-match.ts). An article
+// added twice resolves to the copy that is not archived, then the newest.
 // Defined before GET /:id so 'markdown' is never read as an id.
 router.get('/markdown', async (req, res) => {
   try {
-    const raw = req.query.url;
-    const urls = (Array.isArray(raw) ? raw : [raw])
-      .filter((v): v is string => typeof v === 'string')
-      .map((v) => v.trim())
-      .filter(Boolean)
-      .slice(0, 10);
-    if (urls.length === 0) {
-      return res.status(400).json({ error: 'A url query parameter is required' });
+    const listParam = (raw: unknown): string[] =>
+      (Array.isArray(raw) ? raw : [raw])
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+
+    const urls = listParam(req.query.url);
+    const audioUrls = listParam(req.query.audio);
+    const titles = listParam(req.query.title);
+    if (urls.length + audioUrls.length + titles.length === 0) {
+      return res.status(400).json({ error: 'A url, audio or title query parameter is required' });
     }
+    // Episodes have a null url, so the candidate set can no longer be narrowed to rows that
+    // have one. Still four small columns per item.
     const candidates = await query(
-      'SELECT id, url, is_archived, created_at FROM content_items WHERE user_id = $1 AND url IS NOT NULL',
+      `SELECT id, url, audio_url, title, is_archived, created_at
+         FROM content_items WHERE user_id = $1`,
       [req.user!.userId]
     );
-    const match = pickItemByUrls(candidates.rows, urls);
+    const match = findItem(candidates.rows, { urls, audioUrls, titles });
     if (!match) {
+      const single = urls.length + audioUrls.length + titles.length === 1;
       return res.status(404).json({
-        error: urls.length === 1
+        error: single && urls.length === 1
           ? 'No item in your library has this URL'
-          : 'No item in your library has any of these URLs',
+          : 'No item in your library matches what this note carries',
       });
     }
-    await sendItemMarkdown(res, req.user!.userId, match.item.id, match.matchedUrl);
+    await sendItemMarkdown(res, req.user!.userId, match.item.id, { by: match.by, value: match.value });
   } catch (error) {
     console.error('Error rendering content markdown by URL:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });

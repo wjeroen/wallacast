@@ -59,6 +59,15 @@ export interface UrlCandidate {
   created_at: Date | string;
 }
 
+/** Newest first, and an item that is not archived before one that is: the rule for the
+ *  same article saved twice. */
+function preferred<T extends { is_archived: boolean; created_at: Date | string }>(pool: readonly T[]): T {
+  return [...pool].sort((a, b) => {
+    if (a.is_archived !== b.is_archived) return a.is_archived ? 1 : -1;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  })[0];
+}
+
 /**
  * The library item a URL names. Exact matches win (the stored URL, its human form, or its
  * mirror form equals the query), then normalized matches. Several items can carry the same
@@ -77,11 +86,7 @@ export function pickItemByUrl<T extends UrlCandidate>(candidates: readonly T[], 
     pool = withUrl.filter((c) => normalizeUrlForMatch(c.url!) === nq);
   }
   if (pool.length === 0) return null;
-
-  return [...pool].sort((a, b) => {
-    if (a.is_archived !== b.is_archived) return a.is_archived ? 1 : -1;
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  })[0];
+  return preferred(pool);
 }
 
 /**
@@ -95,13 +100,66 @@ export function pickItemByUrl<T extends UrlCandidate>(candidates: readonly T[], 
  * Returns the item together with the URL that found it, so the caller can say which
  * address resolved.
  */
-export function pickItemByUrls<T extends UrlCandidate>(
+/** What a lookup needs to know about each of the caller's items. */
+export interface LookupCandidate extends UrlCandidate {
+  /** The episode's media file for a podcast, the only address such an item has. */
+  audio_url: string | null;
+  title: string | null;
+}
+
+export type MatchedBy = 'url' | 'audio' | 'title';
+
+export interface LookupMatch<T> {
+  item: T;
+  /** Which kind of identifier found it, so a caller can warn on the weakest one. */
+  by: MatchedBy;
+  /** The exact value that found it, as the caller wrote it. */
+  value: string;
+}
+
+/**
+ * The library item a note describes, from every identifier the note carries.
+ *
+ * A note names its item differently depending on what the item is:
+ *   - an article has `source`, and sometimes `alt-source` (a crosspost's other home, or
+ *     the archive mirror behind a paywalled original), both passed in `urls`;
+ *   - a podcast episode has NO article URL at all, only `audio`, the episode's media file
+ *     (Wallacast stores episodes with a null `url`), passed in `audioUrls`;
+ *   - a pasted text has neither, so only its title identifies it, passed in `titles`.
+ *
+ * They are tried in that order, strongest identifier first, and within each kind in the
+ * order given, so a note's `source` beats its `alt-source`. Titles are the weak last
+ * resort: an exact, case-insensitive match on a title two items could share, which is why
+ * the result says which kind of identifier answered. Inside one identifier the usual rules
+ * apply (exact before normalised, then not-archived before newest).
+ */
+export function findItem<T extends LookupCandidate>(
   candidates: readonly T[],
-  queryUrls: readonly string[]
-): { item: T; matchedUrl: string } | null {
-  for (const url of queryUrls) {
+  query: { urls?: readonly string[]; audioUrls?: readonly string[]; titles?: readonly string[] }
+): LookupMatch<T> | null {
+  for (const url of query.urls ?? []) {
     const item = pickItemByUrl(candidates, url);
-    if (item) return { item, matchedUrl: url.trim() };
+    if (item) return { item, by: 'url', value: url.trim() };
   }
+
+  for (const audio of query.audioUrls ?? []) {
+    const q = audio.trim();
+    if (!q) continue;
+    const withAudio = candidates.filter((c) => !!c.audio_url);
+    let pool = withAudio.filter((c) => c.audio_url === q);
+    if (pool.length === 0) {
+      const nq = normalizeUrlForMatch(q);
+      pool = withAudio.filter((c) => normalizeUrlForMatch(c.audio_url!) === nq);
+    }
+    if (pool.length > 0) return { item: preferred(pool), by: 'audio', value: q };
+  }
+
+  for (const title of query.titles ?? []) {
+    const q = title.trim().toLowerCase();
+    if (!q) continue;
+    const pool = candidates.filter((c) => (c.title || '').trim().toLowerCase() === q);
+    if (pool.length > 0) return { item: preferred(pool), by: 'title', value: title.trim() };
+  }
+
   return null;
 }

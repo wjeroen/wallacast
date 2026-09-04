@@ -226,7 +226,13 @@ assert.deepEqual(backend.parseComments({ not: 'an array' }), []);
 console.log('✅ copy options, index description, comment parsing');
 
 // ---- 4. URL matching ---------------------------------------------------------------------
-const { humanUrl, normalizeUrlForMatch, pickItemByUrl, pickItemByUrls } = await import('../src/services/url-match.ts');
+const { humanUrl, normalizeUrlForMatch, pickItemByUrl, findItem } = await import('../src/services/url-match.ts');
+// findItem takes whole rows; these older cases only care about the url fields.
+const asRows = (list: readonly any[]) => list.map((c) => ({ audio_url: null, title: null, ...c }));
+const pickItemByUrls = (list: readonly any[], urls: readonly string[]) => {
+  const m = findItem(asRows(list), { urls });
+  return m ? { item: m.item, matchedUrl: m.value } : null;
+};
 assert.equal(humanUrl('https://forum-bots.effectivealtruism.org/posts/x'), 'https://forum.effectivealtruism.org/posts/x');
 assert.equal(humanUrl('https://example.com/a'), 'https://example.com/a');
 assert.equal(humanUrl('wallacast://3f1c'), null, 'synthetic address');
@@ -288,6 +294,49 @@ assert.equal(pickItemByUrls(multi, ['https://nowhere.example/x', 'https://exampl
 assert.equal(pickItemByUrls(multi, ['https://a.example/x', 'https://b.example/y']), null, 'no URL matches');
 assert.equal(pickItemByUrls(multi, []), null, 'no URLs given');
 console.log('✅ multi-URL lookup (source + alt-source)');
+
+// A podcast episode is stored with NO url, so its media file is the only address it has,
+// and a pasted text has neither, leaving only its title.
+const mixed = [
+  { id: 20, url: 'https://example.com/article', audio_url: '/api/content/20/audio', title: 'An Article', is_archived: false, created_at: '2026-03-01T00:00:00Z' },
+  { id: 21, url: null, audio_url: 'https://media.transistor.fm/de837028/aef571fd.mp3', title: 'Why AI Hacking Is Becoming Hard to Control', is_archived: false, created_at: '2026-03-02T00:00:00Z' },
+  { id: 22, url: null, audio_url: null, title: 'AI 2040: Plan A', is_archived: false, created_at: '2026-03-03T00:00:00Z' },
+  { id: 23, url: null, audio_url: null, title: 'AI 2040: Plan A', is_archived: true, created_at: '2026-03-04T00:00:00Z' },
+];
+assert.deepEqual(
+  (({ item, by, value }) => ({ id: item.id, by, value }))(findItem(mixed, { audioUrls: ['https://media.transistor.fm/de837028/aef571fd.mp3'] })!),
+  { id: 21, by: 'audio', value: 'https://media.transistor.fm/de837028/aef571fd.mp3' },
+  'an episode is found by its media file'
+);
+assert.equal(
+  findItem(mixed, { audioUrls: ['https://media.transistor.fm/de837028/aef571fd.mp3?utm_source=x'] })!.item.id,
+  21,
+  'a tracking parameter on the media file does not stop the match'
+);
+assert.equal(findItem(mixed, { audioUrls: ['https://media.transistor.fm/other.mp3'] }), null, 'a different episode does not match');
+assert.equal(
+  findItem(mixed, { titles: ['ai 2040: plan a'] })!.item.id,
+  22,
+  'a text is found by title, case-insensitively, and the copy that is not archived wins'
+);
+assert.equal(findItem(mixed, { titles: ['  An Article  '] })!.by, 'title', 'a padded title still matches and reports how');
+assert.equal(findItem(mixed, { titles: ['No Such Note'] }), null);
+// Order: url beats audio beats title, so the strongest identifier a note carries wins.
+assert.equal(
+  findItem(mixed, { urls: ['https://example.com/article'], audioUrls: ['https://media.transistor.fm/de837028/aef571fd.mp3'], titles: ['AI 2040: Plan A'] })!.by,
+  'url',
+  'url wins over audio and title'
+);
+assert.equal(
+  findItem(mixed, { audioUrls: ['https://media.transistor.fm/de837028/aef571fd.mp3'], titles: ['AI 2040: Plan A'] })!.by,
+  'audio',
+  'audio wins over title'
+);
+assert.equal(findItem(mixed, {}), null, 'nothing given, nothing found');
+assert.equal(findItem(mixed, { urls: [''], audioUrls: ['  '], titles: [''] }), null, 'blank identifiers are ignored');
+// An article's own generated narration must never be reachable as an "episode" address.
+assert.equal(findItem(mixed, { audioUrls: ['/api/content/20/audio'] })!.item.id, 20, 'an exact internal audio path still matches, the route never sends one');
+console.log('✅ podcast (audio) and text (title) lookup');
 
 // ---- 4b. archive mirrors: the original URL, and the two source properties ----------------
 const { archivedOriginalUrl, sourceUrls } = await import('../src/shared/format.ts');
