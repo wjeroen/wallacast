@@ -172,6 +172,19 @@ console.log(`✅ ${compared} backend renders are byte-identical to the frontend'
 const md = backend.renderItemMarkdown(articleRow, OPTION_SETS[1][1]);
 assert.ok(md.startsWith('---\ntitle: "The \\"Quoted\\" Title: with a colon"\n'), 'starts with the properties block');
 assert.ok(md.includes('source: "https://forum.effectivealtruism.org/posts/abc/some-post"'), 'human EA Forum host in source');
+assert.ok(!md.includes('alt-source:'), 'an ordinary article gets no alt-source');
+// An item Wallacast read through an archive mirror: the real article is the source, the
+// mirror is the alt-source, so the vault files the note under the address it belongs to.
+const archivedMd = backend.renderItemMarkdown(
+  { ...articleRow, url: 'https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled' },
+  OPTION_SETS[1][1]
+);
+assert.ok(archivedMd.includes('source: "https://www.wsj.com/paywalled"'), 'the real article is the source');
+assert.ok(archivedMd.includes('alt-source: "https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled"'), 'the mirror is the alt-source');
+assert.ok(
+  archivedMd.indexOf('source: "https://www.wsj.com') < archivedMd.indexOf('alt-source:'),
+  'source comes before alt-source'
+);
 assert.ok(md.includes('\ntags:\n  - article\n  - ai-safety\n  - econ\n  - weirdchars\n'), 'tags list');
 assert.ok(md.includes('````ad-summary\nTweet one.'), 'summary block with a longer fence');
 assert.ok(md.includes('> [!ai] Claude Opus 4.6'), 'LLM block callout');
@@ -213,7 +226,7 @@ assert.deepEqual(backend.parseComments({ not: 'an array' }), []);
 console.log('✅ copy options, index description, comment parsing');
 
 // ---- 4. URL matching ---------------------------------------------------------------------
-const { humanUrl, normalizeUrlForMatch, pickItemByUrl } = await import('../src/services/url-match.ts');
+const { humanUrl, normalizeUrlForMatch, pickItemByUrl, pickItemByUrls } = await import('../src/services/url-match.ts');
 assert.equal(humanUrl('https://forum-bots.effectivealtruism.org/posts/x'), 'https://forum.effectivealtruism.org/posts/x');
 assert.equal(humanUrl('https://example.com/a'), 'https://example.com/a');
 assert.equal(humanUrl('wallacast://3f1c'), null, 'synthetic address');
@@ -249,7 +262,77 @@ assert.equal(pickItemByUrl(items, 'http://example.com/c/')!.id, 9, 'exact match 
 assert.equal(pickItemByUrl(items, 'wallacast://abc'), null, 'synthetic addresses never match');
 assert.equal(pickItemByUrl(items, 'https://example.com/none'), null, 'no match');
 assert.equal(pickItemByUrl(items, '   '), null, 'blank query');
+assert.equal(pickItemByUrl(items, 'https://archive.ph/2026.05.01-120000/https://example.com/a')!.id, 3, 'an archive URL finds the item stored under its original');
 console.log('✅ URL identity: human form, normalisation, duplicate rule');
+
+// Several URLs for one article (a note's `source` plus its `alt-source`).
+const multi = [
+  { id: 10, url: 'https://forum-bots.effectivealtruism.org/posts/p/crosspost', is_archived: false, created_at: '2026-02-01T00:00:00Z' },
+  { id: 11, url: 'https://archive.is/2026.05.01-120000/https://www.wsj.com/paywalled', is_archived: false, created_at: '2026-02-02T00:00:00Z' },
+  { id: 12, url: 'https://example.com/plain', is_archived: false, created_at: '2026-02-03T00:00:00Z' },
+];
+// The crosspost case: the vault filed it under Substack, Wallacast has the EA Forum copy.
+assert.equal(
+  pickItemByUrls(multi, ['https://author.substack.com/p/crosspost', 'https://forum.effectivealtruism.org/posts/p/crosspost'])!.item.id,
+  10,
+  'the second URL finds the item when the first does not'
+);
+// The archive case: the note keeps the real article in `source` and the mirror in `alt-source`.
+assert.equal(pickItemByUrls(multi, ['https://www.wsj.com/paywalled'])!.item.id, 11, 'the real article finds the stored mirror');
+assert.equal(
+  pickItemByUrls(multi, ['https://www.wsj.com/paywalled', 'https://archive.is/2026.05.01-120000/https://www.wsj.com/paywalled'])!.matchedUrl,
+  'https://www.wsj.com/paywalled',
+  'the first given URL wins and is reported back'
+);
+assert.equal(pickItemByUrls(multi, ['https://nowhere.example/x', 'https://example.com/plain'])!.item.id, 12);
+assert.equal(pickItemByUrls(multi, ['https://a.example/x', 'https://b.example/y']), null, 'no URL matches');
+assert.equal(pickItemByUrls(multi, []), null, 'no URLs given');
+console.log('✅ multi-URL lookup (source + alt-source)');
+
+// ---- 4b. archive mirrors: the original URL, and the two source properties ----------------
+const { archivedOriginalUrl, sourceUrls } = await import('../src/shared/format.ts');
+const { isArchiveMirrorUrl } = await import('../src/services/article-fetcher.ts');
+assert.equal(
+  archivedOriginalUrl('https://archive.ph/2026.05.01-120000/https://www.wsj.com/x?a=1'),
+  'https://www.wsj.com/x?a=1',
+  'the original keeps its own query string'
+);
+assert.equal(
+  archivedOriginalUrl('https://archive.is/newest/https%3A%2F%2Fwww.wsj.com%2Fx'),
+  'https://www.wsj.com/x',
+  'percent-encoded target decoded'
+);
+assert.equal(archivedOriginalUrl('https://archive.is/aBc12'), null, 'a short-code snapshot carries no original');
+assert.equal(archivedOriginalUrl('https://example.com/a'), null, 'not an archive host');
+assert.equal(archivedOriginalUrl('not a url'), null);
+assert.equal(archivedOriginalUrl(null), null);
+assert.equal(archivedOriginalUrl('https://archive.is/2026/https://archive.ph/xyz'), null, 'a snapshot of a snapshot is not unwrapped');
+// The two host lists must agree, they are maintained in two files.
+for (const host of ['archive.is', 'archive.ph', 'archive.today', 'archive.li', 'archive.vn', 'archive.fo', 'archive.md', 'www.archive.is']) {
+  assert.equal(
+    archivedOriginalUrl(`https://${host}/2026/https://x.example/a`),
+    'https://x.example/a',
+    `${host} recognised by shared/format.ts`
+  );
+  assert.ok(isArchiveMirrorUrl(`https://${host}/abc`), `${host} recognised by article-fetcher.ts`);
+}
+for (const host of ['example.com', 'archiveis.com', 'notarchive.is.example.com', 'web.archive.org']) {
+  assert.equal(archivedOriginalUrl(`https://${host}/2026/https://x.example/a`), null, `${host} is not an archive mirror here`);
+  assert.equal(isArchiveMirrorUrl(`https://${host}/abc`), false, `${host} is not an archive mirror in the fetcher either`);
+}
+assert.deepEqual(sourceUrls('https://example.com/a'), { source: 'https://example.com/a', altSource: null });
+assert.deepEqual(sourceUrls('https://forum-bots.effectivealtruism.org/posts/x'), {
+  source: 'https://forum.effectivealtruism.org/posts/x',
+  altSource: null,
+}, 'the EA mirror is still rewritten, and is not an alt-source');
+assert.deepEqual(sourceUrls('https://archive.ph/2026/https://www.wsj.com/x'), {
+  source: 'https://www.wsj.com/x',
+  altSource: 'https://archive.ph/2026/https://www.wsj.com/x',
+}, 'the real article becomes source, the mirror becomes alt-source');
+assert.deepEqual(sourceUrls('https://archive.is/aBc12'), { source: 'https://archive.is/aBc12', altSource: null }, 'an unrecoverable snapshot stays the source');
+assert.deepEqual(sourceUrls('wallacast://abc'), { source: null, altSource: null });
+assert.deepEqual(sourceUrls(null), { source: null, altSource: null });
+console.log('✅ archive originals and the source / alt-source pair');
 
 // ---- 5. read-token allow-list and token format ------------------------------------------
 const { isReadTokenAllowed, generateApiToken, isApiToken, hashApiToken } = await import('../src/services/api-tokens.ts');

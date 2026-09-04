@@ -101,6 +101,78 @@ export function displayUrl(url: string): string {
   return url.replace('forum-bots.effectivealtruism.org', 'forum.effectivealtruism.org');
 }
 
+// archive.is and its mirror domains, all serving the same rebuilt-page markup. Kept in step
+// with isArchiveMirrorUrl() in backend/src/services/article-fetcher.ts (a case in
+// backend/scripts/test-markdown-export.mts fails when the two lists disagree).
+const ARCHIVE_MIRROR_HOSTS = /(^|\.)archive\.(is|ph|today|li|vn|fo|md)$/i;
+
+/**
+ * The original article URL an archive.is-style address carries inside itself.
+ *
+ * These mirrors address a snapshot as `/<snapshot>/<original url>` (also `/newest/<url>`,
+ * and `?url=<url>` when submitting), so the real address is right there in the path:
+ * `https://archive.ph/2026.05.01-120000/https://www.wsj.com/x` gives `https://www.wsj.com/x`.
+ * Percent-encoded targets are decoded. A short-code snapshot (`https://archive.is/aBc12`)
+ * carries nothing to recover and returns null, and so does any non-archive URL.
+ */
+export function archivedOriginalUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!ARCHIVE_MIRROR_HOSTS.test(u.hostname)) return null;
+  const rest = u.pathname + u.search + u.hash;
+  let candidate = rest.match(/https?:\/\/.+/i)?.[0];
+  if (!candidate) {
+    const encoded = rest.match(/https?%3A%2F%2F.+/i)?.[0];
+    if (encoded) {
+      try {
+        candidate = decodeURIComponent(encoded);
+      } catch {
+        return null;
+      }
+    }
+  }
+  if (!candidate) return null;
+  try {
+    // A snapshot of a snapshot is not worth unwrapping further, and a target that does not
+    // parse is not an address we can hand to anyone.
+    const target = new URL(candidate);
+    if (ARCHIVE_MIRROR_HOSTS.test(target.hostname)) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+export interface SourceUrls {
+  /** The article's own address, what a note's `source` property holds. */
+  source: string | null;
+  /** A second address for the SAME article, what a note's `alt-source` property holds. */
+  altSource: string | null;
+}
+
+/**
+ * The URL properties an export writes for an item.
+ *
+ * Normally there is just `source`, the stored URL in its human form. When the stored URL is
+ * an archive.is-style mirror that names the original article (see archivedOriginalUrl), the
+ * two swap roles: the real article becomes `source` and the mirror becomes `alt-source`, so
+ * a vault note is filed under the address the article actually lives at while still
+ * recording the copy Wallacast read. Both are matched when an outside tool looks an item up
+ * by URL, so a note keeps resolving whichever of the two it carries. A synthetic
+ * `wallacast://` address (an item that never had a URL) yields neither.
+ */
+export function sourceUrls(url: string | null | undefined): SourceUrls {
+  if (!url || url.startsWith('wallacast://')) return { source: null, altSource: null };
+  const original = archivedOriginalUrl(url);
+  if (original) return { source: displayUrl(original), altSource: displayUrl(url) };
+  return { source: displayUrl(url), altSource: null };
+}
+
 // Split a summary into tweet paragraphs. Prefers blank-line separation (what the summarizer is
 // asked for), falling back to single newlines.
 export function toTweets(text: string): string[] {

@@ -60,6 +60,19 @@ console.log('----- EXPORT -----\n' + md + '\n------------------');
 
 assert.ok(md.startsWith('---\ntitle: "The \\"Quoted\\" Title: with a colon"\n'), 'title quoted/escaped');
 assert.ok(md.includes('source: "https://forum.effectivealtruism.org/posts/abc/some-post"'), 'human host in source');
+assert.ok(!md.includes('alt-source:'), 'an ordinary article gets no alt-source');
+
+// An item read through an archive mirror exports the real article as `source` and the
+// mirror as `alt-source`, and both survive the import round trip.
+const archived = contentToMarkdown(
+  { ...item, url: 'https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled' },
+  comments
+);
+assert.ok(archived.includes('source: "https://www.wsj.com/paywalled"'), 'real article as source');
+assert.ok(archived.includes('alt-source: "https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled"'), 'mirror as alt-source');
+const archivedFm = parseFrontmatter(archived);
+assert.equal(archivedFm!.meta.source, 'https://www.wsj.com/paywalled');
+assert.equal(archivedFm!.meta['alt-source'], 'https://archive.ph/2026.05.01-120000/https://www.wsj.com/paywalled', 'the hyphenated key parses');
 assert.ok(md.includes('\ntags:\n  - article\n  - ai-safety\n  - econ\n  - weirdchars\n'), 'tags list');
 assert.ok(md.includes('published: 2026-03-14'), 'published date');
 assert.ok(md.includes('description: "An HTML description with spaces"'), 'description cleaned');

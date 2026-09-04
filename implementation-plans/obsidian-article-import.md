@@ -1,6 +1,8 @@
 # Obsidian read access: a lean index, Copy content as an endpoint, read-only tokens
 
-Status: built on 2026-09-04 (branch `claude/obsidian-read-access`, stacked on `claude/wallabag-tag-sync`). Verified in Node with `backend/scripts/test-markdown-export.mts` and `frontend/scripts/test-migration-029.mjs`, not yet against a deployed instance. The Obsidian-side commands are still to be written in the vault.
+Status: built on 2026-09-04 (branch `claude/obsidian-read-access`, rebased onto main after PR #136 merged). Verified in Node with `backend/scripts/test-markdown-export.mts` and `frontend/scripts/test-migration-029.mjs`, not yet against a deployed instance. The Obsidian-side commands are still to be written in the vault.
+
+Two things arrived after the first build and are included: a bulk "Copy content (zip)" action in the library's selection bar, and `alt-source`, a second address per article that the URL lookup accepts (see the sections below).
 
 ## Why
 
@@ -51,7 +53,25 @@ ARCHITECTURE.md (Quick Reference rows, the three endpoints, the token section un
 For the contract, not for you to build. Both commands send `Authorization: Bearer wcr_...`.
 
 - **Wallacast inbox** calls `/index`, decides "already in Sources" by matching each item's `url` against the `source` property of the vault's source notes (same normalisation as above, applied in Obsidian), and writes the grouped table. Link names are the titles with the characters Obsidian forbids in file names taken out.
-- **Import from wallacast** finds a URL in the note (a bare URL line, or the `source` property of an already imported note), or, for an empty note created by clicking an inbox link, looks the note's name up in the inbox table to get the URL. Then `GET /markdown?url=...`, writes `markdown`, renames the note to `title`, moves it into Sources. A rerun in an imported note repeats the call and replaces the note.
+- **Import from wallacast** finds a URL in the note (a bare URL line, or the `source` property of an already imported note), or, for an empty note created by clicking an inbox link, looks the note's name up in the inbox table to get the URL. It sends the note's `source` AND its `alt-source` as repeated parameters, `GET /markdown?url=<source>&url=<alt-source>`, writes `markdown`, renames the note to `title`, moves it into Sources. A rerun in an imported note repeats the call and replaces the note.
+
+### `source` and `alt-source`
+
+One article can have two addresses, and a note may be filed under either:
+
+- a **crosspost** living on both the EA Forum and Substack, where the vault knows one address and Wallacast stores the other;
+- an **archive mirror**, where Wallacast read `archive.is/...` but the note should be filed under the real article.
+
+So the note carries `source` (the article's own address) and optionally `alt-source` (the second one), and both sides handle the pair:
+
+- `GET /markdown` takes a repeatable `url` parameter (max 10), tries them in the given order, and returns `matched_url` saying which one resolved. Send `source` first so it wins when both match.
+- `GET /index` returns `url` and `alt_url` per item, so the inbox can compare a note against either.
+- Copy content fills the pair in automatically **for archive mirrors only**: an address of the form `https://archive.ph/<snapshot>/https://real.url` yields `source: https://real.url` and `alt-source: <the mirror>`. A short-code snapshot (`archive.is/aBc12`) names no original and stays the `source`, so that one is still a manual edit in the vault. Matching resolves archive addresses the same way, so a note whose `source` is the real article finds the item even before anyone writes an `alt-source`.
+- A **crosspost's** second address cannot be filled in automatically: Wallacast stores one URL per item and keeps no canonical or crosspost link. Write `alt-source` by hand in the vault; the lookup then finds the item from either side.
+
+### A third command: save images to the vault
+
+Wanted, and entirely vault-side, so nothing here blocks it. An imported note's images are remote `![](https://...)` links, which break when the source disappears or the phone is offline. The command walks the note's image links, downloads each with Obsidian's `requestUrl` into the attachments folder, names them after the note plus an index, and rewrites the link to the vault path. No Wallacast change is needed for public images. If some host refuses the download (hotlink protection keyed on `Referer`, or a login wall), the fallback is a small read-only image-proxy endpoint here, which would then join the read-token allow-list. Do not build that until an image actually fails.
 
 So the backend contract is: the index is lean and complete, the markdown endpoint is idempotent and finds items by URL with the duplicate rule above, the markdown stands on its own (no internal ids, the note keeps `source`).
 
@@ -60,6 +80,7 @@ So the backend contract is: the index is lean and complete, the markdown endpoin
 ```
 curl "$API/content/index" -H "Authorization: Bearer wcr_..."
 curl "$API/content/markdown?url=https://forum.effectivealtruism.org/posts/..." -H "Authorization: Bearer wcr_..."
+curl "$API/content/markdown?url=<source>&url=<alt-source>" -H "Authorization: Bearer wcr_..."
 curl -X DELETE "$API/content/123" -H "Authorization: Bearer wcr_..."
 ```
 

@@ -25,7 +25,7 @@ import { marked } from 'marked';
 // byte-identical copy of this file under Node (see the HTML parser note below). Node's
 // module loader needs the extension, Vite and TypeScript resolve it to the `.ts` file.
 import type { ContentItem, Comment } from './types.js';
-import { cleanHtml, displayUrl, formatDuration } from './format.js';
+import { cleanHtml, formatDuration, sourceUrls } from './format.js';
 import { obsidianTag, typeTagFor } from './tags.js';
 
 // The HTML parser behind every conversion. In the browser this is the built-in DOMParser.
@@ -521,9 +521,13 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   if (item.type === 'podcast_episode' && item.podcast_show_name) {
     out.push(`show: ${yamlStr(item.podcast_show_name)}`);
   }
-  if (item.url && !item.url.startsWith('wallacast://')) {
-    out.push(`source: ${yamlStr(displayUrl(item.url))}`);
-  }
+  // `source` is the article's own address; `alt-source` is a second address for the same
+  // article, today the archive.is mirror Wallacast actually read, with the real URL promoted
+  // to `source` (see sourceUrls in format.ts). An outside tool looking an item up by URL
+  // matches on either, so a note resolves whichever of the two it happens to carry.
+  const { source, altSource } = sourceUrls(item.url);
+  if (source) out.push(`source: ${yamlStr(source)}`);
+  if (altSource) out.push(`alt-source: ${yamlStr(altSource)}`);
   // A podcast's direct audio file (the RSS enclosure URL). The stored audio_url for
   // podcasts IS that public CDN link (the token decorator only touches our own
   // /api/content/ URLs), but guard on http(s) anyway so a local path can never leak.

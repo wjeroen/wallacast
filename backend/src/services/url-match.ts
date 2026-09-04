@@ -1,4 +1,5 @@
 import { EA_FORUM_HOST, EA_FORUM_BOTS_HOST, normalizeEAForumUrl } from './article-fetcher.js';
+import { archivedOriginalUrl } from '../shared/format.js';
 
 /**
  * URL identity for outside readers. Seen from an Obsidian vault, an item IS its URL (the
@@ -30,11 +31,14 @@ const DROPPED_QUERY_PARAMS = new Set(['fbclid', 'ref']);
  */
 export function normalizeUrlForMatch(raw: string): string {
   const human = (humanUrl(raw) ?? raw).trim();
+  // An archive.is-style mirror that names its original compares AS that original, so the
+  // real article address and the mirror Wallacast read are the same item to a lookup.
+  const resolved = archivedOriginalUrl(human) ?? human;
   let u: URL;
   try {
-    u = new URL(human);
+    u = new URL(resolved);
   } catch {
-    return human.toLowerCase().replace(/\/+$/, '');
+    return resolved.toLowerCase().replace(/\/+$/, '');
   }
   const host = u.hostname.toLowerCase().replace(/^www\./, '');
   const path = u.pathname.replace(/\/+$/, '');
@@ -78,4 +82,26 @@ export function pickItemByUrl<T extends UrlCandidate>(candidates: readonly T[], 
     if (a.is_archived !== b.is_archived) return a.is_archived ? 1 : -1;
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   })[0];
+}
+
+/**
+ * The library item any of several URLs names, for a note that carries more than one address
+ * for the same article (`source` plus `alt-source`: a crosspost's other home, or the archive
+ * mirror behind a paywalled original).
+ *
+ * The given order is the preference: the first URL that finds anything wins, so a note's
+ * `source` beats its `alt-source` even when only the second matches exactly. Within one URL
+ * the usual rules apply (exact before normalised, then not-archived before newest).
+ * Returns the item together with the URL that found it, so the caller can say which
+ * address resolved.
+ */
+export function pickItemByUrls<T extends UrlCandidate>(
+  candidates: readonly T[],
+  queryUrls: readonly string[]
+): { item: T; matchedUrl: string } | null {
+  for (const url of queryUrls) {
+    const item = pickItemByUrl(candidates, url);
+    if (item) return { item, matchedUrl: url.trim() };
+  }
+  return null;
 }

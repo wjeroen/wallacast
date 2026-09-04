@@ -18,7 +18,8 @@ import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
-import { humanUrl, pickItemByUrl } from '../services/url-match.js';
+import { pickItemByUrls } from '../services/url-match.js';
+import { sourceUrls } from '../shared/format.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -130,9 +131,9 @@ router.post('/status', async (req, res) => {
 // and filters on its side. As lean as POST /status on purpose: GET / ships each item's full
 // plain text plus tts_chunks and transcript_words, far too heavy for a phone on every inbox
 // refresh (the 80GB-incident class of problem). Never content, html_content, comments,
-// transcript, transcript_words, tts_chunks, or content_alignment here. `url` is the human
-// URL, the form Copy content writes into `source` (null for synthetic wallacast:// ones),
-// and `description` is plain text cut to 300 characters.
+// transcript, transcript_words, tts_chunks, or content_alignment here. `url` and `alt_url`
+// are exactly what Copy content writes into `source` and `alt-source` (null for synthetic
+// wallacast:// ones), and `description` is plain text cut to 300 characters.
 // Defined before GET /:id so 'index' is never read as an id.
 router.get('/index', async (req, res) => {
   try {
@@ -146,11 +147,15 @@ router.get('/index', async (req, res) => {
         ORDER BY created_at DESC`,
       [req.user!.userId]
     );
-    res.json(result.rows.map((row) => ({
-      ...row,
-      url: humanUrl(row.url),
-      description: shortDescription(row.description),
-    })));
+    res.json(result.rows.map((row) => {
+      const { source, altSource } = sourceUrls(row.url);
+      return {
+        ...row,
+        url: source,
+        alt_url: altSource,
+        description: shortDescription(row.description),
+      };
+    }));
   } catch (error) {
     console.error('Error building content index:', error);
     res.status(500).json({ error: 'Failed to build content index' });
@@ -160,7 +165,7 @@ router.get('/index', async (req, res) => {
 // "Copy content" as JSON: the item's small fields plus `markdown`, rendered server-side with
 // the caller's Copy & export settings, byte-identical to the Copy content button (see
 // services/markdown-export.ts). Shared by the two Markdown routes below.
-async function sendItemMarkdown(res: express.Response, userId: number, id: number) {
+async function sendItemMarkdown(res: express.Response, userId: number, id: number, matchedUrl?: string) {
   const result = await query(
     `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE id = $1 AND user_id = $2`,
     [id, userId]
@@ -170,12 +175,17 @@ async function sendItemMarkdown(res: express.Response, userId: number, id: numbe
   }
   const row = result.rows[0];
   const opts = await loadCopyContentOptions(userId);
+  const { source, altSource } = sourceUrls(row.url);
   res.json({
     id: row.id,
     title: row.title,
     author: row.author,
     published_at: row.published_at,
-    url: humanUrl(row.url),
+    url: source,
+    alt_url: altSource,
+    // Which of the given URLs found this item, so the caller can tell whether the note's
+    // `source` or its `alt-source` resolved. Absent on the by-id route.
+    ...(matchedUrl ? { matched_url: matchedUrl } : {}),
     tags: row.tags || [],
     is_starred: row.is_starred,
     is_archived: row.is_archived,
@@ -187,22 +197,37 @@ async function sendItemMarkdown(res: express.Response, userId: number, id: numbe
 // GET /markdown?url=... - The Copy content Markdown of the library item with this URL. The
 // vault identifies an item by URL, never by id. Exact match first, then the normalised
 // forms (see services/url-match.ts). An article added twice resolves to the copy that is
-// not archived, then the newest. Defined before GET /:id so 'markdown' is never read as an id.
+// not archived, then the newest.
+//
+// `url` may be repeated (`?url=<source>&url=<alt-source>`, at most 10). A note can hold two
+// addresses for one article: a crosspost that lives on both the EA Forum and Substack, or a
+// real article in `source` with the archive mirror Wallacast read in `alt-source`. The
+// URLs are tried in the given order, so the note's `source` wins when both find something.
+// Defined before GET /:id so 'markdown' is never read as an id.
 router.get('/markdown', async (req, res) => {
   try {
-    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
-    if (!url) {
+    const raw = req.query.url;
+    const urls = (Array.isArray(raw) ? raw : [raw])
+      .filter((v): v is string => typeof v === 'string')
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    if (urls.length === 0) {
       return res.status(400).json({ error: 'A url query parameter is required' });
     }
     const candidates = await query(
       'SELECT id, url, is_archived, created_at FROM content_items WHERE user_id = $1 AND url IS NOT NULL',
       [req.user!.userId]
     );
-    const match = pickItemByUrl(candidates.rows, url);
+    const match = pickItemByUrls(candidates.rows, urls);
     if (!match) {
-      return res.status(404).json({ error: 'No item in your library has this URL' });
+      return res.status(404).json({
+        error: urls.length === 1
+          ? 'No item in your library has this URL'
+          : 'No item in your library has any of these URLs',
+      });
     }
-    await sendItemMarkdown(res, req.user!.userId, match.id);
+    await sendItemMarkdown(res, req.user!.userId, match.item.id, match.matchedUrl);
   } catch (error) {
     console.error('Error rendering content markdown by URL:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
