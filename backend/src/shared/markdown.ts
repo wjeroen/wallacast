@@ -196,6 +196,32 @@ function preprocessForExport(doc: Document): string[] {
     table.replaceWith(p);
   });
 
+  // Distill-style articles (alignment.anthropic.com) write a footnote as an inline custom
+  // element, <d-footnote>the whole note</d-footnote>, with no marker and no anchor
+  // anywhere. Turndown does not know the tag, so it unwraps it and the note reads as part
+  // of the sentence it interrupts. Rewrite each one into the marker-plus-definition-list
+  // shape extractFootnotes already understands, which then renumbers them 1..N.
+  const inlineFootnotes = Array.from(doc.querySelectorAll('d-footnote'));
+  if (inlineFootnotes.length > 0) {
+    const list = doc.createElement('ol');
+    list.className = 'footnotes';
+    inlineFootnotes.forEach((note, i) => {
+      const id = `fn-inline-${i + 1}`;
+      const body = note.innerHTML;
+      const sup = doc.createElement('sup');
+      const link = doc.createElement('a');
+      link.setAttribute('href', `#${id}`);
+      link.textContent = `[${i + 1}]`;
+      sup.appendChild(link);
+      note.replaceWith(sup);
+      const li = doc.createElement('li');
+      li.id = id;
+      li.innerHTML = body;
+      list.appendChild(li);
+    });
+    doc.body.appendChild(list);
+  }
+
   doc.querySelectorAll('pre').forEach((pre) => {
     if (pre.querySelector('code')) return;
     const code = doc.createElement('code');
@@ -313,8 +339,24 @@ function extractFootnotes(doc: Document): ExtractedFootnote[] {
   const parents = new Set<Element>();
 
   for (const { id, n } of order) {
-    const def = doc.getElementById(id);
+    let def = doc.getElementById(id);
     if (!def) continue;
+    // Substack hangs the id on the little number link, not on the note itself:
+    //   <div class="footnote"><a id="footnote-1" href="#footnote-anchor-1">1</a>
+    //     <div class="footnote-content">…the actual note…</div></div>
+    // so the element the id names holds nothing but the digit, and the note would be left
+    // behind in the body as a loose paragraph. Step up to the block that holds it. Only an
+    // anchor that links BACK to the marker is treated this way, which is what makes this
+    // safe: LessWrong/EA Forum put the id on the <li> that holds the text, and the section
+    // markdownToHtml rebuilds puts it on the <li> too, so neither of those moves.
+    if (
+      def.tagName === 'A' &&
+      /^#(footnote-anchor|fnref)/i.test(def.getAttribute('href') || '') &&
+      def.parentElement &&
+      def.parentElement.tagName !== 'BODY'
+    ) {
+      def = def.parentElement;
+    }
     // Drop back-reference links (and their <sup> wrappers).
     def.querySelectorAll('a[href^="#fnref"], a[href^="#footnote-anchor"]').forEach((back) => {
       const sup = back.closest('sup');

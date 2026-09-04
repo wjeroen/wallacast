@@ -206,6 +206,59 @@ assert.ok(pod.includes('show: "The Show"') && pod.includes('duration: "2m"'), 's
 assert.ok(pod.includes('**[00:00]** Welcome to the show. Still minute one.\n\n**[01:02]** Into minute two.'), 'timestamped transcript');
 console.log('✅ rendered Markdown spot checks pass');
 
+// ---- 2b. every footnote shape survives ---------------------------------------------------
+// Sites mark footnotes up in three different ways, and all three must come out as real
+// Markdown definitions. Checked through BOTH copies, because this is exactly the kind of
+// bug that hides behind a fixture covering only one shape.
+const sharedMarkdown = await import('../src/shared/markdown.ts');
+
+const FOOTNOTE_SHAPES: Array<[string, string, RegExp[]]> = [
+  [
+    // Substack hangs the id on the little number link, not on the note. Reading the id
+    // element directly gives the digit "1" and leaves the note loose in the body.
+    'substack',
+    '<p>A claim<a href="#footnote-1" id="footnote-anchor-1" class="footnote-anchor">1</a>.</p>' +
+    '<div data-component-name="FootnoteToDOM" class="footnote">' +
+    '<a id="footnote-1" href="#footnote-anchor-1" contenteditable="false" class="footnote-number">1</a>' +
+    '<div class="footnote-content"><p><span> Compaction summaries are notes to a future self.</span></p></div>' +
+    '</div>',
+    [/^A claim\[\^1\]\.$/m, /^\[\^1\]: Compaction summaries are notes to a future self\.$/m],
+  ],
+  [
+    // LessWrong / EA Forum put the id on the <li> that holds the text.
+    'lesswrong',
+    '<p>A claim<sup><a href="#fn1">[1]</a></sup>.</p>' +
+    '<ol class="footnotes"><li id="fn1">First note body. <a href="#fnref1">^</a></li></ol>',
+    [/^A claim\[\^1\]\.$/m, /^\[\^1\]: First note body\.$/m],
+  ],
+  [
+    // Distill-style articles (alignment.anthropic.com) have no marker and no anchor at all,
+    // just an inline custom element. Turndown unwraps unknown tags, so without help the note
+    // reads as part of the sentence it interrupts.
+    'd-footnote',
+    '<p>We fixed the environments<d-footnote>All of them have since been removed.</d-footnote>.</p>',
+    [/^We fixed the environments\[\^1\]\.$/m, /^\[\^1\]: All of them have since been removed\.$/m],
+  ],
+  [
+    // What markdownToHtml rebuilds after an edit in the app, so an edited item still exports.
+    'canonical',
+    '<p>A claim<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">[1]</a></sup>.</p>' +
+    '<section class="footnotes"><hr><ol><li id="fn-1">Rebuilt body. <a href="#fnref-1" class="footnote-backref">↩</a></li></ol></section>',
+    [/^A claim\[\^1\]\.$/m, /^\[\^1\]: Rebuilt body\.$/m],
+  ],
+];
+
+for (const [name, html, expectations] of FOOTNOTE_SHAPES) {
+  const viaFrontend = frontend.htmlToMarkdown(html);
+  const viaBackend = sharedMarkdown.htmlToMarkdown(html);
+  assert.equal(viaBackend, viaFrontend, `${name}: the two copies disagree`);
+  for (const re of expectations) {
+    assert.match(viaBackend, re, `${name}: ${re}`);
+  }
+  assert.ok(!/^\[\^\d+\]: \d+$/m.test(viaBackend), `${name}: a definition is just a digit`);
+}
+console.log(`✅ ${FOOTNOTE_SHAPES.length} footnote shapes convert correctly in both copies`);
+
 // ---- 3. copy options and the index description -------------------------------------------
 assert.deepEqual(backend.copyOptionsFromSettings({}), {
   includeSummary: false, includeCommentSummary: true, summaryCodeLabel: '', includeComments: true,

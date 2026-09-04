@@ -252,6 +252,22 @@ assert.ok(
 const codeMd = htmlToMarkdown('<pre><code class="language-js">const a = 1;</code></pre>');
 assert.ok(codeMd.includes('```js\nconst a = 1;\n```'), 'pre>code stays a fenced block with language');
 
+// Substack hangs the footnote id on the little number link, not on the note itself, so
+// reading that element gives the digit and leaves the note loose in the body.
+const substackFn = htmlToMarkdown(
+  '<p>A claim<a href="#footnote-1" id="footnote-anchor-1" class="footnote-anchor">1</a>.</p>' +
+  '<div data-component-name="FootnoteToDOM" class="footnote">' +
+  '<a id="footnote-1" href="#footnote-anchor-1" class="footnote-number">1</a>' +
+  '<div class="footnote-content"><p><span> Notes to a future self.</span></p></div></div>'
+);
+assert.match(substackFn, /^A claim\[\^1\]\.$/m, 'substack inline marker');
+assert.match(substackFn, /^\[\^1\]: Notes to a future self\.$/m, 'substack definition carries the note, not the digit');
+
+// Distill-style articles have no marker and no anchor, just an inline custom element.
+const distillFn = htmlToMarkdown('<p>We fixed them<d-footnote>All have since been removed.</d-footnote>.</p>');
+assert.match(distillFn, /^We fixed them\[\^1\]\.$/m, 'a marker is created where the element sat');
+assert.match(distillFn, /^\[\^1\]: All have since been removed\.$/m, 'and the note becomes a real definition');
+
 // A small captioned figure is still kept as a raw HTML island (the rule it was built for).
 const smallFig = '<figure><img src="https://x.y/i.png"><figcaption>A cat</figcaption></figure>';
 assert.ok(htmlToMarkdown(smallFig).includes('<figure>'), 'small captioned figure stays raw');
