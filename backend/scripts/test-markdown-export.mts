@@ -240,6 +240,21 @@ const FOOTNOTE_SHAPES: Array<[string, string, RegExp[]]> = [
     [/^We fixed the environments\[\^1\]\.$/m, /^\[\^1\]: All of them have since been removed\.$/m],
   ],
   [
+    // Tufte-style sidenotes (collusion.wiki) keep the note inside the sentence behind an
+    // empty number label and a hidden checkbox. Items stored before the fetcher learned to
+    // rewrite them still look like this, so the converter has to cope on its own.
+    'tufte sidenote',
+    '<p>These AIs colluded.' +
+    '<label for="fn-intro-9" class="margin-toggle sidenote-number" data-n="1"></label>' +
+    '<input type="checkbox" id="fn-intro-9" class="margin-toggle">' +
+    '<span class="sidenote" data-n="1">However, we believe this is distinct.</span>' +
+    ' And they kept going.</p>',
+    [
+      /^These AIs colluded\.\[\^1\] And they kept going\.$/m,
+      /^\[\^1\]: However, we believe this is distinct\.$/m,
+    ],
+  ],
+  [
     // What markdownToHtml rebuilds after an edit in the app, so an edited item still exports.
     'canonical',
     '<p>A claim<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">[1]</a></sup>.</p>' +

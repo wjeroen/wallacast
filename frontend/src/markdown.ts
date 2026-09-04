@@ -236,18 +236,36 @@ function preprocessForExport(doc: Document): string[] {
     table.replaceWith(p);
   });
 
-  // Distill-style articles (alignment.anthropic.com) write a footnote as an inline custom
-  // element, <d-footnote>the whole note</d-footnote>, with no marker and no anchor
-  // anywhere. Turndown does not know the tag, so it unwraps it and the note reads as part
-  // of the sentence it interrupts. Rewrite each one into the marker-plus-definition-list
-  // shape extractFootnotes already understands, which then renumbers them 1..N.
-  const inlineFootnotes = Array.from(doc.querySelectorAll('d-footnote'));
+  // Some sites keep the whole footnote inside the sentence instead of linking to one at the
+  // end of the article, and lean on their own stylesheet to hide it until asked:
+  //   - Distill-style (alignment.anthropic.com): <d-footnote>the note</d-footnote>
+  //   - Tufte-style sidenotes (collusion.wiki): an empty <label class="margin-toggle
+  //     sidenote-number"> whose number is drawn by CSS, a hidden <input class="margin-toggle">
+  //     that reveals it on a phone, then <span class="sidenote">the note</span>
+  // Neither tag means anything to turndown, so it unwraps them and the note reads as part of
+  // the sentence it interrupts, with no marker at all. Rewrite each into the
+  // marker-plus-definition-list shape extractFootnotes already understands, which then
+  // renumbers them 1..N. (Articles fetched after this landed already arrive with a real
+  // footnotes section, see normalizeSidenotes in the backend's article-fetcher; this repairs
+  // the ones stored before that, with no refetch.)
+  const inlineFootnotes = Array.from(doc.querySelectorAll('d-footnote, span.sidenote, span.marginnote'));
   if (inlineFootnotes.length > 0) {
     const list = doc.createElement('ol');
     list.className = 'footnotes';
     inlineFootnotes.forEach((note, i) => {
       const id = `fn-inline-${i + 1}`;
       const body = note.innerHTML;
+      // A Tufte note hangs off a toggle pair sitting just before it, both carrying no text.
+      let prev = note.previousElementSibling;
+      while (
+        prev &&
+        (prev.nodeName === 'INPUT' || prev.nodeName === 'LABEL') &&
+        (prev.getAttribute('class') || '').includes('margin-toggle')
+      ) {
+        const before = prev.previousElementSibling;
+        prev.remove();
+        prev = before;
+      }
       const sup = doc.createElement('sup');
       const link = doc.createElement('a');
       link.setAttribute('href', `#${id}`);

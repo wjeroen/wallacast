@@ -285,6 +285,18 @@ const substackFn = htmlToMarkdown(
 assert.match(substackFn, /^A claim\[\^1\]\.$/m, 'substack inline marker');
 assert.match(substackFn, /^\[\^1\]: Notes to a future self\.$/m, 'substack definition carries the note, not the digit');
 
+// Tufte-style sidenotes keep the note inside the sentence behind an empty number label and a
+// hidden checkbox, so an item stored before the fetcher learned to rewrite them still has it.
+const sidenote = htmlToMarkdown(
+  '<p>These AIs colluded.' +
+  '<label for="fn-9" class="margin-toggle sidenote-number" data-n="1"></label>' +
+  '<input type="checkbox" id="fn-9" class="margin-toggle">' +
+  '<span class="sidenote" data-n="1">However, we believe this is distinct.</span>' +
+  ' And they kept going.</p>'
+);
+assert.match(sidenote, /^These AIs colluded\.\[\^1\] And they kept going\.$/m, 'a marker replaces the note in the sentence');
+assert.match(sidenote, /^\[\^1\]: However, we believe this is distinct\.$/m, 'the note becomes a real definition');
+
 // Distill-style articles have no marker and no anchor, just an inline custom element.
 const distillFn = htmlToMarkdown('<p>We fixed them<d-footnote>All have since been removed.</d-footnote>.</p>');
 assert.match(distillFn, /^We fixed them\[\^1\]\.$/m, 'a marker is created where the element sat');

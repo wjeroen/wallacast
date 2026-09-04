@@ -941,6 +941,81 @@ export function isArchiveMirrorUrl(url: string): boolean {
 }
 
 /**
+ * Tufte-style sidenotes become an ordinary footnote section.
+ *
+ * Sites built on Tufte CSS (collusion.wiki, many research blogs) put the whole note inside
+ * the sentence and lean on their own stylesheet to place it:
+ *
+ *   <label for="fn-1" class="margin-toggle sidenote-number" data-n="1"></label>
+ *   <input type="checkbox" id="fn-1" class="margin-toggle">
+ *   <span class="sidenote" data-n="1">the note</span>
+ *
+ * The label is EMPTY (its number is drawn by CSS from data-n) and the checkbox only exists so
+ * a phone can toggle the note. We keep the body but not the site's stylesheet, so all of that
+ * arrived as bare checkboxes scattered through the text, with the note itself spliced into the
+ * middle of the sentence and no marker anywhere. The narration read it that way too.
+ *
+ * Each note becomes the canonical shape the reader and the Markdown export already handle: a
+ * numbered `<sup>` marker where the note sat, and the note in a `<section class="footnotes">`
+ * at the end with a back-link. Notes are renumbered 1..N in document order, so a Tufte dagger
+ * or asterisk becomes a number like every other footnote.
+ */
+export function normalizeSidenotes(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  const notes = Array.from(root.querySelectorAll('span.sidenote, span.marginnote'));
+  if (notes.length === 0) return;
+
+  const list = doc.createElement('ol');
+
+  notes.forEach((note, i) => {
+    const n = i + 1;
+
+    // The toggle pair sits immediately before the note and carries no text of its own.
+    let prev = note.previousElementSibling;
+    while (
+      prev &&
+      (prev.nodeName === 'INPUT' || prev.nodeName === 'LABEL') &&
+      (prev.getAttribute('class') || '').includes('margin-toggle')
+    ) {
+      const before = prev.previousElementSibling;
+      prev.remove();
+      prev = before;
+    }
+
+    const body = note.innerHTML;
+
+    const sup = doc.createElement('sup');
+    sup.className = 'footnote-ref';
+    sup.id = `fnref-side-${n}`;
+    const link = doc.createElement('a');
+    link.setAttribute('href', `#fn-side-${n}`);
+    link.textContent = `[${n}]`;
+    sup.appendChild(link);
+    note.replaceWith(sup);
+
+    const li = doc.createElement('li');
+    li.id = `fn-side-${n}`;
+    li.innerHTML = body;
+    li.appendChild(doc.createTextNode(' '));
+    const back = doc.createElement('a');
+    back.setAttribute('href', `#fnref-side-${n}`);
+    back.className = 'footnote-backref';
+    back.textContent = '↩';
+    li.appendChild(back);
+    list.appendChild(li);
+  });
+
+  const section = doc.createElement('section');
+  section.className = 'footnotes';
+  section.appendChild(doc.createElement('hr'));
+  section.appendChild(list);
+  root.appendChild(section);
+
+  console.log(`[Fetcher] Converted ${notes.length} sidenote(s) into a footnotes section`);
+}
+
+/**
  * Rebuild paragraphs in an archive.is-style mirror.
  *
  * The mirror keeps the words but throws away the structure: every block becomes a generic
@@ -1135,6 +1210,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       restoreArchivedParagraphs(contentEl);
     }
 
+    // Tufte sidenotes hold the note inside the sentence and hide it with the site's own CSS,
+    // which we do not keep. Turn them into a real footnote section before the cleanup below
+    // strips the toggles it leaves behind.
+    if (contentEl) normalizeSidenotes(contentEl);
+
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
     if (contentEl) {
       // Remove social interaction bars (like/comment/share buttons)
@@ -1289,6 +1369,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
       // Remove all remaining forms (membership, donation, etc.). We already extracted email forms above.
       contentEl.querySelectorAll('form').forEach(el => el.remove());
+
+      // Interactive controls are page furniture, never article text, and without the site's
+      // stylesheet they render as bare widgets in the reader (this page's carousel buttons,
+      // and any collapsible built on the checkbox hack). Tufte sidenote toggles are already
+      // gone by now, normalizeSidenotes consumed them along with their notes.
+      contentEl.querySelectorAll('input, button, select, textarea').forEach(el => el.remove());
 
       // Apply Substack-specific cleanup (subscribe widgets, navbar, footer, etc.)
       if (isSubstack) {

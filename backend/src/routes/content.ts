@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -794,6 +794,9 @@ router.post('/', async (req, res) => {
       // table scaffolding just like the URL fetcher does (no-op for normal content).
       flattenEmailTables(doc.body);
       normalizeTweetEmbeds(doc.body);
+      // A saved page pasted in can carry Tufte sidenotes too, and without the site's own
+      // stylesheet they would render as bare checkboxes with the note spliced into the text.
+      normalizeSidenotes(doc.body);
 
       htmlContent = doc.body.innerHTML;
     }

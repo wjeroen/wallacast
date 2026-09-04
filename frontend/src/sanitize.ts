@@ -14,10 +14,17 @@
 
 import DOMPurify from 'dompurify';
 
+// Interactive form controls are page furniture, never article text, and DOMPurify allows them
+// by default. Without the site's own stylesheet they render as bare widgets in the reader:
+// collusion.wiki hides 66 checkboxes behind its Tufte sidenote styling, and every one of them
+// showed up as a checkbox scattered through the text. Dropping the tags keeps any text inside
+// them (DOMPurify's KEEP_CONTENT), so a labelled button loses its box and not its words.
+const FORBID_TAGS = ['input', 'button', 'select', 'textarea', 'option', 'optgroup'];
+
 // Strict: for third-party COMMENTS and podcast descriptions, which never need a stylesheet.
 export function safeHtml(dirty: string | null | undefined): string {
   if (!dirty) return '';
-  return DOMPurify.sanitize(dirty, { ADD_ATTR: ['target'] });
+  return DOMPurify.sanitize(dirty, { ADD_ATTR: ['target'], FORBID_TAGS });
 }
 
 // Rich: for ARTICLE BODIES. Same as safeHtml but also keeps <style>, because LessWrong /
@@ -25,5 +32,5 @@ export function safeHtml(dirty: string | null | undefined): string {
 // still sanitizes the CSS inside that <style> (it strips expression(), url(javascript:), etc.).
 export function safeArticleHtml(dirty: string | null | undefined): string {
   if (!dirty) return '';
-  return DOMPurify.sanitize(dirty, { ADD_TAGS: ['style'], ADD_ATTR: ['target'] });
+  return DOMPurify.sanitize(dirty, { ADD_TAGS: ['style'], ADD_ATTR: ['target'], FORBID_TAGS });
 }
