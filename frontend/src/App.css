@@ -166,14 +166,23 @@
   }
 }
 
-@media (max-width: 740px) {
+/* The toolbar labels (Select, Newest, Tags) only appear once the window is wide enough
+   for the whole row: 5 buttons plus the 4 type chips. Measured at 874px with labels on
+   and small counts, so the cut-off sits at 950px to leave room for a four-digit item
+   count on the active chip. They used to appear at 740px, far too early, which forced the
+   chip strip into a sideways scroll on every mid-sized window. */
+@media (max-width: 950px) {
   .filter-label {
     display: none;
   }
 
+  /* Without their labels the toolbar buttons are square icon buttons */
   .filter-buttons button {
     padding: 0.5rem;
   }
+}
+
+@media (max-width: 740px) {
 
   /* Type pill collapses to icon-only on narrow screens (same as .filter-label) */
   .type-label {
@@ -758,10 +767,39 @@
 .filter-buttons {
   display: flex;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  /* One row here, where the chip strip scrolls sideways if it must (see
+     .filter-chips-scroll). The row count is NEVER left to the content: with
+     plain wrapping on, the chips dropped to a second row at some window widths
+     and jumped back at others, because the row was only a few pixels too wide
+     in that band. Below 740px a media query (after .filter-chips-scroll)
+     turns the two row wrappers into real rows at EVERY width instead. */
+  flex-wrap: nowrap;
   align-items: stretch;
   min-width: 0;
   flex: 1;
+}
+
+/* The toolbar's two row wrappers dissolve on wide screens: every control sits
+   on the parent's single flex row exactly as if the wrappers were not there. */
+.toolbar-search-row,
+.toolbar-filter-row {
+  display: contents;
+}
+
+/* THE search box, at every width. On desktop it rests as .desk-search-btn
+   (a count button) and morphs into this field when pressed, at full width
+   right away, so the toolbar reflows exactly once per open and never per
+   keystroke. It stays open while a query is active, collapsing would hide
+   the user's own text. On narrow desktop windows the chip strip absorbs the
+   width by scrolling. */
+.library-search.toolbar-inline-search {
+  display: none;
+}
+
+.library-search.toolbar-inline-search.open {
+  display: flex;
+  width: min(24rem, 34vw);
+  flex-shrink: 0;
 }
 
 /* The type chips live in their own strip so only THEY scroll on small
@@ -770,8 +808,64 @@
 .filter-chips-scroll {
   display: flex;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  /* Only THIS strip scrolls when the toolbar runs out of room. It holds no dropdown, so
+     the overflow cannot clip a menu (the funnel and tag menus live outside it). */
+  flex-wrap: nowrap;
+  overflow-x: auto;
   min-width: 0;
+  /* Hairline between the two halves of the toolbar: the buttons on the left act on the
+     library, the chips on the right choose what it shows. */
+  border-left: 1px solid var(--bg-raised);
+  padding-left: 0.625rem;
+  margin-left: 0.125rem;
+}
+
+/* Below 740px the toolbar splits into two even full-width rows: the permanent
+   search box with Select and Sort on top, then every filter (funnel, tags,
+   the hairline divider, and the type chips) below. flex-basis 100% on the
+   wrappers forces the break at every width below the cut-off, so changing
+   counts or facet icons can never flip the layout. The chip strip keeps its
+   sideways-scroll fallback for extremes (several facet icons on the funnel),
+   normally everything fits. The 740 cut-off is measured, not arbitrary: the
+   one-row rest state needs ~615px of viewport with typical state and ~715px
+   in the worst case (five facet icons on the funnel plus a four-digit count
+   on the search button), so 740 covers the worst case with margin. */
+@media (max-width: 740px) {
+  .filter-buttons {
+    flex-wrap: wrap;
+  }
+  .toolbar-search-row,
+  .toolbar-filter-row {
+    display: flex;
+    flex-basis: 100%;
+    gap: 0.5rem;
+    align-items: stretch;
+    min-width: 0;
+  }
+  /* Phones: the field is simply always there, full row, open or not, and
+     the desktop count button never shows (the count lives in the field's
+     placeholder). Selectors carry .filter-buttons to outweigh the desktop
+     rules and the generic button display rule. */
+  .filter-buttons .library-search.toolbar-inline-search {
+    display: flex;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+  .filter-buttons .desk-search-btn {
+    display: none;
+  }
+}
+
+/* Desktop divider between the row-1 controls (search, select, sort) and the
+   filters (funnel, tags, chips), mirroring the mobile two-row split. On
+   phones the line break is the separator, so this only exists above 740px. */
+@media (min-width: 741px) {
+  .toolbar-filter-row > .dropdown-container:first-child {
+    border-left: 1px solid var(--bg-raised);
+    padding-left: 0.625rem;
+    margin-left: 0.125rem;
+  }
 }
 
 /* Dropdown triggers inside the filter row stretch to the row height, like
@@ -916,14 +1010,32 @@
   border-color: #3b82f6;
 }
 
+/* The browser draws its own clear ✕ inside type=search inputs (bright white
+   in dark mode), doubling our .library-search-clear. Ours is the only one. */
+.library-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .library-search-clear {
   position: absolute;
   right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   background: transparent;
   border: none;
   color: var(--t3);
   cursor: pointer;
+  padding: 0.25rem;
+}
+
+/* The search box lives inside the toolbar, where the generic
+   `.filter-buttons button` rule would turn its clear X into a full bordered
+   toolbar button hanging over the input's edge. Keep it a naked icon. */
+.filter-buttons .library-search-clear {
+  background: transparent;
+  border: none;
   padding: 0.25rem;
 }
 
@@ -945,13 +1057,39 @@
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  /* Pinned while scrolling a long selection (sticky against .app-main, the
+     scroll container), so All/None/star/archive stay reachable mid-list. It
+     renders as a SIBLING of .library-header (sticky cannot escape a parent
+     that ends where the cards begin), hence its own bottom margin. */
+  position: sticky;
+  top: 0;
+  /* Above the cards sliding beneath (their positioned bits are z auto), but
+     BELOW .dropdown-menu at 10, an open filter menu must cover this bar */
+  z-index: 5;
+  background: var(--bg-app);
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.75rem;
 }
 
-.bulk-count {
-  font-size: 0.875rem;
-  color: var(--t2);
+/* The back pill: exit arrow + selected count in one button, so neither
+   floats bare. Slightly tighter padding than its siblings, a three-digit
+   count must still fit the bar on one row at the 344px floor. */
+.bulk-actions .bulk-back {
+  gap: 0.375rem;
+  padding: 0.5rem;
   font-weight: 500;
-  padding-right: 0.5rem;
+  /* The count text's line box is taller than the 16px icons, without this
+     the pill renders 2px taller than its icon-only siblings */
+  line-height: 1;
+}
+
+/* Hairline between the selection-state cluster and the actions, the same
+   divider language as the toolbar's filter divider */
+.bulk-actions .bulk-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--bg-raised);
+  margin: 0 0.125rem;
 }
 
 .bulk-actions button {
@@ -1015,18 +1153,6 @@
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
-.content-card .checkbox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--t3);
-  flex-shrink: 0;
-}
-
-.content-card.selected .checkbox {
-  color: #3b82f6;
-}
-
 .content-card .thumbnail {
   width: 100px;
   height: 100px;
@@ -1080,7 +1206,12 @@
 
 .metadata {
   display: flex;
+  /* Chips wrap onto a second row on narrow screens instead of spilling out of the
+     card (the summary/transcript badges plus tags used to cause a horizontal scroll) */
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.75rem;
+  row-gap: 0.375rem;
   margin-top: 0.5rem;
 }
 
@@ -1123,6 +1254,19 @@
   position: absolute;
   top: 1rem;
   right: 1rem;
+}
+
+/* Bulk-mode stand-in for Delete + the menu at their combined footprint (two
+   buttons plus the gap), so toggling selection mode changes nothing visually
+   in the cluster. Selection state doubles up here (blue check) next to the
+   card's own selected border. */
+.content-actions .bulk-check {
+  width: 76px;
+}
+
+.content-actions .bulk-check.checked {
+  color: #3b82f6;
+  border-color: #3b82f6;
 }
 
 .content-actions button {
@@ -1829,16 +1973,8 @@
     padding-bottom: 5rem;
   }
 
-  .filter-buttons {
-    flex-wrap: nowrap;
-  }
-
-  /* Only the type-chip strip scrolls. Never the row that hosts the funnel
-     dropdown (an overflow container would clip the menu) */
-  .filter-chips-scroll {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-  }
+  /* .filter-buttons and .filter-chips-scroll now carry nowrap + the sideways scroll at
+     EVERY width (see their base rules), so the old overrides here are gone. */
 
   .content-type-selector {
     overflow-x: auto;
@@ -2710,6 +2846,11 @@
 .settings-section .settings-hint.indent {
   margin-left: 1.5rem;
 }
+/* The indented block of sub-options that only apply while the parent checkbox
+   is on (e.g. the comment-summary options in "Copy & export"). */
+.settings-section .settings-indent {
+  margin-left: 1.5rem;
+}
 
 /* Inline checkbox + label (e.g. "Use the same model as Narration"): keep them
    together on the left. Without this the checkbox inherits width:100% from the
@@ -3021,23 +3162,25 @@
   margin-top: 0.125rem;
 }
 
+/* Faint borderless X on the LEFT, matching the fullscreen player's close
+   button. This is the player's real close, the fullscreen X only minimizes
+   while any audio exists. */
 .mini-close-button {
-  background: transparent;
-  border: 1px solid var(--bg-raised);
-  border-radius: 0.375rem;
+  background: none;
+  border: none;
   padding: 0.375rem;
   color: var(--t3);
+  opacity: 0.55;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  transition: opacity 0.2s, color 0.2s;
 }
 
 .mini-close-button:hover {
-  background: var(--bg-hover-soft);
-  border-color: var(--bg-hover);
+  opacity: 1;
   color: var(--t1);
 }
 
@@ -3147,18 +3290,55 @@
 }
 
 .fullscreen-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  /* The buttons are taken OUT of the flow and pinned to the top right, so only the
+     title and the source link have to keep clear of them (via their own padding-right
+     below). The byline and the tag row then get the full width and can run underneath
+     the buttons, instead of every row being squeezed into the leftover column. */
+  position: relative;
   padding: 1rem 1.5rem;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--bg-raised);
   flex-shrink: 0;
 }
 
-.fullscreen-title-area {
+/* Faint borderless minimize/close control at the start of the header. On
+   artwork items it tucks below the artwork (see .fullscreen-leading), so it
+   costs no extra width there. On artwork-less items it simply leads the title.
+   The negative margin cancels the padding, so the icon lines up with the
+   artwork's left edge (and with the header edge when there is no artwork). */
+.fullscreen-close-button {
+  background: none;
+  border: none;
+  padding: 0.375rem;
+  margin-left: -0.375rem;
+  color: var(--t3);
+  opacity: 0.55;
+  cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.fullscreen-close-button:hover {
+  opacity: 1;
+  color: var(--t1);
+}
+
+/* The header's leading column: the artwork first (top-aligned with the title),
+   then the minimize/close control below it. */
+.fullscreen-leading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.fullscreen-title-area {
+  display: flex;
+  align-items: flex-start;
   gap: 1rem;
   flex: 1;
   min-width: 0;
@@ -3201,16 +3381,35 @@
   color: #93c5fd;
 }
 
+/* The byline row. A flex row with wrapping so the "tag +" chip sits to the RIGHT of the
+   author when it fits, and drops to a line of its own FLUSH LEFT when it does not. As an
+   inline element with a left margin it used to land indented on the wrapped line. The
+   byline text itself is one flex item (a span), so it still wraps as normal prose. */
 .fullscreen-author {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
   font-size: 0.875rem;
   color: var(--t3);
   margin: 0.25rem 0 0 0;
 }
 
 .fullscreen-header-buttons {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
   display: flex;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+/* Only these two rows sit level with the pinned buttons, so only they reserve room for
+   them (3 buttons + gaps at their widest). Everything below runs the full width. */
+.fullscreen-title,
+.fullscreen-source-link {
+  padding-right: 9.5rem;
 }
 
 .header-button {
@@ -4632,6 +4831,32 @@ blockquote.twitter-tweet.tweet-quoted {
   padding-left: 0.75rem;
   border-left: 2px solid var(--bg-raised);
 }
+/* Manage tags (Settings): one hairline row per tag with count + rename/delete. */
+.settings-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--bg-raised);
+}
+.settings-tag-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-tag-count {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+.settings-tag-row button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+.settings-tag-delete {
+  color: #ef4444;
+}
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
   /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly
@@ -4872,15 +5097,237 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 /* Draining countdown under the player's Archive->Undo button (10s window). */
-.pending-archive-bar {
-  display: block;
-  height: 2px;
-  margin-top: 3px;
-  background: #60a5fa;
-  border-radius: 1px;
-  animation: archive-drain 10s linear forwards;
+
+/* ============================================================
+   Tags: hashtag chips on cards + in the player, the library tag
+   filter menu, and the tag editor popup
+   ============================================================ */
+
+/* Dimmed hashtag chip (card metadata row). A button so it is tappable, but styled
+   quieter than the capability badges: outline only, faint text. */
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  /* Painted to exactly the same height as .metadata .badge (26px, measured). Three things
+     decide that height, and all three have to be stated here: the badge has NO border, so
+     this 1px border is taken back out of the padding; a chip is a <button>, which the
+     browser gives `line-height: normal` instead of the inherited 1.5, so it is set back;
+     and the icon-only "tag +" chip has no text line at all, so a min-height gives it the
+     same box (1.5em text + 6px padding + 2px border, with border-box sizing). */
+  padding: calc(0.25rem - 1px) calc(0.5rem - 1px);
+  line-height: 1.5;
+  min-height: calc(1.5em + 8px);
+  background: transparent;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.25rem;
+  color: var(--t4);
+  font-size: 0.75rem;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
-@keyframes archive-drain {
-  from { width: 100%; }
-  to { width: 0; }
+.tag-chip:hover {
+  color: var(--t2);
+  border-color: var(--bg-hover);
+}
+.tag-chip.static {
+  cursor: default;
+}
+.tag-chip.static:hover {
+  color: var(--t4);
+  border-color: var(--bg-raised);
+}
+/* The "tag +" chip: icon only, so it needs less side padding to look square, but the
+   same vertical padding as every other chip keeps the row's heights equal. */
+.tag-chip-add {
+  padding: calc(0.25rem - 1px) calc(0.4rem - 1px);
+  gap: 0.05rem;
+}
+
+/* Split quote pieces. One long <blockquote> becomes one read-along element per block
+   inside it, and each piece keeps the quote look. Without this they would each carry the
+   1.5em quote margin, so the quote's blue bar broke into a ladder of separate bars that
+   read as several highlights. Zero margin joins them into ONE continuous bar, and the
+   piece being narrated still stands out through its own tint + lighter bar. */
+.article-content blockquote.quote-part {
+  margin: 0;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+}
+
+/* Player header: the same chips as the cards. Under the author row when there
+   are tags, inline at the end of the author row (no extra row) when there are none. */
+.fullscreen-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+}
+
+/* Library tag filter menu (multi-select, "any of") */
+.dropdown-menu.tag-menu {
+  min-width: 240px;
+  max-width: min(320px, 90vw);
+}
+.tag-menu-search {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--bg-raised);
+}
+.tag-menu-search input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-app);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.375rem;
+  color: var(--t1);
+  font-size: 1rem; /* >=16px prevents iOS zoom-on-focus */
+}
+.tag-menu-search input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.tag-menu-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.tag-menu .tag-menu-list button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tag-menu .tag-menu-list button.selected {
+  color: #60a5fa;
+}
+.tag-menu-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-menu-count {
+  color: var(--t4);
+  font-size: 0.75rem;
+}
+.tag-menu-empty {
+  padding: 0.75rem 1rem;
+  color: var(--t4);
+  font-size: 0.85rem;
+}
+.tag-menu .tag-menu-clear {
+  color: var(--t3);
+  font-size: 0.8rem;
+}
+
+/* Tag editor popup (shares the modal shell with the comment/transcript dialogs) */
+.comment-warning-modal.tag-editor {
+  padding: 1rem;
+}
+.tag-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--t3);
+}
+.tag-editor-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--t1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-editor-close {
+  display: flex;
+  padding: 0.25rem;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+}
+.tag-editor-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-app);
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.375rem;
+  color: var(--t1);
+  font-size: 1rem; /* >=16px prevents iOS zoom-on-focus */
+}
+.tag-editor-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.tag-editor-list {
+  max-height: 45vh;
+  overflow-y: auto;
+  margin: 0.5rem 0 0.75rem;
+  border: 1px solid var(--bg-raised);
+  border-radius: 0.375rem;
+}
+.tag-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--bg-raised);
+  border-radius: 0;
+  color: var(--t1);
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.tag-editor-row:last-child {
+  border-bottom: none;
+}
+.tag-editor-row:hover {
+  background: var(--bg-hover-soft);
+}
+.tag-editor-row.selected {
+  color: #60a5fa;
+}
+.tag-editor-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-editor-row-count {
+  color: var(--t4);
+  font-size: 0.75rem;
+}
+.tag-editor-create {
+  color: #60a5fa;
+  font-weight: 600;
+}
+.comment-warning-modal .tag-editor-hint {
+  margin: 0.5rem 0.25rem;
+  color: var(--t4);
+  font-size: 0.85rem;
+}
+.comment-warning-modal .tag-editor-hint.tag-editor-error {
+  color: #f87171;
+}
+.tag-editor-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+.tag-editor-buttons .comment-warning-btn {
+  flex: 1;
+}
+
+/* Add tab: "Obsidian properties found" notice under a Markdown field */
+.import-notice {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #60a5fa;
 }

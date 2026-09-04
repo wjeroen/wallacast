@@ -56,6 +56,9 @@ export function MiniPlayer({
   return (
     <div className="mini-player">
       <div className="mini-player-header">
+        <button onClick={onClose} className="mini-close-button" title="Close player">
+          <X size={18} />
+        </button>
         <div className="mini-player-content" onClick={onExpand} style={{ cursor: 'pointer' }}>
           {content.preview_picture && (
             <img
@@ -71,16 +74,9 @@ export function MiniPlayer({
             )}
           </div>
         </div>
-        <button onClick={onClose} className="mini-close-button" title="Close player">
-          <X size={18} />
-        </button>
       </div>
 
       <div className="mini-player-controls">
-        <button onClick={onPlayPause} className="mini-play-button">
-          {isPlaying ? <Pause size={24} /> : <Play size={24} />}
-        </button>
-
         <div className="mini-progress-container">
           <span className="mini-time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
@@ -112,6 +108,10 @@ export function MiniPlayer({
           </div>
           <span className="mini-time">{formatTime(duration)}</span>
         </div>
+
+        <button onClick={onPlayPause} className="mini-play-button">
+          {isPlaying ? <Pause size={24} /> : <Play size={24} />}
+        </button>
       </div>
     </div>
   );

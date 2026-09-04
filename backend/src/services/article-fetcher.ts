@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch } from './url-guard.js';
+import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -789,8 +789,15 @@ export function normalizeTweetEmbeds(root: Element): void {
   });
 }
 
+// Layout tables used by email builders. `role="presentation"` is the standards-based
+// marker, but Mailchimp never sets it: it uses its own ids and classes instead
+// (#bodyTable, .templateContainer, .columnWrapper, and the mcn* block classes). One real
+// campaign page held 31 tables, 29 of which match this list and none of which held data.
+const EMAIL_LAYOUT_TABLES =
+  'table[role="presentation"], table#bodyTable, table.templateContainer, table.columnWrapper, table[class*="mcn"]';
+
 export function flattenEmailTables(root: Element): void {
-  if (!root.querySelector('table[role="presentation"]')) return;
+  if (!root.querySelector(EMAIL_LAYOUT_TABLES)) return;
   const doc = root.ownerDocument!;
 
   // 1. Drop hidden elements FIRST: emails duplicate content in mobile/desktop variants
@@ -818,7 +825,7 @@ export function flattenEmailTables(root: Element): void {
   // div so adjacent cells' inline content stays visually separated. `table.rows` and
   // `row.cells` only cover the table's OWN rows per spec, so a genuine data table
   // nested inside survives intact.
-  const tables = Array.from(root.querySelectorAll('table[role="presentation"]')).reverse();
+  const tables = Array.from(root.querySelectorAll(EMAIL_LAYOUT_TABLES)).reverse();
   for (const table of tables) {
     const container = doc.createElement('div');
     // The email's visual rhythm lived in table padding, which the unwrap discards;
@@ -872,6 +879,96 @@ function stripInlineColors(root: Element | Document): void {
   });
 }
 
+/**
+ * Author from the page's schema.org JSON-LD block.
+ *
+ * Used as a last resort, only when no author meta tag and no byline element carried one.
+ * Compact publishes the author ONLY here (`{"@type":"Article","author":{"@type":"Person",
+ * "name":"William Thibeau"}}`, no `meta[name="author"]`), which is why its byline came back
+ * empty. Reading the standard block fixes that site and every other one that follows the
+ * same schema, instead of a selector that only ever works on one domain.
+ *
+ * Only Article-shaped nodes are read and only a name is returned, so a publisher or a
+ * website node can never land in the author field. A malformed block is skipped, never
+ * thrown: a broken script tag must not break the whole fetch.
+ *
+ * MUST be called BEFORE the fetcher strips <script> elements from the document.
+ */
+export function authorFromJsonLd(doc: Document): string | undefined {
+  const ARTICLE_TYPES = new Set([
+    'article', 'newsarticle', 'blogposting', 'report', 'techarticle', 'socialmediaposting',
+  ]);
+
+  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(script.textContent || '');
+    } catch {
+      continue;
+    }
+
+    // A block holds one object, an array of them, or a @graph wrapper.
+    const nodes: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.['@graph'])
+        ? parsed['@graph']
+        : [parsed];
+
+    for (const node of nodes) {
+      const types = [node?.['@type']].flat().filter(Boolean).map((t: any) => String(t).toLowerCase());
+      if (!types.some(t => ARTICLE_TYPES.has(t))) continue;
+
+      for (const candidate of [node?.author].flat().filter(Boolean)) {
+        const name = typeof candidate === 'string'
+          ? candidate
+          : typeof candidate?.name === 'string' ? candidate.name : '';
+        const trimmed = name.trim();
+        if (trimmed && trimmed.length <= 120) return trimmed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/** archive.is and its mirror domains, which all serve the same rebuilt-page markup. */
+export function isArchiveMirrorUrl(url: string): boolean {
+  try {
+    return /(^|\.)archive\.(is|ph|today|li|vn|fo|md)$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild paragraphs in an archive.is-style mirror.
+ *
+ * The mirror keeps the words but throws away the structure: every block becomes a generic
+ * <div> carrying a wall of inline styles (fixed widths, flex, colours), and the copy holds
+ * zero <p> elements. The reader then shows one undivided wall of text, and read-along gets
+ * a single element for the whole article. For these hosts only, the mirror's inline styles
+ * are dropped (our reader supplies its own) and every text-only <div> becomes a <p>.
+ *
+ * UNTESTED beyond one Compact mirror (2026-08-28). Menu lines and captions inside the
+ * mirror become paragraphs too, so expect some leftover noise at the top of such items.
+ */
+export function restoreArchivedParagraphs(root: Element): void {
+  const doc = root.ownerDocument!;
+
+  // The mirror's inline styles fight the reader's own layout, and none of them carry
+  // meaning we want to keep.
+  root.querySelectorAll('[style]').forEach(el => el.removeAttribute('style'));
+
+  const BLOCK_CHILD = 'div, p, section, article, main, ul, ol, table, blockquote, figure, pre, h1, h2, h3, h4, h5, h6';
+  for (const div of Array.from(root.querySelectorAll('div'))) {
+    if (div.querySelector(BLOCK_CHILD)) continue;          // a wrapper, not a leaf
+    if (!(div.textContent || '').trim()) continue;         // empty spacer
+    const p = doc.createElement('p');
+    while (div.firstChild) p.appendChild(div.firstChild);
+    div.replaceWith(p);
+  }
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
@@ -894,12 +991,45 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('[Fetcher] Using simple fetch for standard scraping');
     const response = await safeFetch(url);
 
-    if (!response.ok) {
+    let html: string;
+    if (response.ok) {
+      html = await response.text();
+    } else if (response.status === 403) {
+      // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
+      // does, seen live 2026-09-03). One retry with browser-like headers usually gets the
+      // real page. Only on 403, so the plain fetch stays the first choice for every site
+      // that already works.
+      console.log('[Fetcher] HTTP 403 from simple fetch, retrying once with browser-like headers');
+      const retry = await browserHeadersFetch(url);
+      if (retry.statusCode < 200 || retry.statusCode >= 300) {
+        // Diagnostic detail for ANY site that blocks both attempts: `cf-mitigated: challenge`
+        // means a Cloudflare JavaScript challenge, which no header set can ever pass (we do
+        // not run JavaScript), so header tuning is pointless for that site.
+        const mitigated = retry.headers['cf-mitigated'] || 'none';
+        const server = retry.headers['server'] || 'unknown';
+        const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
+        console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
+        console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
+        // Third and last step: the r.jina.ai reader proxy opens the page in its own real
+        // browser (which passes JavaScript challenges) and returns the rendered HTML.
+        console.log('[Fetcher] Trying the reader proxy (r.jina.ai) as a last resort');
+        try {
+          html = await readerProxyFetch(url);
+          console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
+        } catch (proxyError: any) {
+          console.log(`[Fetcher] Reader proxy failed too: ${proxyError.message}`);
+          throw new Error(
+            `HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode}, reader proxy: ${proxyError.message})`
+          );
+        }
+      } else {
+        console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
+        html = retry.body;
+      }
+    } else {
       console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-
-    const html = await response.text();
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
 
     // Log if potential Cloudflare challenge but continue anyway
@@ -915,6 +1045,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     const dom = new JSDOM(html, { url });
     const doc = dom.window.document;
+
+    // Read the schema.org JSON-LD author BEFORE the scripts are stripped below (it lives
+    // in a <script type="application/ld+json">). Only used further down if nothing better
+    // is found.
+    const jsonLdAuthor = authorFromJsonLd(doc);
 
     // Remove scripts and styles globally
     const scripts = doc.querySelectorAll('script');
@@ -947,6 +1082,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
+    // Last resort: the schema.org block captured above. Purely additive, it only fills a
+    // byline that would otherwise be empty, so no site that already resolves an author
+    // changes behaviour.
+    if (!author?.trim() && jsonLdAuthor) {
+      console.log(`[Fetcher] Author taken from JSON-LD: ${jsonLdAuthor}`);
+      author = jsonLdAuthor;
+    }
+
     const publishedDate =
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
@@ -969,7 +1112,27 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Fallback to generic selectors
     if (!contentEl) {
-      contentEl = doc.querySelector('article') || doc.querySelector('main') || doc.body;
+      const article = doc.querySelector('article');
+      // Some sites (Compact, for one) put BOTH a page header and the story inside a single
+      // <article>, with the story itself in a <main> within it. Taking the <article> then
+      // drags the header (author line, date, share menu) into the body. Prefer that inner
+      // <main>, but only when it holds most of the article's text: a small inner <main> is
+      // a nav or a teaser, not the story.
+      const innerMain = article?.querySelector('main') || null;
+      const articleTextLen = (article?.textContent || '').trim().length;
+      const innerMainTextLen = (innerMain?.textContent || '').trim().length;
+      const preferInnerMain = !!innerMain && articleTextLen > 0 && innerMainTextLen >= articleTextLen * 0.5;
+      if (preferInnerMain) {
+        console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
+      }
+      contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
+    }
+
+    // archive.is and friends rebuild a page as generic <div>s, so the mirrored copy has no
+    // paragraphs at all. Restore them before the cleanup below runs.
+    if (contentEl && isArchiveMirrorUrl(url)) {
+      console.log('[Fetcher] archive mirror detected, restoring paragraphs');
+      restoreArchivedParagraphs(contentEl);
     }
 
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
@@ -997,6 +1160,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const text = el.textContent?.trim() || '';
         // Match "Previous", "Next", with optional arrows like "← Previous" or "Next →"
         if (/^(←\s*)?previous(\s*→)?$/i.test(text) || /^(←\s*)?next(\s*→)?$/i.test(text)) {
+          el.remove();
+        }
+      });
+
+      // Remove share menus. Many sites render "Share", "Share via X", "Share via email",
+      // "Copy link" as ordinary links inside the article, and they are read aloud as body
+      // text. Same text-based approach as the Previous/Next removal above.
+      contentEl.querySelectorAll('button, a').forEach(el => {
+        const text = (el.textContent || '').trim();
+        if (/^(share|share via .{1,20}|copy link|copy the link)$/i.test(text)) {
           el.remove();
         }
       });

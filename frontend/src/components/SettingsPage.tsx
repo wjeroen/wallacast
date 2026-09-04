@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square } from 'lucide-react';
-import { userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
+import { ArrowLeft, Save, Eye, EyeOff, Key, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
+import { contentAPI, userSettingsAPI, wallabagAPI, type PromptDef } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
@@ -217,6 +217,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summarize_comments: 'true',
     summary_max_words: '40',
     library_show_summary: 'false',
+    copy_include_summary: 'false',
+    copy_include_comment_summary: 'true',
+    copy_summary_code_label: '',
+    copy_include_comments: 'true',
     narrate_ea_forum_comments: 'true',
     narrate_substack_comments: 'true',
     max_narrated_comments: '50',
@@ -341,6 +345,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
+        copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
+        copy_include_comment_summary: loaded.copy_include_comment_summary !== undefined && loaded.copy_include_comment_summary !== null ? loaded.copy_include_comment_summary : 'true',
+        copy_summary_code_label: loaded.copy_summary_code_label || '',
+        copy_include_comments: loaded.copy_include_comments !== undefined && loaded.copy_include_comments !== null ? loaded.copy_include_comments : 'true',
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
@@ -510,7 +518,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const alwaysSave = new Set([
         'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'auto_generate_summary_audio',
-        'summarize_comments', 'library_show_summary', 'wallabag_sync_enabled', 'image_alt_text_enabled',
+        'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_include_comment_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
         'show_continue_listening', 'warn_archive_removes_audio', 'generate_read_along',
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
@@ -636,6 +644,49 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       console.error('Full refresh error:', err);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Manage tags: the library-wide tag list with rename/delete, loaded on first expand.
+  const [tagListOpen, setTagListOpen] = useState(false);
+  const [tagList, setTagList] = useState<{ tag: string; count: number }[] | null>(null);
+  const [tagBusy, setTagBusy] = useState(false);
+
+  const loadTagList = async () => {
+    try {
+      const response = await contentAPI.allTags();
+      setTagList(response.data.tags);
+    } catch (err) {
+      console.error('Failed to load tags:', err);
+      setTagList([]);
+    }
+  };
+
+  const handleRenameTag = async (tag: string) => {
+    const to = prompt(`Rename #${tag} to:`, tag);
+    if (to === null || to.trim() === '' || to.trim() === tag) return;
+    setTagBusy(true);
+    try {
+      const response = await contentAPI.renameTag(tag, to);
+      alert(`Renamed on ${response.data.affected} item(s). The change syncs to Wallabag on the next sync.`);
+      await loadTagList();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Rename failed');
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
+  const handleDeleteTag = async (tag: string, count: number) => {
+    if (!confirm(`Remove #${tag} from ${count} item(s)? It is also removed in Wallabag. This cannot be undone.`)) return;
+    setTagBusy(true);
+    try {
+      await contentAPI.removeTag(tag);
+      await loadTagList();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Delete failed');
+    } finally {
+      setTagBusy(false);
     }
   };
 
@@ -832,6 +883,81 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
            )}
         </section>
 
+        {/* Playback / Queue Settings */}
+        <section className="settings-section">
+          <h3>Playback</h3>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.manual_queue_always_autoplay === 'true'}
+                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
+              />
+              Manually queued items always autoplay
+            </label>
+            <small className="settings-hint indent">
+              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
+              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.autoplay_on_open === 'true'}
+                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
+              />
+              Start playing when opening an item
+            </label>
+            <small className="settings-hint indent">
+              When on, clicking a library item starts its audio right away instead of waiting for play.
+            </small>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.show_continue_listening === 'true'}
+                onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
+              />
+              Show the continue-listening row in the library
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.warn_archive_removes_audio === 'true'}
+                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
+              />
+              Warn when archiving removes generated audio
+            </label>
+          </div>
+
+          <div className="form-group">
+            <label>Speed button options</label>
+            <small className="settings-hint">
+              Which speeds the player's speed button cycles through. None selected = the default set.
+            </small>
+            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
+              {SPEED_CATALOG.map(s => (
+                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={speedOptions.includes(s)}
+                    onChange={() => toggleSpeedOption(s)}
+                  />
+                  {s}x
+                </label>
+              ))}
+            </div>
+          </div>
+        </section>
+
         {/* Summaries Section */}
         <section className="settings-section">
           <h3><FileText size={20} /> Summaries</h3>
@@ -968,78 +1094,71 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         </section>
 
-        {/* Playback / Queue Settings */}
+        {/* Copy & export: what leaves the app through the "Copy content" action */}
         <section className="settings-section">
-          <h3>Playback</h3>
+          <h3><Copy size={20} /> Copy & export</h3>
+          <p className="section-description">
+            What the "Copy content" action adds to the article text.
+          </p>
 
           <div className="form-group checkbox-group">
             <label>
               <input
                 type="checkbox"
-                checked={formData.manual_queue_always_autoplay === 'true'}
-                onChange={(e) => handleChange('manual_queue_always_autoplay', e.target.checked ? 'true' : 'false')}
+                checked={formData.copy_include_summary === 'true'}
+                onChange={(e) => handleChange('copy_include_summary', e.target.checked ? 'true' : 'false')}
               />
-              Manually queued items always autoplay
+              Summary
             </label>
             <small className="settings-hint indent">
-              When on, items you explicitly added to the queue auto-advance regardless of the autoplay toggle.
-              Turn off if you only want anything to auto-advance when the player's autoplay toggle is on.
+              At the top, in a code block.
             </small>
           </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.autoplay_on_open === 'true'}
-                onChange={(e) => handleChange('autoplay_on_open', e.target.checked ? 'true' : 'false')}
-              />
-              Start playing when opening an item
-            </label>
-            <small className="settings-hint indent">
-              When on, clicking a library item starts its audio right away instead of waiting for play.
-            </small>
-          </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.show_continue_listening === 'true'}
-                onChange={(e) => handleChange('show_continue_listening', e.target.checked ? 'true' : 'false')}
-              />
-              Show the continue-listening row in the library
-            </label>
-          </div>
-
-          <div className="form-group checkbox-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={formData.warn_archive_removes_audio === 'true'}
-                onChange={(e) => handleChange('warn_archive_removes_audio', e.target.checked ? 'true' : 'false')}
-              />
-              Warn when archiving removes generated audio
-            </label>
-          </div>
-
-          <div className="form-group">
-            <label>Speed button options</label>
-            <small className="settings-hint">
-              Which speeds the player's speed button cycles through. None selected = the default set.
-            </small>
-            <div className="voice-grid" style={{ marginTop: '0.5rem' }}>
-              {SPEED_CATALOG.map(s => (
-                <label key={s} className={`voice-chip ${speedOptions.includes(s) ? 'selected' : ''}`}>
+          {formData.copy_include_summary === 'true' && (
+            <div className="settings-indent">
+              <div className="form-group checkbox-group">
+                <label>
                   <input
                     type="checkbox"
-                    checked={speedOptions.includes(s)}
-                    onChange={() => toggleSpeedOption(s)}
+                    checked={formData.copy_include_comment_summary === 'true'}
+                    onChange={(e) => handleChange('copy_include_comment_summary', e.target.checked ? 'true' : 'false')}
                   />
-                  {s}x
+                  Comment summary
                 </label>
-              ))}
+                <small className="settings-hint indent">
+                  Its own code block, just above the comments.
+                </small>
+              </div>
+              <div className="form-group">
+                <label htmlFor="copy_summary_code_label">Code block label</label>
+                <input
+                  id="copy_summary_code_label"
+                  type="text"
+                  value={formData.copy_summary_code_label}
+                  onChange={(e) => handleChange('copy_summary_code_label', e.target.value)}
+                  placeholder="none"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                />
+                <small className="settings-hint">
+                  The word after the opening backticks. Some note apps style a code block by this word. Leave it empty for a plain block.
+                </small>
+              </div>
             </div>
+          )}
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.copy_include_comments === 'true'}
+                onChange={(e) => handleChange('copy_include_comments', e.target.checked ? 'true' : 'false')}
+              />
+              Comments
+            </label>
+            <small className="settings-hint indent">
+              The full comment thread at the end.
+            </small>
           </div>
         </section>
 
@@ -1433,11 +1552,49 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           )}
         </section>
 
+        {/* Manage tags: library-wide rename/delete, mirrored to Wallabag */}
+        <section className="settings-section">
+          <h3><Tag size={20} /> Tags</h3>
+          <small className="settings-hint">Rename or delete a tag across the whole library. Changes reach Wallabag too.</small>
+          <button
+            className="settings-collapse-toggle"
+            onClick={() => {
+              const next = !tagListOpen;
+              setTagListOpen(next);
+              if (next) loadTagList();
+            }}
+            aria-expanded={tagListOpen}
+          >
+            {tagListOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            Manage tags{tagList ? ` (${tagList.length})` : ''}
+          </button>
+          {tagListOpen && (
+            <div className="settings-collapse-body">
+              {tagList === null ? (
+                <p className="settings-hint">Loading…</p>
+              ) : tagList.length === 0 ? (
+                <p className="settings-hint">No tags yet.</p>
+              ) : (
+                <div className="settings-tag-list">
+                  {tagList.map(({ tag, count }) => (
+                    <div key={tag} className="settings-tag-row">
+                      <span className="settings-tag-name">#{tag}</span>
+                      <span className="settings-tag-count">{count}</span>
+                      <button onClick={() => handleRenameTag(tag)} disabled={tagBusy}>Rename</button>
+                      <button className="settings-tag-delete" onClick={() => handleDeleteTag(tag, count)} disabled={tagBusy}>Delete</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Wallabag Settings */}
         <section className="settings-section">
           <h3>
             <Globe size={20} />
-            Wallabag sync (currently partially broken)
+            Wallabag sync
           </h3>
 
           <div style={{
@@ -1469,7 +1626,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               <li>Enter those credentials below along with your Wallabag URL, username, and password</li>
             </ol>
             <p style={{ marginTop: '0.5rem', paddingLeft: '0rem' }}>
-            Note: The wallabag sync ignores articles with a nosync tag. A full refresh (see button below) might be required to sync older items.
+            Note: entries tagged nosync in Wallabag are never pulled; a local copy is kept but gets a nosync chip and is never pushed. Tags sync both ways (Wallabag-side tag edits are picked up by a cheap whole-library check on every sync, and merged so a tag added on either side survives). A sync never deletes local items or overwrites content Wallacast fetched itself. A full refresh (see button below) might be required to sync older items.
             </p>
             </>)}
           </div>

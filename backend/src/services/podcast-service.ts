@@ -244,6 +244,11 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
     // FIX: Extract items using updated regex for Atom/RSS
     const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
+    // Show author, used when an episode names no author of its own (most feeds set only the
+    // channel-level itunes:author). Read from the podcasts row we already store.
+    const showAuthorResult = await query('SELECT author FROM podcasts WHERE id = $1', [podcastId]);
+    const showAuthor: string | null = showAuthorResult.rows[0]?.author || null;
+
     const episodes = [];
 
     for (const itemXml of itemMatches.slice(0, 20)) {
@@ -253,6 +258,10 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
       const audioUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
+      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
+        extractXMLTag(itemXml, 'itunes:author') ||
+        extractXMLTag(itemXml, 'author');
+      const author = (itemAuthor ? cleanHtmlEntities(itemAuthor) : null) || showAuthor;
 
       if (!title || !audioUrl) continue;
 
@@ -267,8 +276,8 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
       // Insert episode
       const result = await query(
         `INSERT INTO content_items
-         (type, title, description, audio_url, podcast_id, published_at, duration, user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (type, title, description, audio_url, podcast_id, published_at, duration, author, user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           'podcast_episode',
@@ -278,6 +287,7 @@ export async function fetchPodcastEpisodes(feedUrl: string, podcastId: number, u
           podcastId,
           pubDate ? new Date(pubDate) : new Date(),
           parseDuration(duration),
+          author,
           userId,
         ]
       );

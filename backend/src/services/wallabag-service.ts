@@ -16,7 +16,7 @@ export interface WallabagEntry {
   id: number;
   url: string;
   title: string;
-  content: string;
+  content: string;      // absent/empty when fetched with detail=metadata
   is_archived: number;  // 0 or 1
   is_starred: number;   // 0 or 1
   tags: Array<{ id: number; label: string; slug: string }>;
@@ -276,24 +276,28 @@ export class WallabagService {
   // ==========================================================================
 
   /**
-   * Make an authenticated API request to Wallabag
-   * Handles token refresh and retries on 401
+   * The outcome of one API call, including the HTTP status.
+   *
+   * `status` is null when the request never reached Wallabag at all (no token, no base URL,
+   * or a network error). Callers must treat a null status as "unknown", never as "no": the
+   * push once read a failed existence check as "the entry was deleted" and created a
+   * duplicate entry after a transient outage.
    */
-  private async apiRequest(
+  private async apiRequestDetailed(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     endpoint: string,
     body?: any,
     retryCount = 0
-  ): Promise<any | null> {
+  ): Promise<{ ok: boolean; status: number | null; data: any | null }> {
     const token = await this.getAccessToken();
     if (!token) {
       console.error('No access token available');
-      return null;
+      return { ok: false, status: null, data: null };
     }
 
     if (!this.baseUrl) {
       console.error('Base URL not configured');
-      return null;
+      return { ok: false, status: null, data: null };
     }
 
     try {
@@ -319,7 +323,7 @@ export class WallabagService {
         console.log('Got 401, attempting token refresh...');
         // Clear the token and try again
         await this.setUserSetting('wallabag_access_token', '', true);
-        return this.apiRequest(method, endpoint, body, retryCount + 1);
+        return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
       }
 
       // Handle 429 - rate limited
@@ -330,7 +334,7 @@ export class WallabagService {
         if (retryCount < 3) {
           console.log(`Rate limited, waiting ${waitTime}ms...`);
           await this.sleep(waitTime);
-          return this.apiRequest(method, endpoint, body, retryCount + 1);
+          return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
         }
       }
 
@@ -339,24 +343,38 @@ export class WallabagService {
         const waitTime = Math.pow(2, retryCount) * 1000;
         console.log(`Server error ${response.status}, retrying in ${waitTime}ms...`);
         await this.sleep(waitTime);
-        return this.apiRequest(method, endpoint, body, retryCount + 1);
+        return this.apiRequestDetailed(method, endpoint, body, retryCount + 1);
       }
 
       if (!response.ok) {
         console.error(`Wallabag API error: ${response.status} ${response.statusText}`);
-        return null;
+        return { ok: false, status: response.status, data: null };
       }
 
       // DELETE requests might not return JSON
       if (method === 'DELETE') {
-        return { success: true };
+        return { ok: true, status: response.status, data: { success: true } };
       }
 
-      return response.json();
+      return { ok: true, status: response.status, data: await response.json() };
     } catch (error) {
       console.error('Error making Wallabag API request:', error);
-      return null;
+      return { ok: false, status: null, data: null };
     }
+  }
+
+  /**
+   * Make an authenticated API request to Wallabag
+   * Handles token refresh and retries on 401
+   */
+  private async apiRequest(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    endpoint: string,
+    body?: any,
+    retryCount = 0
+  ): Promise<any | null> {
+    const result = await this.apiRequestDetailed(method, endpoint, body, retryCount);
+    return result.ok ? result.data : null;
   }
 
   // ==========================================================================
@@ -409,15 +427,46 @@ export class WallabagService {
    * The caller must not advance its "last sync" cursor on an incomplete pull, otherwise
    * the un-fetched entries would be skipped forever.
    */
-  async fetchEntries(since?: string): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
+  async fetchEntries(
+    since?: string,
+    opts: { detail?: 'full' | 'metadata'; perPage?: number } = {}
+  ): Promise<{ entries: WallabagEntry[]; complete: boolean }> {
     const entries: WallabagEntry[] = [];
+    let complete = true;
+    for await (const page of this.iterateEntryPages(since, opts)) {
+      if (page === null) {
+        // A page fetch failed. We may already hold earlier pages, so keep them,
+        // but flag the pull as incomplete so the caller does not advance last_sync.
+        complete = false;
+        break;
+      }
+      entries.push(...page);
+    }
+    return { entries, complete };
+  }
+
+  /**
+   * Page through entries one page at a time, yielding each page's entries as it arrives
+   * (and `null` once when a page fetch fails, after which iteration stops). Callers that
+   * only need to look at each entry once (the tag reconciliation pass) use this directly,
+   * so a large library never has to sit in memory all at once.
+   *
+   * detail=metadata omits `content` (verified in EntryRestController 2.6.13), which makes a
+   * whole-library pass cheap. Wallabag's controller has no perPage cap (the old "max 30"
+   * note was never enforced in code).
+   */
+  async *iterateEntryPages(
+    since?: string,
+    opts: { detail?: 'full' | 'metadata'; perPage?: number } = {}
+  ): AsyncGenerator<WallabagEntry[] | null> {
     let page = 1;
     let hasMore = true;
-    let complete = true;
+    const detail = opts.detail || 'full';
+    const perPage = opts.perPage || 30;
 
     while (hasMore) {
       // Build URL with pagination
-      let endpoint = `/entries.json?perPage=30&page=${page}&detail=full`;
+      let endpoint = `/entries.json?perPage=${perPage}&page=${page}&detail=${detail}`;
 
       // Add since parameter if provided (unix timestamp)
       if (since) {
@@ -427,13 +476,11 @@ export class WallabagService {
 
       const response = await this.apiRequest('GET', endpoint);
       if (!response?._embedded?.items) {
-        // A page fetch failed. We may already hold earlier pages, so keep them,
-        // but flag the pull as incomplete so the caller does not advance last_sync.
-        complete = false;
-        break;
+        yield null;
+        return;
       }
 
-      entries.push(...response._embedded.items);
+      yield response._embedded.items as WallabagEntry[];
       hasMore = page < response.pages;
       page++;
 
@@ -442,8 +489,6 @@ export class WallabagService {
         await this.sleep(100);
       }
     }
-
-    return { entries, complete };
   }
 
   /**
@@ -451,6 +496,22 @@ export class WallabagService {
    */
   async fetchEntry(id: number): Promise<WallabagEntry | null> {
     return this.apiRequest('GET', `/entries/${id}.json`);
+  }
+
+  /**
+   * Does this entry still exist in Wallabag?
+   *
+   * Three answers, and the third one matters: true (it is there), false (Wallabag answered
+   * 404, so it is really gone), and null (we could not find out, because the server was
+   * unreachable, the token failed, or Wallabag returned an error). The push must only
+   * re-create an entry on a definite false. Treating null as false is what would turn a
+   * short Wallabag outage into a library full of duplicates.
+   */
+  async entryExists(id: number): Promise<boolean | null> {
+    const result = await this.apiRequestDetailed('GET', `/entries/${id}.json`);
+    if (result.status === 404) return false;
+    if (result.ok && result.data) return true;
+    return null;
   }
 
   /**
@@ -491,6 +552,16 @@ export class WallabagService {
    */
   async deleteEntry(id: number): Promise<boolean> {
     const response = await this.apiRequest('DELETE', `/entries/${id}.json`);
+    return response !== null;
+  }
+
+  /**
+   * Delete a tag LABEL everywhere: Wallabag removes it from every entry and drops the tag
+   * itself from its tag list. Used by the library-wide tag rename/delete, where the
+   * per-entry pushes re-assert each entry's new tag set and this cleans up the old label.
+   */
+  async deleteTagLabel(label: string): Promise<boolean> {
+    const response = await this.apiRequest('DELETE', `/tags/label.json?tag=${encodeURIComponent(label)}`);
     return response !== null;
   }
 

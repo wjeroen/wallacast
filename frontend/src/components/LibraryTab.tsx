@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
-import { useContentStore, itemMatchesFilter, type FacetDim, type FacetValue } from '../store/contentStore';
+import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
+import { TagEditor } from './TagEditor';
+import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
+import { loadCopyContentOptions } from '../copy-settings';
 import { isVeryLongArticle } from '../format';
 import type { ContentItem, Comment } from '../types';
 
@@ -61,12 +64,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     allItems,
     typeFilter,
     facets,
+    tagFilter,
     searchQuery,
     sortDir,
     loading,
     setTypeFilter,
     setFacet,
     setFacets,
+    setTagFilter,
+    toggleTagFilter,
+    setItemTags,
     setSortDir,
     setSearchQuery,
     fetchContent,
@@ -82,13 +89,29 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Search bar (expands above the filter row when the search icon is tapped)
-  const [searchOpen, setSearchOpen] = useState(false);
   const [searchInput, setSearchInput] = useState(''); // immediate value, debounced into the store
+  // Desktop-only: the search rests as a count button and morphs into the
+  // field on press. Kept open while a query is active (collapsing would hide
+  // the user's own text). Phones ignore this, their field is always there.
+  const [deskSearchOpen, setDeskSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (deskSearchOpen) searchInputRef.current?.focus();
+  }, [deskSearchOpen]);
 
   // Status filter funnel menu (Active / Favorites / Archived)
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusMenuRef = useRef<HTMLDivElement>(null);
+
+  // Tag filter menu (multi-select checklist, "any of") + its search box
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const tagMenuRef = useRef<HTMLDivElement>(null);
+  const [tagMenuQuery, setTagMenuQuery] = useState('');
+  // The item whose tags are being edited in the TagEditor popup (null = closed)
+  const [tagEditorItem, setTagEditorItem] = useState<ContentItem | null>(null);
+  // Bulk tag mode: the TagEditor opened from the selection bar's menu to add tags to or
+  // remove tags from every selected item at once (null = closed)
+  const [bulkTagMode, setBulkTagMode] = useState<'add' | 'remove' | null>(null);
 
   // Bulk actions overflow menu + sequential progress counter
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
@@ -163,6 +186,21 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     };
   }, [statusMenuOpen]);
 
+  // Close the tag filter menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (tagMenuRef.current && !tagMenuRef.current.contains(event.target as Node)) {
+        setTagMenuOpen(false);
+      }
+    };
+    if (tagMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [tagMenuOpen]);
+
   // Close the bulk overflow menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -216,19 +254,50 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const allSelectedStarred = selectedObjs.length > 0 && selectedObjs.every(i => i.is_starred);
   const allSelectedArchived = selectedObjs.length > 0 && selectedObjs.every(i => i.is_archived);
 
-  // Per-type counts under the current status, ignoring search (so the number
-  // stays stable while typing). The count is shown on the ACTIVE type chip.
+  // Per-type counts under the current facets, tags, AND search, so the chip
+  // number always agrees with the list below it. Search lands here at the
+  // same debounced pace the list filters at, so the number stays calm while
+  // typing. The count is shown on the ACTIVE type chip.
   const typeCounts = useMemo(() => {
     const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
     for (const i of allItems) {
-      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, searchQuery: '' })) continue;
+      if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
     }
     return counts;
-  }, [allItems, facets]);
+  }, [allItems, facets, tagFilter, searchQuery]);
+
+  // The item count lives in the search box placeholder at every width, not on
+  // the type chips, so switching types never changes a chip's width. It
+  // counts the current scope: type, facets, and tags. Search flows into
+  // typeCounts too, but the placeholder only shows while the box is empty.
+  const scopeCount = typeCounts[typeFilter];
+  // "Filtered" measures distance from the DEFAULT view, not from "no facets":
+  // the funnel starts on Active (non-archived), and that default must not
+  // make the untouched library read as filtered.
+  const isFiltered = typeFilter !== 'all' || tagFilter.length > 0 ||
+    (Object.keys(DEFAULT_FACETS) as FacetDim[]).some(dim => facets[dim] !== DEFAULT_FACETS[dim]);
+  const searchPlaceholder = `Search ${scopeCount} ${isFiltered ? 'filtered ' : ''}item${scopeCount === 1 ? '' : 's'}`;
+
+  // Every tag in the library with its usage count (filter menu + tag editor list)
+  const tagCounts = useMemo(() => collectTagCounts(allItems), [allItems]);
+  const tagMenuRows = useMemo(() => {
+    const q = tagMenuQuery.trim().toLowerCase();
+    return q ? tagCounts.filter(t => t.tag.includes(q)) : tagCounts;
+  }, [tagCounts, tagMenuQuery]);
+
+  // Tag filter changes clear the selection like every other filter change
+  const toggleTag = (tag: string) => {
+    toggleTagFilter(tag);
+    setSelectedItems(new Set());
+  };
+  const clearTagFilter = () => {
+    setTagFilter([]);
+    setSelectedItems(new Set());
+  };
 
   // Poll for progress updates on items that are generating
   useEffect(() => {
@@ -399,6 +468,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       alert('Bulk action failed');
     }
   };
+
+  // Bulk tag add/remove: one request with the whole selection and the picked tags, then
+  // refetch (same reasoning as runInstantBulk). Thrown errors reach the TagEditor's own
+  // catch, which shows the alert.
+  const runBulkTags = async (tags: string[]) => {
+    const ids = content.filter(item => selectedItems.has(item.id)).map(item => item.id);
+    if (ids.length === 0 || tags.length === 0 || !bulkTagMode) return;
+    await contentAPI.bulkTagAction(bulkTagMode === 'add' ? 'add_tags' : 'remove_tags', ids, tags);
+    setSelectedItems(new Set());
+    await fetchContent();
+  };
+
+  // For "Remove tags", only the tags actually present on the selection are offered.
+  const selectedTagCounts = useMemo(
+    () => collectTagCounts(allItems.filter(i => selectedItems.has(i.id))),
+    [allItems, selectedItems]
+  );
 
   // Long-running bulk actions: kick off existing per-item endpoints one by
   // one. The start endpoints return immediately; real progress comes from the
@@ -663,9 +749,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       setOpenDropdown(null);
       await contentAPI.update(id, { regenerate_transcript: true } as any);
       refreshItem(id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to regenerate transcript:', error);
-      alert('Failed to regenerate transcript');
+      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
     }
   };
 
@@ -682,7 +768,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       } catch {
         comments = [];
       }
-      await navigator.clipboard.writeText(contentToMarkdown(full, comments));
+      await navigator.clipboard.writeText(contentToMarkdown(full, comments, await loadCopyContentOptions()));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -711,46 +797,55 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   return (
     <div className="library-tab">
       <div className="library-header">
-        {searchOpen && (
-          <div className="library-search">
-            <Search size={16} className="library-search-icon" />
-            <input
-              type="search"
-              className="library-search-input"
-              placeholder="Search library…"
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              autoFocus
-              autoCapitalize="off"
-              autoCorrect="off"
-              enterKeyHint="search"
-            />
-            <button
-              className="library-search-clear"
-              onClick={() => { setSearchInput(''); setSearchQuery(''); setSearchOpen(false); }}
-              title="Close search"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
         <div className="header-top">
           <div className="filter-buttons">
-            <button
-              className={searchOpen || searchQuery.trim() ? 'active' : ''}
-              onClick={() => {
-                if (searchOpen) {
-                  setSearchInput('');
-                  setSearchQuery('');
-                  setSearchOpen(false);
-                } else {
-                  setSearchOpen(true);
-                }
-              }}
-              title="Search library"
-            >
-              <Search size={16} />
-            </button>
+            {/* The two row wrappers dissolve on wide screens (display: contents),
+                so every control sits on one row. Below 740px each wrapper is its
+                own full-width row: search with Select and Sort on top, every
+                filter (funnel, tags, divider, type chips) below. */}
+            <div className="toolbar-search-row">
+            {/* THE search box, at every width. Full row width on phones,
+                always visible there. On desktop it rests as the count button
+                below and morphs into this field when pressed, at its full
+                expanded width right away. No autoFocus attribute, a focused
+                input would pop the phone keyboard on every visit (desktop
+                focus comes from the deskSearchOpen effect instead). */}
+            <div className={`library-search toolbar-inline-search ${deskSearchOpen || searchInput !== '' ? 'open' : ''}`}>
+              <Search size={16} className="library-search-icon" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                className="library-search-input"
+                placeholder={searchPlaceholder}
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                onBlur={() => { if (searchInput === '') setDeskSearchOpen(false); }}
+                onKeyDown={e => { if (e.key === 'Escape') { setSearchInput(''); setSearchQuery(''); setDeskSearchOpen(false); } }}
+                autoCapitalize="off"
+                autoCorrect="off"
+                enterKeyHint="search"
+              />
+              {searchInput !== '' && (
+                <button
+                  className="library-search-clear"
+                  onClick={() => { setSearchInput(''); setSearchQuery(''); setDeskSearchOpen(false); }}
+                  title="Clear search"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            {/* Desktop rest state: the count button the field morphs from */}
+            {!(deskSearchOpen || searchInput !== '') && (
+              <button
+                className="desk-search-btn"
+                onClick={() => setDeskSearchOpen(true)}
+                title="Search library"
+              >
+                <Search size={16} />
+                <span>({scopeCount})</span>
+              </button>
+            )}
             {/* Bulk-select mode toggle, styled like its toolbar neighbors
                 (replaces the old wide standalone Select/Cancel text button) */}
             <button
@@ -771,6 +866,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               {sortDir === 'asc' ? <ArrowUpNarrowWide size={16} /> : <ArrowDownWideNarrow size={16} />}
               <span className="filter-label">{sortDir === 'asc' ? 'Oldest' : 'Newest'}</span>
             </button>
+            </div>
+            <div className="toolbar-filter-row">
             <div className="dropdown-container" ref={statusMenuRef}>
               {/* Facet filter: the button shows the icon of every selected facet
                   (or a funnel when nothing is selected = show everything) */}
@@ -811,12 +908,70 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 </div>
               )}
             </div>
+            <div className="dropdown-container" ref={tagMenuRef}>
+              {/* Tag filter: multi-select checklist, an item matches ANY selected tag.
+                  The button carries the selection count so the state is visible. */}
+              <button
+                className={tagFilter.length > 0 ? 'active' : ''}
+                onClick={() => setTagMenuOpen(!tagMenuOpen)}
+                title={tagFilter.length > 0 ? `Filtering by ${tagFilter.map(t => '#' + t).join(', ')}` : 'Filter by tag'}
+              >
+                <Tag size={16} />
+                <span className="filter-label">Tags</span>
+                {tagFilter.length > 0 && <span>({tagFilter.length})</span>}
+              </button>
+              {tagMenuOpen && (
+                <div className="dropdown-menu menu-left tag-menu">
+                  {tagCounts.length > 6 && (
+                    <div className="tag-menu-search">
+                      <input
+                        type="search"
+                        placeholder="Find tag…"
+                        value={tagMenuQuery}
+                        onChange={e => setTagMenuQuery(e.target.value)}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                      />
+                    </div>
+                  )}
+                  <div className="tag-menu-list">
+                    {tagFilter.length > 0 && (
+                      <button className="tag-menu-clear" onClick={clearTagFilter}>
+                        <X size={14} />
+                        <span className="tag-menu-label">Clear tag filter</span>
+                      </button>
+                    )}
+                    {tagMenuRows.map(({ tag, count }) => {
+                      const on = tagFilter.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          className={on ? 'selected' : undefined}
+                          onClick={() => toggleTag(tag)}
+                        >
+                          {on ? <SquareCheck size={16} /> : <Square size={16} />}
+                          <span className="tag-menu-label">#{tag}</span>
+                          <span className="tag-menu-count">{count}</span>
+                        </button>
+                      );
+                    })}
+                    {tagMenuRows.length === 0 && (
+                      <div className="tag-menu-empty">
+                        {tagCounts.length === 0
+                          ? 'No tags yet. Tap the tag chip on an item to add one.'
+                          : 'No matching tags.'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="filter-chips-scroll">
               <button
                 className={typeFilter === 'all' ? 'active' : ''}
                 onClick={() => changeTypeFilter('all')}
               >
-                All{typeFilter === 'all' && <span> ({typeCounts.all})</span>}
+                All
               </button>
               <button
                 className={typeFilter === 'articles' ? 'active' : ''}
@@ -824,7 +979,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <Newspaper size={16} />
                 <span className="filter-label">Articles</span>
-                {typeFilter === 'articles' && <span>({typeCounts.articles})</span>}
               </button>
               <button
                 className={typeFilter === 'texts' ? 'active' : ''}
@@ -832,7 +986,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <NotebookPen size={16} />
                 <span className="filter-label">Texts</span>
-                {typeFilter === 'texts' && <span>({typeCounts.texts})</span>}
               </button>
               <button
                 className={typeFilter === 'podcasts' ? 'active' : ''}
@@ -840,16 +993,42 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               >
                 <Podcast size={16} />
                 <span className="filter-label">Podcasts</span>
-                {typeFilter === 'podcasts' && <span>({typeCounts.podcasts})</span>}
               </button>
+            </div>
             </div>
           </div>
         </div>
-        {bulkMode && (
+      </div>
+      {/* Sibling of the header, not a child: position sticky cannot escape its
+          parent, and the header ends where the cards begin, so inside it the
+          bar would scroll away with the header instead of staying pinned. */}
+      {bulkMode && (
           <div className="bulk-actions">
-            <span className="bulk-count">{selectedItems.size} selected</span>
-            <button onClick={selectAll}>All</button>
-            <button onClick={deselectAll}>None</button>
+            {/* Android-style selection bar: the back pill (exit + selected
+                count) and the master toggle on the left, a hairline divider,
+                then the actions. The pill mirrors the fullscreen player's
+                back arrow, leaving selection mode is also a "go back". The
+                toggle is Gmail tri-state: any selection clears, none selects
+                all. */}
+            <button
+              className="bulk-back"
+              onClick={() => { setBulkMode(false); setSelectedItems(new Set()); }}
+              title="Exit selection"
+            >
+              <ArrowLeft size={16} />
+              <span>{selectedItems.size}</span>
+            </button>
+            <button
+              onClick={() => selectedItems.size > 0 ? deselectAll() : selectAll()}
+              title={selectedItems.size > 0 ? 'Select none' : 'Select all'}
+            >
+              {content.length > 0 && selectedItems.size === content.length
+                ? <SquareCheck size={16} />
+                : selectedItems.size > 0
+                  ? <SquareMinus size={16} />
+                  : <Square size={16} />}
+            </button>
+            <span className="bulk-divider" />
             {/* Smart toggles (Gmail-style): star/archive act on the whole selection.
                 Mixed selections get starred/archived, and uniform ones get the inverse. */}
             <button
@@ -898,6 +1077,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <button onClick={() => runInstantBulk('remove_summary', `Remove summaries from ${selectedItems.size} item(s)?`)}>
                     Remove summaries
                   </button>
+                  <button onClick={() => { setBulkMenuOpen(false); setBulkTagMode('add'); }}>
+                    Add tags…
+                  </button>
+                  <button onClick={() => { setBulkMenuOpen(false); setBulkTagMode('remove'); }}>
+                    Remove tags…
+                  </button>
                   <button onClick={handleBulkGenerateAudio}>Generate audio</button>
                   <button onClick={handleBulkGenerateSummaries}>Generate summaries</button>
                   <button onClick={handleBulkRefetch}>Refetch from web</button>
@@ -909,7 +1094,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         {bulkProgress && (
           <div className="bulk-progress">{bulkProgress.label} {bulkProgress.done}/{bulkProgress.total}…</div>
         )}
-      </div>
 
       {showContinueStrip && !bulkMode && continueItems.length > 0 && (
         <div className="continue-strip">
@@ -983,9 +1167,32 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onAddToQueue={(it) => { setOpenDropdown(null); useQueueStore.getState().addToQueue(it); }}
               onCopyContent={handleCopyContent}
               onDownloadZip={handleDownloadDataZip}
+              onEditTags={(it) => { setOpenDropdown(null); setTagEditorItem(it); }}
             />
           ))}
         </div>
+      )}
+
+      {tagEditorItem && (
+        <TagEditor
+          itemTitle={tagEditorItem.title}
+          initialTags={tagEditorItem.tags || []}
+          knownTags={tagCounts}
+          onSave={(tags) => setItemTags(tagEditorItem.id, tags)}
+          onClose={() => setTagEditorItem(null)}
+        />
+      )}
+
+      {bulkTagMode && (
+        <TagEditor
+          itemTitle={`${selectedItems.size} selected item(s)`}
+          initialTags={[]}
+          knownTags={bulkTagMode === 'remove' ? selectedTagCounts : tagCounts}
+          mode={bulkTagMode}
+          saveLabel={bulkTagMode === 'add' ? `Add to ${selectedItems.size}` : `Remove from ${selectedItems.size}`}
+          onSave={runBulkTags}
+          onClose={() => setBulkTagMode(null)}
+        />
       )}
 
       {transcriptWarning && (() => {

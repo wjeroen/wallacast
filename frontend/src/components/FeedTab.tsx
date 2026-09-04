@@ -324,7 +324,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           preview_picture: episode.preview_picture, // <--- ADDED THIS
         });
       } else {
-        // Podcast episode
+        // Podcast episode. The author is the episode's own when the feed names one, else the
+        // show's author (most feeds only set the channel-level itunes:author).
         await contentAPI.create({
           type: 'podcast_episode',
           title: episode.title,
@@ -334,6 +335,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           published_at: episode.published_at,
           duration: episode.duration,
           preview_picture: episode.preview_picture, // <--- ADDED THIS
+          author: episode.author || selectedPodcast?.author || selectedSearchResult?.author || undefined,
         });
       }
       setAddingToLibrary(null);

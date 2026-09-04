@@ -58,6 +58,10 @@ const VALID_SETTING_KEYS = [
   // Blank/whitespace = use the built-in default. Spread so the list stays in sync with the registry.
   ...PROMPT_SETTING_KEYS,
   'library_show_summary',       // Show the article summary (not the description) on library cards
+  'copy_include_summary',       // "Copy content": put the summary at the top as a fenced code block (default: false)
+  'copy_include_comment_summary', // "Copy content": also the comment summary, as a second block (default: true; only matters when copy_include_summary is on)
+  'copy_summary_code_label',    // Label after the opening ``` of those blocks, e.g. "ad-summary" for Obsidian Admonition (default: none)
+  'copy_include_comments',      // "Copy content": append the "## Comments" section (default: true)
   'image_alt_text_enabled', // NEW: Toggle for image descriptions in audio
   'narrate_ea_forum_comments',  // Include EA Forum/LessWrong comments in TTS audio (default: true)
   'narrate_substack_comments',  // Include Substack comments in TTS audio (default: true)

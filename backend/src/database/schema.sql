@@ -43,11 +43,12 @@ CREATE TABLE IF NOT EXISTS content_items (
     -- Organization (Wallabag-compatible naming)
     is_starred BOOLEAN DEFAULT FALSE,  -- Renamed from is_favorite (Wallabag: starred)
     is_archived BOOLEAN DEFAULT FALSE,
-    tags TEXT,  -- Comma-separated tags (Wallabag style: "article,tech,toread")
+    tags TEXT[] NOT NULL DEFAULT '{}',  -- The user's own tags, normalized (lowercase, trimmed). Type tags are derived from `type`, never stored. See migration 027.
 
     -- Wallabag sync fields
     wallabag_id INTEGER,  -- ID in Wallabag (NULL if not synced)
     wallabag_updated_at TIMESTAMP,  -- Last update time in Wallabag (for conflict resolution)
+    wallabag_synced_tags TEXT[] DEFAULT NULL,  -- Tag set both sides agreed on at the last sync (three-way merge base, see migration 027)
 
     -- Playback state (Wallacast-specific, not synced to Wallabag)
     playback_position INTEGER DEFAULT 0, -- In seconds
@@ -66,20 +67,10 @@ CREATE TABLE IF NOT EXISTS queue_items (
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tags for organization
-CREATE TABLE IF NOT EXISTS tags (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL UNIQUE,
-    color VARCHAR(7), -- Hex color
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Many-to-many relationship for content and tags
-CREATE TABLE IF NOT EXISTS content_tags (
-    content_item_id INTEGER NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (content_item_id, tag_id)
-);
+-- Tags live in content_items.tags (TEXT[], see migration 027). The old normalized
+-- `tags` + `content_tags` pair that used to be declared here was never written to and is
+-- dropped (while empty) by that migration. A per-user tag-metadata table (colors etc.)
+-- can be added later, keyed by label.
 
 -- Settings (key-value store for user preferences)
 CREATE TABLE IF NOT EXISTS settings (

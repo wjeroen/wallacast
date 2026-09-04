@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
@@ -35,6 +35,7 @@ interface ContentCardProps {
   onAddToQueue: (item: ContentItem) => void;
   onCopyContent: (item: ContentItem) => void;
   onDownloadZip: (item: ContentItem) => void;
+  onEditTags: (item: ContentItem) => void;
 }
 
 export function ContentCard({
@@ -64,6 +65,7 @@ export function ContentCard({
   onAddToQueue,
   onCopyContent,
   onDownloadZip,
+  onEditTags,
 }: ContentCardProps) {
   // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
   // rest inline on the card (article summary only, never the comment summary)
@@ -227,11 +229,6 @@ export function ContentCard({
       className={`content-card ${selected ? 'selected' : ''}`}
       onClick={() => bulkMode ? onToggleSelect(item.id) : onPlay(item)}
     >
-      {bulkMode && (
-        <div className="checkbox">
-          {selected ? <CheckSquare size={20} /> : <Square size={20} />}
-        </div>
-      )}
       <div className="content-info">
         {item.preview_picture && (
           <img src={item.preview_picture} alt={item.title} className="thumbnail" />
@@ -324,12 +321,47 @@ export function ContentCard({
           {item.transcript_words && (
             <span className="badge transcript"><Captions size={12} /> Transcript</span>
           )}
-          {item.playback_position > 0 && item.duration && item.duration > 0 && (
+          {/* One chip for listening state: "34% • 1h 23m" while in progress, just the
+              length before the first play. Keeps the badge row to chips only. */}
+          {item.duration && item.duration > 0 && (
             <span className="progress">
-              {Math.round((item.playback_position / item.duration) * 100)}% complete
+              {item.playback_position > 0 && (
+                <>{Math.round((item.playback_position / item.duration) * 100)}% &bull; </>
+              )}
+              {formatDuration(item.duration)}
             </span>
           )}
-          {item.duration && <span className="duration">{formatDuration(item.duration)}</span>}
+          {/* Tags as dimmed hashtag chips. Tapping any chip (or the tag+ chip at the end)
+              opens the tag picker. In bulk mode the card click selects, so chips are inert. */}
+          {(item.tags || []).map(tag => (
+            bulkMode ? (
+              <span key={tag} className="tag-chip static">#{tag}</span>
+            ) : (
+              <button
+                key={tag}
+                type="button"
+                className="tag-chip"
+                onClick={(e) => { e.stopPropagation(); onEditTags(item); }}
+                title="Edit tags"
+              >
+                #{tag}
+              </button>
+            )
+          ))}
+          {bulkMode ? (
+            <span className="tag-chip tag-chip-add static">
+              <Tag size={12} /><Plus size={10} />
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="tag-chip tag-chip-add"
+              onClick={(e) => { e.stopPropagation(); onEditTags(item); }}
+              title={item.tags && item.tags.length > 0 ? 'Edit tags' : 'Add tags'}
+            >
+              <Tag size={12} /><Plus size={10} />
+            </button>
+          )}
         </div>
         {generationStatusDisplay()}
         {item.summary_status === 'generating' && (
@@ -393,7 +425,12 @@ export function ContentCard({
       </div>
       {/* Star/archive stay visible in bulk mode. They show each item's state
           (filled star, highlighted archive) and still work as toggles.
-          Delete and the dropdown are hidden to keep selection taps safe. */}
+          Delete and the dropdown give way to a wide select checkbox at their
+          combined footprint, so entering selection mode moves nothing on the
+          card and destructive taps stay impossible while selecting. Nothing
+          in this cluster shifts layout anyway (it is an absolute overlay),
+          the in-flow left-edge checkbox that used to reflow every card on
+          bulk toggle is gone. */}
       <div className="content-actions" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => onToggleStarred(item.id)}
@@ -539,6 +576,15 @@ export function ContentCard({
             )}
           </div>
           </>
+        )}
+        {bulkMode && (
+          <button
+            className={`bulk-check ${selected ? 'checked' : ''}`}
+            onClick={() => onToggleSelect(item.id)}
+            title={selected ? 'Deselect' : 'Select'}
+          >
+            {selected ? <CheckSquare size={16} /> : <Square size={16} />}
+          </button>
         )}
       </div>
     </div>

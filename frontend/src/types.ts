@@ -19,7 +19,10 @@ export interface ContentItem {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   audio_url?: string;
   transcript?: string;
-  transcript_words?: string; // JSON string of word timestamps
+  // Word timestamps. The column is JSONB, so the API delivers a parsed ARRAY of
+  // { word, start, end } at runtime. Consumers must accept both shapes (see
+  // AudioPlayer.tsx parsedTranscriptWords and markdown.ts timestampedTranscript).
+  transcript_words?: string | Array<{ word: string; start: number; end: number }>;
   tts_chunks?: string; // JSON string of TTS chunk metadata
   content_alignment?: string; // JSON string of content-to-transcript alignment data
   duration?: number;
@@ -38,7 +41,7 @@ export interface ContentItem {
   comment_source?: 'ea_forum' | 'lesswrong' | 'substack' | null;
   is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
-  tags?: string;  // Comma-separated tags (Wallabag style)
+  tags?: string[];  // The user's own tags, normalized (lowercase). Type tags (article/text/podcast) are derived from `type`, never stored
   content_source?: 'wallabag' | 'wallacast';  // Who fetched the content
   wallabag_id?: number;  // ID in Wallabag (for sync)
   wallabag_updated_at?: string;  // Last update in Wallabag (for conflict resolution)

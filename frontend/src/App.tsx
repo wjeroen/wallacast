@@ -9,7 +9,6 @@ import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
-import { notifyArchivePlayerItem } from './store/pendingArchiveStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
 import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio } from './format';
 import type { ContentItem } from './types';
@@ -134,6 +133,11 @@ function App() {
   // the new track once metadata loads. First-click from the library leaves it
   // at 0 so playback stays user-initiated.
   const [autoPlayToken, setAutoPlayToken] = useState(0);
+
+  // Bumped on every library click so a minimized player pops back to
+  // fullscreen for the newly opened item. Auto-advance leaves it alone,
+  // a track change during background listening must stay in the mini player.
+  const [openToken, setOpenToken] = useState(0);
 
   // Feed staleness (days since last refresh)
   const [feedDaysStale, setFeedDaysStale] = useState(0);
@@ -263,16 +267,39 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Restart-if-nearly-finished: every way into the player (library click, queue
+  // click, next/prev, auto-advance) runs the item through this first. When the
+  // effective audio sits within seconds of its end, the track counts as finished
+  // and starts over instead of resuming into its final moments. 10 seconds for
+  // full audio (the Apple Podcasts / Pocket Casts convention), 5 for the much
+  // shorter summary audio. Only the effective variant's position is touched,
+  // never both, because card progress is original-audio-only by design.
+  const resetIfNearlyFinished = (item: ContentItem): ContentItem => {
+    const variant = getEffectiveAudio(item, preferSummaryAudio);
+    if (!variant) return item;
+    const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
+    const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
+    const threshold = variant === 'summary' ? 5 : 10;
+    if (dur > 0 && pos > 0 && dur - pos < threshold) {
+      return variant === 'summary'
+        ? { ...item, summary_playback_position: 0 }
+        : { ...item, playback_position: 0 };
+    }
+    return item;
+  };
+
   // Called from LibraryTab when the user clicks a library item. Captures the
   // current filter as a "play context" (Spotify-style) so the non-manual
   // auto-queue can be derived from it. By default the first click loads the
-  // track without playing it; the opt-in autoplay_on_open setting flips that.
+  // track without playing it, and the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
-    const { typeFilter, facets, searchQuery } = useContentStore.getState();
-    useQueueStore.getState().setLibraryContext({ typeFilter, facets, searchQuery }, content.id);
+    const { typeFilter, facets, tagFilter, searchQuery } = useContentStore.getState();
+    useQueueStore.getState().setLibraryContext({ typeFilter, facets, tags: tagFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
-    setCurrentContent(content);
-    if (autoplayOnOpen && hasAnyAudio(content)) setAutoPlayToken(t => t + 1);
+    setOpenToken(t => t + 1);
+    const item = resetIfNearlyFinished(content);
+    setCurrentContent(item);
+    if (autoplayOnOpen && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
@@ -283,9 +310,9 @@ function App() {
     if (hasAnyAudio(item)) {
       try {
         const res = await contentAPI.getById(item.id);
-        setCurrentContent(res.data);
+        setCurrentContent(resetIfNearlyFinished(res.data));
       } catch {
-        setCurrentContent(item);
+        setCurrentContent(resetIfNearlyFinished(item));
       }
       setAutoPlayToken(t => t + 1);
       return;
@@ -339,9 +366,9 @@ function App() {
       if (hasAnyAudio(nextItem)) {
         try {
           const res = await contentAPI.getById(nextItem.id);
-          setCurrentContent(res.data);
+          setCurrentContent(resetIfNearlyFinished(res.data));
         } catch {
-          setCurrentContent(nextItem);
+          setCurrentContent(resetIfNearlyFinished(nextItem));
         }
         setAutoPlayToken(t => t + 1);
         return;
@@ -380,13 +407,6 @@ function App() {
     }
   };
 
-  // Tell the delayed-archive machinery which item the player holds: a pending
-  // archive that fires while its item is still loaded defers to player-leave,
-  // and leaving the item is exactly this id changing (or becoming null).
-  useEffect(() => {
-    notifyArchivePlayerItem(currentContent?.id ?? null);
-  }, [currentContent?.id]);
-
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');
   };
@@ -405,23 +425,7 @@ function App() {
     } catch {
       item = prev;
     }
-    // If the track was nearly or fully finished, restart from the beginning.
-    // 10 seconds is the industry-standard threshold (Apple Podcasts, Pocket Casts).
-    // Checks whichever audio would actually play: summary audio has its OWN
-    // position/duration, entirely separate from the original's, so reusing the
-    // original fields here silently skipped this reset for summary audio and
-    // bounced straight back to the item you were trying to leave (reported
-    // 2026-08-21). The card's progress percentage stays original-only by
-    // design, so only summary_playback_position is reset here, never
-    // playback_position, when the summary is the effective audio.
-    const variant = getEffectiveAudio(item, preferSummaryAudio);
-    const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
-    const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
-    if (dur > 0 && pos > 0 && (dur - pos) < 10) {
-      item = variant === 'summary'
-        ? { ...item, summary_playback_position: 0 }
-        : { ...item, playback_position: 0 };
-    }
+    item = resetIfNearlyFinished(item);
     setCurrentContent(item);
     // Only try to play when there is something to play (prev can now land on
     // an audio-less item, which just opens for reading).
@@ -644,9 +648,9 @@ function App() {
     try {
       await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to regenerate transcript:', error);
-      alert('Failed to regenerate transcript');
+      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
     }
   };
 
@@ -960,7 +964,16 @@ function App() {
         {currentContent && (
           <AudioPlayer
             content={currentContent}
-            onClose={() => setCurrentContent(null)}
+            openToken={openToken}
+            onClose={() => {
+              setCurrentContent(null);
+              // Closing unmounts AudioPlayer, which forgets the last token it
+              // consumed. A leftover token would then read as a fresh play
+              // request on the next plain library click and auto-play against
+              // the autoplay_on_open setting (found 2026-08-31). Clearing it
+              // keeps plain opens silent, the setting bumps it again when on.
+              setAutoPlayToken(0);
+            }}
             onRefetch={handleRefetchContent}
             onGenerateAudio={handleGenerateAudio}
             onRemoveAudio={handleRemoveAudio}

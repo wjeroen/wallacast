@@ -13,17 +13,16 @@ import {
   Moon,
   SunMoon,
   X,
-  Minimize2,
   SquareArrowOutUpRight,
   RefreshCw,
   ArrowDownToLine,
+  ArrowLeft,
   MoreVertical,
   ArrowUp,
   MessageCircle,
   Star,
   Archive,
   ArchiveRestore,
-  Undo2,
   Trash2,
   SkipBack,
   SkipForward,
@@ -51,8 +50,11 @@ import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
-import { usePendingArchiveStore } from '../store/pendingArchiveStore';
 import { useQueueStore } from '../store/queueStore';
+import { TagEditor } from './TagEditor';
+import { collectTagCounts } from '../tags';
+import { loadCopyContentOptions } from '../copy-settings';
+import { Tag as TagIcon, Plus as PlusIcon } from 'lucide-react';
 import type { ContentItem, ContentVersion, Comment } from '../types';
 
 interface TranscriptWord {
@@ -454,12 +456,12 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
-  // Content store for star/archive/delete actions
-  const { toggleStarred, toggleArchived, deleteItem, updateItem } = useContentStore();
-  // Delayed-archive state (player-only): pending + deferred both render as Undo
-  // (deferred = timer fired while this item is loaded; archives on player-leave).
-  const pendingArchives = usePendingArchiveStore(s => s.pending);
-  const deferredArchives = usePendingArchiveStore(s => s.deferred);
+  // Content store for star/archive/delete/tag actions
+  const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
+  // Tag editor popup + the library-wide tag list it offers
+  const [showTagEditor, setShowTagEditor] = useState(false);
+  const allLibraryItems = useContentStore(s => s.allItems);
+  const knownTags = useMemo(() => collectTagCounts(allLibraryItems), [allLibraryItems]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Markdown editor (Content tab) state
@@ -962,18 +964,23 @@ export function FullscreenPlayer({
   // show text the playing audio does not narrate). Toggling the mode on an item
   // with both audios flips between Summary and the item's normal default. Items
   // playing their original audio keep the existing persistence behavior.
-  // NOTE: the item-change branch below (playingVariant === 'summary') is
-  // mirrored in the scroll-reset effect below. Keep both in sync.
+  // NOTE: both branches below (playingVariant === 'summary', and the return-to-default
+  // when leaving summary playback) are mirrored in the scroll-reset effect below. Keep
+  // them in sync. prevTabFollowRef is written by a dedicated recorder effect DEFINED
+  // AFTER the scroll-reset effect, so this effect and the scroll-reset effect both read
+  // the true previous item/variant during the same commit.
   const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
   useEffect(() => {
     const prev = prevTabFollowRef.current;
-    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
     if (playingVariant === 'summary') {
       if (prev.id !== content.id || prev.variant !== 'summary') setActiveTab('summary');
       return;
     }
-    // Mode toggled back to the original audio on the SAME item: return to its default.
-    if (prev.id === content.id && prev.variant === 'summary' && playingVariant === 'original') {
+    // Back on the original audio, either because the mode toggled on the SAME item or
+    // because we advanced from a summary-playing item into one playing its full audio
+    // (reported 2026-09-04: the next item stayed stuck on the Summary tab): return to
+    // the item's default tab.
+    if (prev.variant === 'summary' && playingVariant === 'original') {
       setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1123,6 +1130,10 @@ export function FullscreenPlayer({
     if (availableTabs.length > 0 && !availableTabs.includes(landingTab)) landingTab = availableTabs[0];
     if (initialTab === 'summary' && (content.summary || '').trim()) landingTab = 'summary';
     if (playingVariant === 'summary') landingTab = 'summary';
+    else if (prevTabFollowRef.current.variant === 'summary' && playingVariant === 'original') {
+      // Mirrors the follow-playing-summary effect's return-to-default branch.
+      landingTab = content.type === 'podcast_episode' ? 'description' : 'read-along';
+    }
 
     const jumpToHighlight = landingTab === 'read-along' && autoScroll;
     const jumpToSummaryProgress = landingTab === 'summary' && autoScroll && playingVariant === 'summary';
@@ -1142,6 +1153,14 @@ export function FullscreenPlayer({
     // auto-scroll or switches tabs mid-item.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id]);
+
+  // Recorder for prevTabFollowRef, deliberately defined AFTER both effects that read it
+  // (follow-playing-summary and the scroll-reset above): React runs effects in definition
+  // order, so both readers see the PREVIOUS item/variant during the same commit and this
+  // then records the current one. KEEP LAST of this group.
+  useEffect(() => {
+    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
+  }, [content.id, playingVariant]);
 
   // Trigger scroll once when switching to read-along tab
   useEffect(() => {
@@ -1365,12 +1384,38 @@ export function FullscreenPlayer({
     target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
+  // Archive/unarchive from the header button. Same behavior as a library card:
+  // one confirm popup when archiving would wipe generated audio (article/text,
+  // not starred, warning toggleable in Settings), instant otherwise.
+  const handleArchiveClick = async () => {
+    const archiveWipesAudio = !!content.audio_url
+      && (content.type === 'article' || content.type === 'text')
+      && !content.is_starred;
+    if (!content.is_archived && archiveWipesAudio) {
+      let warn = true;
+      try {
+        const res = await userSettingsAPI.get('warn_archive_removes_audio');
+        warn = res.data.value !== 'false';
+      } catch { /* setting unreadable, keep the warning */ }
+      if (warn && !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")) return;
+    }
+    // toggleArchived does the optimistic store update + the server PATCH,
+    // then fetch the fresh item for the player.
+    await toggleArchived(content.id);
+    try {
+      const fresh = await contentAPI.getById(content.id);
+      onContentUpdated?.(fresh.data);
+    } catch (err) {
+      console.error('Failed to refresh player after archive:', err);
+    }
+  };
+
   // Copy the readable content (title, link, author, date, body, comments) to
   // the clipboard as Markdown, via the shared contentToMarkdown export.
   const handleCopyContent = async () => {
     setShowDropdown(false);
     try {
-      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments));
+      await navigator.clipboard.writeText(contentToMarkdown(content, parsedComments, await loadCopyContentOptions()));
     } catch (error) {
       console.error('Failed to copy content:', error);
       alert('Failed to copy to clipboard');
@@ -1664,7 +1709,13 @@ export function FullscreenPlayer({
       case 'read-along': {
         const isPodcast = content.type === 'podcast_episode';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
-        const isTranscribing = content.current_operation === 'transcribing';
+        // What is actually running. The transcript job reports `current_operation` as
+        // 'transcript' (set by the PATCH route) or 'transcribing' (set by the service), and
+        // `generation_status` as 'generating_transcript'. Without all three, a transcript
+        // regeneration fell through to the generic branch and claimed audio was being made.
+        const isTranscribing = content.current_operation === 'transcribing'
+          || content.current_operation === 'transcript'
+          || content.generation_status === 'generating_transcript';
         const isAligning = content.current_operation === 'aligning_content';
         const hasAudio = !!content.audio_url;
         const hasTranscript = transcriptWords.length > 0 || !!content.transcript;
@@ -1677,10 +1728,12 @@ export function FullscreenPlayer({
           // The word spans come from the memoized transcriptTree (built once per
           // transcript); read-state and clicks are handled imperatively above.
           let podcastMessage: string | null = null;
-          if (!hasAudio && isGenerating) {
-            podcastMessage = 'Audio is being generated...';
-          } else if (isTranscribing) {
+          if (isTranscribing) {
             podcastMessage = 'Transcript is being generated... This may take a minute.';
+          } else if (!hasAudio && isGenerating) {
+            podcastMessage = 'Audio is being generated...';
+          } else if (isAligning) {
+            podcastMessage = 'Aligning content with audio...';
           } else if (!hasTranscript) {
             podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
           }
@@ -1701,9 +1754,11 @@ export function FullscreenPlayer({
         // Article/text: if LLM alignment exists, use the rich read-along view
         if (isLLMAlignment) {
           // Show generating/transcribing status above the content if applicable
-          const statusMsg = isGenerating ? 'Audio is being generated...'
-            : isTranscribing ? 'Transcribing...'
+          // Order matters: the transcript job also sets a busy generation_status, so it
+          // must be checked BEFORE the generic "audio" message.
+          const statusMsg = isTranscribing ? 'Transcript is being generated...'
             : isAligning ? 'Aligning content with audio...'
+            : isGenerating ? 'Audio is being generated...'
             : null;
           return (
             <div className="tab-read-along-display">
@@ -1717,15 +1772,13 @@ export function FullscreenPlayer({
         // This ensures articles are readable even before audio is generated.
         return (
           <div className="tab-read-along-display">
-            {isGenerating && (
-              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
-            )}
-            {isTranscribing && (
-              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcribing... Read-along highlighting will appear once complete.</p>
-            )}
-            {isAligning && (
+            {isTranscribing ? (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Transcript is being generated... Read-along highlighting will appear once complete.</p>
+            ) : isAligning ? (
               <p className="no-content" style={{ marginBottom: '1rem' }}>Aligning content with audio... Almost done.</p>
-            )}
+            ) : isGenerating ? (
+              <p className="no-content" style={{ marginBottom: '1rem' }}>Audio is being generated... Read-along highlighting will appear once complete.</p>
+            ) : null}
             <div className="tab-content-display">
               <div className="content-header-with-button">
                 <div className="content-header">
@@ -1935,8 +1988,9 @@ export function FullscreenPlayer({
           if (f.facets.transcript === 'transcript') facetLabels.push('Transcribed');
           if (f.facets.transcript === 'no_transcript') facetLabels.push('Untranscribed');
           const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
+          const tagLabel = f.tags.length > 0 ? ` • ${f.tags.map(t => '#' + t).join(' ')}` : '';
           const searchLabel = f.searchQuery.trim() ? ` • “${f.searchQuery.trim()}”` : '';
-          return `Up next from ${facetLabel}${typeLabel}${searchLabel}`;
+          return `Up next from ${facetLabel}${typeLabel}${tagLabel}${searchLabel}`;
         })() : 'Up next';
 
         const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
@@ -2044,15 +2098,41 @@ export function FullscreenPlayer({
     <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
-          {content.preview_picture && (
-            <img
-              src={content.preview_picture}
-              alt={content.title}
-              className="fullscreen-thumbnail"
-            />
-          )}
+          {/* Leading column: the artwork top-aligned with the title, with the
+              back control tucked below it. Without artwork the control simply
+              leads the title. Back means "leave this view": with any audio
+              (original or summary) it minimizes to the mini player, whose own
+              X is the real close. Without audio there is no mini player, so
+              back closes for real. Both feel like "back to the library". */}
+          <div className="fullscreen-leading">
+            {content.preview_picture && (
+              <img
+                src={content.preview_picture}
+                alt={content.title}
+                className="fullscreen-thumbnail"
+              />
+            )}
+            <button
+              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              className="fullscreen-close-button"
+              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+            >
+              <ArrowLeft size={18} />
+            </button>
+          </div>
           <div>
-            <h2 className="fullscreen-title">{content.title}</h2>
+            {/* Tapping the title does the same as the back control above, the
+                inverse of the mini player's title tap that expands. Better
+                thumb reach than the top-left control. With audio it minimizes,
+                without audio there is no mini player so it closes. */}
+            <h2
+              className="fullscreen-title"
+              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              style={{ cursor: 'pointer' }}
+              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+            >
+              {content.title}
+            </h2>
             {content.type === 'article' && content.url && (
               <p className="fullscreen-source-link">
                 <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
@@ -2061,100 +2141,113 @@ export function FullscreenPlayer({
                 </a>
               </p>
             )}
-            {content.author && (
-              <p className="fullscreen-author">
-                {content.author}
-                {content.published_at && (
-                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                )}
-                {(content.karma !== undefined && content.karma !== null) && (
-                  <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
-                )}
-                {totalCommentCount > 0 && (
-                  <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
-                )}
-              </p>
-            )}
-            {content.type === 'podcast_episode' && content.podcast_show_name && (
-              <p className="fullscreen-author">
-                {content.podcast_show_name}
-                {content.published_at && (
-                  <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
-                )}
-              </p>
-            )}
+            {(() => {
+              const itemTags = content.tags || [];
+              // The "tag +" chip opens the picker. With no tags it rides at the end of
+              // the author row (no extra row); with tags, the chips get their own
+              // thinner row below and the chip closes that row.
+              const addChip = (
+                <button
+                  type="button"
+                  className="tag-chip tag-chip-add"
+                  onClick={() => setShowTagEditor(true)}
+                  title={itemTags.length > 0 ? 'Edit tags' : 'Add tags'}
+                >
+                  <TagIcon size={12} /><PlusIcon size={10} />
+                </button>
+              );
+              const inlineChip = itemTags.length === 0 ? addChip : null;
+              let authorRow: React.ReactNode = null;
+              if (content.author) {
+                authorRow = (
+                  <p className="fullscreen-author">
+                    <span>
+                      {content.author}
+                      {content.published_at && (
+                        <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                      )}
+                      {(content.karma !== undefined && content.karma !== null) && (
+                        <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
+                      )}
+                      {totalCommentCount > 0 && (
+                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
+                      )}
+                    </span>
+                    {inlineChip}
+                  </p>
+                );
+              } else if (content.type === 'podcast_episode' && content.podcast_show_name) {
+                authorRow = (
+                  <p className="fullscreen-author">
+                    <span>
+                      {content.podcast_show_name}
+                      {content.published_at && (
+                        <> &bull; {new Date(content.published_at).toLocaleDateString('en-GB')}</>
+                      )}
+                    </span>
+                    {inlineChip}
+                  </p>
+                );
+              } else if (inlineChip) {
+                authorRow = <p className="fullscreen-author">{inlineChip}</p>;
+              }
+              return (
+                <>
+                  {authorRow}
+                  {itemTags.length > 0 && (
+                    <div className="fullscreen-tags">
+                      {itemTags.map(tag => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="tag-chip"
+                          onClick={() => setShowTagEditor(true)}
+                          title="Edit tags"
+                        >
+                          #{tag}
+                        </button>
+                      ))}
+                      {addChip}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
         <div className="fullscreen-header-buttons">
-          {/* Dropdown menu (same options as library item) */}
+          {/* Star and Archive ride along as their own buttons (the library card
+              shows them inline too). Delete lives at the bottom of the menu. */}
+          <button
+            onClick={() => {
+              toggleStarred(content.id);
+              onContentUpdated?.({ ...content, is_starred: !content.is_starred });
+            }}
+            className="header-button"
+            title={content.is_starred ? 'Unstar' : 'Star'}
+            style={content.is_starred ? { color: '#fbbf24' } : undefined}
+          >
+            <Star size={16} fill={content.is_starred ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            onClick={handleArchiveClick}
+            className="header-button"
+            title={content.is_archived ? 'Unarchive' : 'Archive'}
+            style={content.is_archived ? { color: '#60a5fa' } : undefined}
+          >
+            {content.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+          </button>
+          {/* Dropdown menu (a library card's menu options, plus Delete at the bottom) */}
           <div className="dropdown-container" ref={showDropdown ? dropdownRef : null} style={{ position: 'relative' }}>
             <button
               onClick={() => setShowDropdown(!showDropdown)}
               className="header-button"
               title="More options"
             >
-              <MoreVertical size={20} />
+              <MoreVertical size={16} />
             </button>
             {showDropdown && (
               <div className="dropdown-menu" style={{ right: 0, top: '100%' }}>
-                {/* Star / Archive / Delete at the top */}
-                <button
-                  onClick={() => {
-                    toggleStarred(content.id);
-                    onContentUpdated?.({ ...content, is_starred: !content.is_starred });
-                  }}
-                  style={content.is_starred ? { color: '#fbbf24' } : undefined}
-                >
-                  <Star size={14} fill={content.is_starred ? 'currentColor' : 'none'} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  {content.is_starred ? 'Unstar' : 'Star'}
-                </button>
-                <button
-                  onClick={async () => {
-                    // The 10s undo window exists to protect generated audio from an
-                    // accidental archive. When archiving deletes nothing (no audio,
-                    // podcast source audio, or a starred item), archive instantly.
-                    const archiveWipesAudio = !!content.audio_url
-                      && (content.type === 'article' || content.type === 'text')
-                      && !content.is_starred;
-                    if (!content.is_archived && archiveWipesAudio) {
-                      // Delayed archive (10s): the timer lives app-level (pendingArchiveStore),
-                      // so it fires even after this player moves on or closes, defers while the
-                      // item is still loaded here, and a second press within the window undoes
-                      // it before the server wipes anything.
-                      const store = usePendingArchiveStore.getState();
-                      if (store.pending[content.id] || store.deferred[content.id]) store.cancel(content.id);
-                      else store.schedule(content.id);
-                      return;
-                    }
-                    // Unarchiving, and archiving that wipes nothing, stay instant.
-                    // toggleArchived does the optimistic store update + the server
-                    // PATCH; then fetch the fresh item for the player.
-                    await toggleArchived(content.id);
-                    try {
-                      const fresh = await contentAPI.getById(content.id);
-                      onContentUpdated?.(fresh.data);
-                    } catch (err) {
-                      console.error('Failed to refresh player after archive:', err);
-                    }
-                  }}
-                  style={content.is_archived || pendingArchives[content.id] || deferredArchives[content.id] ? { color: '#60a5fa' } : undefined}
-                >
-                  {content.is_archived
-                    ? <ArchiveRestore size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    : pendingArchives[content.id] || deferredArchives[content.id]
-                      ? <Undo2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                      : <Archive size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  }
-                  {content.is_archived ? 'Unarchive' : pendingArchives[content.id] || deferredArchives[content.id] ? 'Undo' : 'Archive'}
-                  {!content.is_archived && pendingArchives[content.id] && <span className="pending-archive-bar" />}
-                </button>
-                <button
-                  onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
-                  style={{ color: '#ef4444' }}
-                >
-                  <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                  Delete
-                </button>
                 {/* Audio / transcript / refetch options */}
                 {(content.type === 'article' || content.type === 'text') && (
                   <>
@@ -2249,22 +2342,28 @@ export function FullscreenPlayer({
                   <FolderDown size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                   Download data (zip)
                 </button>
+                <button
+                  onClick={() => { setShowDropdown(false); deleteItem(content.id); onClose(); }}
+                  style={{ color: '#ef4444' }}
+                >
+                  <Trash2 size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Delete
+                </button>
               </div>
             )}
           </div>
-          {/* No minimize without audio (original OR summary). The mini player is
-              playback chrome, so audio-less items live in fullscreen only (close
-              is the way out). Missed the summary-audio case until 2026-08-21:
-              a summary-audio-only item's button had vanished since this still
-              checked content.audio_url alone. */}
-          {hasAnyAudio(content) && (
-            <button onClick={onMinimize} className="header-button" title="Minimize">
-              <Minimize2 size={20} />
-            </button>
+          {showTagEditor && (
+            <TagEditor
+              itemTitle={content.title}
+              initialTags={content.tags || []}
+              knownTags={knownTags}
+              onSave={async (tags) => {
+                await setItemTags(content.id, tags);
+                onContentUpdated?.({ ...content, tags });
+              }}
+              onClose={() => setShowTagEditor(false)}
+            />
           )}
-          <button onClick={onClose} className="header-button" title="Close">
-            <X size={20} />
-          </button>
         </div>
       </div>
 

@@ -58,7 +58,10 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
 // 5xx, backoff 15s/30s/60s, a busy model needs breathing room rather than a quick hammer).
 // Throws immediately on anything else (e.g. auth failures). Seen live 2026-07-27: DeepInfra
 // answered 429 Model busy on whisper-large-v3 and the old network-only classification gave
-// up after one attempt.
+// up after one attempt. Seen live 2026-09-03: undici's "TypeError: fetch failed" (cause
+// HeadersTimeoutError, code UND_ERR_HEADERS_TIMEOUT, DeepInfra never answered) also gave up
+// after one attempt, so undici error codes and "fetch failed"/timeout messages now count as
+// network errors too.
 async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRetries = 3): Promise<T> {
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
@@ -67,9 +70,11 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
       const isNetworkError =
         error?.code === 'ECONNRESET' ||
         error?.cause?.code === 'ECONNRESET' ||
+        (typeof error?.cause?.code === 'string' && error.cause.code.startsWith('UND_ERR')) ||
         error?.cause?.type === 'system' ||
         error?.constructor?.name === 'APIConnectionError' ||
-        (typeof error?.message === 'string' && /connection|socket hang up|network/i.test(error.message));
+        (typeof error?.message === 'string' &&
+          /connection|socket hang up|network|fetch failed|timeout|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN/i.test(error.message));
 
       // Covers both transports: the OpenAI SDK attaches a numeric status, the DeepInfra
       // native path throws "DeepInfra transcription HTTP <status> ..." messages.
@@ -80,7 +85,9 @@ async function withChunkRetry<T>(fn: () => Promise<T>, chunkLabel: string, maxRe
         (typeof error?.message === 'string' && /HTTP (429|5\d\d)/.test(error.message));
 
       if ((!isNetworkError && !isCapacityError) || attempt > maxRetries) {
-        console.error(`${chunkLabel} failed after ${attempt} attempt(s), giving up.`);
+        // The generic undici message hides the real reason, so name the cause when there is one.
+        const cause = error?.cause?.code || error?.cause?.message || '';
+        console.error(`${chunkLabel} failed after ${attempt} attempt(s), giving up.${cause ? ` (cause: ${cause})` : ''}`);
         throw error;
       }
 
@@ -272,10 +279,33 @@ export async function transcribeWithTimestamps(
       // URL passed, download it (legacy path, used for podcast transcription)
       // Log without the query string: article URLs carry the audio access token.
       console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
-      const response = await safeFetch(audioSource, {}, AUDIO_REDIRECT_HOPS);
-      if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
-      if (!response.body) throw new Error('No response body');
-      await pipeline(response.body, createWriteStream(audioPath));
+      // Downloads fail transiently in the wild (2026-07-07: a 163 MB episode failed once
+      // with a bare "fetch failed" and worked on retry), so try up to 3 times with a short
+      // backoff. A 4xx answer is permanent (a dead URL does not heal) and is not retried.
+      const DOWNLOAD_ATTEMPTS = 3;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const response = await safeFetch(audioSource, {}, AUDIO_REDIRECT_HOPS);
+          if (!response.ok) {
+            const err: any = new Error(`Failed to download audio: HTTP ${response.status} ${response.statusText}`);
+            err.permanentDownload = response.status >= 400 && response.status < 500;
+            throw err;
+          }
+          if (!response.body) throw new Error('No response body');
+          await pipeline(response.body, createWriteStream(audioPath));
+          break;
+        } catch (error: any) {
+          const cause = error?.cause?.code || error?.cause?.message || '';
+          const causeNote = cause ? ` (cause: ${cause})` : '';
+          if (error?.permanentDownload || attempt >= DOWNLOAD_ATTEMPTS) {
+            console.error(`[Transcription] Download failed after ${attempt} attempt(s): ${error.message}${causeNote}`);
+            throw error;
+          }
+          const delayMs = attempt * 10_000; // 10s, then 20s
+          console.warn(`[Transcription] Download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed: ${error.message}${causeNote}, retrying in ${delayMs / 1000}s...`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
     }
 
     const fileStats = await fs.stat(audioPath);

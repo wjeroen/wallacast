@@ -17,6 +17,7 @@ import { summaryAudioKey, generateSummaryAudioForContent } from '../services/sum
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
+import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 
 const router = express.Router();
 
@@ -140,7 +141,7 @@ router.post('/bulk', async (req, res) => {
     const userId = req.user!.userId;
     const { action, ids } = req.body as { action?: string; ids?: unknown };
 
-    const ACTIONS = ['star', 'unstar', 'archive', 'unarchive', 'delete', 'remove_audio', 'remove_summary'];
+    const ACTIONS = ['star', 'unstar', 'archive', 'unarchive', 'delete', 'remove_audio', 'remove_summary', 'add_tags', 'remove_tags'];
     if (!action || !ACTIONS.includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
     }
@@ -149,6 +150,47 @@ router.post('/bulk', async (req, res) => {
     }
 
     let affected = 0;
+
+    if (action === 'add_tags' || action === 'remove_tags') {
+      // Same validation as the single-item PATCH: reserved tags rejected, the rest
+      // normalized. Tag changes must reach Wallabag, so the push flag is set (the push
+      // PATCH replaces the entry's whole tag set). `affected` counts only rows that
+      // actually changed: adds skip items already carrying every tag, removes skip items
+      // carrying none of them.
+      const rawTags = (req.body as { tags?: unknown }).tags;
+      if (!Array.isArray(rawTags) || rawTags.length === 0 || rawTags.length > 20) {
+        return res.status(400).json({ error: 'tags must be a non-empty array of strings (max 20)' });
+      }
+      const reserved = findReservedTags(rawTags);
+      if (reserved.length > 0) {
+        return res.status(400).json({
+          error: `Reserved tag(s): ${reserved.join(', ')}. Type tags are set automatically and nosync is managed in Wallabag.`,
+        });
+      }
+      const tagList = normalizeTagList(rawTags);
+      if (tagList.length === 0) {
+        return res.status(400).json({ error: 'No valid tags given' });
+      }
+      if (action === 'add_tags') {
+        const r = await query(
+          `UPDATE content_items
+              SET tags = ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(tags, '{}') || $3::text[]) x ORDER BY x),
+                  updated_at = NOW(), wallabag_needs_push = TRUE
+            WHERE user_id = $1 AND id = ANY($2::int[]) AND NOT (COALESCE(tags, '{}') @> $3::text[])`,
+          [userId, ids, tagList]
+        );
+        affected = r.rowCount ?? 0;
+      } else {
+        const r = await query(
+          `UPDATE content_items
+              SET tags = ARRAY(SELECT x FROM unnest(COALESCE(tags, '{}')) x WHERE NOT (x = ANY($3::text[]))),
+                  updated_at = NOW(), wallabag_needs_push = TRUE
+            WHERE user_id = $1 AND id = ANY($2::int[]) AND COALESCE(tags, '{}') && $3::text[]`,
+          [userId, ids, tagList]
+        );
+        affected = r.rowCount ?? 0;
+      }
+    }
 
     if (action === 'star' || action === 'unstar') {
       // Starred/archived state must reach Wallabag, so set the explicit push flag instead of relying on an updated_at vs wallabag_updated_at comparison (those columns run on different clocks).
@@ -275,6 +317,99 @@ router.post('/bulk', async (req, res) => {
   }
 });
 
+// Every tag in use with its item count, for the Settings "Manage tags" list. Registered
+// before GET /:id so 'tags' is never read as an item id.
+router.get('/tags/all', async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT t AS tag, COUNT(*)::int AS count
+         FROM content_items, unnest(tags) AS t
+        WHERE user_id = $1
+        GROUP BY t
+        ORDER BY count DESC, tag ASC`,
+      [req.user!.userId]
+    );
+    res.json({ tags: r.rows });
+  } catch (error) {
+    console.error('Error listing tags:', error);
+    res.status(500).json({ error: 'Failed to list tags' });
+  }
+});
+
+// Library-wide tag rename. Every item swaps the label (deduplicated in case the target tag
+// was already present), and the push flag re-asserts each entry's new tag set in Wallabag.
+// The old label itself is then removed from Wallabag fire-and-forget, so it does not linger
+// in Wallabag's tag list.
+router.post('/tags/rename', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const from = normalizeTag((req.body as { from?: unknown }).from);
+    const to = normalizeTag((req.body as { to?: unknown }).to);
+    if (!from || !to) {
+      return res.status(400).json({ error: 'Both the current and the new tag name are required' });
+    }
+    if (from === to) {
+      return res.status(400).json({ error: 'The new name is the same as the current one' });
+    }
+    const reserved = findReservedTags([from, to]);
+    if (reserved.length > 0) {
+      return res.status(400).json({ error: `Reserved tag(s): ${reserved.join(', ')}.` });
+    }
+    const r = await query(
+      `UPDATE content_items
+          SET tags = ARRAY(SELECT DISTINCT x FROM unnest(array_replace(tags, $2, $3)) x ORDER BY x),
+              updated_at = NOW(), wallabag_needs_push = TRUE
+        WHERE user_id = $1 AND tags @> ARRAY[$2]::text[]`,
+      [userId, from, to]
+    );
+    const affected = r.rowCount ?? 0;
+    if (affected > 0) {
+      const { deleteTagLabelFromWallabag } = await import('../services/wallabag-sync.js');
+      deleteTagLabelFromWallabag(userId, from).catch((err) => {
+        console.error(`[tags] Wallabag label cleanup failed for "${from}":`, err);
+      });
+    }
+    console.log(`[tags] user=${userId} rename "${from}" -> "${to}" affected=${affected}`);
+    res.json({ affected });
+  } catch (error) {
+    console.error('Error renaming tag:', error);
+    res.status(500).json({ error: 'Failed to rename tag' });
+  }
+});
+
+// Library-wide tag delete: the label leaves every item, the push flag re-asserts each
+// entry's set, and the label is removed from Wallabag fire-and-forget.
+router.post('/tags/remove', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const tag = normalizeTag((req.body as { tag?: unknown }).tag);
+    if (!tag) {
+      return res.status(400).json({ error: 'A tag name is required' });
+    }
+    if (findReservedTags([tag]).length > 0) {
+      return res.status(400).json({ error: `"${tag}" is a reserved tag.` });
+    }
+    const r = await query(
+      `UPDATE content_items
+          SET tags = array_remove(tags, $2), updated_at = NOW(), wallabag_needs_push = TRUE
+        WHERE user_id = $1 AND tags @> ARRAY[$2]::text[]`,
+      [userId, tag]
+    );
+    const affected = r.rowCount ?? 0;
+    if (affected > 0) {
+      const { deleteTagLabelFromWallabag } = await import('../services/wallabag-sync.js');
+      deleteTagLabelFromWallabag(userId, tag).catch((err) => {
+        console.error(`[tags] Wallabag label cleanup failed for "${tag}":`, err);
+      });
+    }
+    console.log(`[tags] user=${userId} delete "${tag}" affected=${affected}`);
+    res.json({ affected });
+  } catch (error) {
+    console.error('Error deleting tag:', error);
+    res.status(500).json({ error: 'Failed to delete tag' });
+  }
+});
+
 // Get single content item (includes large columns needed for display)
 router.get('/:id', async (req, res) => {
   try {
@@ -314,6 +449,10 @@ router.post('/', async (req, res) => {
       audio_url,
       published_at,
       duration,
+      tags,
+      comments,
+      summary,
+      comment_summary,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -341,7 +480,9 @@ router.post('/', async (req, res) => {
     // For text items, store content in html_content too so read-along works (same as articles)
     // Strip <script> and <style> tags to prevent injected CSS from breaking the player UI
     // Also clean up broken Obsidian/saved-webpage artifacts (broken markdown image syntax, relative image paths)
-    if (type === 'text' && processedContent && !htmlContent) {
+    // Articles that ARRIVE with content (a Markdown import whose frontmatter names a source
+    // URL) take the same path: the URL is kept for provenance, nothing is fetched.
+    if ((type === 'text' || type === 'article') && processedContent && !htmlContent) {
       const dom = new JSDOM(processedContent);
       const doc = dom.window.document;
       doc.querySelectorAll('script, style').forEach(el => el.remove());
@@ -484,6 +625,32 @@ router.post('/', async (req, res) => {
       finalTitle = 'Untitled Article';
     }
 
+    // Comments supplied by the caller (a Markdown import round-tripping an exported
+    // "## Comments" section). Only when the fetcher produced none, and only a real array
+    // of { username, content } objects; anything else is ignored rather than stored.
+    if (!extractedComments && Array.isArray(comments) && comments.length > 0) {
+      const valid = comments.every(
+        (c: any) => c && typeof c === 'object' && typeof c.username === 'string' && typeof c.content === 'string'
+      );
+      if (valid) {
+        const countAll = (list: any[]): number =>
+          list.reduce((n: number, c: any) => n + 1 + (Array.isArray(c.replies) ? countAll(c.replies) : 0), 0);
+        extractedComments = JSON.stringify(comments);
+        commentCountTotal = countAll(comments);
+      }
+    }
+
+    // Tags on create (Add tab field or frontmatter import). Same normalization as PATCH;
+    // reserved names are silently dropped here rather than failing the whole add.
+    const initialTags = normalizeTagList(tags);
+
+    // Summary supplied by the caller (a Markdown import round-tripping the summary code
+    // blocks of an export). Stored as a completed summary, so nothing is regenerated.
+    const importedSummary = typeof summary === 'string' && summary.trim() ? summary.trim() : null;
+    const importedCommentSummary = importedSummary && typeof comment_summary === 'string' && comment_summary.trim()
+      ? comment_summary.trim()
+      : null;
+
     // Look up podcast show name if podcast_id is provided (for podcast episodes)
     if (podcast_id) {
       const podcastResult = await query(
@@ -502,10 +669,10 @@ router.post('/', async (req, res) => {
     const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
     );
 
     const createdItem = result.rows[0];
@@ -549,7 +716,8 @@ router.post('/', async (req, res) => {
 
     // Auto-generate summary for articles/texts (independent of audio, both can run at once).
     // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
-    if ((type === 'article' || type === 'text') && (processedContent || htmlContent)) {
+    // Skipped when the item arrived with its summary (Markdown import).
+    if ((type === 'article' || type === 'text') && (processedContent || htmlContent) && !importedSummary) {
       const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
       if (autoGenerateSummary === 'true') {
         console.log(`Auto-generating summary for ${type} ${createdItem.id}`);
@@ -636,6 +804,23 @@ router.patch('/:id', async (req, res) => {
       'description',
       'duration',
     ];
+
+    // Tags: the picker sends the FULL list (replace semantics, same as Wallabag's PATCH).
+    // Normalized like Wallabag (lowercase, trimmed, no commas); reserved names are refused.
+    // Counted as a content change below, so updated_at and wallabag_needs_push get set.
+    if (updates.tags !== undefined) {
+      if (!Array.isArray(updates.tags) || !updates.tags.every((t: unknown) => typeof t === 'string')) {
+        return res.status(400).json({ error: 'tags must be an array of strings' });
+      }
+      const reserved = findReservedTags(updates.tags);
+      if (reserved.length > 0) {
+        return res.status(400).json({
+          error: `Reserved tag(s): ${reserved.join(', ')}. Type tags are set automatically and nosync is managed in Wallabag.`,
+        });
+      }
+      updates.tags = normalizeTagList(updates.tags);
+      allowedFields.push('tags');
+    }
 
     // Manual Markdown/HTML edit of an article/text body. The frontend converts Markdown ->
     // HTML and sends { is_edit: true, html_content, content }. We snapshot the current body
@@ -750,10 +935,27 @@ router.patch('/:id', async (req, res) => {
         [id, req.user!.userId]
       );
 
-      if (contentResult.rows.length > 0) {
+      if (contentResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Content not found' });
+      }
+
+      {
         const { type, audio_url, title, author, published_at, comments } = contentResult.rows[0];
 
-        if (audio_url) {
+        // No audio means nothing to transcribe. Answer with a real reason: this used to
+        // fall through to the generic "No valid fields to update" 400 with no log line,
+        // so pressing the menu item looked like it did nothing at all.
+        if (!audio_url) {
+          console.log(`Transcript regeneration refused for ${type} ${id}: no audio`);
+          return res.status(400).json({
+            code: 'no_audio',
+            error: type === 'podcast_episode'
+              ? 'This episode has no audio URL, so there is nothing to transcribe.'
+              : 'This item has no audio yet. Generate audio first, then the transcript. (Archiving removes the audio of items that are not starred.)',
+          });
+        }
+
+        {
           console.log(`Regenerating transcript for ${type} ${id}`);
 
           // Build Whisper prompt hint for better transcription of key phrases

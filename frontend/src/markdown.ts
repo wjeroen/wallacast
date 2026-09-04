@@ -22,7 +22,8 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { marked } from 'marked';
 import type { ContentItem, Comment } from './types';
-import { displayUrl } from './format';
+import { cleanHtml, displayUrl, formatDuration } from './format';
+import { obsidianTag, typeTagFor } from './tags';
 
 // Prefix every line of a block with the Markdown blockquote marker `> ` (used for callouts).
 function quoteLines(text: string): string {
@@ -66,6 +67,23 @@ function buildTurndown(): TurndownService {
     replacement: (content) => {
       const body = content.trim();
       return '\n\n' + quoteLines(['[!tweet]', '', body].join('\n')) + '\n\n';
+    },
+  });
+
+  // Fenced code blocks sized to their content: turndown's built-in rule always uses three
+  // backticks, so a code block CONTAINING ``` would end its own fence early. Reuses the
+  // fence-sizing helper the summary blocks use.
+  td.addRule('fencedCodeSafeFence', {
+    filter: (node, options) =>
+      options.codeBlockStyle === 'fenced' &&
+      node.nodeName === 'PRE' &&
+      node.firstChild !== null &&
+      node.firstChild.nodeName === 'CODE',
+    replacement: (_content, node) => {
+      const code = (node as HTMLElement).firstChild as HTMLElement;
+      const cls = code.getAttribute('class') || '';
+      const lang = (cls.match(/language-(\S+)/) || [null, ''])[1] || '';
+      return '\n\n' + fencedBlock(lang, code.textContent || '') + '\n\n';
     },
   });
 
@@ -117,14 +135,101 @@ function imageWidth(el: HTMLElement): number | null {
 
 const turndownService = buildTurndown();
 
+// How big a <figure> may be (in characters of markup) before the export refuses to keep it
+// as a raw HTML island. The keep-figures rule exists for small captioned or width-styled
+// images; page widgets (alignment.anthropic.com builds whole interactive diagrams inside
+// <figure>) blew one note up to 78% raw HTML with single lines of 78k characters that
+// scroll sideways in Obsidian.
+const RAW_FIGURE_MAX_CHARS = 1500;
+
+// Prepare the parsed document for turndown. MUTATES `doc`, like extractFootnotes does.
+// Returns the collected TeX strings; the caller swaps their tokens in AFTER conversion,
+// because turndown escapes backslashes and underscores in text it converts, which would
+// corrupt the TeX.
+// - <math> carrying its original TeX (arXiv's HTML keeps it in an annotation element)
+//   becomes $...$/$$...$$, which Obsidian renders natively.
+// - LaTeX equation tables (pure layout scaffolding around display math) unwrap to a
+//   paragraph, because Obsidian does not render $$ inside a raw HTML island.
+// - A bare <pre> without a <code> child is wrapped in one, so it becomes a real fenced
+//   code block instead of loose text whose indented lines read as accidental code blocks.
+// - A <figure> bigger than RAW_FIGURE_MAX_CHARS is reduced to its images, its data tables
+//   (inline sizing styles dropped), and its caption; when nothing displayable survives, a
+//   short note marks the omission.
+function preprocessForExport(doc: Document): string[] {
+  const mathTexts: string[] = [];
+  doc.querySelectorAll('math').forEach((math) => {
+    const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
+    if (!tex) return;
+    const block = math.getAttribute('display') === 'block';
+    mathTexts.push(block ? `$$${tex}$$` : `$${tex}$`);
+    math.replaceWith(doc.createTextNode(`XWCMATHX${mathTexts.length - 1}X`));
+  });
+
+  doc.querySelectorAll('table.ltx_equation, table.ltx_equationgroup').forEach((table) => {
+    const text = (table.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
+      table.remove();
+      return;
+    }
+    const p = doc.createElement('p');
+    p.textContent = text;
+    table.replaceWith(p);
+  });
+
+  doc.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('code')) return;
+    const code = doc.createElement('code');
+    while (pre.firstChild) code.appendChild(pre.firstChild);
+    pre.appendChild(code);
+  });
+
+  doc.querySelectorAll('figure').forEach((fig) => {
+    if (fig.outerHTML.length <= RAW_FIGURE_MAX_CHARS) return;
+    const parts: Element[] = [];
+    for (const img of Array.from(fig.querySelectorAll('img'))) {
+      const p = doc.createElement('p');
+      p.appendChild(img);
+      parts.push(p);
+    }
+    // Top-level tables only: appending a nested table would rip it out of its parent.
+    for (const table of Array.from(fig.querySelectorAll('table'))) {
+      if (table.parentElement?.closest('table')) continue;
+      table.querySelectorAll('[style]').forEach((el) => el.removeAttribute('style'));
+      table.removeAttribute('style');
+      parts.push(table);
+    }
+    const capText = fig.querySelector('figcaption')?.textContent?.replace(/\s+/g, ' ').trim();
+    if (parts.length === 0) {
+      const p = doc.createElement('p');
+      const em = doc.createElement('em');
+      em.textContent = '[Interactive figure omitted, see the original page]';
+      p.appendChild(em);
+      parts.push(p);
+    }
+    if (capText) {
+      const p = doc.createElement('p');
+      const em = doc.createElement('em');
+      em.textContent = capText;
+      p.appendChild(em);
+      parts.push(p);
+    }
+    const wrap = doc.createElement('div');
+    parts.forEach((el) => wrap.appendChild(el));
+    fig.replaceWith(wrap);
+  });
+
+  return mathTexts;
+}
+
 /**
  * Convert article/comment HTML into readable Markdown (Obsidian-friendly).
  * Preserves headings, lists, blockquotes, bold/italic, links, images, tables, code,
- * and Wallacast's LLM blocks / tweet embeds (as callouts).
+ * math (as $TeX$), and Wallacast's LLM blocks / tweet embeds (as callouts).
  */
 export function htmlToMarkdown(html: string): string {
   if (!html) return '';
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  const mathTexts = preprocessForExport(doc);
   const footnotes = extractFootnotes(doc);
   let md = turndownService.turndown(doc.body.innerHTML).trim();
   // Turn the inline marker tokens left by extractFootnotes into `[^n]`.
@@ -140,6 +245,9 @@ export function htmlToMarkdown(html: string): string {
       })
       .join('\n\n');
   }
+  // Swap the math tokens for their TeX only now, AFTER every turndown pass (the body above
+  // and the footnote bodies inside extractFootnotes), so no pass can escape the TeX.
+  md = md.replace(/XWCMATHX(\d+)X/g, (_m, i) => mathTexts[Number(i)] ?? '');
   return md.trim();
 }
 
@@ -364,19 +472,433 @@ export function markdownToHtml(markdown: string): string {
   return doc.body.innerHTML.trim();
 }
 
-// Readable Markdown export of an item (title, meta line, link, body, comments).
+// ---------------------------------------------------------------------------
+// Markdown export with Obsidian properties (YAML frontmatter), and the reverse
+// ---------------------------------------------------------------------------
+
+function yamlStr(s: string): string {
+  // A JSON string literal is a valid YAML double-quoted scalar, escapes included.
+  return JSON.stringify(s.replace(/\s+/g, ' ').trim());
+}
+
+function isoDate(value?: string | null): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+/**
+ * The Obsidian-properties block for an item. Only keys Obsidian understands natively get
+ * special treatment (`tags` is a real tag list, ISO dates become Date properties); the rest
+ * are plain text. The first tag is always the item's type tag (article / text / podcast).
+ * `source` is the human URL (the EA Forum bot mirror is rewritten back), never a synthetic
+ * `wallacast://` one. No internal ids: an import creates a NEW item, it never overwrites.
+ */
+export function buildFrontmatter(item: ContentItem, comments: Comment[]): string {
+  const out: string[] = ['---'];
+  out.push(`title: ${yamlStr(item.title || '')}`);
+  if (item.author) out.push(`author: ${yamlStr(item.author)}`);
+  if (item.type === 'podcast_episode' && item.podcast_show_name) {
+    out.push(`show: ${yamlStr(item.podcast_show_name)}`);
+  }
+  if (item.url && !item.url.startsWith('wallacast://')) {
+    out.push(`source: ${yamlStr(displayUrl(item.url))}`);
+  }
+  // A podcast's direct audio file (the RSS enclosure URL). The stored audio_url for
+  // podcasts IS that public CDN link (the token decorator only touches our own
+  // /api/content/ URLs), but guard on http(s) anyway so a local path can never leak.
+  if (item.type === 'podcast_episode' && item.audio_url && /^https?:\/\//i.test(item.audio_url)) {
+    out.push(`audio: ${yamlStr(item.audio_url)}`);
+  }
+  const published = isoDate(item.published_at);
+  if (published) out.push(`published: ${published}`);
+  const tags = [typeTagFor(item.type)];
+  for (const t of item.tags || []) {
+    const o = obsidianTag(t);
+    if (o && !tags.includes(o)) tags.push(o);
+  }
+  out.push('tags:');
+  for (const t of tags) out.push(`  - ${t}`);
+  // A podcast's description IS the body (see contentToMarkdown), so no property for it.
+  if (item.type !== 'podcast_episode' && item.description) {
+    const d = cleanHtml(item.description).replace(/\s+/g, ' ').trim();
+    if (d) out.push(`description: ${yamlStr(d)}`);
+  }
+  if (item.type === 'podcast_episode' && item.duration) {
+    out.push(`duration: ${yamlStr(formatDuration(item.duration))}`);
+  }
+  if (item.karma !== undefined && item.karma !== null) out.push(`upvotes: ${item.karma}`);
+  const commentCount = item.comment_count || comments.length;
+  if (commentCount > 0) out.push(`comments: ${commentCount}`);
+  out.push('---');
+  return out.join('\n');
+}
+
+export interface Frontmatter {
+  meta: Record<string, string | string[]>;
+  body: string; // the Markdown after the closing ---
+}
+
+function unquoteYaml(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return s.slice(1, -1);
+    }
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
+/**
+ * Read a leading YAML frontmatter block (the subset Obsidian writes: `key: value` scalars,
+ * `key:` + `  - item` lists, inline `[a, b]` lists). Keys are lowercased. Returns null when
+ * the text does not start with a `---` block, so callers can treat it as plain Markdown.
+ */
+export function parseFrontmatter(markdown: string): Frontmatter | null {
+  const m = markdown.match(/^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!m) return null;
+  const meta: Record<string, string | string[]> = {};
+  let listKey: string | null = null;
+  for (const line of m[1].split(/\r?\n/)) {
+    const li = line.match(/^\s+-\s*(.*)$/);
+    if (li && listKey) {
+      (meta[listKey] as string[]).push(unquoteYaml(li[1]));
+      continue;
+    }
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].toLowerCase();
+    const val = kv[2].trim();
+    if (val === '') {
+      meta[key] = [];
+      listKey = key;
+      continue;
+    }
+    listKey = null;
+    if (val.startsWith('[') && val.endsWith(']')) {
+      meta[key] = val.slice(1, -1).split(',').map((s) => unquoteYaml(s)).filter(Boolean);
+      continue;
+    }
+    meta[key] = unquoteYaml(val);
+  }
+  return { meta, body: markdown.slice(m[0].length) };
+}
+
+/** Drop a first-line `# Title` that repeats the given title (an export puts one there). */
+export function stripLeadingTitle(body: string, title: string): string {
+  const m = body.match(/^\s*#\s+(.+?)\s*\r?\n/);
+  if (!m) return body;
+  if (m[1].trim().toLowerCase() !== (title || '').trim().toLowerCase()) return body;
+  return body.slice(m[0].length).replace(/^\s*\n/, '');
+}
+
+/**
+ * The comment summary text inside a fenced block's body, or null when the block is not one.
+ *
+ * The current export opens the block with `title: Comments summary`, which Obsidian's
+ * callout plugins read as the callout's own title instead of showing it as a stray line of
+ * body text. Exports made before 2026-09-01 opened it with a plain `Comments summary:`
+ * line, so that spelling is still recognized.
+ */
+function stripCommentSummaryMarker(inner: string): string | null {
+  const text = inner.trimStart();
+  for (const marker of [COMMENT_SUMMARY_TITLE, COMMENT_SUMMARY_MARKER]) {
+    if (text.slice(0, marker.length).toLowerCase() === marker.toLowerCase()) {
+      return text.slice(marker.length).trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Pull the comment-summary fenced block out of a body and return the body without it.
+ *
+ * Only the part ABOVE the Comments heading is searched, which is exactly where an export
+ * puts the block, so a fenced code block quoted inside a comment can never be mistaken for
+ * one. A block is only taken when its first line is the marker, so ordinary code blocks in
+ * the article are left alone.
+ */
+function extractCommentSummaryBlock(markdown: string): { body: string; comment_summary?: string } {
+  const heading = markdown.match(COMMENTS_HEADING_RE);
+  const limit = heading?.index ?? markdown.length;
+  const head = markdown.slice(0, limit);
+  const BLOCK_RE = /(^|\r?\n)[ \t]*(`{3,})[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*\2[ \t]*(?=\r?\n|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = BLOCK_RE.exec(head)) !== null) {
+    const inner = stripCommentSummaryMarker(m[3]);
+    if (inner === null) continue;
+    const before = markdown.slice(0, m.index + m[1].length).replace(/\s+$/, '');
+    const after = markdown.slice(m.index + m[0].length).replace(/^\s+/, '');
+    return {
+      body: [before, after].filter(Boolean).join('\n\n'),
+      comment_summary: inner || undefined,
+    };
+  }
+  return { body: markdown };
+}
+
+/**
+ * The reverse of the summary blocks contentToMarkdown emits.
+ *
+ * The article summary is the fenced block the text STARTS with, right after the properties
+ * block. The comment summary is a fenced block opening with `title: Comments summary`,
+ * which an export places at the end of the body, directly above the Comments heading. Any
+ * fence label is accepted (the user picks it in Settings), so callers should only use this
+ * on text that had a properties block, which is what makes a leading code block unambiguous.
+ *
+ * Exports made before 2026-09-01 put the comment summary directly under the article summary
+ * instead. That layout is still read, so older notes still round-trip.
+ *
+ * Returns the text with both blocks removed.
+ */
+export function splitExportedSummary(markdown: string): { body: string; summary?: string; comment_summary?: string } {
+  const FENCE_RE = /^\s*(`{3,})[^\n]*\n([\s\S]*?)\n\1[ \t]*(?:\r?\n|$)/;
+  let rest = markdown;
+  const first = rest.match(FENCE_RE);
+  if (!first) return { body: markdown };
+  const summary = first[2].trim();
+  if (!summary) return { body: markdown };
+  rest = rest.slice(first[0].length).replace(/^\s*\n/, '');
+
+  // Older layout: the comment summary is the very next block.
+  const second = rest.match(FENCE_RE);
+  if (second) {
+    const marked = stripCommentSummaryMarker(second[2]);
+    if (marked !== null) {
+      return {
+        body: rest.slice(second[0].length).replace(/^\s*\n/, ''),
+        summary,
+        comment_summary: marked || undefined,
+      };
+    }
+  }
+
+  const found = extractCommentSummaryBlock(rest);
+  return { body: found.body, summary, comment_summary: found.comment_summary };
+}
+
+const COMMENT_HEADER_RE = /^\*\*(.+?)\*\*$/;
+// One hash is what an export writes now, two is what it wrote before 2026-09-01.
+const COMMENTS_HEADING_RE = /^#{1,2} Comments(?: \(\d+\))?[ \t]*$/m;
+
+// Parse one exported comment header line ("**name • 12 points • 14/03/2026**").
+function parseCommentHeader(text: string): Comment | null {
+  const m = text.trim().match(COMMENT_HEADER_RE);
+  if (!m) return null;
+  const parts = m[1].split(' • ').map((p) => p.trim());
+  const username = parts.shift() || '';
+  if (!username) return null;
+  const c: Comment = { username, content: '' };
+  for (const p of parts) {
+    const pts = p.match(/^(-?\d+) points?$/);
+    if (pts) {
+      c.karma = parseInt(pts[1], 10);
+      continue;
+    }
+    const gb = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (gb) {
+      c.date = `${gb[3]}-${gb[2]}-${gb[1]}`;
+      continue;
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(p)) c.date = p;
+  }
+  return c;
+}
+
+function stripQuoteMarkers(line: string): { depth: number; text: string } {
+  let depth = 0;
+  let text = line;
+  for (;;) {
+    const m = text.match(/^>[ ]?/);
+    if (!m) break;
+    depth++;
+    text = text.slice(m[0].length);
+  }
+  return { depth, text };
+}
+
+// One top-level comment block (between `---` separators): the root comment plus its
+// replies, which the export nests as `> ` quotes one level per depth. A reply starts
+// wherever a header line appears at a deeper quote level; lines that are not headers
+// belong to the comment currently open at their level (extra `>` markers are kept, so a
+// quote inside a comment survives).
+function parseCommentBlock(block: string): Comment[] {
+  interface Node { depth: number; comment: Comment; lines: string[] }
+  const roots: Comment[] = [];
+  const stack: Node[] = [];
+  const finish = (node: Node) => {
+    node.comment.content = markdownToHtml(node.lines.join('\n').trim());
+  };
+  for (const raw of block.split('\n')) {
+    const { depth, text } = stripQuoteMarkers(raw);
+    const header = parseCommentHeader(text);
+    if (header) {
+      while (stack.length > 0 && stack[stack.length - 1].depth >= depth) finish(stack.pop()!);
+      const parent = stack.length > 0 ? stack[stack.length - 1].comment : null;
+      if (parent) (parent.replies ||= []).push(header);
+      else roots.push(header);
+      stack.push({ depth, comment: header, lines: [] });
+      continue;
+    }
+    if (stack.length === 0) continue; // text before any header: not a comment
+    const node = stack[stack.length - 1];
+    const extra = Math.max(0, depth - node.depth);
+    node.lines.push(('> '.repeat(extra) + text).trimEnd());
+  }
+  while (stack.length > 0) finish(stack.pop()!);
+  return roots;
+}
+
+/**
+ * Split an exported "# Comments" section back into structured comments (the reverse of
+ * contentToMarkdown's comment rendering), so an imported export gets real comments again:
+ * shown in the Comments area, counted on the card, and narrated. When the section does
+ * not parse as our format, it is left in the body untouched and no comments are returned.
+ */
+export function splitExportedComments(markdown: string): { body: string; comments: Comment[] } {
+  const idx = markdown.search(COMMENTS_HEADING_RE);
+  if (idx < 0) return { body: markdown, comments: [] };
+  const section = markdown.slice(idx).replace(/^#{1,2} Comments(?: \(\d+\))?[ \t]*\r?\n?/, '');
+  const comments = section
+    .split(/\r?\n[ \t]*---[ \t]*\r?\n/)
+    .flatMap((block) => parseCommentBlock(block.replace(/\r/g, '')));
+  if (comments.length === 0) return { body: markdown, comments: [] };
+  return { body: markdown.slice(0, idx).trimEnd(), comments };
+}
+
+// Readable Markdown export of an item: Obsidian properties, title, body, comments.
 // What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
 // "Copy content" action in both the fullscreen player and the library dropdown.
-// Needs the FULL item (html_content/transcript), the list payload is not enough.
-export function contentToMarkdown(item: ContentItem, comments: Comment[]): string {
-  const lines: string[] = [`# ${item.title}`];
-  const meta: string[] = [];
-  if (item.author) meta.push(`By ${item.author}`);
-  if (item.type === 'podcast_episode' && item.podcast_show_name) meta.push(item.podcast_show_name);
-  if (item.published_at) meta.push(new Date(item.published_at).toLocaleDateString('en-GB'));
-  if (item.karma !== undefined && item.karma !== null) meta.push(`${item.karma} upvotes`);
-  if (meta.length > 0) lines.push(meta.join(' • '));
-  if (item.url) lines.push(displayUrl(item.url));
+// Needs the FULL item (html_content/transcript/transcript_words), the list payload is not enough.
+// The byline/link that used to sit under the title now live in the frontmatter, so
+// an import of this text round-trips them as fields instead of body paragraphs.
+export interface CopyContentOptions {
+  // Put the item's summary at the very top, right under the properties block and before
+  // the title, inside a fenced code block. `summaryCodeLabel` is the text after the
+  // opening backticks (some Obsidian plugins style blocks by it); empty = a plain block.
+  includeSummary?: boolean;
+  summaryCodeLabel?: string;
+  // Also the comment summary, in its own block at the END of the body, directly above the
+  // Comments heading, because that is what it is about (default true; only used when
+  // includeSummary is on).
+  includeCommentSummary?: boolean;
+  // Append the "# Comments" section (default true).
+  includeComments?: boolean;
+}
+
+// Opens the comment-summary block. Obsidian's callout plugins read a leading `title:` line
+// as the callout's own title, so the words become the block's heading instead of a stray
+// first line of body text.
+const COMMENT_SUMMARY_TITLE = 'title: Comments summary';
+// The same block's opening line in exports made before 2026-09-01. Read on import only.
+const COMMENT_SUMMARY_MARKER = 'Comments summary:';
+
+function fencedBlock(label: string, body: string): string {
+  // A body that itself contains a triple backtick would end the fence early, so use a
+  // longer fence in that case (CommonMark allows any length >= 3).
+  const longest = Math.max(2, ...Array.from(body.matchAll(/`{3,}/g), (m) => m[0].length));
+  const fence = '`'.repeat(longest + 1);
+  return `${fence}${label.trim()}\n${body.trim()}\n${fence}`;
+}
+
+// One Whisper word with its timing in seconds (the shape stored in transcript_words).
+interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+// Clock time for a transcript marker: "03:02", or "1:03:02" once the audio passes an hour.
+function clockTime(seconds: number, withHours: boolean): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const two = (n: number) => String(n).padStart(2, '0');
+  return withHours ? `${h}:${two(m)}:${two(s)}` : `${two(m)}:${two(s)}`;
+}
+
+// Rebuild a podcast transcript FROM its word-level timestamps, as one paragraph per
+// minute of audio, each opening with a bold time marker such as `**[03:02]**`. The
+// marker shows the true start time of the paragraph's first sentence, never a rounded
+// minute, so the reader can trust it for seeking. Only the copied export uses this,
+// the player keeps its plain transcript. Sentences are the words joined until closing
+// punctuation, the same grouping the backend uses for read-along alignment. This is a
+// pure rebuild from the words themselves, no matching against other text (see the
+// no-fuzzy-matching rule in CLAUDE.md). Returns null when the data is missing or
+// unusable, and the caller then falls back to the plain transcript.
+//
+// The transcript_words COLUMN is JSONB, so the API delivers a real array at runtime,
+// whatever the frontend type annotation says. Mirror the player's robust parsing
+// (AudioPlayer.tsx parsedTranscriptWords): accept an array, a JSON string, and a
+// double-stringified JSON string.
+function timestampedTranscript(raw: unknown): string | null {
+  let parsed: unknown = raw;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) return null;
+  const words = parsed as TranscriptWord[];
+
+  const sentences: Array<{ start: number; text: string }> = [];
+  let current: string[] = [];
+  let sentenceStart = 0;
+  for (const w of words) {
+    const token = String(w?.word ?? '').trim();
+    if (!token || !Number.isFinite(w?.start)) continue;
+    if (current.length === 0) sentenceStart = w.start;
+    current.push(token);
+    if (/[.!?]["')\]]?$/.test(token)) {
+      sentences.push({ start: sentenceStart, text: current.join(' ') });
+      current = [];
+    }
+  }
+  if (current.length > 0) sentences.push({ start: sentenceStart, text: current.join(' ') });
+  if (sentences.length === 0) return null;
+
+  const last = words[words.length - 1];
+  const withHours = (Number(last?.end) || Number(last?.start) || 0) >= 3600;
+
+  // A new paragraph starts at the first sentence that crosses the next whole minute.
+  const paragraphs: string[] = [];
+  let block: string[] = [];
+  let blockStart = 0;
+  let nextBreak = 0;
+  const flush = () => {
+    paragraphs.push(`**[${clockTime(blockStart, withHours)}]** ${block.join(' ')}`);
+    block = [];
+  };
+  for (const s of sentences) {
+    if (block.length > 0 && s.start >= nextBreak) flush();
+    if (block.length === 0) {
+      blockStart = s.start;
+      nextBreak = Math.floor(s.start / 60) * 60 + 60;
+    }
+    block.push(s.text);
+  }
+  if (block.length > 0) flush();
+  return paragraphs.join('\n\n');
+}
+
+export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
+  const lines: string[] = [buildFrontmatter(item, comments)];
+
+  // The article summary sits at the very top, between the properties and the title.
+  if (opts.includeSummary && item.summary?.trim()) {
+    lines.push('', fencedBlock(opts.summaryCodeLabel || '', item.summary));
+  }
+
+  lines.push('', `# ${item.title}`);
 
   // Podcasts: description first, then the transcript, each only when present
   // (the `content` field is deliberately not used for podcasts). Articles/texts
@@ -384,14 +906,25 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[]): strin
   const body = item.type === 'podcast_episode'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
-        item.transcript ? `## Transcript\n\n${item.transcript.trim()}` : '',
+        item.transcript
+          ? `## Transcript\n\n${(item.transcript_words && timestampedTranscript(item.transcript_words)) || item.transcript.trim()}`
+          : '',
       ].filter(part => part.trim()).map(part => part.trim()).join('\n\n')
     : item.html_content
       ? htmlToMarkdown(item.html_content)
       : (item.content || '');
   if (body.trim()) lines.push('', body.trim());
 
-  if (comments.length > 0) {
+  // The comment summary belongs with the comments, so it goes directly above the Comments
+  // heading. Without comments in the export it simply closes the note.
+  if (opts.includeSummary && opts.includeCommentSummary !== false && item.comment_summary?.trim()) {
+    lines.push('', fencedBlock(
+      opts.summaryCodeLabel || '',
+      `${COMMENT_SUMMARY_TITLE}\n\n${item.comment_summary.trim()}`
+    ));
+  }
+
+  if (opts.includeComments !== false && comments.length > 0) {
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
       if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
@@ -404,7 +937,7 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[]): strin
       const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
       return [prefixed, ...replies].join('\n\n');
     };
-    lines.push('', `## Comments (${item.comment_count || comments.length})`, '');
+    lines.push('', `# Comments (${item.comment_count || comments.length})`, '');
     lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
   }
 
