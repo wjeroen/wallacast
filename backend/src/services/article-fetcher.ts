@@ -1115,8 +1115,9 @@ export function archivedPublishedDate(doc: Document, archivedAt?: string | null)
  * archive.is swaps the page's `og:image` for a screenshot of the archived page, which then became
  * the library thumbnail. Checked on five archive copies (2026-09-14): FT, the New York Times, the
  * Washington Post and The Information each got their real lead photo, and Compact (no figure
- * before its story) got none. "The first image on the page" would have been wrong, since on the
- * Times that is the site logo, which is why only a <figure> counts.
+ * before its story) got none. "The first image on the page" would have been wrong: on the Times
+ * the first two images are archive.is's pictures of a blocked embed (Chromium's
+ * "static01.nyt.com is blocked" page), which is why only a <figure> counts.
  */
 export function archivedLeadFigure(doc: Document, storyStart: Element | null): Element | null {
   const snapshot = doc.querySelector('#CONTENT');
