@@ -1,10 +1,12 @@
-// Scratch test for the three fetch cleanups added on 2026-08-28:
-//   1. the <main>-inside-<article> preference and the share-menu removal (live fetch)
-//   2. archive.is paragraph restore (runs on a stored export, no network)
-//   3. the widened email-table flattener (runs on a stored export, no network)
+// Scratch test for the fetch cleanups in article-fetcher.ts:
+//   0.  the JSON-LD author fallback, Tufte sidenotes, and (0c) the story box, share links,
+//       comment areas, archive date and lead photo, all on small fixtures (no network)
+//   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
+//   2.  archive.is paragraph restore (runs on a stored export, no network)
+//   3.  the widened email-table flattener (runs on a stored export, no network)
 //
 // Run from backend/:  npx tsx scripts/test-fetch-cleanup.mts [investigationDir]
-// Without the directory argument, only step 1 runs. Not wired into any build.
+// Without the directory argument, steps 2 and 3 are skipped. Not wired into any build.
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -16,6 +18,14 @@ import {
   normalizeSidenotes,
   isArchiveMirrorUrl,
   authorFromJsonLd,
+  isArchiveSnapshot,
+  isCommentArea,
+  removeCommentAreas,
+  removeShareLinks,
+  findStoryBody,
+  nestedStoryArticle,
+  archivedPublishedDate,
+  archivedLeadFigure,
 } from '../src/services/article-fetcher.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
@@ -85,6 +95,121 @@ const dir = process.argv[2];
   assert.equal(plain.innerHTML, '<p>Just prose.</p>', 'a page without sidenotes is untouched');
 
   console.log('✅ Tufte sidenotes: 2 notes converted, toggles removed, sentence intact');
+}
+
+// --- 0c. Story box, share links, comments, archive date and lead photo -------------
+// Shapes taken from five real archive.is copies (FT, the New York Times, the Washington Post,
+// The Information and Compact, 2026-09-14): class names gone, every <p> turned into a <div>,
+// while ids, aria-labels, datetimes and link addresses survive.
+{
+  const block = (n: number) => `<div>${'The story goes on here. '.repeat(n)}</div>`; // 24 chars per repeat
+  const doc = (html: string) => new JSDOM(html).window.document;
+  const snap = (inner: string) =>
+    doc(`<div id="HEADER"><time datetime="2026-09-02T21:38:33Z">archived</time></div><div id="CONTENT">${inner}</div>`);
+
+  // FT: the whole page is one <article>, the story a second <article> inside it.
+  const ft = doc(
+    '<div id="HEADER"><time datetime="2026-09-14T23:43:47Z">archived</time></div>' +
+    '<div id="CONTENT"><article id="site-content" role="main">' +
+      '<div><figure><picture><img src="/MHqt4/lead.avif" alt="A mural"></picture>' +
+        '<figcaption>A visitor passes a mural</figcaption></figure></div>' +
+      '<div><ul>' +
+        '<li><a href="https://archive.is/o/MHqt4/https://twitter.com/intent/tweet?url=https://www.ft.com/content/x">Time for a pause on x (opens in a new window)</a></li>' +
+        '<li><a href="https://archive.is/o/MHqt4/https://www.facebook.com/sharer.php?u=x">Time for a pause on facebook (opens in a new window)</a></li>' +
+        '<li><a href="whatsapp://send?text=Time">Time for a pause on whatsapp (opens in a new window)</a></li>' +
+      '</ul></div>' +
+      '<div><a href="https://archive.is/o/MHqt4/https://www.ft.com/ft-view">The editorial board</a>' +
+        '<time datetime="2026-09-14T17:16:35.451Z">7 hours ago</time></div>' +
+      '<div>Unlock the White House Watch newsletter for free</div>' +
+      `<article id="article-body">${block(25)}${block(25)}${block(25)}</article>` +
+      `<div id="o-comments-stream"><main aria-label="Comments Embed">${block(250)}` +
+        '<time datetime="2026-09-14T22:49:49Z">59 minutes ago</time></main></div>' +
+    '</article></div>'
+  );
+  const siteContent = ft.querySelector('#site-content')!;
+  const storyBody = ft.querySelector('#article-body')!;
+  assert.equal(findStoryBody(ft), storyBody, 'FT: the marked story body is found');
+  assert.equal(nestedStoryArticle(siteContent), storyBody, 'FT: the story <article> inside the page <article> is found too');
+  assert.equal(archivedPublishedDate(ft, '2026-09-14T23:43:47Z'), '2026-09-14T17:16:35.451Z',
+    'FT: the byline date, not the archive time and not a comment date');
+  assert.equal(isArchiveSnapshot(ft), true, 'a snapshot has the CONTENT box');
+  assert.equal(isArchiveSnapshot(doc('<h1>Welcome to nginx!</h1>')), false, 'the nginx placeholder is not a snapshot');
+  assert.equal(archivedLeadFigure(ft, storyBody.firstElementChild), ft.querySelector('figure'),
+    'FT: the captioned photo before the story is the lead photo');
+
+  const shareBar = ft.querySelector('ul')!.parentElement!;
+  assert.equal(removeShareLinks(siteContent), 3, 'FT: all three share links go');
+  assert.equal(siteContent.contains(shareBar), false, 'the emptied share bar goes with them');
+  assert.ok(siteContent.querySelector('a[href*="ft-view"]'), 'an ordinary link stays');
+  assert.equal(removeCommentAreas(siteContent), 1, 'FT: the comment stream goes, its Comments Embed with it');
+  assert.ok(!/59 minutes ago/.test(siteContent.textContent || ''), 'no comment text is left');
+
+  // Teaser cards are never the story, nor is a long piece that is a small part of the page,
+  // nor a long comment.
+  const teasers = doc(`<article id="outer">${block(60)}<article>Teaser one</article><article>Teaser two</article></article>`);
+  assert.equal(nestedStoryArticle(teasers.querySelector('#outer')!), null, 'short nested teasers never win');
+  const minor = doc(`<article id="outer">${block(250)}<article>${block(50)}</article></article>`);
+  assert.equal(nestedStoryArticle(minor.querySelector('#outer')!), null, 'a nested article under half the page text does not win');
+  const wordpress = doc(`<article id="post">${block(60)}<div id="comments"><article id="div-comment-1">${block(50)}</article></div></article>`);
+  assert.equal(nestedStoryArticle(wordpress.querySelector('#post')!), null, 'a long comment is never the story');
+
+  // Story body markers.
+  const nyt = doc(`<div id="CONTENT"><header>${block(10)}</header><section name="articleBody">${block(30)}</section></div>`);
+  assert.equal(findStoryBody(nyt), nyt.querySelector('section'), 'the New York Times marker');
+  const split = doc(`<div itemprop="articleBody">${block(30)}</div><div>Ad</div><div itemprop="articleBody">${block(30)}</div>`);
+  assert.equal(findStoryBody(split), null, 'a body split over two markers is left to the other rules');
+  const nestedMarkers = doc(`<div id="article-body"><div itemprop="articleBody">${block(30)}</div></div>`);
+  assert.equal(findStoryBody(nestedMarkers), nestedMarkers.querySelector('#article-body'), 'a marker inside a marker is one body');
+  assert.equal(findStoryBody(doc('<div id="article-body">Just a teaser.</div>')), null, 'a marker under 500 characters does not count');
+
+  // Archive dates: one candidate only, never a later teaser date.
+  assert.equal(archivedPublishedDate(snap('<article><time datetime="2026-08-26T03:01:07-04:00">Aug. 26</time></article>'), '2026-09-01T00:50:36Z'),
+    '2026-08-26T07:01:07.000Z', 'NYT: a date with a zone offset is read');
+  assert.equal(archivedPublishedDate(snap('<article><time datetime="Sep 1, 2026, 5:40pm PDT">Sep 1</time><time datetime="2026-08-27T21:48:57Z">teaser</time></article>'), '2026-09-02T21:38:33Z'),
+    '2026-09-02T00:40:00.000Z', 'The Information: "5:40pm PDT" is read');
+  assert.equal(archivedPublishedDate(snap('<article><time datetime="whenever">Soon</time><time datetime="2026-08-27T21:48:57Z">teaser</time></article>'), '2026-09-02T21:38:33Z'),
+    null, 'an unreadable first date falls back to the archive time, never to a later teaser date');
+  assert.equal(archivedPublishedDate(snap('<article><time datetime="2026-07-23">July 23</time></article>'), '2026-07-23T12:11:40Z'),
+    '2026-07-23T12:00:00.000Z', 'Compact: a date without a time becomes noon UTC');
+  assert.equal(archivedPublishedDate(snap('<div><time datetime="2026-09-03T09:00:00.000Z">5:00 a.m.</time></div><article>no date</article>'), '2026-09-03T09:21:46Z'),
+    '2026-09-03T09:00:00.000Z', 'WaPo: the byline date sits outside the <article>');
+  assert.equal(archivedPublishedDate(snap('<article><time datetime="2026-09-10T08:00:00Z">later</time></article>'), '2026-09-02T21:38:33Z'),
+    null, 'a date after the archiving itself is rejected');
+  assert.equal(archivedPublishedDate(doc('<article><time datetime="2026-08-26">x</time></article>'), null), null, 'not a snapshot, no date');
+
+  // Lead photo: a figure before the story text, never a bare image, never a later figure.
+  const wapo = snap(`<figure><div><img src="/8QTe9/lead.webp" alt=""></div></figure><article><div>By Ian Duncan</div>${block(10)}</article>`);
+  assert.equal(archivedLeadFigure(wapo, wapo.querySelector('article > div:nth-child(2)')), wapo.querySelector('figure'),
+    'WaPo: an unlabelled figure before the story is the lead photo');
+  const logoOnly = snap(`<img src="/logo.png" alt=""><article>${block(10)}<figure><img src="/later.jpg"></figure></article>`);
+  assert.equal(archivedLeadFigure(logoOnly, logoOnly.querySelector('article > div')), null,
+    'a bare logo image never counts, nor a figure after the story start');
+
+  // Share links are judged by their address, nothing else.
+  const links = doc(
+    '<div id="root"><p>Read <a href="https://x.com/someone/status/123">the post</a> and ' +
+    '<a href="mailto:author@example.com">email the author</a>.</p>' +
+    '<p><a href="https://box.com/shared/abc">a shared folder</a></p>' +
+    '<ul><li><a href="https://www.linkedin.com/sharing/share-offsite/?url=x">LinkedIn</a></li>' +
+    '<li><a href="mailto:?subject=Look">Email</a></li>' +
+    '<li><a href="https://bsky.app/intent/compose?text=x">Bluesky</a></li></ul></div>'
+  ).querySelector('#root')!;
+  assert.equal(removeShareLinks(links), 3, 'LinkedIn, the recipient-less mailto and Bluesky go');
+  assert.equal(links.querySelector('ul'), null, 'the emptied list goes too');
+  assert.equal(links.querySelectorAll('a').length, 3, 'a status link, a real mailto and a box.com link stay');
+
+  const el = (html: string) => doc(html).body.firstElementChild!;
+  assert.equal(isCommentArea(el('<div id="comments"></div>')), true, '#comments');
+  assert.equal(isCommentArea(el('<div id="coral_thread"></div>')), true, 'a Coral embed');
+  assert.equal(
+    isCommentArea(el('<ol aria-label="Comments"><li>Karen Weise, Technology reporter: I read the essay twice.</li></ol>')),
+    false,
+    'an aria-label is never read: the Times labels a reporter note "Comments"'
+  );
+  assert.equal(isCommentArea(el('<div id="commentary"></div>')), false, '"commentary" is not a comment area');
+  assert.equal(isCommentArea(el('<a aria-label="There are 97 comments">97</a>')), false, 'a comment count link is left alone');
+
+  console.log('✅ Story box, share links, comment areas, archive date and lead photo');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------
