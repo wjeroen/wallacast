@@ -225,3 +225,58 @@ export async function readerProxyFetch(rawUrl: string): Promise<string> {
   }
   return html;
 }
+
+// The same reader proxy asked for Markdown, its default answer. Without an API key the proxy
+// builds its HTML answer from a plain request, which a Cloudflare JavaScript challenge stops,
+// while it renders the Markdown answer in a real browser, which gets through. Tested on
+// axios.com 2026-10-01: three fresh HTML answers were all the "Just a moment..." page, the
+// fresh Markdown answer was the article. The answer opens with "Title:", "URL Source:" and
+// "Published Time:" lines, then "Markdown Content:" and the article body. It names no author.
+export async function readerProxyMarkdown(
+  rawUrl: string
+): Promise<{ title: string | null; publishedTime: string | null; markdown: string }> {
+  await assertPublicHttpUrl(rawUrl);
+  const res = await safeFetch(`https://r.jina.ai/${rawUrl}`, {}, 5, 90_000);
+  if (!res.ok) {
+    throw new Error(`reader proxy Markdown answered HTTP ${res.status}`);
+  }
+  const text = await res.text();
+  const marker = text.indexOf('Markdown Content:');
+  const header = marker >= 0 ? text.slice(0, marker) : '';
+  const markdown = (marker >= 0 ? text.slice(marker + 'Markdown Content:'.length) : text).trim();
+  if (markdown.length < 500) {
+    throw new Error(`reader proxy Markdown returned only ${markdown.length} characters`);
+  }
+  const field = (name: string) => header.match(new RegExp(`^${name}:[ \\t]*(.+)$`, 'm'))?.[1].trim() || null;
+  return { title: field('Title'), publishedTime: field('Published Time'), markdown };
+}
+
+// The newest Internet Archive (Wayback Machine) copy of a page, as the page's own HTML: the
+// `id_` form leaves out the archive's toolbar and keeps every link and image pointing at the
+// original site. For pages whose bot wall stops every live fetch. Returns null when the
+// archive holds no successful copy (brand-new articles often are not archived yet).
+export async function waybackSnapshotFetch(rawUrl: string): Promise<{ html: string; timestamp: string } | null> {
+  await assertPublicHttpUrl(rawUrl);
+  const lookup = await safeFetch(
+    `https://archive.org/wayback/available?url=${encodeURIComponent(rawUrl)}`,
+    {},
+    5,
+    30_000
+  );
+  if (!lookup.ok) {
+    throw new Error(`Wayback lookup answered HTTP ${lookup.status}`);
+  }
+  const data = (await lookup.json()) as {
+    archived_snapshots?: { closest?: { available?: boolean; status?: string; timestamp?: string } };
+  };
+  const closest = data.archived_snapshots?.closest;
+  const timestamp = String(closest?.timestamp || '');
+  if (!closest?.available || String(closest.status) !== '200' || !/^\d{14}$/.test(timestamp)) {
+    return null;
+  }
+  const res = await safeFetch(`https://web.archive.org/web/${timestamp}id_/${rawUrl}`, {}, 5, 60_000);
+  if (!res.ok) {
+    throw new Error(`Wayback copy answered HTTP ${res.status}`);
+  }
+  return { html: await res.text(), timestamp };
+}

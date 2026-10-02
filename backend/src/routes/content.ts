@@ -804,7 +804,15 @@ router.post('/', async (req, res) => {
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
-      const articleData = await fetchArticleContent(url);
+      let articleData;
+      try {
+        articleData = await fetchArticleContent(url);
+      } catch (fetchError) {
+        // The fetcher's own message says why (a bot check, an HTTP error), so the Add tab can
+        // show it instead of a generic failure. Nothing is stored.
+        console.error('Article fetch failed:', fetchError);
+        return res.status(502).json({ error: `Could not fetch this article. ${(fetchError as Error).message}` });
+      }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;
 

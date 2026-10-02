@@ -1,6 +1,7 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js';
+import { safeFetch, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch } from './url-guard.js';
+import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -1235,6 +1236,104 @@ export function restoreArchivedParagraphs(root: Element): void {
   }
 }
 
+/**
+ * A bot-check page served in place of the article: Cloudflare's "Just a moment..." JavaScript
+ * challenge, its older "Attention Required!" block page, and similar walls. Such a page has
+ * almost no visible text. Most normal pages behind Cloudflare also load its challenge-platform
+ * script, so that script alone never counts, only a short page with a bot-check title or text.
+ */
+export function isBotCheckPage(html: string): boolean {
+  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim();
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length > 3000) return false;
+  return /^(just a moment|attention required|verifying you are human|checking your browser|access denied)/i.test(title)
+    || /enable javascript and cookies to continue|verifying you are human|checking if the site connection is secure|checking your browser before accessing/i.test(text);
+}
+
+// markdownToHtml() needs a DOMParser, which Node lacks. markdown-export.ts installs the same
+// jsdom parser, installing it here too keeps the fetcher independent of import order.
+setHtmlParser(new (new JSDOM('').window.DOMParser)());
+
+// The reader proxy's Markdown answer as a small HTML page, so the usual pipeline reads its
+// title, date, and lead image from the same meta tags a real page carries.
+export function readerMarkdownPage(md: { title: string | null; publishedTime: string | null; markdown: string }): string {
+  const attr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const leadImage = md.markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)/)?.[1];
+  const head = [
+    md.title ? `<title>${attr(md.title)}</title><meta property="og:title" content="${attr(md.title)}">` : '',
+    md.publishedTime ? `<meta property="article:published_time" content="${attr(md.publishedTime)}">` : '',
+    leadImage ? `<meta property="og:image" content="${attr(leadImage)}">` : '',
+  ].join('');
+  return `<!DOCTYPE html><html><head>${head}</head><body><article>${markdownToHtml(md.markdown)}</article></body></html>`;
+}
+
+/**
+ * For a page whose bot wall stopped our own requests. Each step runs only when the one before
+ * failed or answered with a bot-check page:
+ * 1. the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
+ * 2. the newest Wayback Machine copy (the page's own HTML, author and date included),
+ * 3. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
+ *    archive does not hold yet, but names no author).
+ * Throws when none of them yields the article, so a bot-check page is never stored.
+ */
+async function fetchPastBotWall(url: string): Promise<string> {
+  const tried: string[] = [];
+
+  console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
+  try {
+    const html = await readerProxyFetch(url);
+    if (!isBotCheckPage(html)) {
+      console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
+      return html;
+    }
+    console.log('[Fetcher] Reader proxy HTML is the bot-check page too');
+    tried.push('reader proxy HTML: bot-check page');
+  } catch (error: any) {
+    console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
+    tried.push(`reader proxy HTML: ${error.message}`);
+  }
+
+  console.log('[Fetcher] Trying the newest Wayback Machine copy');
+  try {
+    const snapshot = await waybackSnapshotFetch(url);
+    if (!snapshot) {
+      console.log('[Fetcher] The Wayback Machine holds no copy of this page');
+      tried.push('Wayback Machine: no copy');
+    } else if (isBotCheckPage(snapshot.html)) {
+      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is a bot-check page`);
+      tried.push('Wayback Machine: bot-check page');
+    } else {
+      console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
+      return snapshot.html;
+    }
+  } catch (error: any) {
+    console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
+    tried.push(`Wayback Machine: ${error.message}`);
+  }
+
+  console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
+  try {
+    const md = await readerProxyMarkdown(url);
+    if (md.title && /^(just a moment|attention required)/i.test(md.title)) {
+      console.log('[Fetcher] Reader proxy Markdown is the bot-check page too');
+      tried.push('reader proxy Markdown: bot-check page');
+    } else {
+      console.log(`[Fetcher] Using the reader proxy Markdown: ${md.markdown.length} characters, title "${md.title || '(none)'}"`);
+      return readerMarkdownPage(md);
+    }
+  } catch (error: any) {
+    console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
+    tried.push(`reader proxy Markdown: ${error.message}`);
+  }
+
+  console.log(`[Fetcher] No way past the bot check: ${tried.join(' | ')}`);
+  throw new Error('This site blocks automated reading with a bot check, and no other copy of the article could be found.');
+}
+
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
@@ -1260,6 +1359,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let html: string;
     if (response.ok) {
       html = await response.text();
+      if (isBotCheckPage(html)) {
+        console.log(`[Fetcher] HTTP ${response.status} but the page is a bot check`);
+        html = await fetchPastBotWall(url);
+      }
     } else if (response.status === 403) {
       // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
       // does, seen live 2026-09-03). One retry with browser-like headers usually gets the
@@ -1276,18 +1379,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
         console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
-        // Third and last step: the r.jina.ai reader proxy opens the page in its own real
-        // browser (which passes JavaScript challenges) and returns the rendered HTML.
-        console.log('[Fetcher] Trying the reader proxy (r.jina.ai) as a last resort');
-        try {
-          html = await readerProxyFetch(url);
-          console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
-        } catch (proxyError: any) {
-          console.log(`[Fetcher] Reader proxy failed too: ${proxyError.message}`);
-          throw new Error(
-            `HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode}, reader proxy: ${proxyError.message})`
-          );
-        }
+        html = await fetchPastBotWall(url);
+      } else if (isBotCheckPage(retry.body)) {
+        console.log(`[Fetcher] Browser-like retry got HTTP ${retry.statusCode} but the page is a bot check`);
+        html = await fetchPastBotWall(url);
       } else {
         console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
         html = retry.body;
@@ -1297,11 +1392,6 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
-
-    // Log if potential Cloudflare challenge but continue anyway
-    if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
-      console.log('[Fetcher] ⚠️ Potential Cloudflare challenge detected, but attempting to parse anyway');
-    }
 
     // Detect Substack BEFORE removing scripts (needs to check for substackcdn.com links)
     const isSubstack = isSubstackPage(html);
