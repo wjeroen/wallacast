@@ -1445,7 +1445,7 @@ export function FullscreenPlayer({
   // tabs: "Fetched by wallacast/wallabag on [date]" (texts: "Last edited on
   // [date]") and "Audio generated on [date]".
   const renderProvenance = () => (
-    <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', lineHeight: '1.6' }}>
+    <div className="content-provenance" style={{ color: 'var(--t3)', marginTop: '0.25rem', lineHeight: '1.6' }}>
       <div>
         {content.type === 'article'
           ? `Fetched by ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`

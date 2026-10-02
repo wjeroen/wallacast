@@ -668,6 +668,7 @@ router.post('/', async (req, res) => {
       description,
       preview_picture,
       podcast_id,
+      podcast_show_name,
       audio_url,
       published_at,
       duration,
@@ -885,6 +886,11 @@ router.post('/', async (req, res) => {
       if (podcastResult.rows.length > 0) {
         podcastShowName = podcastResult.rows[0].title;
       }
+    }
+    // An episode added from the preview of a feed the user does not subscribe to has no
+    // podcast_id, so the Feed tab sends the show's title itself (VARCHAR(500) column).
+    if (!podcastShowName && typeof podcast_show_name === 'string' && podcast_show_name.trim()) {
+      podcastShowName = podcast_show_name.trim().slice(0, 500);
     }
 
     const dbType = type;

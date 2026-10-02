@@ -16,18 +16,9 @@ const SHOTS = [
   { src: '/landing/shot-summary.svg', caption: 'AI summaries' },
 ];
 
-// Same initial-theme rules as index.html and App.tsx: stored 'light' wins, 'system'
-// follows the OS, anything else is dark.
-function initialIsLight(): boolean {
-  try {
-    const stored = localStorage.getItem('wallacast-theme');
-    if (stored === 'light') return true;
-    if (stored === 'system') return window.matchMedia('(prefers-color-scheme: light)').matches;
-  } catch { /* default dark */ }
-  return false;
-}
-
-export function HomePage() {
+// The theme belongs to App (it stays mounted while this page shows), so the toggle
+// here and the one in the user menu can never disagree after logging in.
+export function HomePage({ isLight, onToggleTheme }: { isLight: boolean; onToggleTheme: () => void }) {
   const { login, register, demoLogin, isLoading, error, clearError } = useAuthStore();
 
   // Login dropdown (lives top-right, where the user menu sits once logged in)
@@ -50,8 +41,6 @@ export function HomePage() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
-
-  const [isLight, setIsLight] = useState(initialIsLight);
 
   // Screenshot carousel
   const [shot, setShot] = useState(1);
@@ -98,14 +87,6 @@ export function HomePage() {
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [loginOpen]);
-
-  const toggleTheme = () => {
-    const next = !isLight;
-    setIsLight(next);
-    const t = next ? 'light' : 'dark';
-    try { localStorage.setItem('wallacast-theme', t); } catch { /* fine */ }
-    document.documentElement.setAttribute('data-theme', t);
-  };
 
   const openAccountForm = (registerMode: boolean) => {
     setIsRegister(registerMode);
@@ -178,7 +159,7 @@ export function HomePage() {
           <h1>wallacast</h1>
         </div>
         <div className="header-right">
-          <button className="home-icon-btn" onClick={toggleTheme} title="Toggle theme">
+          <button className="home-icon-btn" onClick={onToggleTheme} title="Toggle theme">
             {isLight ? <Sun size={17} /> : <Moon size={17} />}
           </button>
           <div className="user-menu-container" ref={loginRef}>

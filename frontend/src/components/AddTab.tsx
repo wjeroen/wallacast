@@ -397,7 +397,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
                 onChange={handleFileSelect}
               />
               {uploadedFileName && (
-                <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--t3)', marginTop: '0.5rem' }}>
                   Selected: {uploadedFileName}{isMarkdownUpload ? ' (converted from Markdown)' : ''}
                 </p>
               )}

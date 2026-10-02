@@ -1715,20 +1715,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             Wallabag sync
           </h3>
 
-          <div style={{
-            padding: '0.75rem',
-            background: '#1e3a5f',
-            borderRadius: '0.5rem',
-            fontSize: '0.875rem',
-            lineHeight: '1.5',
-            marginBottom: '1rem',
-            border: '1px solid #2563eb',
-            color: '#fff'
-          }}>
+          <div className="settings-info-box">
             <button
               type="button"
               className="settings-collapse-toggle"
-              style={{ color: '#fff', padding: 0 }}
               onClick={() => setShowWallabagHelp(v => !v)}
               aria-expanded={showWallabagHelp}
             >
@@ -1867,10 +1857,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
 
                 {connectionStatus === 'success' && (
-                  <span style={{ color: 'green' }}>✓ Connected</span>
+                  <span style={{ color: 'var(--ok-text)' }}>✓ Connected</span>
                 )}
                 {connectionStatus === 'failed' && (
-                  <span style={{ color: 'red' }}>✗ Failed</span>
+                  <span style={{ color: 'var(--danger-text)' }}>✗ Failed</span>
                 )}
               </div>
 
@@ -1878,9 +1868,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               {connectionError && (
                 <div className="form-group" style={{
                   padding: '0.5rem',
-                  background: '#fee',
+                  background: 'var(--error-bg)',
                   borderRadius: '4px',
-                  color: '#c33',
+                  color: 'var(--error-fg)',
                   fontSize: '0.9rem'
                 }}>
                   {connectionError}

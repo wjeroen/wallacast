@@ -79,7 +79,7 @@ export function ContentCard({
       // Show "Completed ✓" for 5 seconds after completion
       if (justCompleted) {
         return (
-          <div className="generation-status completed" style={{ color: '#10b981' }}>
+          <div className="generation-status completed">
             <span>✓ Completed</span>
           </div>
         );

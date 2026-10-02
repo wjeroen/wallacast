@@ -84,6 +84,8 @@ function App() {
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemPrefersDark);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    // Phone status bar / browser bar color: the header color in light mode
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark ? '#0f172a' : '#ffffff');
     try { localStorage.setItem('wallacast-theme', themeMode); } catch { /* private mode */ }
   }, [isDark, themeMode]);
   const cycleTheme = () => setThemeMode(m => m === 'dark' ? 'light' : m === 'light' ? 'system' : 'dark');
@@ -851,7 +853,7 @@ function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-content">
-          <img src="/logo-0f172a.png?v=2" alt="wallacast logo" className="loading-logo" />
+          <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="loading-logo" />
           <h1>wallacast</h1>
           <div className="loading-spinner"></div>
         </div>
@@ -861,7 +863,7 @@ function App() {
 
   // Logged out: the marketing home page (login lives in its top-right dropdown)
   if (!isAuthenticated) {
-    return <HomePage />;
+    return <HomePage isLight={!isDark} onToggleTheme={() => setThemeMode(isDark ? 'light' : 'dark')} />;
   }
 
   // Show settings page
