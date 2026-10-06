@@ -311,6 +311,14 @@ button {
   transform: scale(1.05);
 }
 
+/* On the Add tab the button stays blue, darker and with a ring, instead of taking the
+   grey background of the other open tabs (the .active rule above) */
+.bottom-nav .add-button.active {
+  background: #1d4ed8;
+  color: white;
+  box-shadow: 0 0 0 3px var(--bg-surface), 0 0 0 5px #3b82f6;
+}
+
 /* Feed Tab */
 .feed-tab {
   width: 100%;
@@ -4902,7 +4910,7 @@ blockquote.twitter-tweet.tweet-quoted {
   white-space: nowrap;
 }
 .settings-tag-count {
-  color: var(--text-secondary);
+  color: var(--t3);
   font-size: 0.8rem;
 }
 .settings-tag-row button {
@@ -4996,7 +5004,7 @@ blockquote.twitter-tweet.tweet-quoted {
   white-space: nowrap;
 }
 .settings-token-meta {
-  color: var(--text-secondary);
+  color: var(--t3);
   font-size: 0.8rem;
 }
 .settings-token-row button {

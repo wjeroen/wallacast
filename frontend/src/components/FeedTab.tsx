@@ -412,7 +412,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
-              color: 'var(--text-secondary)',
+              color: 'var(--t3)',
               fontSize: '0.9rem'
             }}
           >

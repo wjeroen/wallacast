@@ -43,10 +43,21 @@ app.post('/api/auth/register', (req, res) => res.json({ ...fakeTokens, user: fak
 app.post('/api/auth/refresh', (req, res) => res.json(fakeTokens));
 app.get('/api/auth/me', (req, res) => res.json({ user: fakeUser }));
 app.post('/api/auth/logout', (req, res) => res.json({ success: true }));
-// Read-only API tokens (Settings section). A fake token so the one-time reveal can be previewed.
-app.get('/api/auth/tokens', (req, res) => res.json({ tokens: [] }));
-app.post('/api/auth/tokens', (req, res) => res.json({ id: 1, name: req.body?.name || 'Token', token: 'wcr_' + '0123456789abcdef'.repeat(2) + '01234567' }));
-app.delete('/api/auth/tokens/:id', (req, res) => res.json({ success: true }));
+// Read-only API tokens (Settings section). Fake tokens, kept in memory until the mock restarts,
+// so the one-time reveal and the token list can be previewed.
+const mockTokens = [];
+app.get('/api/auth/tokens', (req, res) => res.json({ tokens: mockTokens }));
+app.post('/api/auth/tokens', (req, res) => {
+  const id = mockTokens.length ? Math.max(...mockTokens.map(t => t.id)) + 1 : 1;
+  const name = req.body?.name || 'Token';
+  mockTokens.push({ id, name, created_at: new Date().toISOString(), last_used_at: null });
+  res.json({ id, name, token: 'wcr_' + '0123456789abcdef'.repeat(2) + '01234567' });
+});
+app.delete('/api/auth/tokens/:id', (req, res) => {
+  const i = mockTokens.findIndex(t => t.id === Number(req.params.id));
+  if (i >= 0) mockTokens.splice(i, 1);
+  res.json({ success: true });
+});
 
 app.get('/api/users/settings', (req, res) => res.json({ settings: {} }));
 app.get('/api/users/prompts', (req, res) => res.json({ prompts: [] }));
@@ -54,6 +65,15 @@ app.get('/api/users/ai-providers', (req, res) => res.json({ providers: {} }));
 
 // --- Content (Library / Add tabs) ---
 app.get('/api/content', (req, res) => res.json(db.content));
+
+// Tag counts for Settings > Manage tags. Defined before /api/content/:id, which would take "tags".
+app.get('/api/content/tags/all', (req, res) => {
+  const counts = new Map();
+  for (const item of db.content) {
+    for (const tag of item.tags || []) counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  res.json({ tags: [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count) });
+});
 
 app.get('/api/content/:id', (req, res) => {
   const item = db.content.find(c => c.id === Number(req.params.id));

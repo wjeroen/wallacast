@@ -112,7 +112,7 @@ cd backend
 npm run mock
 ```
 
-This starts a small stand-in server on port 3001 that always "logs in" successfully (any username/password works) and returns empty or default data for most other requests, so the real frontend renders normally with no live content. The Feed tab gets a small set of fake feeds (search for anything to list them), including a slow one and one that always fails, so subscribing, previews, Load More, and Refresh can all be clicked through. It never touches Railway or any real database, so it's safe to leave running. It's a plain file (`backend/mock-server.mjs`) that the real deploy command (`npm start`) never touches, so it has no effect on production.
+This starts a small stand-in server on port 3001 that always "logs in" successfully (any username/password works) and returns empty or default data for most other requests, so the real frontend renders normally with no live content. The Feed tab gets a small set of fake feeds (search for anything to list them), including a slow one and one that always fails, so subscribing, previews, Load More, and Refresh can all be clicked through. Settings lists the tags of the fake items and any read-only tokens you create while the mock runs. It never touches Railway or any real database, so it's safe to leave running. It's a plain file (`backend/mock-server.mjs`) that the real deploy command (`npm start`) never touches, so it has no effect on production.
 
 ## More documentation
 
