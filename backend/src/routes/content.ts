@@ -134,6 +134,16 @@ router.post('/status', async (req, res) => {
 // transcript, transcript_words, tts_chunks, or content_alignment here. `url` and `alt_url`
 // are exactly what Copy content writes into `source` and `alt-source` (null for synthetic
 // wallacast:// ones), and `description` is plain text cut to 300 characters.
+//
+// `has_transcript` (every row, a boolean) is true exactly when the item's Copy content export
+// carries a "## Transcript" section (exportHasTranscript in shared/markdown.ts): a podcast
+// episode whose transcript holds text. Always false for articles and texts, whose export never
+// has the section. It is computed without reading the transcript: octet_length() takes the
+// size from the value's header or TOAST pointer and never fetches the text ("We need not
+// detoast the input at all", textoctetlen in PostgreSQL's varlena.c). Transcripts are not
+// stored whitespace-only (see transcribeWithTimestamps and Wallabag sync), and the regex for
+// any older short whitespace-only value only runs on transcripts of at most 1,000 bytes, which
+// cost nothing to read.
 // Defined before GET /:id so 'index' is never read as an id.
 router.get('/index', async (req, res) => {
   try {
@@ -141,7 +151,11 @@ router.get('/index', async (req, res) => {
       `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
               is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
               COALESCE(comment_count_total, 0) AS comment_count,
-              LEFT(description, 1500) AS description
+              LEFT(description, 1500) AS description,
+              COALESCE(type = 'podcast_episode'
+                AND octet_length(transcript) > 0
+                AND (octet_length(transcript) > 1000 OR transcript ~ '[^[:space:]]'), false
+              ) AS has_transcript
          FROM content_items
         WHERE user_id = $1
         ORDER BY created_at DESC`,

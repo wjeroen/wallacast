@@ -212,6 +212,24 @@ console.log('✅ rendered Markdown spot checks pass');
 // bug that hides behind a fixture covering only one shape.
 const sharedMarkdown = await import('../src/shared/markdown.ts');
 
+// ---- 2a. the "## Transcript" section and the index's has_transcript flag -----------------
+// exportHasTranscript() is the rule both follow: a podcast episode whose transcript holds
+// text. GET /api/content/index computes it in SQL (routes/content.ts), which these offline
+// tests cannot run, so they pin the export side the SQL mirrors.
+const { exportHasTranscript } = sharedMarkdown;
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: 'Hello there.' }), true, 'podcast with text');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: ' \n\t ' }), false, 'whitespace only counts as none');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: '' }), false, 'empty');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: null }), false, 'null');
+assert.equal(exportHasTranscript({ type: 'article', transcript: 'Read-along transcript.' }), false, 'articles never get the section');
+assert.equal(exportHasTranscript({ type: 'text', transcript: 'Read-along transcript.' }), false, 'texts never get the section');
+const blankPod = backend.renderItemMarkdown({ ...podcastRow, transcript: '  \n ', transcript_words: null }, {});
+assert.ok(!blankPod.includes('## Transcript'), 'no empty Transcript heading for a whitespace-only transcript');
+assert.ok(blankPod.includes('Episode notes with a [link](https://x.y).'), 'the show notes stay');
+const plainPod = backend.renderItemMarkdown({ ...podcastRow, transcript_words: null }, {});
+assert.ok(plainPod.includes('## Transcript\n\nWelcome to the show. Still minute one. Into minute two.'), 'plain transcript without word timestamps');
+console.log('✅ Transcript section and the has_transcript rule');
+
 const FOOTNOTE_SHAPES: Array<[string, string, RegExp[]]> = [
   [
     // Substack hangs the id on the little number link, not on the note. Reading the id
