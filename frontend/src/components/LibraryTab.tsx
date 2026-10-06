@@ -469,6 +469,31 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
   };
 
+  // Bulk "Copy content": one zip with a Markdown file per selected item, rendered by the
+  // server with the same Copy & export settings as the Copy content button, downloaded
+  // through the same blob-link trick as the per-item data zip. A read, so the selection
+  // stays as it is afterwards.
+  const handleBulkCopyContentZip = async () => {
+    const ids = content.filter(item => selectedItems.has(item.id)).map(item => item.id);
+    if (ids.length === 0) return;
+    setBulkMenuOpen(false);
+    try {
+      const response = await contentAPI.markdownZip(ids);
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wallacast-copy-content-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Bulk copy content failed:', error);
+      alert('Could not build the zip');
+    }
+  };
+
   // Bulk tag add/remove: one request with the whole selection and the picked tags, then
   // refetch (same reasoning as runInstantBulk). Thrown errors reach the TagEditor's own
   // catch, which shows the alert.
@@ -1086,6 +1111,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   <button onClick={handleBulkGenerateAudio}>Generate audio</button>
                   <button onClick={handleBulkGenerateSummaries}>Generate summaries</button>
                   <button onClick={handleBulkRefetch}>Refetch from web</button>
+                  <button onClick={handleBulkCopyContentZip}>Copy content (zip)</button>
                 </div>
               )}
             </div>

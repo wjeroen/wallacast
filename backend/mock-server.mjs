@@ -43,6 +43,10 @@ app.post('/api/auth/register', (req, res) => res.json({ ...fakeTokens, user: fak
 app.post('/api/auth/refresh', (req, res) => res.json(fakeTokens));
 app.get('/api/auth/me', (req, res) => res.json({ user: fakeUser }));
 app.post('/api/auth/logout', (req, res) => res.json({ success: true }));
+// Read-only API tokens (Settings section). A fake token so the one-time reveal can be previewed.
+app.get('/api/auth/tokens', (req, res) => res.json({ tokens: [] }));
+app.post('/api/auth/tokens', (req, res) => res.json({ id: 1, name: req.body?.name || 'Token', token: 'wcr_' + '0123456789abcdef'.repeat(2) + '01234567' }));
+app.delete('/api/auth/tokens/:id', (req, res) => res.json({ success: true }));
 
 app.get('/api/users/settings', (req, res) => res.json({ settings: {} }));
 app.get('/api/users/prompts', (req, res) => res.json({ prompts: [] }));

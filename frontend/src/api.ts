@@ -161,6 +161,11 @@ export const contentAPI = {
   exportZip: (id: number) =>
     api.get(`/content/${id}/export`, { responseType: 'arraybuffer' }),
 
+  // Bulk Copy content: one zip with a Markdown file per id, each rendered server-side exactly
+  // like the Copy content button (the caller's Copy & export settings apply).
+  markdownZip: (ids: number[]) =>
+    api.get('/content/markdown-zip', { params: { ids: ids.join(',') }, responseType: 'arraybuffer' }),
+
   logAudioError: (data: {
     contentId?: number;
     contentType?: string;
@@ -262,7 +267,21 @@ export const authAPI = {
 
   changePassword: (currentPassword: string, newPassword: string) =>
     api.post('/auth/change-password', { currentPassword, newPassword }),
+
+  // Read-only API tokens (Settings). The raw token is in the create response only.
+  listTokens: () => api.get<{ tokens: ApiToken[] }>('/auth/tokens'),
+  createToken: (name: string) =>
+    api.post<{ id: number; name: string; token: string }>('/auth/tokens', { name }),
+  revokeToken: (id: number) => api.delete<{ success: boolean }>(`/auth/tokens/${id}`),
 };
+
+// One live read-only API token as listed by GET /auth/tokens (never the token value itself).
+export interface ApiToken {
+  id: number;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+}
 
 export const userSettingsAPI = {
   getAll: () => api.get<{ settings: Record<string, string | null> }>('/users/settings'),

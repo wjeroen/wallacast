@@ -4857,6 +4857,80 @@ blockquote.twitter-tweet.tweet-quoted {
 .settings-tag-delete {
   color: #ef4444;
 }
+/* Read-only API tokens (Settings): the create row, the one-time reveal, one row per live token. */
+.settings-token-create {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.settings-token-create input {
+  flex: 1;
+  min-width: 0;
+}
+.settings-token-create button {
+  white-space: nowrap;
+}
+.settings-token-reveal {
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+}
+.settings-token-reveal p {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+.settings-token-reveal code {
+  display: block;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: var(--bg-raised);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  word-break: break-all;
+  user-select: all;
+}
+.settings-token-reveal-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.settings-token-reveal-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+.settings-token-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--bg-raised);
+}
+.settings-token-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-token-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-token-meta {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+.settings-token-row button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+.settings-token-revoke {
+  color: #ef4444;
+}
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
   /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly

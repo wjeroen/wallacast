@@ -8,8 +8,8 @@ import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js
 // NOTE: "forum-bots.effectivealtruism.org" does NOT contain the substring
 // "forum.effectivealtruism.org" (the "-bots" breaks it), so EA-Forum detection must check
 // for BOTH hosts. Always detect with isEAForumUrl() rather than a bare .includes() check.
-const EA_FORUM_HOST = 'forum.effectivealtruism.org';
-const EA_FORUM_BOTS_HOST = 'forum-bots.effectivealtruism.org';
+export const EA_FORUM_HOST = 'forum.effectivealtruism.org';
+export const EA_FORUM_BOTS_HOST = 'forum-bots.effectivealtruism.org';
 
 /** True for both the main EA Forum host and its bot-friendly mirror. */
 export function isEAForumUrl(url: string | null | undefined): boolean {
@@ -941,6 +941,272 @@ export function isArchiveMirrorUrl(url: string): boolean {
 }
 
 /**
+ * True when an archive.is answer holds a real snapshot. archive.is puts every copy it serves
+ * inside `<div id="CONTENT">`, and a server placeholder has no such box (seen 2026-09-14: a
+ * plain fetch of a snapshot came back as nginx's 612-byte "Welcome to nginx" page, HTTP 200).
+ */
+export function isArchiveSnapshot(doc: Document): boolean {
+  return !!doc.querySelector('#CONTENT');
+}
+
+/**
+ * An element that holds a page's reader comments. Judged by id only, because an archive.is copy
+ * keeps ids and drops every class name: any id containing "comments" (FT's `#o-comments-stream`,
+ * the common `#comments`), the Coral embed (`#coral...`) and Disqus (`#disqus_thread`).
+ * Wallacast collects comments itself only for the forums and Substack. Comments embedded in any
+ * other page are noise that would otherwise be narrated as part of the article.
+ *
+ * An aria-label is deliberately NOT read: the New York Times labels a reporter's note inside its
+ * story "Comments" (`<ol aria-label="Comments">`, the reporter writing about the interview), and
+ * that is editorial text, not reader comments.
+ */
+export function isCommentArea(el: Element): boolean {
+  const id = el.id || '';
+  return /comments/i.test(id) || /^coral/i.test(id) || id === 'disqus_thread';
+}
+
+/** True when el, or one of its ancestors below `stop`, is a comment area. */
+function insideCommentArea(el: Element, stop: Element | null = null): boolean {
+  for (let x: Element | null = el; x && x !== stop; x = x.parentElement) {
+    if (isCommentArea(x)) return true;
+  }
+  return false;
+}
+
+/** Removes every comment area inside root (see isCommentArea). Returns how many went. */
+export function removeCommentAreas(root: Element): number {
+  let removed = 0;
+  for (const el of Array.from(root.querySelectorAll('[id]'))) {
+    if (!root.contains(el) || !isCommentArea(el)) continue; // already gone with an outer area
+    el.remove();
+    removed++;
+  }
+  return removed;
+}
+
+// Links that open a share dialog on another service. Judged by the address, because the link
+// text varies per site ("Share on X", FT's "<title> on x (opens in a new window)") and archive.is
+// drops the class names a share bar usually carries, while the address survives both (archive.is
+// keeps it inside its own `/o/<id>/` redirect). A `mailto:` share has no recipient, so an
+// ordinary "email the author" link never matches.
+const SHARE_LINK_PATTERNS: RegExp[] = [
+  /(?:^|[/.])(?:twitter|x)\.com\/(?:intent\/(?:tweet|post)|share)(?:[/?#]|$)/i,
+  /(?:^|[/.])facebook\.com\/(?:sharer|share\.php|dialog\/(?:share|feed))/i,
+  /(?:^|[/.])linkedin\.com\/(?:sharing\/share-offsite|shareArticle)/i,
+  /^whatsapp:\/\/send/i,
+  /(?:^|[/.])(?:api\.whatsapp\.com\/send|wa\.me\/\?)/i,
+  /(?:^|[/.])reddit\.com\/submit/i,
+  /(?:^|[/.])(?:t|telegram)\.me\/share/i,
+  /(?:^|[/.])bsky\.app\/intent\/compose/i,
+  /(?:^|[/.])pinterest\.[a-z.]+\/pin\/create/i,
+  /(?:^|[/.])threads\.(?:net|com)\/intent\/post/i,
+  /(?:^|[/.])news\.ycombinator\.com\/submitlink/i,
+  /^mailto:\?/i,
+];
+
+/**
+ * Removes share links (see SHARE_LINK_PATTERNS), plus the list items, lists and bars they leave
+ * with nothing in them. Returns how many links went.
+ */
+export function removeShareLinks(root: Element): number {
+  let removed = 0;
+  for (const link of Array.from(root.querySelectorAll('a[href]'))) {
+    const href = link.getAttribute('href') || '';
+    if (!SHARE_LINK_PATTERNS.some(re => re.test(href))) continue;
+    let parent: Element | null = link.parentElement;
+    link.remove();
+    removed++;
+    while (
+      parent && parent !== root &&
+      !(parent.textContent || '').trim() &&
+      !parent.querySelector('img, picture, video, audio, iframe')
+    ) {
+      const up: Element | null = parent.parentElement;
+      parent.remove();
+      parent = up;
+    }
+  }
+  return removed;
+}
+
+// Names pages give their story body. They are ids and attributes, not class names, so an
+// archive.is copy keeps them: FT's `#article-body`, the New York Times' `<section
+// name="articleBody">`, and schema.org's `itemprop="articleBody"`.
+const STORY_BODY_MARKERS =
+  '[itemprop="articleBody"], section[name="articleBody"], #article-body, #articleBody, #article_body';
+const MIN_STORY_BODY_CHARS = 500;
+
+/**
+ * The element a page marks as its story body (see STORY_BODY_MARKERS), or null.
+ *
+ * Only an unambiguous marker counts: exactly one outermost match (a marker inside another marker
+ * is part of the same body), outside the comments, with at least 500 characters of text. A body
+ * split over several markers gives null, since keeping one part would drop the rest.
+ */
+export function findStoryBody(doc: Document): Element | null {
+  const found = Array.from(doc.querySelectorAll(STORY_BODY_MARKERS));
+  const outermost = found.filter(el => !found.some(other => other !== el && other.contains(el)));
+  if (outermost.length !== 1) return null;
+  const body = outermost[0];
+  if (insideCommentArea(body)) return null;
+  return (body.textContent || '').trim().length >= MIN_STORY_BODY_CHARS ? body : null;
+}
+
+const MIN_NESTED_STORY_CHARS = 1000;
+
+/**
+ * The story inside a page-sized <article>, or null.
+ *
+ * FT wraps its WHOLE page in `<article id="site-content">` (the photo, two share bars, the
+ * byline, a newsletter ad, the story, the topic list, 97 reader comments) and puts the story
+ * itself in a second `<article>` inside it, so taking the outer one kept all of that. The inner
+ * one wins when it is the only nested article of real length (1,000+ characters, so teaser cards
+ * never qualify) outside the comments, and it holds at least half of the outer article's text
+ * once the comment areas are left out (on FT the comments alone were 87% of the page).
+ */
+export function nestedStoryArticle(article: Element): Element | null {
+  const long = Array.from(article.querySelectorAll('article')).filter(el =>
+    !insideCommentArea(el, article) && (el.textContent || '').trim().length >= MIN_NESTED_STORY_CHARS);
+  const candidates = long.filter(el => !long.some(other => other !== el && other.contains(el)));
+  if (candidates.length !== 1) return null;
+  const story = candidates[0];
+  const withoutComments = article.cloneNode(true) as Element;
+  removeCommentAreas(withoutComments);
+  const outerLen = (withoutComments.textContent || '').trim().length;
+  return (story.textContent || '').trim().length >= outerLen * 0.5 ? story : null;
+}
+
+/**
+ * The publication date an archive.is copy still carries in its own page, or null.
+ *
+ * archive.is replaces a page's meta tags with its own, so `article:published_time` becomes the
+ * moment of archiving (FT, 2026-09-14: 23:43 UTC for a piece published at 17:16 UTC, and a New
+ * York Times copy was five days off). The page's own `<time datetime>` survives inside the
+ * snapshot box. Exactly ONE candidate is read: the first one outside the comments within the
+ * page's first `<article>`, or within the whole snapshot when that article has none. It is never
+ * passed over for a later one, because a later date on the page usually belongs to a
+ * related-story teaser (The Information's did). The candidate is rejected when it does not parse
+ * or is later than the archiving itself, and the caller then keeps the archive time. A date
+ * without a time becomes noon UTC, so it shows as the same day in every time zone.
+ */
+export function archivedPublishedDate(doc: Document, archivedAt?: string | null): string | null {
+  const snapshot = doc.querySelector('#CONTENT');
+  if (!snapshot) return null;
+  const firstDate = (scope: Element) =>
+    Array.from(scope.querySelectorAll('time[datetime]')).find(t => !insideCommentArea(t, snapshot)) || null;
+  const article = snapshot.querySelector('article');
+  const time = (article && firstDate(article)) || firstDate(snapshot);
+  if (!time) return null;
+
+  let raw = (time.getAttribute('datetime') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) raw += 'T12:00:00Z';
+  // "5:40pm PDT" only parses with a space before the am/pm, and The Information writes none.
+  const ms = Date.parse(raw.replace(/(\d)([ap]m)\b/i, '$1 $2'));
+  if (Number.isNaN(ms)) return null;
+  const archivedMs = archivedAt ? Date.parse(archivedAt) : NaN;
+  if (!Number.isNaN(archivedMs) && ms > archivedMs + 60_000) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * The lead photo of an archive.is copy: the first `<figure>` holding an image that comes before
+ * the story's first paragraph, outside the comments. Null when there is none.
+ *
+ * archive.is swaps the page's `og:image` for a screenshot of the archived page, which then became
+ * the library thumbnail. Checked on five archive copies (2026-09-14): FT, the New York Times, the
+ * Washington Post and The Information each got their real lead photo, and Compact (no figure
+ * before its story) got none. "The first image on the page" would have been wrong: on the Times
+ * the first two images are archive.is's pictures of a blocked embed (Chromium's
+ * "static01.nyt.com is blocked" page), which is why only a <figure> counts.
+ */
+export function archivedLeadFigure(doc: Document, storyStart: Element | null): Element | null {
+  const snapshot = doc.querySelector('#CONTENT');
+  if (!snapshot || !storyStart) return null;
+  for (const figure of Array.from(snapshot.querySelectorAll('figure'))) {
+    // Figures come in document order, so the first one at or after the story text ends the search.
+    if (!(figure.compareDocumentPosition(storyStart) & 4 /* DOCUMENT_POSITION_FOLLOWING */)) break;
+    if (insideCommentArea(figure, snapshot)) continue;
+    if (figure.querySelector('img[src]')) return figure;
+  }
+  return null;
+}
+
+/**
+ * Tufte-style sidenotes become an ordinary footnote section.
+ *
+ * Sites built on Tufte CSS (collusion.wiki, many research blogs) put the whole note inside
+ * the sentence and lean on their own stylesheet to place it:
+ *
+ *   <label for="fn-1" class="margin-toggle sidenote-number" data-n="1"></label>
+ *   <input type="checkbox" id="fn-1" class="margin-toggle">
+ *   <span class="sidenote" data-n="1">the note</span>
+ *
+ * The label is EMPTY (its number is drawn by CSS from data-n) and the checkbox only exists so
+ * a phone can toggle the note. We keep the body but not the site's stylesheet, so all of that
+ * arrived as bare checkboxes scattered through the text, with the note itself spliced into the
+ * middle of the sentence and no marker anywhere. The narration read it that way too.
+ *
+ * Each note becomes the canonical shape the reader and the Markdown export already handle: a
+ * numbered `<sup>` marker where the note sat, and the note in a `<section class="footnotes">`
+ * at the end with a back-link. Notes are renumbered 1..N in document order, so a Tufte dagger
+ * or asterisk becomes a number like every other footnote.
+ */
+export function normalizeSidenotes(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  const notes = Array.from(root.querySelectorAll('span.sidenote, span.marginnote'));
+  if (notes.length === 0) return;
+
+  const list = doc.createElement('ol');
+
+  notes.forEach((note, i) => {
+    const n = i + 1;
+
+    // The toggle pair sits immediately before the note and carries no text of its own.
+    let prev = note.previousElementSibling;
+    while (
+      prev &&
+      (prev.nodeName === 'INPUT' || prev.nodeName === 'LABEL') &&
+      (prev.getAttribute('class') || '').includes('margin-toggle')
+    ) {
+      const before = prev.previousElementSibling;
+      prev.remove();
+      prev = before;
+    }
+
+    const body = note.innerHTML;
+
+    const sup = doc.createElement('sup');
+    sup.className = 'footnote-ref';
+    sup.id = `fnref-side-${n}`;
+    const link = doc.createElement('a');
+    link.setAttribute('href', `#fn-side-${n}`);
+    link.textContent = `[${n}]`;
+    sup.appendChild(link);
+    note.replaceWith(sup);
+
+    const li = doc.createElement('li');
+    li.id = `fn-side-${n}`;
+    li.innerHTML = body;
+    li.appendChild(doc.createTextNode(' '));
+    const back = doc.createElement('a');
+    back.setAttribute('href', `#fnref-side-${n}`);
+    back.className = 'footnote-backref';
+    back.textContent = '↩';
+    li.appendChild(back);
+    list.appendChild(li);
+  });
+
+  const section = doc.createElement('section');
+  section.className = 'footnotes';
+  section.appendChild(doc.createElement('hr'));
+  section.appendChild(list);
+  root.appendChild(section);
+
+  console.log(`[Fetcher] Converted ${notes.length} sidenote(s) into a footnotes section`);
+}
+
+/**
  * Rebuild paragraphs in an archive.is-style mirror.
  *
  * The mirror keeps the words but throws away the structure: every block becomes a generic
@@ -1057,6 +1323,21 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     const styles = doc.querySelectorAll('style');
     styles.forEach(style => style.remove());
 
+    // archive.is sometimes answers with a server placeholder instead of the snapshot (nginx's
+    // "Welcome to nginx" page with HTTP 200, seen 2026-09-14). Storing that would replace a good
+    // article with junk on a refetch, so a short answer without the snapshot box counts as a
+    // failed fetch: a refetch keeps the old body and the Add tab shows an error to retry. A long
+    // answer without the box (an archive link that redirects on to the original site) is used
+    // as before.
+    if (isArchiveMirrorUrl(url) && !isArchiveSnapshot(doc)) {
+      const bodyChars = (doc.body?.textContent || '').trim().length;
+      if (bodyChars < 1000) {
+        const pageTitle = (doc.querySelector('title')?.textContent || '').trim().slice(0, 80);
+        console.log(`[Fetcher] archive mirror answered without a snapshot (title "${pageTitle}", ${bodyChars} characters), treating it as a failed fetch`);
+        throw new Error(`The archive answered with "${pageTitle}" instead of the snapshot`);
+      }
+    }
+
     // Extract metadata from meta tags
     const title =
       doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
@@ -1090,11 +1371,21 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       author = jsonLdAuthor;
     }
 
-    const publishedDate =
+    let publishedDate =
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
+    // An archive.is copy's meta date is the moment of archiving. Prefer the date the archived
+    // page itself shows (see archivedPublishedDate), and keep the archive time when it has none.
+    if (isArchiveMirrorUrl(url)) {
+      const pageDate = archivedPublishedDate(doc, publishedDate);
+      if (pageDate) {
+        console.log(`[Fetcher] archive copy: publication date ${pageDate} from the page, not the archive time ${publishedDate || '(none)'}`);
+        publishedDate = pageDate;
+      }
+    }
+
     // --- ADDED IMAGE EXTRACTION HERE ---
-    const leadImageUrl =
+    let leadImageUrl =
       doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ||
       doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content') ||
       undefined;
@@ -1110,22 +1401,41 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
                   doc.querySelector('.available-content');
     }
 
+    // A page that names its story body gets exactly that element (see findStoryBody). This runs
+    // before the <article> guess below, because one <article> can hold the whole page.
+    if (!contentEl) {
+      const storyBody = findStoryBody(doc);
+      if (storyBody) {
+        const marker = storyBody.id ? `#${storyBody.id}` : `<${storyBody.tagName.toLowerCase()}> articleBody`;
+        console.log(`[Fetcher] Using the marked story body (${marker})`);
+        contentEl = storyBody;
+      }
+    }
+
     // Fallback to generic selectors
     if (!contentEl) {
       const article = doc.querySelector('article');
-      // Some sites (Compact, for one) put BOTH a page header and the story inside a single
-      // <article>, with the story itself in a <main> within it. Taking the <article> then
-      // drags the header (author line, date, share menu) into the body. Prefer that inner
-      // <main>, but only when it holds most of the article's text: a small inner <main> is
-      // a nav or a teaser, not the story.
-      const innerMain = article?.querySelector('main') || null;
-      const articleTextLen = (article?.textContent || '').trim().length;
-      const innerMainTextLen = (innerMain?.textContent || '').trim().length;
-      const preferInnerMain = !!innerMain && articleTextLen > 0 && innerMainTextLen >= articleTextLen * 0.5;
-      if (preferInnerMain) {
-        console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
+      // A page-sized <article> with the story in a second <article> inside it (FT): take the
+      // inner one (see nestedStoryArticle).
+      const nestedStory = article ? nestedStoryArticle(article) : null;
+      if (nestedStory) {
+        console.log('[Fetcher] Using the story <article> nested inside the page <article>');
+        contentEl = nestedStory;
+      } else {
+        // Some sites (Compact, for one) put BOTH a page header and the story inside a single
+        // <article>, with the story itself in a <main> within it. Taking the <article> then
+        // drags the header (author line, date, share menu) into the body. Prefer that inner
+        // <main>, but only when it holds most of the article's text: a small inner <main> is
+        // a nav or a teaser, not the story.
+        const innerMain = article?.querySelector('main') || null;
+        const articleTextLen = (article?.textContent || '').trim().length;
+        const innerMainTextLen = (innerMain?.textContent || '').trim().length;
+        const preferInnerMain = !!innerMain && articleTextLen > 0 && innerMainTextLen >= articleTextLen * 0.5;
+        if (preferInnerMain) {
+          console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
+        }
+        contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
       }
-      contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
     }
 
     // archive.is and friends rebuild a page as generic <div>s, so the mirrored copy has no
@@ -1133,7 +1443,33 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     if (contentEl && isArchiveMirrorUrl(url)) {
       console.log('[Fetcher] archive mirror detected, restoring paragraphs');
       restoreArchivedParagraphs(contentEl);
+
+      // archive.is swaps the page's og:image for a screenshot of the archived page. Use the
+      // page's own lead photo instead (see archivedLeadFigure), and put it back at the top of
+      // the story when the story box chosen above left it out.
+      const storyStart = (Array.from(contentEl.querySelectorAll('p')) as Element[])
+        .find(p => (p.textContent || '').trim().length >= 150) || null;
+      const leadFigure = archivedLeadFigure(doc, storyStart);
+      const leadSrc = leadFigure?.querySelector('img[src]')?.getAttribute('src');
+      if (leadFigure && leadSrc) {
+        try {
+          leadImageUrl = new URL(leadSrc, url).toString();
+          console.log(`[Fetcher] archive copy: lead photo ${leadImageUrl} replaces the archive screenshot`);
+        } catch {
+          // An unparseable src keeps the screenshot as the thumbnail
+        }
+        if (!contentEl.contains(leadFigure)) {
+          // Outside the story box, the figure still carries the mirror's inline styles
+          [leadFigure, ...Array.from(leadFigure.querySelectorAll('[style]'))].forEach(el => el.removeAttribute('style'));
+          contentEl.insertBefore(leadFigure, contentEl.firstChild);
+        }
+      }
     }
+
+    // Tufte sidenotes hold the note inside the sentence and hide it with the site's own CSS,
+    // which we do not keep. Turn them into a real footnote section before the cleanup below
+    // strips the toggles it leaves behind.
+    if (contentEl) normalizeSidenotes(contentEl);
 
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
     if (contentEl) {
@@ -1173,6 +1509,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           el.remove();
         }
       });
+
+      // Share links recognised by their address (see SHARE_LINK_PATTERNS). This catches share
+      // bars whose wording the rule above cannot know, and it works on archive.is copies, which
+      // keep the address but drop the class names the share-container rule further down needs.
+      // Reader comments embedded in the page go too (see isCommentArea).
+      const shareLinks = removeShareLinks(contentEl);
+      const commentAreas = removeCommentAreas(contentEl);
+      if (shareLinks || commentAreas) {
+        console.log(`[Fetcher] Removed ${shareLinks} share link(s) and ${commentAreas} comment area(s)`);
+      }
 
       // Remove SVG elements (icons, share buttons, decorative graphics - never article content)
       contentEl.querySelectorAll('svg').forEach(el => el.remove());
@@ -1289,6 +1635,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
       // Remove all remaining forms (membership, donation, etc.). We already extracted email forms above.
       contentEl.querySelectorAll('form').forEach(el => el.remove());
+
+      // Interactive controls are page furniture, never article text, and without the site's
+      // stylesheet they render as bare widgets in the reader (this page's carousel buttons,
+      // and any collapsible built on the checkbox hack). Tufte sidenote toggles are already
+      // gone by now, normalizeSidenotes consumed them along with their notes.
+      contentEl.querySelectorAll('input, button, select, textarea').forEach(el => el.remove());
 
       // Apply Substack-specific cleanup (subscribe widgets, navbar, footer, etc.)
       if (isSubstack) {

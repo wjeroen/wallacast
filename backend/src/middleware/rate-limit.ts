@@ -30,6 +30,17 @@ export const registerLimiter = rateLimit({
   message: { error: 'Too many accounts created from this address. Please try again later.' },
 });
 
+// Read-only API token creation and revocation. These routes are authenticated, so this is
+// belt and braces: a leaked session could otherwise mint tokens without limit. Listing is
+// not limited, the Settings page lists on every open.
+export const tokenLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many token changes. Please try again later.' },
+});
+
 // Password-reset requests: block inbox bombing and Resend quota abuse.
 export const forgotPasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour

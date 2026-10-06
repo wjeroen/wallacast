@@ -115,7 +115,9 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setTagsInput(cleaned.join(', '));
       detected.push(`${cleaned.length} tag${cleaned.length === 1 ? '' : 's'}`);
     }
-    const src = metaString(m.source || m.url);
+    // `alt-source` is the export's second address for the same article (an archive mirror),
+    // used only when the note carries no `source`.
+    const src = metaString(m.source || m['alt-source'] || m.url);
     const source = /^https?:\/\//i.test(src) ? src : undefined;
     if (source) detected.push('source URL');
     const description = metaString(m.description) || undefined;
@@ -144,7 +146,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     data.content = markdownToHtml(bodyWithoutComments);
     if (comments.length > 0) data.comments = comments;
     if (fm) {
-      const src = metaString(fm.meta.source || fm.meta.url);
+      const src = metaString(fm.meta.source || fm.meta['alt-source'] || fm.meta.url);
       if (/^https?:\/\//i.test(src)) {
         data.type = 'article';
         data.url = src;

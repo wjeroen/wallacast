@@ -12,7 +12,8 @@ import {
 } from '../services/auth.js';
 import { emailConfigured, sendEmail } from '../services/email.js';
 import { requireAuth } from '../middleware/auth.js';
-import { loginLimiter, registerLimiter, forgotPasswordLimiter } from '../middleware/rate-limit.js';
+import { loginLimiter, registerLimiter, forgotPasswordLimiter, tokenLimiter } from '../middleware/rate-limit.js';
+import { createApiToken, listApiTokens, revokeApiToken, ApiTokenLimitError } from '../services/api-tokens.js';
 
 const router = Router();
 
@@ -269,6 +270,77 @@ router.post('/change-password', requireAuth, async (req, res) => {
     res.json({ success: true, message: 'Password changed. Please log in again.' });
   } catch (error) {
     console.error('Change password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Read-only API tokens (services/api-tokens.ts, migration 029). JWT sessions only: the
+// allow-list in requireAuth already keeps a token away from these routes, and the explicit
+// req.apiToken check below makes that intent visible. The demo session cannot create or
+// revoke (requireAuth blocks every non-GET for it). It may list, and sees none.
+// ---------------------------------------------------------------------------
+
+// POST /api/auth/tokens { name } - Create a token. The raw token is in this response only.
+router.post('/tokens', tokenLimiter, requireAuth, async (req, res) => {
+  try {
+    if (req.apiToken) {
+      return res.status(403).json({ error: 'This token is read-only' });
+    }
+    if (req.user!.demo) {
+      return res.status(403).json({ error: 'Tokens cannot be created in the read-only demo.', demo: true });
+    }
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) {
+      return res.status(400).json({ error: 'Give the token a name, such as the device or tool it is for' });
+    }
+    if (name.length > 100) {
+      return res.status(400).json({ error: 'Token name must be 100 characters or fewer' });
+    }
+    const created = await createApiToken(req.user!.userId, name);
+    console.log(`[ApiToken] user=${req.user!.userId} created token ${created.id} "${name}"`);
+    res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof ApiTokenLimitError) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Create API token error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/auth/tokens - The caller's live tokens (id, name, created_at, last_used_at).
+// Never the token value itself, which exists only in the create response.
+router.get('/tokens', requireAuth, async (req, res) => {
+  try {
+    if (req.apiToken) {
+      return res.status(403).json({ error: 'This token is read-only' });
+    }
+    res.json({ tokens: await listApiTokens(req.user!.userId) });
+  } catch (error) {
+    console.error('List API tokens error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/auth/tokens/:id - Revoke a token. Requests carrying it fail from then on.
+router.delete('/tokens/:id', tokenLimiter, requireAuth, async (req, res) => {
+  try {
+    if (req.apiToken) {
+      return res.status(403).json({ error: 'This token is read-only' });
+    }
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid token id' });
+    }
+    const revoked = await revokeApiToken(req.user!.userId, id);
+    if (!revoked) {
+      return res.status(404).json({ error: 'Token not found' });
+    }
+    console.log(`[ApiToken] user=${req.user!.userId} revoked token ${id}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Revoke API token error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

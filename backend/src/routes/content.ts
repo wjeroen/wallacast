@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -18,6 +18,9 @@ import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
+import { findItem } from '../services/url-match.js';
+import { sourceUrls } from '../shared/format.js';
+import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
 
@@ -114,6 +117,225 @@ router.post('/status', async (req, res) => {
   } catch (error) {
     console.error('Error fetching content statuses:', error);
     res.status(500).json({ error: 'Failed to fetch content statuses' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Read surface for outside tools (the Obsidian "Wallacast inbox" and "Import from
+// wallacast" commands, see implementation-plans/obsidian-article-import.md). These three
+// routes are the ONLY ones a read-only API token may call (services/api-tokens.ts). They
+// change nothing and trigger nothing: no audio, no summary, no fetch.
+// ---------------------------------------------------------------------------
+
+// Lean library index: one small row per item, every item, newest first. Obsidian groups
+// and filters on its side. As lean as POST /status on purpose: GET / ships each item's full
+// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every inbox
+// refresh (the 80GB-incident class of problem). Never content, html_content, comments,
+// transcript, transcript_words, tts_chunks, or content_alignment here. `url` and `alt_url`
+// are exactly what Copy content writes into `source` and `alt-source` (null for synthetic
+// wallacast:// ones), and `description` is plain text cut to 300 characters.
+// Defined before GET /:id so 'index' is never read as an id.
+router.get('/index', async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
+              is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
+              COALESCE(comment_count_total, 0) AS comment_count,
+              LEFT(description, 1500) AS description
+         FROM content_items
+        WHERE user_id = $1
+        ORDER BY created_at DESC`,
+      [req.user!.userId]
+    );
+    res.json(result.rows.map((row) => {
+      const { source, altSource } = sourceUrls(row.url);
+      return {
+        ...row,
+        url: source,
+        alt_url: altSource,
+        // A podcast episode has no article URL, so its media file IS its address, and it is
+        // the `audio` property of an exported note. Same guard as buildFrontmatter, so the
+        // two always carry the same value. Our own generated narration (articles and texts,
+        // an internal /api/content/... path) is never exposed here.
+        audio_url: row.type === 'podcast_episode' && /^https?:\/\//i.test(row.audio_url || '')
+          ? row.audio_url
+          : null,
+        description: shortDescription(row.description),
+      };
+    }));
+  } catch (error) {
+    console.error('Error building content index:', error);
+    res.status(500).json({ error: 'Failed to build content index' });
+  }
+});
+
+// "Copy content" as JSON: the item's small fields plus `markdown`, rendered server-side with
+// the caller's Copy & export settings, byte-identical to the Copy content button (see
+// services/markdown-export.ts). Shared by the two Markdown routes below.
+async function sendItemMarkdown(
+  res: express.Response,
+  userId: number,
+  id: number,
+  match?: { by: string; value: string }
+) {
+  const result = await query(
+    `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE id = $1 AND user_id = $2`,
+    [id, userId]
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'Content not found' });
+  }
+  const row = result.rows[0];
+  const opts = await loadCopyContentOptions(userId);
+  const { source, altSource } = sourceUrls(row.url);
+  res.json({
+    id: row.id,
+    title: row.title,
+    author: row.author,
+    published_at: row.published_at,
+    url: source,
+    alt_url: altSource,
+    audio_url: row.type === 'podcast_episode' && /^https?:\/\//i.test(row.audio_url || '')
+      ? row.audio_url
+      : null,
+    // Which identifier found this item ('url', 'audio' or 'title') and the exact value that
+    // did, so the caller can tell whether the note's `source`, its `alt-source`, its `audio`
+    // or merely its title resolved, and warn on that last one. Absent on the by-id route.
+    ...(match ? { matched_by: match.by, matched_value: match.value } : {}),
+    tags: row.tags || [],
+    is_starred: row.is_starred,
+    is_archived: row.is_archived,
+    summary_status: row.summary_status,
+    markdown: renderItemMarkdown(row, opts),
+  });
+}
+
+// GET /markdown?url=... - The Copy content Markdown of the library item a note describes.
+// The vault identifies an item by what the note carries, never by an internal id, and which
+// property that is depends on the item:
+//
+//   ?url=<source>&url=<alt-source>   an article. `url` may be repeated (at most 10) because
+//                                    a note can hold two addresses for one article: a
+//                                    crosspost living on both the EA Forum and Substack, or
+//                                    the real article with the archive mirror Wallacast read.
+//   ?audio=<audio>                   a podcast episode. Episodes are stored with NO url at
+//                                    all, so the media file from the note's `audio` property
+//                                    is the only address they have.
+//   ?title=<title>                   a pasted text, which has neither. The weak last resort,
+//                                    an exact title match.
+//
+// All three may be combined and repeated: send everything the note has. They are tried
+// url, then audio, then title, and in the given order within each kind, so `source` wins
+// over `alt-source`. The response says which one answered (`matched_by`, `matched_value`).
+// Exact match first, then the normalised forms (see services/url-match.ts). An article
+// added twice resolves to the copy that is not archived, then the newest.
+// Defined before GET /:id so 'markdown' is never read as an id.
+router.get('/markdown', async (req, res) => {
+  try {
+    const listParam = (raw: unknown): string[] =>
+      (Array.isArray(raw) ? raw : [raw])
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+
+    const urls = listParam(req.query.url);
+    const audioUrls = listParam(req.query.audio);
+    const titles = listParam(req.query.title);
+    if (urls.length + audioUrls.length + titles.length === 0) {
+      return res.status(400).json({ error: 'A url, audio or title query parameter is required' });
+    }
+    // Episodes have a null url, so the candidate set can no longer be narrowed to rows that
+    // have one. Still four small columns per item.
+    const candidates = await query(
+      `SELECT id, url, audio_url, title, is_archived, created_at
+         FROM content_items WHERE user_id = $1`,
+      [req.user!.userId]
+    );
+    const match = findItem(candidates.rows, { urls, audioUrls, titles });
+    if (!match) {
+      const single = urls.length + audioUrls.length + titles.length === 1;
+      return res.status(404).json({
+        error: single && urls.length === 1
+          ? 'No item in your library has this URL'
+          : 'No item in your library matches what this note carries',
+      });
+    }
+    await sendItemMarkdown(res, req.user!.userId, match.item.id, { by: match.by, value: match.value });
+  } catch (error) {
+    console.error('Error rendering content markdown by URL:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
+  }
+});
+
+// GET /markdown-zip?ids=1,2,3 - Bulk Copy content: one zip with one Markdown file per selected
+// item, each byte-identical to that item's Copy content. Used by the library's bulk bar. A GET
+// with the ids in the query, so the read-only demo can use it too: it reads and changes
+// nothing. Items are fetched a few at a time and appended as they render, so a 500-item
+// selection never sits in memory at once. Ids that are not the caller's are skipped.
+// Defined before GET /:id so 'markdown-zip' is never read as an id.
+router.get('/markdown-zip', async (req, res) => {
+  try {
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const ids = Array.from(new Set(
+      raw.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
+    ));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a comma-separated list of content ids' });
+    }
+    if (ids.length > 500) {
+      return res.status(400).json({ error: 'At most 500 items per zip' });
+    }
+    const userId = req.user!.userId;
+    const opts = await loadCopyContentOptions(userId);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="wallacast-copy-content-${new Date().toISOString().slice(0, 10)}.zip"`);
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      console.error('[markdown-zip] archive error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to build the zip' });
+      else res.end();
+    });
+    archive.pipe(res);
+
+    const used = new Set<string>();
+    let added = 0;
+    const CHUNK = 10;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const result = await query(
+        `SELECT ${MARKDOWN_ITEM_COLUMNS} FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+        [userId, chunk]
+      );
+      const byId = new Map<number, any>(result.rows.map((r: any) => [r.id, r]));
+      for (const id of chunk) {
+        const row = byId.get(id);
+        if (!row) continue;
+        archive.append(renderItemMarkdown(row, opts), { name: uniqueFileName(markdownFileName(row.title), used) });
+        added++;
+      }
+    }
+    console.log(`[markdown-zip] user=${userId} requested=${ids.length} added=${added}`);
+    await archive.finalize();
+  } catch (error) {
+    console.error('Error building markdown zip:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to build the zip' });
+    else res.end();
+  }
+});
+
+// GET /:id/markdown - The same, by id.
+router.get('/:id/markdown', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid content id' });
+    }
+    await sendItemMarkdown(res, req.user!.userId, id);
+  } catch (error) {
+    console.error('Error rendering content markdown:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
   }
 });
 
@@ -572,6 +794,9 @@ router.post('/', async (req, res) => {
       // table scaffolding just like the URL fetcher does (no-op for normal content).
       flattenEmailTables(doc.body);
       normalizeTweetEmbeds(doc.body);
+      // A saved page pasted in can carry Tufte sidenotes too, and without the site's own
+      // stylesheet they would render as bare checkboxes with the note spliced into the text.
+      normalizeSidenotes(doc.body);
 
       htmlContent = doc.body.innerHTML;
     }
