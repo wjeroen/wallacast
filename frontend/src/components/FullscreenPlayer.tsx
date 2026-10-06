@@ -2233,7 +2233,7 @@ export function FullscreenPlayer({
             onClick={handleArchiveClick}
             className="header-button"
             title={content.is_archived ? 'Unarchive' : 'Archive'}
-            style={content.is_archived ? { color: '#60a5fa' } : undefined}
+            style={content.is_archived ? { color: 'var(--accent-text)' } : undefined}
           >
             {content.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
           </button>

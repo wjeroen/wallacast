@@ -41,6 +41,25 @@ export function feedKey(url: string): string {
   return url.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
 }
 
+// The key a feed item and a library item share: articles by their link, podcast episodes by
+// their audio file (see libraryKeys in FeedTab). A link is compared without protocol, "www.",
+// trailing slash, #fragment, and utm_ tracking parameters, and the EA Forum mirror host the
+// backend stores (forum-bots.effectivealtruism.org) reads as the forum's own host.
+export function libraryUrlKey(raw: string): string {
+  try {
+    const url = new URL(raw.trim());
+    for (const name of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(name)) url.searchParams.delete(name);
+    }
+    const host = url.hostname
+      .replace(/^www\./, '')
+      .replace(/^forum-bots\.effectivealtruism\.org$/, 'forum.effectivealtruism.org');
+    return host + url.pathname.replace(/\/+$/, '') + url.search;
+  } catch {
+    return raw.trim();
+  }
+}
+
 export function findSubscription(podcasts: Podcast[], feedUrl: string): Podcast | null {
   const key = feedKey(feedUrl);
   return podcasts.find(p => feedKey(p.feed_url) === key) || null;

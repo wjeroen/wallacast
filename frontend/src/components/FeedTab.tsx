@@ -1,11 +1,12 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Search, Plus, X, ChevronDown, ChevronRight, ArrowLeft, Link, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Search, Plus, X, Check, ChevronDown, ChevronRight, ArrowLeft, Link, RefreshCw } from 'lucide-react';
 import { podcastAPI, contentAPI } from '../api';
 import { FeedCard, FeedEpisodeCard, type FeedEpisode } from './FeedCards';
 import { cleanHtml } from '../format';
 import type { Podcast as PodcastType } from '../types';
-import { useFeedStore, feedKey, feedScroll, findSubscription, type FeedList } from '../store/feedStore';
+import { useFeedStore, feedKey, feedScroll, findSubscription, libraryUrlKey, type FeedList } from '../store/feedStore';
 import { useAuthStore } from '../store/authStore';
+import { useContentStore } from '../store/contentStore';
 
 function formatRefreshTime(date: Date): string {
   const now = new Date();
@@ -54,6 +55,21 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   } = useFeedStore();
 
   const [addingToLibrary, setAddingToLibrary] = useState<string | null>(null);
+
+  // What is already in the library (active and archived, the content store holds both), so
+  // the plus of an item added before turns into a check mark
+  const libraryItems = useContentStore(s => s.allItems);
+  const libraryKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of libraryItems) {
+      if (item.url) keys.add(`url:${libraryUrlKey(item.url)}`);
+      if (item.type === 'podcast_episode' && item.audio_url) keys.add(`audio:${item.audio_url.trim()}`);
+    }
+    return keys;
+  }, [libraryItems]);
+  const isInLibrary = (episode: FeedEpisode) => episode.item_type === 'article'
+    ? !!episode.url && libraryKeys.has(`url:${libraryUrlKey(episode.url)}`)
+    : !!episode.audio_url && libraryKeys.has(`audio:${episode.audio_url.trim()}`);
   const [episodeSearchResults, setEpisodeSearchResults] = useState<FeedEpisode[] | null>(null);
   const [episodeSearchLoading, setEpisodeSearchLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -193,9 +209,10 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     const itemKey = episode.audio_url || episode.url || null;
     setAddingToLibrary(itemKey);
     try {
+      let created;
       if (episode.item_type === 'article') {
         // RSS article (from newsletter / blog)
-        await contentAPI.create({
+        created = await contentAPI.create({
           type: 'article',
           title: episode.title,
           description: episode.description,
@@ -208,7 +225,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
       } else {
         // Podcast episode. The author is the episode's own when the feed names one, else the
         // show's author (most feeds only set the channel-level itunes:author).
-        await contentAPI.create({
+        created = await contentAPI.create({
           type: 'podcast_episode',
           title: episode.title,
           description: episode.description,
@@ -221,6 +238,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           author: episode.author || show.author || undefined,
         });
       }
+      // Into the library list at once, which also turns this plus into a check mark
+      useContentStore.getState().addItem(created.data);
     } catch (error) {
       console.error('Failed to add to library:', error);
       alert('Could not add this to your library. Please try again.');
@@ -229,8 +248,16 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
     }
   };
 
-  // The add-to-library plus button passed into FeedEpisodeCard
+  // The add-to-library plus button passed into FeedEpisodeCard. An item already in the
+  // library shows a check mark in the same grey instead, and tapping it does nothing.
   const addToLibraryButton = (episode: FeedEpisode, show: ShowInfo) => {
+    if (isInLibrary(episode)) {
+      return (
+        <button className="in-library" title="In your library" aria-disabled="true">
+          <Check size={16} />
+        </button>
+      );
+    }
     const itemKey = episode.audio_url || episode.url;
     return (
       <button

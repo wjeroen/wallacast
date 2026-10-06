@@ -455,7 +455,7 @@ export function HomePage({ isLight, onToggleTheme }: { isLight: boolean; onToggl
           <h3 className="home-section-title">What you get</h3>
           <div className="home-features">
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><BookOpen size={16} /><span>Read along</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><BookOpen size={16} /><span>Read along</span></div>
               <div className="home-feature-desc">Text lights up in sync with the audio.</div>
             </div>
             <div className="home-feature">
@@ -463,19 +463,19 @@ export function HomePage({ isLight, onToggleTheme }: { isLight: boolean; onToggl
               <div className="home-feature-desc">Subscribe to shows and get transcripts.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><FileText size={16} /><span>AI summaries</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><FileText size={16} /><span>AI summaries</span></div>
               <div className="home-feature-desc">Short summaries of long reads.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><MessageCircle size={16} /><span>Comments too</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><MessageCircle size={16} /><span>Comments too</span></div>
               <div className="home-feature-desc">Support for Substack, LessWrong and EA Forum.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><RefreshCw size={16} /><span>Wallabag sync</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><RefreshCw size={16} /><span>Wallabag sync</span></div>
               <div className="home-feature-desc">Two way sync with your Wallabag library.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><KeyRound size={16} /><span>Your own keys</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><KeyRound size={16} /><span>Your own keys</span></div>
               <div className="home-feature-desc">Bring API keys from OpenAI and friends.</div>
             </div>
           </div>

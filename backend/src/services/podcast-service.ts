@@ -328,11 +328,12 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
   return xml;
 }
 
-function parseOneItem(itemXml: string): any | null {
+function parseOneItem(itemXml: string, withTeaser = true): any | null {
   const title = extractXMLTag(itemXml, 'title');
   if (!title) return null;
 
   const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const teaser = withTeaser ? buildTeaser(title, description, extractPostContent(itemXml)) : null;
   const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
   const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
   const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
@@ -356,6 +357,7 @@ function parseOneItem(itemXml: string): any | null {
     return {
       title: cleanHtmlEntities(title),
       description: cleanDescription(description),
+      teaser,
       audio_url: enclosureUrl,
       published_at: pubDate ? new Date(pubDate) : new Date(),
       duration: parseDuration(duration),
@@ -367,6 +369,7 @@ function parseOneItem(itemXml: string): any | null {
     return {
       title: cleanHtmlEntities(title),
       description: cleanDescription(description),
+      teaser,
       url: link,
       published_at: pubDate ? new Date(pubDate) : new Date(),
       item_type: 'article',
@@ -409,15 +412,16 @@ export async function searchFeedEpisodes(feedUrl: string, searchQuery: string): 
   const q = searchQuery.toLowerCase();
   const results: any[] = [];
 
+  // A long feed holds hundreds of items, so teasers are built for the matches only
   while ((match = itemRegex.exec(xml)) !== null) {
-    const ep = parseOneItem(match[0]);
+    const ep = parseOneItem(match[0], false);
     if (!ep) continue;
     if (
       (ep.title && ep.title.toLowerCase().includes(q)) ||
       (ep.description && ep.description.toLowerCase().includes(q)) ||
       (ep.author && ep.author.toLowerCase().includes(q))
     ) {
-      results.push(ep);
+      results.push(parseOneItem(match[0]));
     }
   }
   return results;
@@ -507,6 +511,113 @@ function cleanDescription(description: string): string {
   return cleaned.trim();
 }
 
+// --- Feed card teaser ---
+// The text a Feed tab card shows under an item's title: plain text with a blank line between
+// paragraphs. Many newsletter feeds (Substack among them) carry only a one-line subtitle,
+// nothing, or "..." in <description>, and the whole post in <content:encoded>. The teaser is
+// then the subtitle followed by the opening of the post, so a title alone never has to decide
+// whether an item is worth adding. When the post already opens with the description (WordPress
+// excerpts, feeds that repeat their show notes), the description is not shown twice. Feeds
+// without post content (EA Forum, LessWrong, most podcasts) get their description as the teaser.
+// The library item keeps the feed's plain description, the teaser is only for the Feed tab.
+const TEASER_MAX_CHARS = 1200;
+// Only the start of a post is parsed. Substack posts run to 80,000+ characters of HTML.
+const TEASER_HTML_SCAN = 15_000;
+// A refresh builds teasers for the newest items of a feed only (older ones show their
+// description), and never again for an item that already has one.
+const TEASER_REFRESH_ITEMS = 30;
+// Parts of a post that are not its words: media and their captions, subscribe and share
+// buttons, embedded posts and publications, footnotes and their number links.
+const TEASER_SKIP = [
+  'figure', 'figcaption', 'picture', 'img', 'svg', 'video', 'audio', 'iframe', 'script', 'style',
+  'noscript', 'button', 'form', 'table',
+  '.subscription-widget-wrap', '.subscription-widget-wrap-editor', '.subscription-widget',
+  '.button-wrapper', '.captioned-image-container', '.image-gallery-embed', '.embedded-post-wrap',
+  '.digest-post-embed', '.embedded-publication-wrap', '.youtube-wrap', '.tweet',
+  '.native-audio-embed', '.poll-embed', '.footnote', '.footnotes', '.footnote-anchor',
+  'a[href^="#fn"]', 'a[href^="#footnote"]',
+].join(', ');
+// One HTML parser for all teasers. A new JSDOM window per item cost 20-75 ms, a refresh
+// builds teasers for hundreds of items.
+const teaserParser = new (new JSDOM('').window.DOMParser)();
+// Megaphone adds this line to every episode description
+const TEASER_BOILERPLATE = /^Learn more about your ad choices\. Visit megaphone\.fm\/adchoices\.?$/i;
+
+// A post's full content: RSS <content:encoded>, else Atom <content> (never <content:encoded>,
+// which the Atom pattern leaves alone because it needs a space or ">" right after the name).
+function extractPostContent(itemXml: string): string {
+  const encoded = extractXMLTag(itemXml, 'content:encoded');
+  if (encoded) return encoded;
+  const atom = itemXml.match(/<content(?:\s[^>]*)?>([\s\S]*?)<\/content>/i);
+  return atom ? atom[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim() : '';
+}
+
+// Feed HTML as plain text, paragraphs separated by a blank line, list items as "• " lines.
+function htmlToTeaserText(rawHtml: string): string {
+  if (!rawHtml) return '';
+  let html = rawHtml.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  // Entity-escaped markup (&lt;p&gt;...) is decoded into real markup first
+  if (!/<[a-z!/]/i.test(html) && /&lt;\/?[a-z]/i.test(html)) html = cleanHtmlEntities(html);
+  // EA Forum and LessWrong open every item with "Published on <date> GMT"
+  html = html.replace(/^Published on [a-zA-Z]+ \d{1,2}, \d{4}.*?GMT\s*(?:<br\s*\/?>\s*)+/i, '');
+  const doc = teaserParser.parseFromString(`<!DOCTYPE html><html><body>${html.slice(0, TEASER_HTML_SCAN)}</body></html>`, 'text/html');
+  doc.querySelectorAll(TEASER_SKIP).forEach(el => el.remove());
+  // Line breaks in the HTML source are plain spaces. Only <br> and block ends break lines.
+  const walker = doc.createTreeWalker(doc.body, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    node.nodeValue = (node.nodeValue || '').replace(/\s+/g, ' ');
+  }
+  doc.querySelectorAll('br').forEach(el => el.replaceWith('\n'));
+  doc.querySelectorAll('li').forEach(el => el.prepend('• '));
+  doc.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol').forEach(el => el.append('\n\n'));
+  return (doc.body.textContent || '')
+    // Entities escaped twice in the feed (&amp;nbsp;) are still visible after one decode
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(line => !TEASER_BOILERPLATE.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Letters and digits only, for "does the post open with the description?"
+const plainKey = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+function truncateAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.search(/\s\S*$/);
+  return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
+
+export function buildTeaser(title: string, descriptionRaw: string, contentRaw: string): string | null {
+  try {
+    return composeTeaser(title, descriptionRaw, contentRaw);
+  } catch (error) {
+    // A teaser is a nice-to-have. A post that breaks it must never break a refresh.
+    console.error('Teaser failed for feed item:', (error as Error).message);
+    return null;
+  }
+}
+
+function composeTeaser(title: string, descriptionRaw: string, contentRaw: string): string | null {
+  let description = htmlToTeaserText(descriptionRaw);
+  // "...", "…", or the title once more say nothing about the item
+  if (!/[\p{L}\p{N}]/u.test(description) || plainKey(description) === plainKey(htmlToTeaserText(title))) {
+    description = '';
+  }
+  const post = contentRaw ? htmlToTeaserText(contentRaw) : '';
+  let teaser = description;
+  if (post) {
+    const descriptionStart = plainKey(description).slice(0, 40);
+    const postRepeatsDescription = !descriptionStart || plainKey(post.slice(0, 800)).includes(descriptionStart);
+    teaser = postRepeatsDescription ? post : `${description}\n\n${post}`;
+  }
+  return teaser ? truncateAtWord(teaser, TEASER_MAX_CHARS) : null;
+}
+
 function cleanHtmlEntities(text: string): string {
   if (!text) return '';
 
@@ -547,8 +658,14 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
 
     let itemsAdded = 0;
 
+    const withTeaser = await query(
+      'SELECT guid FROM feed_items WHERE feed_id = $1 AND teaser IS NOT NULL',
+      [feedId]
+    );
+    const hasTeaser = new Set<string>(withTeaser.rows.map((row: { guid: string }) => row.guid));
+
     // Parse and save items (limit to 100 most recent)
-    for (const itemXml of itemMatches.slice(0, 100)) {
+    for (const [itemIndex, itemXml] of itemMatches.slice(0, 100).entries()) {
       const title = extractXMLTag(itemXml, 'title');
       const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
@@ -584,15 +701,19 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
 
       // Truncate description to 2000 chars to prevent abuse
       const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
+      const teaser = itemIndex < TEASER_REFRESH_ITEMS && !hasTeaser.has(guid.slice(0, 500))
+        ? buildTeaser(title, description, extractPostContent(itemXml))
+        : null;
 
-      // Insert into feed_items (ON CONFLICT update author for existing items that lack it)
+      // Insert into feed_items. ON CONFLICT refreshes the author and fills in a missing teaser.
       try {
         const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(
           `INSERT INTO feed_items
-           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author
+           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author, teaser)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author,
+             teaser = COALESCE(EXCLUDED.teaser, feed_items.teaser)
            RETURNING id`,
           [
             feedId,
@@ -608,6 +729,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             preview_picture,
             guid ? guid.slice(0, 500) : guid,
             cleanAuthor,
+            teaser,
           ]
         );
 

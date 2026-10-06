@@ -276,6 +276,11 @@ export async function initializeDatabase() {
     const apiTokensMigration = await fs.readFile(apiTokensMigrationPath, 'utf-8');
     await client.query(apiTokensMigration);
 
+    // Run migration adding feed_items.teaser (the Feed tab card text, filled by Refresh)
+    const feedTeaserMigrationPath = path.join(__dirname, 'migrations', '030_feed_item_teaser.sql');
+    const feedTeaserMigration = await fs.readFile(feedTeaserMigrationPath, 'utf-8');
+    await client.query(feedTeaserMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

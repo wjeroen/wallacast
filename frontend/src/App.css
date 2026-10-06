@@ -38,6 +38,9 @@
   --ok-text: #22c55e;
   --warn-text: #f59e0b;
   --ai-text: #a78bfa;
+  /* Accent blue for links, selected tabs and chips, and accent icons. The logo and the
+     "wallacast" wordmark keep #60a5fa in both themes (logos have no contrast requirement). */
+  --accent-text: #60a5fa;
 
   /* Native controls, scrollbars and the page behind .app follow the app theme,
      not the OS (index.css is the Vite starter and follows the OS) */
@@ -83,6 +86,9 @@
   --ok-text: #15803d;
   --warn-text: #b45309;
   --ai-text: #7c3aed;
+  /* #60a5fa is 2.5:1 on white. #3b82f6, the primary button blue, is 3.7:1 and stays close
+     to the logo's blue. */
+  --accent-text: #3b82f6;
 
   color-scheme: light;
 }
@@ -292,7 +298,7 @@ button {
 }
 
 .bottom-nav button.active {
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-raised);
 }
 
@@ -311,10 +317,11 @@ button {
   transform: scale(1.05);
 }
 
-/* On the Add tab the button stays blue, darker and with a ring, instead of taking the
-   grey background of the other open tabs (the .active rule above) */
+/* On the Add tab the button keeps its blue instead of taking the grey background of the
+   other open tabs (the .active rule above). A blue ring marks it as open, the same
+   "selected" signal as a selected library card (.content-card.selected). */
 .bottom-nav .add-button.active {
-  background: #1d4ed8;
+  background: #3b82f6;
   color: white;
   box-shadow: 0 0 0 3px var(--bg-surface), 0 0 0 5px #3b82f6;
 }
@@ -634,7 +641,7 @@ button {
 }
 
 .content-source-link a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -708,7 +715,7 @@ button {
 
 .content-type-selector button.active {
   border-color: #3b82f6;
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-raised);
 }
 
@@ -966,7 +973,7 @@ button {
 .filter-buttons button.active {
   background: var(--bg-raised);
   border-color: #3b82f6;
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Status funnel button keeps its text label visible on mobile (it's the
@@ -1364,7 +1371,7 @@ button {
 
 /* Blue for the Archive button (same accent blue as selected text/icons) */
 .content-actions button.active[title="Restore from archive"] {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .content-actions .delete-btn:hover {
@@ -1375,6 +1382,22 @@ button {
 .content-actions button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Feed tab: an item already in the library. Same look as the plus it replaces, and no
+   hover change, since tapping it does nothing. */
+.content-actions button.in-library,
+.content-actions button.in-library:hover {
+  background: var(--bg-surface);
+  border-color: var(--bg-raised);
+  color: var(--t3);
+  cursor: default;
+}
+
+/* Feed tab card text: the teaser keeps a blank line between the description and the
+   opening of the post */
+.description.feed-description {
+  white-space: pre-line;
 }
 
 .dropdown-container {
@@ -1444,7 +1467,7 @@ button {
 .dropdown-menu button:hover:not(:disabled) {
   background: var(--bg-hover-soft);
   border-color: var(--bg-raised); /* keep the divider neutral, no colored hover edges */
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .dropdown-menu button:disabled {
@@ -1678,7 +1701,7 @@ button {
 
 .playback-controls button:hover {
   background: var(--bg-hover-soft);
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .play-pause-btn {
@@ -1752,13 +1775,13 @@ button {
 }
 
 .transcript-word:hover {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Read state is applied imperatively (classList) during playback, so the
    memoized span tree never re-renders; color must live here, not inline. */
 .transcript-word.read {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Comments Section */
@@ -1810,7 +1833,7 @@ button {
 
 .comment-username {
   font-weight: 600;
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: calc(1rem * var(--reader-font-scale, 1));
 }
 
@@ -1864,7 +1887,7 @@ button {
 }
 
 .comment-content a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: underline;
 }
 
@@ -2239,7 +2262,7 @@ button {
 .home-login-toggle {
   background: none;
   border: none;
-  color: #60a5fa;
+  color: var(--accent-text);
   cursor: pointer;
   font-size: 0.875rem;
   padding: 0;
@@ -2381,7 +2404,7 @@ button {
   height: 32px;
   border-radius: 0.5rem;
   background: var(--bg-raised);
-  color: #60a5fa;
+  color: var(--accent-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2535,7 +2558,7 @@ button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .home-cost-head span {
@@ -2568,7 +2591,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   font-weight: 500;
 }
@@ -3313,7 +3336,7 @@ button {
   appearance: none;
   width: 12px;
   height: 12px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -3326,7 +3349,7 @@ button {
 .mini-progress-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -3433,7 +3456,7 @@ button {
 }
 
 .fullscreen-source-link a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -3536,7 +3559,7 @@ button {
 }
 
 .tab-button.active {
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-app);
 }
 
@@ -3681,7 +3704,7 @@ button {
 
 /* Footnotes. Inline reference markers + the definition section at the end (clickable). */
 .article-content sup.footnote-ref a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   cursor: pointer;
 }
@@ -3702,7 +3725,7 @@ button {
   margin: 0.4em 0;
 }
 .article-content .footnote-backref {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   margin-left: 0.35em;
   cursor: pointer;
@@ -3751,7 +3774,7 @@ button {
 
 .article-content blockquote.twitter-tweet > a,
 .read-along-element blockquote.twitter-tweet > a {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.85rem;
   text-decoration: none;
 }
@@ -3813,7 +3836,7 @@ blockquote.twitter-tweet .tweet-footer {
 }
 
 blockquote.twitter-tweet .tweet-footer a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -4129,10 +4152,10 @@ blockquote.twitter-tweet.tweet-quoted {
 .version-badge.version-refetch { color: #0891b2; border-color: #0891b255; }
 .version-badge.version-restore { color: #d97706; border-color: #d9770655; }
 /* Marks the snapshot the current audio narration was generated from */
-.version-badge.version-audio { color: #60a5fa; border-color: #60a5fa55; }
+.version-badge.version-audio { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-text) 33%, transparent); }
 /* Audio-sync status line at the top of the History tab */
 .version-audio-note {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.8rem;
   margin: 0.35rem 0 0;
 }
@@ -4280,8 +4303,8 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .sleep-preset.active {
-  color: #60a5fa;
-  border-color: #60a5fa;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 /* Prefer-summary-audio toggle row: label left, checkmark right with a soft
@@ -4291,7 +4314,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .display-panel-toggle.prefer-summary-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .prefer-summary-check {
@@ -4327,7 +4350,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 .read-along-element.ra-active {
   background-color: rgba(96, 165, 250, 0.1);
-  border-left-color: #60a5fa;
+  border-left-color: var(--accent-text);
 }
 
 /* Autoscroll toggle in tabs bar */
@@ -4355,7 +4378,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .autoscroll-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Orange divider between content and comments in read-along tab.
@@ -4422,8 +4445,8 @@ blockquote.twitter-tweet.tweet-quoted {
   color: var(--t0);
 }
 .queue-shuffle-btn.active {
-  color: #60a5fa;
-  border-color: #60a5fa;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 .queue-divider {
@@ -4460,8 +4483,8 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .queue-row.current {
-  border-color: #60a5fa;
-  background: color-mix(in srgb, #60a5fa 10%, var(--bg-surface));
+  border-color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, var(--bg-surface));
 }
 
 .queue-row-main {
@@ -4496,11 +4519,11 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .queue-row.current .queue-row-title {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .queue-now-playing {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.85rem;
 }
 
@@ -4592,7 +4615,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 /* Autoplay "On/Off" option toggle gets a blue tint when active */
 .fullscreen-player-options .option-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Player Controls (in fullscreen) */
@@ -4634,7 +4657,7 @@ blockquote.twitter-tweet.tweet-quoted {
   appearance: none;
   width: 16px;
   height: 16px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -4647,7 +4670,7 @@ blockquote.twitter-tweet.tweet-quoted {
 .fullscreen-progress-bar .progress-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -4780,7 +4803,7 @@ blockquote.twitter-tweet.tweet-quoted {
   background: none;
   border: 1px solid #3b82f6;
   border-radius: 999px;
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.8rem;
   font-weight: 600;
   padding: 0.3rem 0.8rem;
@@ -5018,7 +5041,7 @@ blockquote.twitter-tweet.tweet-quoted {
 .settings-badge-custom {
   /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly
      dim on the dark background) */
-  color: #60a5fa;
+  color: var(--accent-text);
   font-weight: 600;
   font-size: 0.8rem;
 }
@@ -5100,7 +5123,7 @@ blockquote.twitter-tweet.tweet-quoted {
   font-size: 1rem;
 }
 .read-more-link {
-  color: #60a5fa;          /* same link blue as card links / active tab */
+  color: var(--accent-text);          /* same link blue as card links / active tab */
   font-weight: 600;
   cursor: pointer;
 }
@@ -5249,7 +5272,7 @@ blockquote.twitter-tweet.tweet-quoted {
   border-radius: 999px;
   border: 1px solid #3b82f6;
   background: transparent;
-  color: #60a5fa;
+  color: var(--accent-text);
   cursor: pointer;
 }
 
@@ -5356,7 +5379,7 @@ blockquote.twitter-tweet.tweet-quoted {
   gap: 0.5rem;
 }
 .tag-menu .tag-menu-list button.selected {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 .tag-menu-label {
   flex: 1;
@@ -5449,7 +5472,7 @@ blockquote.twitter-tweet.tweet-quoted {
   background: var(--bg-hover-soft);
 }
 .tag-editor-row.selected {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 .tag-editor-row-label {
   flex: 1;
@@ -5463,7 +5486,7 @@ blockquote.twitter-tweet.tweet-quoted {
   font-size: 0.75rem;
 }
 .tag-editor-create {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-weight: 600;
 }
 .comment-warning-modal .tag-editor-hint {
@@ -5486,5 +5509,5 @@ blockquote.twitter-tweet.tweet-quoted {
 .import-notice {
   margin-top: 0.5rem;
   font-size: 0.85rem;
-  color: #60a5fa;
+  color: var(--accent-text);
 }

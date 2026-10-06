@@ -24,7 +24,7 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
     dim: 'archive',
     options: [
       { value: 'active', label: 'Active', icon: <Inbox size={16} /> },
-      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#60a5fa' }} /> },
+      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: 'var(--accent-text)' }} /> },
     ],
   },
   {
@@ -921,7 +921,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                           className={isSelected ? 'selected' : undefined}
                           onClick={() => toggleFacet(row.dim, opt.value)}
                           onDoubleClick={() => soloFacet(row.dim, opt.value)}
-                          style={isSelected ? { color: '#60a5fa' } : undefined}
+                          style={isSelected ? { color: 'var(--accent-text)' } : undefined}
                         >
                           {opt.icon}
                           <span className="facet-label">{opt.label}</span>
@@ -1064,7 +1064,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </button>
             {allSelectedArchived ? (
               <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected">
-                <ArchiveRestore size={16} style={{ color: '#60a5fa' }} />
+                <ArchiveRestore size={16} style={{ color: 'var(--accent-text)' }} />
               </button>
             ) : (
               <button

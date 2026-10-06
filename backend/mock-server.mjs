@@ -59,7 +59,18 @@ app.delete('/api/auth/tokens/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/users/settings', (req, res) => res.json({ settings: {} }));
+app.get('/api/users/settings', (req, res) => res.json({ settings: db.settings || {} }));
+// Single settings, kept in mock-data.json, so features behind a setting (summaries on library
+// cards, for example) can be switched on with a PUT and previewed
+app.get('/api/users/settings/:key', (req, res) => {
+  const value = (db.settings || {})[req.params.key];
+  res.json({ value: value ?? null, isSet: value !== undefined });
+});
+app.put('/api/users/settings/:key', (req, res) => {
+  db.settings = { ...(db.settings || {}), [req.params.key]: String(req.body?.value ?? '') };
+  saveData();
+  res.json({ success: true });
+});
 app.get('/api/users/prompts', (req, res) => res.json({ prompts: [] }));
 app.get('/api/users/ai-providers', (req, res) => res.json({ providers: {} }));
 
@@ -160,9 +171,16 @@ function feedEpisodes(feedUrl) {
   return Array.from({ length: ITEMS_PER_FEED }, (_, i) => {
     const article = feed.type === 'newsletter';
     const n = ITEMS_PER_FEED - i;
+    // Newsletters get a one-line subtitle plus a teaser with the post's opening (like a
+    // Substack feed), podcasts long show notes and no teaser (like most podcast feeds)
+    const subtitle = `Fake subtitle of post ${n} of ${feed.title}.`;
+    const showNotes = `Fake show notes of episode ${n}. `.repeat(18).trim();
     return {
       title: `${feed.title} ${article ? 'post' : 'episode'} ${n}`,
-      description: `Fake description of item ${n} of ${feed.title}.`,
+      description: article ? subtitle : showNotes,
+      teaser: article
+        ? `${subtitle}\n\n${'This is the opening paragraph of the fake post, as the feed carries it. '.repeat(5).trim()}\n\n${'A second paragraph follows here. '.repeat(8).trim()}`
+        : null,
       item_type: article ? 'article' : 'podcast_episode',
       url: article ? `https://example.com/${slug}/${n}` : null,
       audio_url: article ? null : `https://example.com/audio/${slug}-${n}.mp3`,

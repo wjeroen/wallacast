@@ -266,9 +266,11 @@ export function ContentCard({
           </p>
         )}
         {showSummary && item.summary ? (() => {
+          // Collapsed, a card shows only the first paragraph, which the default summary
+          // prompts ask to state the central thesis or main takeaway. "[N more]" opens the rest.
           const tweets = toTweets(item.summary);
-          const shown = summaryExpanded ? tweets : tweets.slice(0, 3);
-          const hasMore = !summaryExpanded && tweets.length > 3;
+          const shown = summaryExpanded ? tweets : tweets.slice(0, 1);
+          const hasMore = !summaryExpanded && tweets.length > 1;
           const moreCount = tweets.length - shown.length;
           return (
             <div className="library-summary">
