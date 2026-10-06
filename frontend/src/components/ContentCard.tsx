@@ -16,6 +16,7 @@ interface ContentCardProps {
   onPlay: (item: ContentItem, opts?: { tab?: 'summary' }) => void;
   searchQuery: string;
   showSummary: boolean; // "Twitter feed" mode: summary instead of description
+  summaryParagraphs: number; // paragraphs shown before "[N more]" (Infinity = all)
   justCompleted: boolean; // show "✓ Completed" for a few seconds after generation
   dropdownOpen: boolean;
   dropdownRef: React.Ref<HTMLDivElement> | null;
@@ -46,6 +47,7 @@ export function ContentCard({
   onPlay,
   searchQuery,
   showSummary,
+  summaryParagraphs,
   justCompleted,
   dropdownOpen,
   dropdownRef,
@@ -266,11 +268,12 @@ export function ContentCard({
           </p>
         )}
         {showSummary && item.summary ? (() => {
-          // Collapsed, a card shows only the first paragraph, which the default summary
-          // prompts ask to state the central thesis or main takeaway. "[N more]" opens the rest.
+          // Collapsed, a card shows the first summaryParagraphs paragraphs (Settings, default 1:
+          // the default summary prompts ask the first one to state the central thesis or main
+          // takeaway). "[N more]" opens the rest.
           const tweets = toTweets(item.summary);
-          const shown = summaryExpanded ? tweets : tweets.slice(0, 1);
-          const hasMore = !summaryExpanded && tweets.length > 1;
+          const shown = summaryExpanded ? tweets : tweets.slice(0, summaryParagraphs);
+          const hasMore = !summaryExpanded && tweets.length > summaryParagraphs;
           const moreCount = tweets.length - shown.length;
           return (
             <div className="library-summary">

@@ -217,6 +217,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summarize_comments: 'true',
     summary_max_words: '40',
     library_show_summary: 'false',
+    library_summary_paragraphs: '1',
     copy_include_summary: 'false',
     copy_include_comment_summary: 'true',
     copy_summary_code_label: '',
@@ -345,6 +346,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
+        library_summary_paragraphs: loaded.library_summary_paragraphs || '1',
         copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
         copy_include_comment_summary: loaded.copy_include_comment_summary !== undefined && loaded.copy_include_comment_summary !== null ? loaded.copy_include_comment_summary : 'true',
         copy_summary_code_label: loaded.copy_summary_code_label || '',
@@ -1077,6 +1079,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               Replaces each library card's description with its article summary. Falls back to the description when no summary exists.
             </small>
           </div>
+
+          {formData.library_show_summary === 'true' && (
+            <div className="settings-indent">
+              <div className="form-group">
+                <label htmlFor="library_summary_paragraphs">Paragraphs shown</label>
+                <select
+                  id="library_summary_paragraphs"
+                  value={formData.library_summary_paragraphs}
+                  onChange={(e) => handleChange('library_summary_paragraphs', e.target.value)}
+                >
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
+            </div>
+          )}
 
           <button
             type="button"
