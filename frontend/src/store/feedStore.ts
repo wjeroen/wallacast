@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { podcastAPI } from '../api';
+import { podcastAPI, type FeedRefreshStatus } from '../api';
 import type { Podcast } from '../types';
 import type { FeedEpisode } from '../components/FeedCards';
 
@@ -87,7 +87,28 @@ function sortByTitle(podcasts: Podcast[]): Podcast[] {
 let recentGen = 0;
 let feedGen = 0;
 let searchGen = 0;
+let refreshGen = 0;
 let feedAbort: AbortController | null = null;
+
+// A refresh runs on the server (about a minute for 100+ feeds), and the app asks for its status
+// every few seconds. A status request that fails (the phone cut it while the app was in the
+// background) is simply asked again, and coming back to the app asks at once. Past the limit
+// the app stops waiting and reports a failure.
+const REFRESH_POLL_MS = 3000;
+const REFRESH_WAIT_LIMIT_MS = 10 * 60 * 1000;
+
+function nextRefreshPoll(): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      resolve();
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') done(); };
+    const timer = setTimeout(done, REFRESH_POLL_MS);
+    document.addEventListener('visibilitychange', onVisible);
+  });
+}
 
 // Scroll spots, kept outside React state so scrolling never re-renders the tab.
 // `tab` is where the tab was when the user left it, `home` is where the home screen
@@ -120,8 +141,12 @@ interface FeedActions {
   loadRecent: (limit?: number) => Promise<void>;
   loadMoreRecent: () => Promise<void>;
   loadLastRefresh: () => Promise<void>;
-  // Fetches every subscribed feed from the network. Returns false on failure.
-  refresh: () => Promise<boolean>;
+  // Fetches every subscribed feed from the network on the server and waits for it. Returns
+  // false on failure. `attach` joins a refresh that is already running instead of starting one.
+  refresh: (attach?: boolean) => Promise<boolean>;
+  // Called on load: when the server is still refreshing (the app was closed or reloaded
+  // during a refresh), shows it as refreshing and waits for it again
+  resumeRefresh: () => Promise<void>;
   setSearchQuery: (query: string) => void;
   search: () => Promise<void>;
   closeSearch: () => void;
@@ -173,6 +198,7 @@ export const useFeedStore = create<FeedState & FeedActions>((set, get) => {
       if (get().ownerKey === ownerKey) return false;
       recentGen++;
       searchGen++;
+      refreshGen++;
       leaveFeed();
       feedScroll.tab = 0;
       feedScroll.home = 0;
@@ -180,6 +206,7 @@ export const useFeedStore = create<FeedState & FeedActions>((set, get) => {
       void get().loadSubscriptions();
       void get().loadRecent();
       void get().loadLastRefresh();
+      void get().resumeRefresh();
       return true;
     },
 
@@ -243,20 +270,51 @@ export const useFeedStore = create<FeedState & FeedActions>((set, get) => {
       }
     },
 
-    refresh: async () => {
+    refresh: async (attach = false) => {
       if (get().refreshing) return true;
+      const gen = ++refreshGen;
       set({ refreshing: true });
       try {
-        console.log('Refreshing feeds from network...');
-        const response = await podcastAPI.refreshFeeds();
-        console.log(`Refresh complete: ${response.data.totalFeeds} feeds, ${response.data.totalItemsAdded} new items`);
+        let startedAt: string | undefined;
+        if (!attach) {
+          console.log('Refreshing feeds from network...');
+          startedAt = (await podcastAPI.refreshFeeds()).data.startedAt;
+        }
+        const waitStart = Date.now();
+        for (;;) {
+          if (Date.now() - waitStart > REFRESH_WAIT_LIMIT_MS) throw new Error('Gave up waiting for the feed refresh');
+          await nextRefreshPoll();
+          if (gen !== refreshGen) return true; // another account took over the tab
+          let status: FeedRefreshStatus;
+          try {
+            status = (await podcastAPI.getRefreshStatus()).data;
+          } catch {
+            continue; // cut while the app was in the background, ask again
+          }
+          if (status.running) continue;
+          // Not running and no result: the server restarted during the refresh
+          if (status.error || !status.finishedAt || (startedAt && status.startedAt !== startedAt)) {
+            throw new Error(status.error || 'The feed refresh stopped before it finished');
+          }
+          console.log(`Refresh complete: ${status.totalFeeds} feeds, ${status.totalItemsAdded} new items`);
+          break;
+        }
         await Promise.all([get().loadRecent(), get().loadLastRefresh()]);
         return true;
       } catch (error) {
         console.error('Failed to refresh feeds:', error);
         return false;
       } finally {
-        set({ refreshing: false });
+        if (gen === refreshGen) set({ refreshing: false });
+      }
+    },
+
+    resumeRefresh: async () => {
+      try {
+        const status = (await podcastAPI.getRefreshStatus()).data;
+        if (status.running && !get().refreshing) await get().refresh(true);
+      } catch (error) {
+        console.error('Failed to check the feed refresh status:', error);
       }
     },
 

@@ -178,6 +178,16 @@ export const contentAPI = {
   }) => api.post('/content/audio-error-log', data),
 };
 
+// Status of the latest feed refresh (backend: startFeedRefresh in podcast-service.ts)
+export interface FeedRefreshStatus {
+  running: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  totalFeeds?: number;
+  totalItemsAdded?: number;
+}
+
 export const podcastAPI = {
   getAll: () => api.get<Podcast[]>('/podcasts'),
 
@@ -207,8 +217,13 @@ export const podcastAPI = {
   getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
     api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
+  // Starts a refresh of every subscribed feed in the background and answers at once. Poll
+  // getRefreshStatus until `running` is false.
   refreshFeeds: () =>
-    api.post<{ totalFeeds: number; totalItemsAdded: number }>('/podcasts/refresh-feeds'),
+    api.post<FeedRefreshStatus>('/podcasts/refresh-feeds'),
+
+  getRefreshStatus: () =>
+    api.get<FeedRefreshStatus>('/podcasts/refresh-status'),
 
   getLastRefresh: () =>
     api.get<{ lastRefresh: string | null }>('/podcasts/last-refresh'),

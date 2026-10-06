@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, refreshAllFeedsFromNetwork, getLastRefreshTime } from '../services/podcast-service.js';
+import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
 
 const router = express.Router();
 
@@ -196,17 +196,18 @@ router.get('/feed-items', async (req, res) => {
   }
 });
 
-// Refresh all subscribed feeds from network (fetches RSS and updates cache)
-router.post('/refresh-feeds', async (req, res) => {
-  try {
-    console.log(`User ${req.user!.userId} refreshing all feeds from network`);
-    const result = await refreshAllFeedsFromNetwork(req.user!.userId);
-    console.log(`Refresh complete: ${result.totalFeeds} feeds, ${result.totalItemsAdded} new items`);
-    res.json(result);
-  } catch (error) {
-    console.error('Error refreshing feeds:', error);
-    res.status(500).json({ error: 'Failed to refresh feeds' });
-  }
+// Refresh all subscribed feeds from network (fetches RSS and updates cache). The refresh runs
+// in the background and this answers 202 at once with its status, also when one is already
+// running for this user (see startFeedRefresh). The app polls GET /refresh-status.
+router.post('/refresh-feeds', (req, res) => {
+  res.status(202).json(startFeedRefresh(req.user!.userId));
+});
+
+// Status of this user's latest feed refresh: { running, startedAt, finishedAt, error,
+// totalFeeds, totalItemsAdded }, or { running: false } when there was none since the server
+// started.
+router.get('/refresh-status', (req, res) => {
+  res.json(getFeedRefreshStatus(req.user!.userId));
 });
 
 // Get last refresh timestamp for user's feeds

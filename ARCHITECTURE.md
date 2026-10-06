@@ -198,7 +198,8 @@ This is the technical reference and codebase map for Wallacast (backend structur
   - `GET /search-feed?url=&q=` - Search full RSS feed for episodes matching query (searches cached XML server-side)
   - **Feed Caching (Performance Optimization)**:
     - `GET /feed-items?feedId&limit&offset` - Get cached feed items from database with pagination (instant, no network requests)
-    - `POST /refresh-feeds` - Refresh all subscribed feeds from network, update cache (fetches RSS, saves to `feed_items` table)
+    - `POST /refresh-feeds` - Starts a refresh of all subscribed feeds from network in the background (fetches RSS, saves to `feed_items` table) and answers 202 at once with its status, also when one is already running for the user
+    - `GET /refresh-status` - Status of the user's latest refresh: `{ running, startedAt, finishedAt, error, totalFeeds, totalItemsAdded }`, or `{ running: false }` when there was none since the server started
     - `GET /last-refresh` - Get timestamp of last feed refresh
 
 - **`routes/queue.ts`**: Manual play queue (per-user)
@@ -326,6 +327,7 @@ This is the technical reference and codebase map for Wallacast (backend structur
   - **Feed Caching (Performance Optimization)**:
     - `refreshFeedFromNetwork()`: Fetches RSS feed, parses items, saves to `feed_items` table, cleans up old items (keeps 100 most recent). Builds teasers for the newest 30 items of a feed that have none yet (`ON CONFLICT` keeps a stored teaser, `COALESCE`), so the first refresh after migration 030 fills them in and later refreshes only build them for new items
     - `refreshAllFeedsFromNetwork()`: Refreshes all subscribed feeds for a user sequentially
+    - `startFeedRefresh()` / `getFeedRefreshStatus()`: run that refresh in the background and report on it. A refresh of 114 feeds took 68 s (2026-10-05), and while the request stayed open that long a phone that put the app in the background closed it (HTTP 499 in the Railway logs), so the app reported a failure although the server finished. The status lives in memory, one entry per user, which fits the single backend instance. A restart during a refresh loses it, and the app then reports a failure
     - `getCachedFeedItems()`: Loads feed items from database (instant, no network requests)
     - `getLastRefreshTime()`: Returns timestamp of last feed refresh
   - Simple regex-based XML parsing (no XML library) with support for both attributes and nested tags
@@ -420,7 +422,7 @@ The matching CSS (`App.css`) caps every image at the column width (`max-width: 1
   - **Subscriptions**: Collapsible section (collapsed by default) showing all subscribed feeds (podcasts + newsletters) with type icons. The X here asks "Are you sure?" first, since the feed leaves the list.
   - **Recent Updates**: Server-side paginated feed items from the `feed_items` database cache. Load More fetches next 50 items via offset. A new subscription's items arrive at the next Refresh (Refresh is what fills the cache). An unsubscribe removes that feed's items from the list at once.
   - **Feed page paging**: Server-side paginated via XML cache. Load More fetches next 50 episodes from cached RSS XML without re-downloading.
-  - **Refresh Button**: Next to "Recent Updates" heading - refreshes all feeds from network, shows last refresh time ("5 mins ago"). A refresh that finishes while a feed page is open only updates Recent Updates.
+  - **Refresh Button**: Next to "Recent Updates" heading - refreshes all feeds from network, shows last refresh time ("5 mins ago"). The server runs the refresh and `feedStore.refresh()` polls `GET /refresh-status` every 3 seconds, and at once when the app comes back to the foreground. A failed status request (the phone cut it in the background) is asked again, so leaving the app no longer reports a failure. Opening the app while a refresh runs (`resumeRefresh()` on load) shows "Refreshing..." again and waits for it. The "Could not refresh feeds" alert only appears when the server reports an error, the refresh was lost to a server restart, or it did not finish within 10 minutes. A refresh that finishes while a feed page is open only updates Recent Updates.
   - **Performance**: Database caching eliminates 70+ network requests per page load (instant instead of 30+ seconds for 70 subscriptions)
   - **Feed Type Icons**: Podcast icon (microphone) for podcasts, Newspaper icon for newsletters. Link icon in search bar when URL detected
   - **Add to Library**: Plus button on each episode/article adds it to library (respects auto-generate audio setting for articles). The created item goes into `contentStore` at once. An item already in the library (active or archived, as held by `contentStore.allItems`) shows a grey check mark in place of the plus, and tapping it does nothing. Articles match by link through `libraryUrlKey()` in `feedStore.ts` (no protocol, `www.`, trailing slash, `#fragment` or `utm_` parameters, the EA Forum mirror host read as the forum's own), podcast episodes by their exact audio URL.

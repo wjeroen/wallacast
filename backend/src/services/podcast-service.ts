@@ -759,6 +759,57 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
   }
 }
 
+// --- Background refresh ---
+// A refresh of 100+ feeds takes about a minute (68 s for 114 feeds, measured 2026-10-05). The
+// request used to stay open that long, and a phone that put the app in the background closed
+// it (HTTP 499 in the Railway logs), so the app reported a failure while the server finished
+// the refresh anyway. POST /refresh-feeds now starts the refresh and answers at once, and the
+// app polls GET /refresh-status. The status lives in memory, one entry per user, which fits
+// the single backend instance. A restart during a refresh loses it, and the app then reports
+// a failure.
+export interface FeedRefreshStatus {
+  running: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  totalFeeds?: number;
+  totalItemsAdded?: number;
+}
+
+const feedRefreshes = new Map<number, FeedRefreshStatus>();
+
+export function getFeedRefreshStatus(userId: number): FeedRefreshStatus {
+  return feedRefreshes.get(userId) ?? { running: false };
+}
+
+// Starts a refresh unless one of this user is already running, and returns its status
+export function startFeedRefresh(userId: number): FeedRefreshStatus {
+  const current = feedRefreshes.get(userId);
+  if (current?.running) return current;
+
+  const startedAt = new Date().toISOString();
+  const status: FeedRefreshStatus = { running: true, startedAt };
+  feedRefreshes.set(userId, status);
+  console.log(`User ${userId} refreshing all feeds from network`);
+
+  refreshAllFeedsFromNetwork(userId)
+    .then((result) => {
+      console.log(`Refresh complete: ${result.totalFeeds} feeds, ${result.totalItemsAdded} new items`);
+      feedRefreshes.set(userId, { running: false, startedAt, finishedAt: new Date().toISOString(), ...result });
+    })
+    .catch((error) => {
+      console.error('Error refreshing feeds:', error);
+      feedRefreshes.set(userId, {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        error: 'Failed to refresh feeds',
+      });
+    });
+
+  return status;
+}
+
 /**
  * Refreshes all subscribed feeds for a specific user
  */

@@ -288,14 +288,24 @@ app.get('/api/podcasts/feed-items', (req, res) => {
   res.json(items.slice(offset, offset + limit));
 });
 
-app.post('/api/podcasts/refresh-feeds', async (req, res) => {
-  await wait(3000);
-  const now = new Date().toISOString();
-  const subscribed = db.podcasts.filter(p => p.is_subscribed !== false);
-  subscribed.forEach(p => { p.last_refreshed_at = now; });
-  saveData();
-  res.json({ totalFeeds: subscribed.length, totalItemsAdded: 0 });
+// Like the real backend: the refresh runs in the background (8 seconds here) and the app polls
+// GET /refresh-status
+let mockRefresh = { running: false };
+app.post('/api/podcasts/refresh-feeds', (req, res) => {
+  if (!mockRefresh.running) {
+    const startedAt = new Date().toISOString();
+    mockRefresh = { running: true, startedAt };
+    setTimeout(() => {
+      const now = new Date().toISOString();
+      const subscribed = db.podcasts.filter(p => p.is_subscribed !== false);
+      subscribed.forEach(p => { p.last_refreshed_at = now; });
+      saveData();
+      mockRefresh = { running: false, startedAt, finishedAt: now, totalFeeds: subscribed.length, totalItemsAdded: 0 };
+    }, 8000);
+  }
+  res.status(202).json(mockRefresh);
 });
+app.get('/api/podcasts/refresh-status', (req, res) => res.json(mockRefresh));
 
 app.get('/api/podcasts/last-refresh', (req, res) => {
   const times = db.podcasts.filter(p => p.is_subscribed !== false && p.last_refreshed_at).map(p => p.last_refreshed_at).sort();
