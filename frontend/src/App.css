@@ -754,6 +754,13 @@ button {
   margin-bottom: 1rem;
 }
 
+/* What a slow article save is doing, under the Add tab's Save button */
+.save-progress {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--t3);
+}
+
 .message.success {
   background: var(--success-bg);
   color: var(--success-fg);

@@ -100,8 +100,13 @@ export const contentAPI = {
       summary_audio_status: ContentItem['summary_audio_status'];
     }>>('/content/status', { ids }),
 
-  // feed_item_id: the Feed tab's cached row, whose full description the server copies
-  create: (data: Partial<ContentItem> & { feed_item_id?: number }) => api.post<ContentItem>('/content', data),
+  // feed_item_id: the Feed tab's cached row, whose full description the server copies.
+  // progress_id: the Add tab's id for fetchProgress below.
+  create: (data: Partial<ContentItem> & { feed_item_id?: number; progress_id?: string }) => api.post<ContentItem>('/content', data),
+
+  // What a slow article fetch started with that progress_id is doing (null when nothing yet)
+  fetchProgress: (progressId: string) =>
+    api.get<{ text: string | null }>(`/content/fetch-progress/${progressId}`),
 
   update: (id: number, data: Partial<ContentItem>) =>
     api.patch<ContentItem>(`/content/${id}`, data),

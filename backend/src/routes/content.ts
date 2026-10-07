@@ -5,6 +5,7 @@ import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
 import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes, ArticleUnavailableError } from '../services/article-fetcher.js';
+import { isProgressId, setFetchProgress, getFetchProgress, clearFetchProgress } from '../services/fetch-progress.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -647,6 +648,15 @@ router.post('/tags/remove', async (req, res) => {
 });
 
 // Get single content item (includes large columns needed for display)
+// What a slow article fetch for the Add tab is doing (see services/fetch-progress.ts)
+router.get('/fetch-progress/:id', (req, res) => {
+  const { id } = req.params;
+  if (!isProgressId(id)) {
+    return res.status(400).json({ error: 'Invalid progress id' });
+  }
+  res.json({ text: getFetchProgress(id, req.user!.userId) });
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
@@ -691,6 +701,7 @@ router.post('/', async (req, res) => {
       summary,
       comment_summary,
       feed_item_id,
+      progress_id,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -833,8 +844,13 @@ router.post('/', async (req, res) => {
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
       let articleData;
+      // The Add tab sends a progress_id and shows the steps of a slow fetch while it waits
+      const progressId = isProgressId(progress_id) ? progress_id : null;
       try {
-        articleData = await fetchArticleContent(url);
+        articleData = await fetchArticleContent(
+          url,
+          progressId ? text => setFetchProgress(progressId, req.user!.userId, text) : undefined
+        );
       } catch (fetchError) {
         // The fetcher's own message says why (a bot check, an HTTP error), so the Add tab can
         // show it instead of a generic failure. Nothing is stored. When no copy of the article
@@ -844,6 +860,8 @@ router.post('/', async (req, res) => {
           error: `Could not fetch this article. ${(fetchError as Error).message}`,
           ...(fetchError instanceof ArticleUnavailableError ? { archive_submit_url: fetchError.archiveSubmitUrl } : {}),
         });
+      } finally {
+        if (progressId) clearFetchProgress(progressId);
       }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;

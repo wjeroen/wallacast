@@ -303,15 +303,19 @@ export async function readerProxyMarkdown(
 // markup, its own base URL).
 const ARCHIVE_PH_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' };
 
-export async function archiveTodayFetch(rawUrl: string): Promise<{ html: string; url: string } | null> {
+/** The archive.ph address of the newest copy of a page (from its timemap), or null when there is none. */
+export async function archiveTodayNewestCopy(rawUrl: string): Promise<string | null> {
   await assertPublicHttpUrl(rawUrl);
   const map = await safeFetch(`https://archive.ph/timemap/${rawUrl}`, { headers: ARCHIVE_PH_HEADERS }, 5, 20_000);
   if (map.status === 404) return null;
   if (!map.ok) {
     throw new Error(`archive.ph timemap answered HTTP ${map.status}`);
   }
-  const copyUrl = newestArchiveCopy(await map.text());
-  if (!copyUrl) return null;
+  return newestArchiveCopy(await map.text());
+}
+
+/** One archive.ph copy (an address from archiveTodayNewestCopy): its HTML and its final address. */
+export async function archiveTodayCopyFetch(copyUrl: string): Promise<{ html: string; url: string }> {
   const res = await safeFetch(copyUrl, { headers: ARCHIVE_PH_HEADERS }, 5, 45_000);
   if (!res.ok) {
     throw new Error(`archive.ph answered HTTP ${res.status}`);
@@ -334,17 +338,18 @@ export function newestArchiveCopy(timemap: string): string | null {
 // `id_` form leaves out the archive's toolbar and keeps every link and image pointing at the
 // original site. For pages whose bot wall stops every live fetch. Returns null when the
 // archive holds no successful copy (brand-new articles often are not archived yet).
-export async function waybackSnapshotFetch(rawUrl: string): Promise<{ html: string; timestamp: string } | null> {
+export async function waybackNewestTimestamp(rawUrl: string): Promise<string | null> {
   await assertPublicHttpUrl(rawUrl);
   // The CDX search, not archive.org/wayback/available: that lookup answered HTTP 429 to every
   // news address, even to a first request from a phone, while the CDX search answered normally
   // (2026-10-07). limit=-1 asks for the newest capture with status 200 only. The answer is
-  // [["timestamp"], ["20260930222423"]], or [] when there is none.
+  // [["timestamp"], ["20260930222423"]], or [] when there is none. It is slow: 7 to 20 seconds
+  // on Railway, once over 30 (2026-10-07), so it gets 45 seconds to start answering.
   const lookup = await safeFetch(
     `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(rawUrl)}&output=json&fl=timestamp&filter=statuscode:200&limit=-1`,
     {},
     5,
-    30_000
+    45_000
   );
   if (!lookup.ok) {
     throw new Error(`Wayback lookup answered HTTP ${lookup.status}`);
@@ -352,12 +357,15 @@ export async function waybackSnapshotFetch(rawUrl: string): Promise<{ html: stri
   const rows = (await lookup.json()) as unknown;
   const last = Array.isArray(rows) && rows.length > 1 ? rows[rows.length - 1] : null;
   const timestamp = String(Array.isArray(last) ? last[0] : '');
-  if (!/^\d{14}$/.test(timestamp)) {
-    return null;
-  }
+  return /^\d{14}$/.test(timestamp) ? timestamp : null;
+}
+
+/** The Wayback copy of a page at a timestamp from waybackNewestTimestamp, in the `id_` form. */
+export async function waybackCopyFetch(rawUrl: string, timestamp: string): Promise<string> {
+  await assertPublicHttpUrl(rawUrl);
   const res = await safeFetch(`https://web.archive.org/web/${timestamp}id_/${rawUrl}`, {}, 5, 60_000);
   if (!res.ok) {
     throw new Error(`Wayback copy answered HTTP ${res.status}`);
   }
-  return { html: await res.text(), timestamp };
+  return res.text();
 }

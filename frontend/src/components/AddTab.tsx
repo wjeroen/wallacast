@@ -48,6 +48,9 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   // archive.ph address that makes a copy of an article the server could not fetch (see
   // ArticleUnavailableError in article-fetcher.ts). Adding the article again finds that copy.
   const [archiveLink, setArchiveLink] = useState<string | null>(null);
+  // What the server is doing during a slow article save (a bot check or a paywall sends it to
+  // archived copies), shown under the Save button
+  const [progressText, setProgressText] = useState<string | null>(null);
   const [uploadedContent, setUploadedContent] = useState<string>('');
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
@@ -164,6 +167,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     setLoading(true);
     setMessage('');
     setArchiveLink(null);
+    let progressPoll: number | undefined;
 
     try {
       const data: Record<string, unknown> = {
@@ -182,6 +186,17 @@ export function AddTab({ onContentAdded }: AddTabProps) {
           return;
         }
         data.url = url;
+        // The server reports each slow step under this id, asked for every 1.5 seconds.
+        // randomUUID needs HTTPS, so a dev server over plain http gets a time-based id.
+        const progressId = typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        data.progress_id = progressId;
+        progressPoll = window.setInterval(() => {
+          contentAPI.fetchProgress(progressId)
+            .then(res => { if (res.data.text) setProgressText(res.data.text); })
+            .catch(() => { /* the next ask tries again */ });
+        }, 1500);
       } else if (contentType === 'text') {
         // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
@@ -234,6 +249,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setMessage(errorMsg);
       setArchiveLink(error?.response?.data?.archive_submit_url || null);
     } finally {
+      window.clearInterval(progressPoll);
+      setProgressText(null);
       setLoading(false);
     }
   };
@@ -487,6 +504,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         <button type="submit" disabled={loading} className="submit-btn">
           {loading ? 'Saving...' : 'Save Content'}
         </button>
+        {loading && progressText && <p className="save-progress">{progressText}</p>}
       </form>
 
       <div className="quick-tips">

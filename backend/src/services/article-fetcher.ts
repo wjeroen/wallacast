@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, safeFetchWithCookies, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch, archiveTodayFetch } from './url-guard.js';
+import { safeFetch, safeFetchWithCookies, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackNewestTimestamp, waybackCopyFetch, archiveTodayNewestCopy, archiveTodayCopyFetch } from './url-guard.js';
 import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
 
 // --- EA Forum domain handling ---
@@ -1797,6 +1797,26 @@ export function isPaidPreview(html: string): boolean {
 type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
 
 /**
+ * Reports what a slow fetch is doing, in words for the person waiting (the Add tab shows them
+ * under its Save button, see fetch-progress.ts). Called at each step that can take seconds.
+ */
+export type FetchProgress = (text: string) => void;
+
+// Why a page is not the article, as the Add tab says it while the other copies are tried
+const WALL_PROGRESS: Record<Wall, string> = {
+  'bot check': 'The site blocks automated reading. Looking for another copy...',
+  login: 'The article is behind a login. Looking for another copy...',
+  'no text': 'The page has no text. Looking for another copy...',
+  paywall: 'This is a paid article. Looking for a full copy...',
+};
+
+// A promise's outcome without ever rejecting, for lookups started before they are needed: a
+// rejection nobody awaits yet would otherwise crash the process.
+type Settled<T> = { ok: true; value: T } | { ok: false; error: Error };
+const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
+  promise.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+
+/**
  * For a page that is not the article: a bot-check page, a login form, a page without text, or
  * the preview of a paid article (`wall` names which). It looks for another copy, each step
  * running only when the one before failed or gave a copy that is no good:
@@ -1812,6 +1832,11 @@ type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
  * paid preview, and for a paid preview also when it holds less than 1,000 characters more story
  * than the preview (`previewChars`).
  *
+ * The two archive searches start together the first time either one is needed, because each
+ * can take 20 seconds (the Wayback search, and archive.ph's copy list when it is busy), and the
+ * copies are then tried in the order above. archive.ph is not asked before that, so a site the
+ * reader proxy gets past never spends archive.ph's small request allowance.
+ *
  * Throws an ArticleUnavailableError when no step yields the article, so none of these pages is
  * ever stored as the article. Returns the HTML and the address to read it as: the article's own,
  * or the archive.ph snapshot's, since an archive.ph copy has its own markup and links and is
@@ -1820,9 +1845,11 @@ type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
 async function fetchPastBotWall(
   url: string,
   wall: Wall = 'bot check',
-  previewChars = 0
+  previewChars = 0,
+  onProgress: FetchProgress = () => {}
 ): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
+  onProgress(WALL_PROGRESS[wall]);
   // Why a copy is no good, or null when it is
   const unusable = (html: string): string | null => {
     if (isBotCheckPage(html)) return 'bot-check page';
@@ -1833,8 +1860,23 @@ async function fetchPastBotWall(
     return null;
   };
 
+  // Both archive searches, started together on first use
+  let searches: { wayback: Promise<Settled<string | null>>; archivePh: Promise<Settled<string | null>> } | null = null;
+  const archiveSearches = () => {
+    if (!searches) {
+      onProgress('Searching the Wayback Machine and archive.ph...');
+      searches = {
+        wayback: settle(waybackNewestTimestamp(url)),
+        // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
+        archivePh: isArchiveMirrorUrl(url) ? Promise.resolve({ ok: true as const, value: null }) : settle(archiveTodayNewestCopy(url)),
+      };
+    }
+    return searches;
+  };
+
   const readerHtml = async (): Promise<{ html: string; pageUrl: string } | null> => {
     console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
+    onProgress('Trying a reader service...');
     try {
       const html = await readerProxyFetch(url);
       const problem = unusable(html);
@@ -1853,19 +1895,27 @@ async function fetchPastBotWall(
 
   const wayback = async (): Promise<{ html: string; pageUrl: string } | null> => {
     console.log('[Fetcher] Trying the newest Wayback Machine copy');
+    const search = await archiveSearches().wayback;
+    if (!search.ok) {
+      console.log(`[Fetcher] Wayback Machine failed: ${search.error.message}`);
+      tried.push(`Wayback Machine: ${search.error.message}`);
+      return null;
+    }
+    const timestamp = search.value;
+    if (!timestamp) {
+      console.log('[Fetcher] The Wayback Machine holds no copy of this page');
+      tried.push('Wayback Machine: no copy');
+      return null;
+    }
+    onProgress('Downloading the Wayback Machine copy...');
     try {
-      const snapshot = await waybackSnapshotFetch(url);
-      if (!snapshot) {
-        console.log('[Fetcher] The Wayback Machine holds no copy of this page');
-        tried.push('Wayback Machine: no copy');
-        return null;
-      }
-      const problem = unusable(snapshot.html);
+      const html = await waybackCopyFetch(url, timestamp);
+      const problem = unusable(html);
       if (!problem) {
-        console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
-        return { html: snapshot.html, pageUrl: url };
+        console.log(`[Fetcher] Using the Wayback copy from ${timestamp}: ${html.length} bytes of HTML`);
+        return { html, pageUrl: url };
       }
-      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is no good: ${problem}`);
+      console.log(`[Fetcher] The Wayback copy from ${timestamp} is no good: ${problem}`);
       tried.push(`Wayback Machine: ${problem}`);
     } catch (error: any) {
       console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
@@ -1875,16 +1925,23 @@ async function fetchPastBotWall(
   };
 
   const archivePh = async (): Promise<{ html: string; pageUrl: string } | null> => {
-    // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
     if (isArchiveMirrorUrl(url)) return null;
     console.log('[Fetcher] Trying the newest archive.ph copy');
+    const search = await archiveSearches().archivePh;
+    if (!search.ok) {
+      console.log(`[Fetcher] archive.ph failed: ${search.error.message}`);
+      tried.push(`archive.ph: ${search.error.message}`);
+      return null;
+    }
+    const copyUrl = search.value;
+    if (!copyUrl) {
+      console.log('[Fetcher] archive.ph holds no copy of this page');
+      tried.push('archive.ph: no copy');
+      return null;
+    }
+    onProgress('Downloading the archive.ph copy...');
     try {
-      const copy = await archiveTodayFetch(url);
-      if (!copy) {
-        console.log('[Fetcher] archive.ph holds no copy of this page');
-        tried.push('archive.ph: no copy');
-        return null;
-      }
+      const copy = await archiveTodayCopyFetch(copyUrl);
       if (!/id="CONTENT"/.test(copy.html)) {
         // The snapshot box isArchiveSnapshot() looks for, checked here without a second parse
         const pageTitle = (copy.html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim().slice(0, 80);
@@ -1908,6 +1965,7 @@ async function fetchPastBotWall(
 
   const readerMarkdown = async (): Promise<{ html: string; pageUrl: string } | null> => {
     console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
+    onProgress('Trying a reader service that renders the page...');
     try {
       const md = await readerProxyMarkdown(url);
       if (md.title && BOT_CHECK_TITLE.test(md.title)) {
@@ -1941,7 +1999,7 @@ async function fetchPastBotWall(
   throw new ArticleUnavailableError(`${reason}, and ${copy}.`, url);
 }
 
-export async function fetchArticleContent(url: string): Promise<ArticleContent> {
+export async function fetchArticleContent(url: string, onProgress: FetchProgress = () => {}): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
 
   const isLessWrong = url.includes('lesswrong.com');
@@ -1967,7 +2025,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // bot-wall routes ended there (see fetchPastBotWall).
     let pageUrl = url;
     const pastBotWall = async (wall: Wall = 'bot check', previewChars = 0) => {
-      const copy = await fetchPastBotWall(url, wall, previewChars);
+      const copy = await fetchPastBotWall(url, wall, previewChars, onProgress);
       pageUrl = copy.pageUrl;
       return copy.html;
     };
