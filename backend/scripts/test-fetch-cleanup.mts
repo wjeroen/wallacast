@@ -1,6 +1,7 @@
 // Scratch test for the fetch cleanups in article-fetcher.ts:
-//   0.  the JSON-LD author fallback, Tufte sidenotes, and (0c) the story box, share links,
-//       comment areas, archive date and lead photo, all on small fixtures (no network)
+//   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
+//       comment areas, archive date and lead photo, and (0d) bot walls, paywall previews,
+//       Substack notes and blog post boxes, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -26,6 +27,10 @@ import {
   nestedStoryArticle,
   archivedPublishedDate,
   archivedLeadFigure,
+  isBotCheckPage,
+  isPaywallPreview,
+  substackNote,
+  blogPostBox,
 } from '../src/services/article-fetcher.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
@@ -210,6 +215,92 @@ const dir = process.argv[2];
   assert.equal(isCommentArea(el('<a aria-label="There are 97 comments">97</a>')), false, 'a comment count link is left alone');
 
   console.log('✅ Story box, share links, comment areas, archive date and lead photo');
+}
+
+// --- 0d. Bot walls, paywall previews, Substack notes and blog post boxes -----------
+// Shapes from 2026-10-06: wsj.com's DataDome page (HTTP 401) and its Wayback copy, a Substack
+// note, and robert.ocallahan.org (no <article> or <main>, the archive list before the post).
+{
+  const DATADOME = '<html lang="en"><head><title>wsj.com</title><style>#cmsg{animation: A 1.5s;}</style></head>'
+    + '<body style="margin:0"><p id="cmsg">Please enable JS and disable any ad blocker</p>'
+    + '<script data-cfasync="false">var dd={\'rt\':\'c\'}</script>'
+    + '<script data-cfasync="false" src="https://ct.captcha-delivery.com/c.js"></script></body></html>';
+  assert.equal(isBotCheckPage(DATADOME), true, 'DataDome block page');
+
+  const ldPaywall = (body: string) => '<html><head><script type="application/ld+json">'
+    + '{"@type":"NewsArticle","isAccessibleForFree":false,'
+    + '"hasPart":{"@type":"WebPageElement","cssSelector":".paywall","isAccessibleForFree":false}}'
+    + `</script></head><body><article><p>Alicja Piecha found her first rogue AI swarm.</p>${body}</article></body></html>`;
+  assert.equal(isPaywallPreview(ldPaywall('')), true, 'the paid part is missing: a preview');
+  assert.equal(
+    isPaywallPreview(ldPaywall(`<div class="paywall"><p>${'The rest of the story. '.repeat(20)}</p></div>`)),
+    false,
+    'the paid part is there (hidden by CSS on the site): the whole article'
+  );
+  assert.equal(isPaywallPreview('<html><body><p>No markup at all.</p></body></html>'), false, 'no JSON-LD, no verdict');
+  assert.equal(
+    isPaywallPreview('<script type="application/ld+json">{ "isAccessibleForFree": false, broken</script>'),
+    false,
+    'a malformed block is skipped'
+  );
+
+  const preloads = {
+    feedData: {
+      feedItem: {
+        comment: {
+          name: 'Will MacAskill',
+          date: '2026-10-04T17:24:53.856Z',
+          body: 'Effective altruism\'s openness to strangeness is a big part of its strength.\n\nMy response:',
+          attachments: [
+            { type: 'image', imageUrl: 'https://substack-post-media.s3.amazonaws.com/public/images/a.png' },
+            { type: 'post', post: { canonical_url: 'https://www.planned-obsolescence.org/p/x', title: 'The attack surprised me' } },
+            { type: 'link', linkMetadata: { url: 'javascript:alert(1)', title: 'Never a link' } },
+            { type: 'comment', comment: { user: { name: 'Dan Williams' }, body: 'New episode!\n\nI enjoyed it.' } },
+            { type: 'video' },
+          ],
+        },
+      },
+    },
+  };
+  const notePage = '<html><head><meta name="author" content="Substack">'
+    + `<script>window._preloads = JSON.parse(${JSON.stringify(JSON.stringify(preloads))})</script></head><body>`
+    + '<div style="margin-right:420px"><h3>Make money doing the work you believe in</h3>'
+    + '<div class="ProseMirror FeedProseMirror"><p>Effective altruism\'s openness to strangeness is a big part of its strength.</p>'
+    + '<p>My response:</p></div><h4>Log in or sign up</h4></div></body></html>';
+  const noteDoc = new JSDOM(notePage).window.document;
+  const note = substackNote(notePage, noteDoc, 'https://substack.com/@willmacaskill/note/c-352811447');
+  assert.ok(note, 'a note page is a note');
+  assert.equal(note!.title, 'Effective altruism\'s openness to strangeness is a big part of its strength.', 'first line as title');
+  assert.equal(note!.author, 'Will MacAskill', 'the note author, not "Substack"');
+  assert.equal(note!.publishedDate, '2026-10-04T17:24:53.856Z', 'the note date');
+  const noteHtml = note!.content.innerHTML;
+  assert.ok(!/Make money|Log in|420px/.test(noteHtml), 'none of the page shell');
+  assert.equal(note!.content.querySelectorAll(':scope > p').length, 3, 'two note paragraphs and the post link');
+  assert.equal(note!.content.querySelector('figure img')?.getAttribute('src'), 'https://substack-post-media.s3.amazonaws.com/public/images/a.png', 'the image');
+  assert.equal(note!.content.querySelector('a[href="https://www.planned-obsolescence.org/p/x"]')?.textContent, 'The attack surprised me', 'the attached post');
+  assert.ok(!noteHtml.includes('javascript:'), 'a non-http link is dropped');
+  assert.equal(note!.content.querySelector('blockquote strong')?.textContent, 'Dan Williams', 'the quoted note author');
+  assert.equal(note!.content.querySelectorAll('blockquote p').length, 3, 'the quoted note author and two paragraphs');
+  assert.equal(
+    substackNote(notePage, new JSDOM(notePage).window.document, 'https://www.astralcodexten.com/p/an-open-letter'),
+    null,
+    'a post is not a note'
+  );
+  const longBody = { feedData: { feedItem: { comment: { name: 'A', body: 'x'.repeat(30) + ' ' + 'y'.repeat(90) + '\nline two' } } } };
+  const longPage = `<html><head><script>window._preloads = JSON.parse(${JSON.stringify(JSON.stringify(longBody))})</script></head><body></body></html>`;
+  const longNote = substackNote(longPage, new JSDOM(longPage).window.document, 'https://substack.com/@a/note/c-1');
+  assert.equal(longNote!.title, 'x'.repeat(30) + '...', 'a long first line is cut at a word');
+  assert.equal(longNote!.content.innerHTML, `<p>${'x'.repeat(30)} ${'y'.repeat(90)}<br>line two</p>`, 'without the rendered box, the plain text');
+
+  const blog = (posts: string) => new JSDOM('<body><h1>Eyes Above The Waves</h1><div id="main"><div id="nav"><h2>Archive</h2><ul>'
+    + '<li><a href="/2026/09/goodbye-google.html">Goodbye Google</a></li>'.repeat(40)
+    + `</ul></div><div id="body">${posts}</div></div></body>`).window.document;
+  const post = `<div class="post"><p class="date">Thursday 24 September 2026</p><h2>Goodbye Google</h2><p>${'I resign. '.repeat(60)}</p></div>`;
+  assert.equal(blogPostBox(blog(post))?.querySelector('h2')?.textContent, 'Goodbye Google', 'the one post box, not the archive');
+  assert.equal(blogPostBox(blog(post + post)), null, 'two posts (a list page) give no box');
+  assert.equal(blogPostBox(blog('<div class="post"><p>Short.</p></div>')), null, 'a box under 500 characters does not count');
+
+  console.log('✅ Bot walls, paywall previews, Substack notes and blog post boxes');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

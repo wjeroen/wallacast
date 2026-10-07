@@ -604,6 +604,101 @@ function cleanSubstackContent(contentEl: Element): void {
   contentEl.querySelectorAll('[data-component-name="ShareMenuDialog"]').forEach(el => el.remove());
 }
 
+export interface SubstackNote {
+  title?: string;
+  author?: string;
+  publishedDate?: string;
+  content: Element;
+}
+
+/**
+ * A Substack note (`substack.com/@name/note/c-123`): a short post without a title, inside
+ * Substack's app shell. The page has no `.body.markup` box like a post, so the generic fallback
+ * kept the whole shell: a promo banner, loading placeholders, "Log in or sign up", and a wrapper
+ * with a fixed 420px right margin that pressed the text against the left edge on a phone (Will
+ * MacAskill's note, 2026-10-06). The note's own text is the page's first `.FeedProseMirror` box:
+ * a reply's page shows only the reply, and a quoted note comes after the note. The author, the
+ * date, the text as plain paragraphs, and the attachments are in
+ * `_preloads.feedData.feedItem.comment`. Attachments are appended after the text: an image, a
+ * link to an attached post or page, and a quoted note as a blockquote. A video is left out.
+ * Returns null for any page that is not a note.
+ */
+export function substackNote(html: string, doc: Document, url: string): SubstackNote | null {
+  let path = '';
+  try { path = new URL(url).pathname; } catch { return null; }
+  if (!/\/note\/c-\d+/.test(path)) return null;
+
+  const comment = parseSubstackPreloads(html)?.feedData?.feedItem?.comment;
+  const box = doc.querySelector('.FeedProseMirror');
+  if (!comment && !box) return null;
+
+  const content = doc.createElement('div');
+  const addParagraphs = (parent: Element, text: string) => {
+    text.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean).forEach(part => {
+      const p = doc.createElement('p');
+      part.split('\n').forEach((line, i) => {
+        if (i > 0) p.appendChild(doc.createElement('br'));
+        p.appendChild(doc.createTextNode(line));
+      });
+      parent.appendChild(p);
+    });
+  };
+  const addLink = (href: unknown, text: unknown) => {
+    if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return;
+    const p = doc.createElement('p');
+    const a = doc.createElement('a');
+    a.setAttribute('href', href);
+    a.textContent = typeof text === 'string' && text.trim() ? text.trim() : href;
+    p.appendChild(a);
+    content.appendChild(p);
+  };
+
+  if (box) {
+    content.append(...Array.from(box.childNodes));
+  } else {
+    addParagraphs(content, String(comment.body || ''));
+  }
+
+  for (const attachment of Array.isArray(comment?.attachments) ? comment.attachments : []) {
+    if (attachment?.type === 'image' && typeof attachment.imageUrl === 'string') {
+      const figure = doc.createElement('figure');
+      const img = doc.createElement('img');
+      img.setAttribute('src', attachment.imageUrl);
+      img.setAttribute('alt', '');
+      figure.appendChild(img);
+      content.appendChild(figure);
+    } else if (attachment?.type === 'post') {
+      addLink(attachment.post?.canonical_url, attachment.post?.title);
+    } else if (attachment?.type === 'link') {
+      addLink(attachment.linkMetadata?.url, attachment.linkMetadata?.title);
+    } else if (attachment?.type === 'comment' && attachment.comment?.body) {
+      const quote = doc.createElement('blockquote');
+      const name = attachment.comment.user?.name;
+      if (typeof name === 'string' && name.trim()) {
+        const p = doc.createElement('p');
+        const strong = doc.createElement('strong');
+        strong.textContent = name.trim();
+        p.appendChild(strong);
+        quote.appendChild(p);
+      }
+      addParagraphs(quote, String(attachment.comment.body));
+      content.appendChild(quote);
+    }
+  }
+
+  // A note has no title, so its first line stands in for one (cut at a word after 100
+  // characters). Without any text the caller keeps the page title.
+  const firstLine = String(comment?.body || box?.textContent || '')
+    .split('\n').map(line => line.trim()).find(Boolean);
+  const title = !firstLine || firstLine.length <= 100
+    ? firstLine
+    : firstLine.slice(0, 100).replace(/\s+\S*$/, '') + '...';
+  const author = typeof comment?.name === 'string' && comment.name.trim() ? comment.name.trim() : undefined;
+  const publishedDate = typeof comment?.date === 'string' ? comment.date : undefined;
+  console.log(`[Fetcher] Substack note by ${author || '(unknown)'}, ${content.querySelectorAll('p').length} paragraph(s), ${comment?.attachments?.length || 0} attachment(s)`);
+  return { title, author, publishedDate, content };
+}
+
 // --- SUBSTACK HELPERS END ---
 
 // Flatten email-newsletter layout into normal block flow. Newsletters are built from
@@ -1045,12 +1140,31 @@ const MIN_STORY_BODY_CHARS = 500;
  * split over several markers gives null, since keeping one part would drop the rest.
  */
 export function findStoryBody(doc: Document): Element | null {
-  const found = Array.from(doc.querySelectorAll(STORY_BODY_MARKERS));
+  return singleMarkedBox(doc, STORY_BODY_MARKERS);
+}
+
+function singleMarkedBox(doc: Document, markers: string): Element | null {
+  const found = Array.from(doc.querySelectorAll(markers));
   const outermost = found.filter(el => !found.some(other => other !== el && other.contains(el)));
   if (outermost.length !== 1) return null;
   const body = outermost[0];
   if (insideCommentArea(body)) return null;
   return (body.textContent || '').trim().length >= MIN_STORY_BODY_CHARS ? body : null;
+}
+
+// The box that blog templates put one post in: Blogger's `.post` (with `.post-body` inside),
+// WordPress's `.entry-content`, and the `.post` and `.post-content` of Jekyll and Ghost themes.
+const BLOG_POST_MARKERS = '.post, .post-body, .post-content, .entry-content';
+
+/**
+ * The one blog post on a page that has neither an `<article>` nor a `<main>`, or null. Such a
+ * page used to be kept whole: robert.ocallahan.org puts its full archive of post titles (120 KB
+ * of links) before the post, so a copy to Obsidian opened with years of titles (2026-10-06).
+ * The same rule as findStoryBody applies: exactly one outermost match, outside the comments,
+ * with at least 500 characters of text.
+ */
+export function blogPostBox(doc: Document): Element | null {
+  return singleMarkedBox(doc, BLOG_POST_MARKERS);
 }
 
 const MIN_NESTED_STORY_CHARS = 1000;
@@ -1238,9 +1352,11 @@ export function restoreArchivedParagraphs(root: Element): void {
 
 /**
  * A bot-check page served in place of the article: Cloudflare's "Just a moment..." JavaScript
- * challenge, its older "Attention Required!" block page, and similar walls. Such a page has
- * almost no visible text. Most normal pages behind Cloudflare also load its challenge-platform
- * script, so that script alone never counts, only a short page with a bot-check title or text.
+ * challenge, its older "Attention Required!" block page, DataDome's "Please enable JS and
+ * disable any ad blocker" page (wsj.com answers our requests with it and HTTP 401, seen
+ * 2026-10-06), and similar walls. Such a page has almost no visible text. Most normal pages
+ * behind Cloudflare also load its challenge-platform script, so that script alone never counts,
+ * only a short page with a bot-check title or text.
  */
 export function isBotCheckPage(html: string): boolean {
   const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim();
@@ -1251,7 +1367,46 @@ export function isBotCheckPage(html: string): boolean {
     .trim();
   if (text.length > 3000) return false;
   return /^(just a moment|attention required|verifying you are human|checking your browser|access denied)/i.test(title)
-    || /enable javascript and cookies to continue|verifying you are human|checking if the site connection is secure|checking your browser before accessing/i.test(text);
+    || /enable javascript and cookies to continue|verifying you are human|checking if the site connection is secure|checking your browser before accessing|please enable js and disable any ad blocker/i.test(text);
+}
+
+/**
+ * True when a page says part of it is for subscribers only and that part is missing from the
+ * HTML we got. News sites mark the paid part for search engines with schema.org JSON-LD:
+ * `hasPart: { isAccessibleForFree: false, cssSelector: ".paywall" }`. A copy made without a
+ * subscription (the Wayback Machine's copy of a wsj.com article, 2026-10-06) leaves that
+ * element out and holds only the first few paragraphs. A page that ships the paid part and
+ * hides it with CSS still has the element, so it does not count.
+ */
+export function isPaywallPreview(html: string): boolean {
+  if (!/isAccessibleForFree/i.test(html)) return false;
+  const doc = new JSDOM(html).window.document;
+  const selectors: string[] = [];
+  const visit = (node: any): void => {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!node || typeof node !== 'object') return;
+    const free = node.isAccessibleForFree;
+    if ((free === false || String(free).toLowerCase() === 'false') && typeof node.cssSelector === 'string') {
+      selectors.push(node.cssSelector);
+    }
+    Object.values(node).forEach(visit);
+  };
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    try {
+      visit(JSON.parse(script.textContent || ''));
+    } catch {
+      // A malformed block says nothing about a paywall
+    }
+  });
+  if (selectors.length === 0) return false;
+  return selectors.every(selector => {
+    try {
+      const parts = Array.from(doc.querySelectorAll(selector));
+      return parts.every(el => (el.textContent || '').trim().length < 200);
+    } catch {
+      return false; // A selector jsdom cannot read proves nothing
+    }
+  });
 }
 
 // markdownToHtml() needs a DOMParser, which Node lacks. markdown-export.ts installs the same
@@ -1273,12 +1428,13 @@ export function readerMarkdownPage(md: { title: string | null; publishedTime: st
 
 /**
  * For a page whose bot wall stopped our own requests. Each step runs only when the one before
- * failed or answered with a bot-check page:
+ * failed or answered with a bot-check page or a paywall preview (see isPaywallPreview):
  * 1. the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
  * 2. the newest Wayback Machine copy (the page's own HTML, author and date included),
  * 3. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
  *    archive does not hold yet, but names no author).
- * Throws when none of them yields the article, so a bot-check page is never stored.
+ * Throws when none of them yields the article, so a bot-check page or the first paragraphs of
+ * a paywalled article are never stored as the article.
  */
 async function fetchPastBotWall(url: string): Promise<string> {
   const tried: string[] = [];
@@ -1286,12 +1442,16 @@ async function fetchPastBotWall(url: string): Promise<string> {
   console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
   try {
     const html = await readerProxyFetch(url);
-    if (!isBotCheckPage(html)) {
+    if (isBotCheckPage(html)) {
+      console.log('[Fetcher] Reader proxy HTML is the bot-check page too');
+      tried.push('reader proxy HTML: bot-check page');
+    } else if (isPaywallPreview(html)) {
+      console.log('[Fetcher] Reader proxy HTML holds only the paywall preview');
+      tried.push('reader proxy HTML: paywall preview');
+    } else {
       console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
       return html;
     }
-    console.log('[Fetcher] Reader proxy HTML is the bot-check page too');
-    tried.push('reader proxy HTML: bot-check page');
   } catch (error: any) {
     console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
     tried.push(`reader proxy HTML: ${error.message}`);
@@ -1306,6 +1466,9 @@ async function fetchPastBotWall(url: string): Promise<string> {
     } else if (isBotCheckPage(snapshot.html)) {
       console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is a bot-check page`);
       tried.push('Wayback Machine: bot-check page');
+    } else if (isPaywallPreview(snapshot.html)) {
+      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} holds only the paywall preview`);
+      tried.push('Wayback Machine: paywall preview');
     } else {
       console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
       return snapshot.html;
@@ -1388,8 +1551,18 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         html = retry.body;
       }
     } else {
-      console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      // Other bot walls answer with another status and their own bot-check page. DataDome on
+      // wsj.com answers HTTP 401 (seen 2026-10-06), and the browser-like retry above gets the
+      // same 401, so it goes straight to the other routes.
+      const body = await response.text();
+      if (isBotCheckPage(body)) {
+        const wall = response.headers.get('x-datadome') ? 'DataDome' : (response.headers.get('server') || 'unknown');
+        console.log(`[Fetcher] HTTP ${response.status} with a bot-check page (${wall})`);
+        html = await fetchPastBotWall(url);
+      } else {
+        console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
     }
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
 
@@ -1428,8 +1601,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
+    // A Substack note brings its own text, author and date (see substackNote).
+    const note = isSubstack ? substackNote(html, doc, url) : null;
+
     // Extract metadata from meta tags
     const title =
+      note?.title ||
       doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
       doc.querySelector('title')?.textContent ||
       'Untitled';
@@ -1461,7 +1638,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       author = jsonLdAuthor;
     }
 
+    // A note page's meta author is "Substack" itself
+    if (note?.author) author = note.author;
+
     let publishedDate =
+      note?.publishedDate ||
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
     // An archive.is copy's meta date is the moment of archiving. Prefer the date the archived
@@ -1484,7 +1665,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let contentEl;
 
     // Substack-specific selectors (more precise). Works on custom domains too.
-    if (isSubstack) {
+    if (note) {
+      contentEl = note.content;
+    } else if (isSubstack) {
       console.log('[Fetcher] Using Substack-specific content selectors');
       contentEl = doc.querySelector('.available-content .body.markup') ||
                   doc.querySelector('.body.markup') ||
@@ -1524,7 +1707,13 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         if (preferInnerMain) {
           console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
         }
-        contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
+        contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main');
+        if (!contentEl) {
+          // Neither <article> nor <main>: a blog post box beats the whole <body> (see blogPostBox)
+          const post = blogPostBox(doc);
+          if (post) console.log(`[Fetcher] No <article> or <main>, using the blog post box (.${post.classList[0] || post.tagName.toLowerCase()})`);
+          contentEl = post || doc.body;
+        }
       }
     }
 
@@ -1632,9 +1821,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       // Remove share button containers
       contentEl.querySelectorAll('[class*="share-buttons"], [class*="share-tools"], [class*="social-share"]').forEach(el => el.remove());
 
-      // Remove the first <h1> if it matches the already-extracted title (prevents title being narrated twice)
+      // Remove the first <h1> if it matches the already-extracted title (prevents title being
+      // narrated twice). Without an <h1>, the first <h2> (a blog post box titles its post with one).
       if (title && title !== 'Untitled') {
-        const firstH1 = contentEl.querySelector('h1');
+        const firstH1 = contentEl.querySelector('h1') || contentEl.querySelector('h2');
         if (firstH1) {
           const h1Text = firstH1.textContent?.trim() || '';
           // Normalize both for comparison (collapse whitespace, ignore case)
@@ -1645,9 +1835,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         }
       }
 
-      // Remove subtitle/dek that matches the og:description (often repeated under title in lede sections)
+      // Remove subtitle/dek that matches the og:description (often repeated under title in lede
+      // sections). Not on a Substack note, whose og:description is the note itself, so a note of
+      // one paragraph would lose all its text.
       const ogDescription = doc.querySelector('meta[property="og:description"]')?.getAttribute('content');
-      if (ogDescription) {
+      if (ogDescription && !note) {
         const normalizeText = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
         const normalizedDesc = normalizeText(ogDescription);
         // Search all paragraphs. The dek might be anywhere in the lede wrapper.
@@ -1801,7 +1993,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let comments: Comment[] | undefined;
     let comment_source: string | undefined;
     let comment_count_total: number | undefined;
-    if (isSubstack) {
+    // A note's replies live elsewhere (a note page has no /comments page)
+    if (isSubstack && !note) {
       comments = await fetchSubstackComments(url, html);
       if (comments.length === 0) {
         comments = undefined;
@@ -1827,7 +2020,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     };
 
   } catch (error) {
+    // The message says why (a bot check, an HTTP status, a timeout). The Add tab and a failed
+    // refetch's card show it, so it is passed on as it is.
     console.error('[Fetcher] ✗ Error fetching article:', error);
-    throw new Error('Failed to fetch article content');
+    throw error instanceof Error && error.message ? error : new Error('Failed to fetch article content');
   }
 }
