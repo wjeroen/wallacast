@@ -1,8 +1,8 @@
 // Scratch test for the fetch cleanups in article-fetcher.ts:
 //   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
 //       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
-//       Substack notes and blog post boxes, and (0e) page-layout styles, all on small
-//       fixtures (no network)
+//       Substack notes and blog post boxes, (0e) page-layout styles, and (0f) print-hidden
+//       parts and empty video players, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -33,6 +33,8 @@ import {
   substackNote,
   blogPostBox,
   stripLayoutStyles,
+  removePrintHidden,
+  removeEmptyVideoPlayers,
 } from '../src/services/article-fetcher.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
@@ -331,6 +333,45 @@ const dir = process.argv[2];
   assert.equal(root.getElementById('only')!.hasAttribute('style'), false, 'an emptied style attribute is removed');
   assert.equal(root.body.textContent, 'NoteIndented quoteWideHiddena  bx', 'no text changes');
   console.log('✅ Page-layout styles');
+}
+
+// --- 0f. Print-hidden parts and empty video players ---------------------------------
+// The shape of smh.com.au's story box (2026-10-07): ads, a save tooltip and a Brightcove player
+// marked noPrint between the paragraphs, and the player's file loaded only by the site's script.
+{
+  const story = '<p>' + 'Labor is eyeing laws to force tech firms to be transparent. '.repeat(4) + '</p>';
+  const doc = new JSDOM('<body><div id="box">'
+    + '<div class="container"><div class="adWrapper noPrint" data-testid="ad"><small>Advertisement</small></div></div>'
+    + '<div class="noPrint" data-testid="article-actions"><div role="tooltip"><p>You have reached your maximum number of saved items.</p></div></div>'
+    + story
+    + '<div class="noPrint" data-testid="video"><div><video data-video-id="6405512121112" controls></video>'
+    + '<div><span>Loading</span></div></div><p></p></div>'
+    + story
+    + '<aside class="noPrint" data-testid="related-story"><h2>Related Article</h2></aside>'
+    + '</div></body>').window.document;
+  const box = doc.getElementById('box')!;
+  assert.equal(removePrintHidden(box), 4, 'the ad, the tooltip bar, the player and the related box go');
+  assert.equal(box.textContent!.replace(/\s+/g, ' ').trim(), (story + story).replace(/<\/?p>/g, '').trim(), 'only the story text is left');
+
+  const whole = new JSDOM('<body><div id="box"><div class="no-print">' + story + story + '</div><p>Short</p></div></body>').window.document;
+  assert.equal(removePrintHidden(whole.getElementById('box')!), 0, 'a story body marked print-hidden stays');
+
+  // Another site's player without print marks: the empty one goes with its "Loading" box, a
+  // captioned one keeps its caption, and a video with a file stays.
+  const players = new JSDOM('<body><div id="box">' + story
+    + '<div id="p1"><div><video data-account="1"></video><div><span>Loading</span></div></div></div>'
+    + '<figure id="p2"><div id="p2box"><video></video><span>Play</span></div><figcaption>The prime minister at the United Nations in New York.</figcaption></figure>'
+    + '<div id="p3"><video src="clip.mp4" controls></video></div>'
+    + '<div id="p4"><video controls><source src="clip.webm" type="video/webm"></video></div>'
+    + story + '</div></body>').window.document;
+  const pbox = players.getElementById('box')!;
+  assert.equal(removeEmptyVideoPlayers(pbox), 2, 'two players without a file go');
+  assert.equal(players.getElementById('p1'), null, 'the empty player and its Loading box are gone');
+  assert.equal(players.getElementById('p2box'), null, 'the captioned player box is gone');
+  assert.ok(players.getElementById('p2')!.querySelector('figcaption'), 'its caption stays');
+  assert.ok(players.getElementById('p3')!.querySelector('video'), 'a video with src stays');
+  assert.ok(players.getElementById('p4')!.querySelector('video'), 'a video with a <source> stays');
+  console.log('✅ Print-hidden parts and empty video players');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

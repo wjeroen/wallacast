@@ -1300,6 +1300,67 @@ export function removeShareLinks(root: Element): number {
   return removed;
 }
 
+// Class names that hide an element in the site's own print stylesheet: Nine's `noPrint`
+// (smh.com.au, The Age), Bootstrap's `d-print-none` and `hidden-print`, Tailwind's
+// `print:hidden`, and the usual spellings. A site leaves out of print exactly what is not the
+// article: ads, video players, save and share bars, related-story boxes.
+const PRINT_HIDDEN_SELECTOR =
+  '.noPrint, .noprint, .no-print, .d-print-none, .hidden-print, .print-hidden, .print\\:hidden';
+
+/** Characters of text inside el, whitespace not counted (page markup is full of indentation). */
+const textChars = (el: Element) => (el.textContent || '').replace(/\s+/g, '').length;
+
+/**
+ * Removes what the site hides when printing (see PRINT_HIDDEN_SELECTOR). An element holding more
+ * than a third of the text stays, so a site that marks its whole story body never loses it.
+ * Returns how many elements went.
+ *
+ * smh.com.au, 2026-10-07: every piece of furniture inside its story box carries `noPrint` (7
+ * "Advertisement" labels, an empty video player, two "maximum number of saved items" tooltips,
+ * related-story boxes, ad widgets), and no paragraph of the story does.
+ */
+export function removePrintHidden(root: Element): number {
+  const totalText = textChars(root);
+  let removed = 0;
+  for (const el of Array.from(root.querySelectorAll(PRINT_HIDDEN_SELECTOR))) {
+    if (!root.contains(el)) continue; // already gone with an outer match
+    if (textChars(el) > totalText / 3) continue;
+    el.remove();
+    removed++;
+  }
+  return removed;
+}
+
+// Text a player box may hold besides its video ("Loading", "Play", a duration) before it counts
+// as holding something else, such as a caption worth keeping.
+const PLAYER_TEXT_MAX_CHARS = 30;
+
+/**
+ * Removes video players with no video file: a `<video>` without `src` and without a
+ * `<source src>`, whose file only the site's own script loads (Brightcove, JW Player). The reader
+ * shows them as an empty player with the site's "Loading" text. The player box goes too, up to
+ * the first ancestor that holds more than a few words or any other media. A video with a file
+ * stays. Returns how many players went.
+ */
+export function removeEmptyVideoPlayers(root: Element): number {
+  let removed = 0;
+  for (const video of Array.from(root.querySelectorAll('video'))) {
+    if (!root.contains(video)) continue;
+    if (video.getAttribute('src') || video.querySelector('source[src]')) continue;
+    let box: Element = video;
+    for (let parent = box.parentElement; parent && parent !== root; parent = parent.parentElement) {
+      const otherText = textChars(parent) - textChars(box);
+      const otherMedia = Array.from(parent.querySelectorAll('img, picture, video, audio, iframe'))
+        .some(m => !box.contains(m));
+      if (otherText > PLAYER_TEXT_MAX_CHARS || otherMedia) break;
+      box = parent;
+    }
+    box.remove();
+    removed++;
+  }
+  return removed;
+}
+
 // Names pages give their story body. They are ids and attributes, not class names, so an
 // archive.is copy keeps them: FT's `#article-body`, the New York Times' `<section
 // name="articleBody">`, and schema.org's `itemprop="articleBody"`.
@@ -1963,6 +2024,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
     if (contentEl) {
+      // What the site leaves out of print, and video players with no video file (see both
+      // functions). First, so the rules below work on the story alone.
+      const printHidden = removePrintHidden(contentEl);
+      const emptyPlayers = removeEmptyVideoPlayers(contentEl);
+      if (printHidden || emptyPlayers) {
+        console.log(`[Fetcher] Removed ${printHidden} print-hidden element(s) and ${emptyPlayers} empty video player(s)`);
+      }
+
       // Remove social interaction bars (like/comment/share buttons)
       contentEl.querySelectorAll('.post-ufi, .ufi, .pencraft-ufi').forEach(el => el.remove());
 
