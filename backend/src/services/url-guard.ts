@@ -160,6 +160,40 @@ export async function safeFetch(
   throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
 }
 
+// safeFetch that keeps the cookies each host sets and sends them back to that host on the next
+// hops, the way a browser does. For a consent gate that hands over to the site through a redirect
+// whose cookie the next hop needs: DPG Media's privacy gate continue link sets it, then sends the
+// browser on to the article (hln.be, demorgen.be, 2026-10-07). Cookies are kept per exact host,
+// so none ever travels to another site.
+export async function safeFetchWithCookies(rawUrl: string, maxHops = 8): Promise<Response> {
+  const jar = new Map<string, Map<string, string>>();
+  let currentUrl = rawUrl;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    await assertPublicHttpUrl(currentUrl);
+    const host = new URL(currentUrl).host;
+    const hostCookies = jar.get(host) || new Map<string, string>();
+    const cookie = Array.from(hostCookies, ([name, value]) => `${name}=${value}`).join('; ');
+    const res = await fetchWithHeadersTimeout(
+      currentUrl,
+      { redirect: 'manual', headers: cookie ? { cookie } : {} },
+      RESPONSE_HEADERS_TIMEOUT_MS
+    );
+    for (const setCookie of res.headers.raw()['set-cookie'] || []) {
+      const pair = setCookie.split(';')[0];
+      const eq = pair.indexOf('=');
+      if (eq > 0) hostCookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+    }
+    jar.set(host, hostCookies);
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
+}
+
 // Fetch with got-scraping's realistic browser headers, for sites whose bot walls answer the
 // plain fetch with a 403 (openai.com behind Cloudflare, seen live 2026-09-03). Redirects are
 // followed manually so every hop passes the same SSRF check as safeFetch. HTTP error statuses
@@ -281,8 +315,12 @@ export async function archiveTodayFetch(rawUrl: string): Promise<{ html: string;
 // archive holds no successful copy (brand-new articles often are not archived yet).
 export async function waybackSnapshotFetch(rawUrl: string): Promise<{ html: string; timestamp: string } | null> {
   await assertPublicHttpUrl(rawUrl);
+  // The CDX search, not archive.org/wayback/available: that lookup answered HTTP 429 to every
+  // news address, even to a first request from a phone, while the CDX search answered normally
+  // (2026-10-07). limit=-1 asks for the newest capture with status 200 only. The answer is
+  // [["timestamp"], ["20260930222423"]], or [] when there is none.
   const lookup = await safeFetch(
-    `https://archive.org/wayback/available?url=${encodeURIComponent(rawUrl)}`,
+    `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(rawUrl)}&output=json&fl=timestamp&filter=statuscode:200&limit=-1`,
     {},
     5,
     30_000
@@ -290,12 +328,10 @@ export async function waybackSnapshotFetch(rawUrl: string): Promise<{ html: stri
   if (!lookup.ok) {
     throw new Error(`Wayback lookup answered HTTP ${lookup.status}`);
   }
-  const data = (await lookup.json()) as {
-    archived_snapshots?: { closest?: { available?: boolean; status?: string; timestamp?: string } };
-  };
-  const closest = data.archived_snapshots?.closest;
-  const timestamp = String(closest?.timestamp || '');
-  if (!closest?.available || String(closest.status) !== '200' || !/^\d{14}$/.test(timestamp)) {
+  const rows = (await lookup.json()) as unknown;
+  const last = Array.isArray(rows) && rows.length > 1 ? rows[rows.length - 1] : null;
+  const timestamp = String(Array.isArray(last) ? last[0] : '');
+  if (!/^\d{14}$/.test(timestamp)) {
     return null;
   }
   const res = await safeFetch(`https://web.archive.org/web/${timestamp}id_/${rawUrl}`, {}, 5, 60_000);

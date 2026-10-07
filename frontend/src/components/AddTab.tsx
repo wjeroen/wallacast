@@ -45,6 +45,9 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  // archive.ph address that makes a copy of an article the server could not fetch (see
+  // ArticleUnavailableError in article-fetcher.ts). Adding the article again finds that copy.
+  const [archiveLink, setArchiveLink] = useState<string | null>(null);
   const [uploadedContent, setUploadedContent] = useState<string>('');
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
   const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
@@ -160,6 +163,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     e.preventDefault();
     setLoading(true);
     setMessage('');
+    setArchiveLink(null);
 
     try {
       const data: Record<string, unknown> = {
@@ -228,6 +232,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       console.error('Failed to save content:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to save content. Please try again.';
       setMessage(errorMsg);
+      setArchiveLink(error?.response?.data?.archive_submit_url || null);
     } finally {
       setLoading(false);
     }
@@ -470,6 +475,12 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         {message && (
           <div className={`message ${message.includes('success') ? 'success' : 'error'}`}>
             {message}
+            {archiveLink && (
+              <>
+                {' '}
+                <a href={archiveLink} target="_blank" rel="noopener noreferrer">Make an archive.ph copy</a>
+              </>
+            )}
           </div>
         )}
 

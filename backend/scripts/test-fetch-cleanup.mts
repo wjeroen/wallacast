@@ -1,8 +1,9 @@
 // Scratch test for the fetch cleanups in article-fetcher.ts:
 //   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
 //       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
-//       Substack notes and blog post boxes, (0e) page-layout styles, and (0f) print-hidden
-//       parts and empty video players, all on small fixtures (no network)
+//       Substack notes and blog post boxes, (0e) page-layout styles, (0f) print-hidden
+//       parts and empty video players, and (0g) consent gates, login forms, captchas and
+//       empty pages, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -35,6 +36,10 @@ import {
   stripLayoutStyles,
   removePrintHidden,
   removeEmptyVideoPlayers,
+  isLoginWall,
+  hasNoText,
+  dpgPrivacyGateCallback,
+  archiveSubmitUrl,
 } from '../src/services/article-fetcher.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
@@ -372,6 +377,43 @@ const dir = process.argv[2];
   assert.ok(players.getElementById('p3')!.querySelector('video'), 'a video with src stays');
   assert.ok(players.getElementById('p4')!.querySelector('video'), 'a video with a <source> stays');
   console.log('✅ Print-hidden parts and empty video players');
+}
+
+// --- 0g. Consent gates, login forms, captchas and empty pages ------------------------
+// Shapes from 2026-10-07: DPG Media's privacy gate (hln.be, demorgen.be), Roularta's login page
+// (knack.be on our server) and AWS WAF's captcha (knack.be from a phone).
+{
+  const article = 'https://www.hln.be/binnenland/een-artikel~adfc0aaa/';
+  const callback = `https://www.hln.be/privacy-gate/accept-tcf2?redirectUri=%2Fbinnenland%2Feen-artikel%7Eadfc0aaa%2F&authId=6eb89096-432c-42ed-a9ed-dc62a84484bf`;
+  const gate = `<!DOCTYPE html><html lang='nl'><head><script type="text/javascript">
+    const callbackUrl = new URL(decodeURIComponent('${encodeURIComponent(callback)}'))
+    window._privacy = window._privacy || [];</script><title>DPG Media Privacy Gate</title></head>
+    <body><noscript><iframe title="gtm" src="https://www.googletagmanager.com/ns.html?id=GTM-1"></iframe></noscript>
+    <div class="container"><div id="message" class="modal"><img src="logo.svg" alt="dpg media logo"><div aria-busy="true"></div></div></div></body></html>`;
+  const gateUrl = 'https://myprivacy.dpgmedia.be/consent?siteKey=Uqxf9TXhjmaG4pbQ&callbackUrl=x';
+  assert.equal(dpgPrivacyGateCallback(gateUrl, gate), callback, 'the gate gives its continue link');
+  assert.equal(dpgPrivacyGateCallback(article, '<html><title>Een artikel</title><p>Tekst</p></html>'), null, 'an ordinary page has none');
+  assert.equal(
+    dpgPrivacyGateCallback(gateUrl, gate.replace(encodeURIComponent(callback), encodeURIComponent('https://myprivacy.dpgmedia.be/x'))),
+    null,
+    'a link back to the gate itself does not count'
+  );
+  assert.equal(hasNoText(gate), true, 'the gate page has no text');
+  assert.equal(hasNoText('<html><head><title>Een artikel met een titel</title></head><body><p>' + 'Woord '.repeat(10) + '</p></body></html>'), false, 'a page with a sentence has text');
+
+  const login = '<html><head><title>Knack</title></head><body><div class="roul-wrapper"><h4>Vul hier je e-mailadres en wachtwoord in om aan te melden:</h4>'
+    + '<form><input type="email" name="email"><input type="password" name="password"><button>Aanmelden</button></form>'
+    + '<span>Nog geen account? <a href="/register">Maak er snel één aan.</a></span></div></body></html>';
+  assert.equal(isLoginWall(login), true, 'a short page with a password field is a login form');
+  const articleWithDialog = login.replace('</body>', '<article><p>' + 'Een lange zin uit het artikel. '.repeat(120) + '</p></article></body>');
+  assert.equal(isLoginWall(articleWithDialog), false, 'an article page hiding a login dialog is not');
+
+  const captcha = '<!DOCTYPE html><html lang="en"><head><title>Human Verification</title>'
+    + '<script src="https://x.token.awswaf.com/challenge.js"></script></head><body><div id="captcha-container"></div></body></html>';
+  assert.equal(isBotCheckPage(captcha), true, "AWS WAF's Human Verification captcha is a bot check");
+
+  assert.equal(archiveSubmitUrl(article), 'https://archive.ph/?run=1&url=' + encodeURIComponent(article), 'the archive.ph link carries the address');
+  console.log('✅ Consent gates, login forms, captchas and empty pages');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch, archiveTodayFetch } from './url-guard.js';
+import { safeFetch, safeFetchWithCookies, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch, archiveTodayFetch } from './url-guard.js';
 import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
 
 // --- EA Forum domain handling ---
@@ -1586,24 +1586,91 @@ export function restoreArchivedParagraphs(root: Element): void {
   }
 }
 
+/** The text a page shows: scripts, styles and tags removed, whitespace collapsed. */
+function visiblePageText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Titles of bot-check pages, also checked on the reader proxy's Markdown answer
+const BOT_CHECK_TITLE = /^(just a moment|attention required|verifying you are human|checking your browser|access denied|human verification)/i;
+
 /**
  * A bot-check page served in place of the article: Cloudflare's "Just a moment..." JavaScript
  * challenge, its older "Attention Required!" block page, DataDome's "Please enable JS and
  * disable any ad blocker" page (wsj.com answers our requests with it and HTTP 401, seen
- * 2026-10-06), and similar walls. Such a page has almost no visible text. Most normal pages
+ * 2026-10-06), AWS WAF's "Human Verification" captcha (knack.be answers with it and HTTP 405,
+ * 2026-10-07), and similar walls. Such a page has almost no visible text. Most normal pages
  * behind Cloudflare also load its challenge-platform script, so that script alone never counts,
  * only a short page with a bot-check title or text.
  */
 export function isBotCheckPage(html: string): boolean {
   const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim();
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const text = visiblePageText(html);
   if (text.length > 3000) return false;
-  return /^(just a moment|attention required|verifying you are human|checking your browser|access denied)/i.test(title)
+  return BOT_CHECK_TITLE.test(title)
     || /enable javascript and cookies to continue|verifying you are human|checking if the site connection is secure|checking your browser before accessing|please enable js and disable any ad blocker/i.test(text);
+}
+
+/**
+ * A login form served in place of the article: a password field on a page with little text.
+ * knack.be answered our server with Roularta's "Vul hier je e-mailadres en wachtwoord in"
+ * login page (12.8 KB, 2026-10-07), which was stored as the article. A real article page that
+ * hides a login dialog in its markup holds far more text than 3,000 characters.
+ */
+export function isLoginWall(html: string): boolean {
+  return /<input\b[^>]*\btype\s*=\s*["']?password\b/i.test(html) && visiblePageText(html).length < 3000;
+}
+
+/** True when a page body shows (almost) no text: fewer than 20 letters and digits, the title not counted. */
+export function hasNoText(html: string): boolean {
+  const body = html.replace(/<head[\s\S]*?<\/head>/i, ' ');
+  return (visiblePageText(body).match(/[\p{L}\p{N}]/gu) || []).length < 20;
+}
+
+/**
+ * The continue link of DPG Media's cookie consent page, or null for any other page. DPG sites
+ * (hln.be, demorgen.be, humo.be, ad.nl, volkskrant.nl and more) redirect a visitor without the
+ * consent cookie to myprivacy.dpgmedia.be, whose script sends the browser on to
+ * `callbackUrl`: the site's own `privacy-gate/accept-tcf2` (or `privacygate-confirm`) address
+ * with an `authId`. That address sets the cookie and redirects to the article. The page writes
+ * the link as `decodeURIComponent('...')`. Only a link back to an https site counts.
+ */
+export function dpgPrivacyGateCallback(pageUrl: string, html: string): string | null {
+  let host = '';
+  try { host = new URL(pageUrl).hostname; } catch { return null; }
+  if (host !== 'myprivacy.dpgmedia.be' && !/<title>\s*DPG Media Privacy Gate\s*<\/title>/i.test(html)) return null;
+  const encoded = html.match(/callbackUrl\s*=\s*new URL\(decodeURIComponent\('([^']+)'\)\)/)?.[1];
+  if (!encoded) return null;
+  try {
+    const callback = new URL(decodeURIComponent(encoded));
+    if (callback.protocol !== 'https:' || callback.hostname.endsWith('dpgmedia.be')) return null;
+    return callback.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** An archive.ph address that opens its "archive this page" form with url filled in and starts it. */
+export function archiveSubmitUrl(url: string): string {
+  return `https://archive.ph/?run=1&url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * A fetch that found no usable copy of the article (a bot check, a login form, or a page
+ * without text, with no other copy anywhere). Carries the archive.ph address that makes a copy,
+ * so the Add tab can offer it: once archive.ph holds a copy, adding the article again finds it.
+ */
+export class ArticleUnavailableError extends Error {
+  readonly archiveSubmitUrl: string;
+  constructor(message: string, url: string) {
+    super(message);
+    this.name = 'ArticleUnavailableError';
+    this.archiveSubmitUrl = archiveSubmitUrl(url);
+  }
 }
 
 /**
@@ -1671,23 +1738,33 @@ export function readerMarkdownPage(md: { title: string | null; publishedTime: st
  *    a wsj.com article held only its first four paragraphs, 2026-10-06),
  * 4. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
  *    archives do not hold yet, but names no author).
- * Throws when none of them yields the article, so a bot-check page or the first paragraphs of
- * a paywalled article are never stored as the article. Returns the HTML and the address to
- * read it as: the article's own, or the archive.ph snapshot's, since an archive.ph copy has
- * its own markup and links and is read exactly like a pasted archive link.
+ * Also for a login form or a page without text in place of the article (`wall` names which, for
+ * the error). Throws an ArticleUnavailableError when none of them yields the article, so a
+ * bot-check page, a login form or the first paragraphs of a paywalled article are never stored
+ * as the article. Returns the HTML and the address to read it as: the article's own, or the
+ * archive.ph snapshot's, since an archive.ph copy has its own markup and links and is read
+ * exactly like a pasted archive link.
  */
-async function fetchPastBotWall(url: string): Promise<{ html: string; pageUrl: string }> {
+async function fetchPastBotWall(
+  url: string,
+  wall: 'bot check' | 'login' | 'no text' = 'bot check'
+): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
+  // Why a copy is no good, or null when it is
+  const unusable = (html: string): string | null =>
+    isBotCheckPage(html) ? 'bot-check page'
+      : isLoginWall(html) ? 'login form'
+        : hasNoText(html) ? 'no text'
+          : isPaywallPreview(html) ? 'paywall preview'
+            : null;
 
   console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
   try {
     const html = await readerProxyFetch(url);
-    if (isBotCheckPage(html)) {
-      console.log('[Fetcher] Reader proxy HTML is the bot-check page too');
-      tried.push('reader proxy HTML: bot-check page');
-    } else if (isPaywallPreview(html)) {
-      console.log('[Fetcher] Reader proxy HTML holds only the paywall preview');
-      tried.push('reader proxy HTML: paywall preview');
+    const problem = unusable(html);
+    if (problem) {
+      console.log(`[Fetcher] Reader proxy HTML is no good: ${problem}`);
+      tried.push(`reader proxy HTML: ${problem}`);
     } else {
       console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
       return { html, pageUrl: url };
@@ -1700,15 +1777,13 @@ async function fetchPastBotWall(url: string): Promise<{ html: string; pageUrl: s
   console.log('[Fetcher] Trying the newest Wayback Machine copy');
   try {
     const snapshot = await waybackSnapshotFetch(url);
+    const problem = snapshot ? unusable(snapshot.html) : null;
     if (!snapshot) {
       console.log('[Fetcher] The Wayback Machine holds no copy of this page');
       tried.push('Wayback Machine: no copy');
-    } else if (isBotCheckPage(snapshot.html)) {
-      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is a bot-check page`);
-      tried.push('Wayback Machine: bot-check page');
-    } else if (isPaywallPreview(snapshot.html)) {
-      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} holds only the paywall preview`);
-      tried.push('Wayback Machine: paywall preview');
+    } else if (problem) {
+      console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is no good: ${problem}`);
+      tried.push(`Wayback Machine: ${problem}`);
     } else {
       console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
       return { html: snapshot.html, pageUrl: url };
@@ -1744,7 +1819,7 @@ async function fetchPastBotWall(url: string): Promise<{ html: string; pageUrl: s
   console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
   try {
     const md = await readerProxyMarkdown(url);
-    if (md.title && /^(just a moment|attention required)/i.test(md.title)) {
+    if (md.title && BOT_CHECK_TITLE.test(md.title)) {
       console.log('[Fetcher] Reader proxy Markdown is the bot-check page too');
       tried.push('reader proxy Markdown: bot-check page');
     } else {
@@ -1756,8 +1831,11 @@ async function fetchPastBotWall(url: string): Promise<{ html: string; pageUrl: s
     tried.push(`reader proxy Markdown: ${error.message}`);
   }
 
-  console.log(`[Fetcher] No way past the bot check: ${tried.join(' | ')}`);
-  throw new Error('This site blocks automated reading with a bot check, and no other copy of the article could be found.');
+  console.log(`[Fetcher] No way past the ${wall}: ${tried.join(' | ')}`);
+  const reason = wall === 'login' ? 'This article is behind a login'
+    : wall === 'no text' ? 'This page has no article text'
+      : 'This site blocks automated reading with a bot check';
+  throw new ArticleUnavailableError(`${reason}, and no other copy of the article could be found.`, url);
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -1785,8 +1863,8 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // The address the page is read as: the article's own, or the archive.ph snapshot's when the
     // bot-wall routes ended there (see fetchPastBotWall).
     let pageUrl = url;
-    const pastBotWall = async () => {
-      const copy = await fetchPastBotWall(url);
+    const pastBotWall = async (wall: 'bot check' | 'login' | 'no text' = 'bot check') => {
+      const copy = await fetchPastBotWall(url, wall);
       pageUrl = copy.pageUrl;
       return copy.html;
     };
@@ -1794,9 +1872,31 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let html: string;
     if (response.ok) {
       html = await response.text();
+      // DPG Media's cookie consent page (hln.be, demorgen.be) stands in for the article until
+      // its continue link is followed with the cookie it sets (see dpgPrivacyGateCallback).
+      const gateCallback = dpgPrivacyGateCallback(response.url, html);
+      if (gateCallback) {
+        console.log('[Fetcher] DPG Media privacy gate, following its continue link');
+        const passed = await safeFetchWithCookies(gateCallback);
+        const passedHtml = await passed.text();
+        if (passed.ok && !dpgPrivacyGateCallback(passed.url, passedHtml)) {
+          console.log(`[Fetcher] Past the privacy gate: ${passedHtml.length} bytes of HTML`);
+          html = passedHtml;
+        } else {
+          console.log(`[Fetcher] The privacy gate let nothing through (HTTP ${passed.status})`);
+        }
+      }
       if (isBotCheckPage(html)) {
         console.log(`[Fetcher] HTTP ${response.status} but the page is a bot check`);
         html = await pastBotWall();
+      } else if (isLoginWall(html)) {
+        console.log(`[Fetcher] HTTP ${response.status} but the page is a login form`);
+        html = await pastBotWall('login');
+      } else if (hasNoText(html) && !isSubstackPage(html)) {
+        // A consent page that could not be passed, or a page built entirely by scripts. Not a
+        // Substack page: a note can carry its text in the page data only.
+        console.log(`[Fetcher] HTTP ${response.status} but the page has no text`);
+        html = await pastBotWall('no text');
       }
     } else if (response.status === 403) {
       // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
@@ -1831,6 +1931,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const wall = response.headers.get('x-datadome') ? 'DataDome' : (response.headers.get('server') || 'unknown');
         console.log(`[Fetcher] HTTP ${response.status} with a bot-check page (${wall})`);
         html = await pastBotWall();
+      } else if (isLoginWall(body)) {
+        console.log(`[Fetcher] HTTP ${response.status} with a login form`);
+        html = await pastBotWall('login');
       } else {
         console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -2269,6 +2372,13 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     normalizeTweetEmbeds(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
+
+    // An article without text or pictures is never stored: before 2026-10-07 DPG Media's consent
+    // page was saved as two empty articles. A comic or a Substack note may be just a picture.
+    if (!note && (textContent.match(/[\p{L}\p{N}]/gu) || []).length < 20 && !contentEl.querySelector('img, picture, video')) {
+      console.log('[Fetcher] The page holds no article text after cleanup');
+      throw new ArticleUnavailableError('This page has no article text.', url);
+    }
 
     // Fetch Substack comments from /comments page (uses structured JSON, not CSS selectors)
     let comments: Comment[] | undefined;

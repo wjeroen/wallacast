@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes, ArticleUnavailableError } from '../services/article-fetcher.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -837,9 +837,13 @@ router.post('/', async (req, res) => {
         articleData = await fetchArticleContent(url);
       } catch (fetchError) {
         // The fetcher's own message says why (a bot check, an HTTP error), so the Add tab can
-        // show it instead of a generic failure. Nothing is stored.
+        // show it instead of a generic failure. Nothing is stored. When no copy of the article
+        // was found, archive_submit_url lets the user make one on archive.ph and add it again.
         console.error('Article fetch failed:', fetchError);
-        return res.status(502).json({ error: `Could not fetch this article. ${(fetchError as Error).message}` });
+        return res.status(502).json({
+          error: `Could not fetch this article. ${(fetchError as Error).message}`,
+          ...(fetchError instanceof ArticleUnavailableError ? { archive_submit_url: fetchError.archiveSubmitUrl } : {}),
+        });
       }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;
