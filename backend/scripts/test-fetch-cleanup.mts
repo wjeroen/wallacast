@@ -2,8 +2,9 @@
 //   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
 //       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
 //       Substack notes and blog post boxes, (0e) page-layout styles, (0f) print-hidden
-//       parts and empty video players, and (0g) consent gates, login forms, captchas and
-//       empty pages, all on small fixtures (no network)
+//       parts and empty video players, (0g) consent gates, login forms, captchas and
+//       empty pages, and (0h) paid previews and archive.ph timemaps, all on small fixtures
+//       (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -40,7 +41,10 @@ import {
   hasNoText,
   dpgPrivacyGateCallback,
   archiveSubmitUrl,
+  isPaidPreview,
+  storyTextChars,
 } from '../src/services/article-fetcher.js';
+import { newestArchiveCopy } from '../src/services/url-guard.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
 const ld = (json: string) =>
@@ -414,6 +418,44 @@ const dir = process.argv[2];
 
   assert.equal(archiveSubmitUrl(article), 'https://archive.ph/?run=1&url=' + encodeURIComponent(article), 'the archive.ph link carries the address');
   console.log('✅ Consent gates, login forms, captchas and empty pages');
+}
+
+// --- 0h. Paid previews without a selector, and archive.ph timemaps -------------------
+// HLN+ (2026-10-07): `NewsArticle.isAccessibleForFree: false` without hasPart, the intro and a
+// list of teaser links in the story box. De Morgen names its paid part `.paywall` and ships it.
+{
+  const ld = (free: string, part = '') =>
+    `<script type="application/ld+json">{"@type":"NewsArticle","isAccessibleForFree":${free}${part}}</script>`;
+  const teasers = Array.from({ length: 17 }, (_, i) => `<a href="/a${i}"><p>Een ander artikel met een lange titel nummer ${i}</p></a>`).join('');
+  const intro = '<p>' + 'De argwaan tegenover AI is niet kleiner geworden. '.repeat(5) + '</p>';
+  const hlnPreview = `<html><head>${ld('false')}</head><body><main><article>${intro}${teasers}</article></main></body></html>`;
+  assert.ok(storyTextChars(hlnPreview) < 400, 'teaser links do not count as story text');
+  assert.equal(isPaidPreview(hlnPreview), true, 'a paid page without a selector and only an intro is a preview');
+  const fullStory = '<p>' + 'Een volledige alinea uit het betalende artikel. '.repeat(60) + '</p>';
+  const hlnFull = hlnPreview.replace(intro, intro + fullStory);
+  assert.equal(isPaidPreview(hlnFull), false, 'the same page with the whole story is not');
+  assert.equal(isPaidPreview(hlnPreview.replace(ld('false'), ld('true'))), false, 'a free article is never a preview');
+  assert.equal(isPaidPreview(hlnPreview.replace(ld('false'), ld('"False"'))), true, 'the flag may be a string in any case');
+  const shipped = `<html><head>${ld('false', ',"hasPart":{"@type":"WebPageElement","isAccessibleForFree":false,"cssSelector":".paywall"}')}</head>`
+    + `<body><article>${intro}<div class="paywall">${fullStory}</div></article></body></html>`;
+  assert.equal(isPaidPreview(shipped), false, 'a page that ships its named paid part is not a preview');
+  assert.equal(isPaidPreview(shipped.replace(`<div class="paywall">${fullStory}</div>`, '')), true, 'without the named part it is');
+
+  const timemap = [
+    '<https://www.hln.be/binnenland/x~adfc0aaa/>; rel="original",',
+    '<http://archive.md/timegate/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="timegate",',
+    '<http://archive.md/20260113075854/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="first memento"; datetime="Tue, 13 Jan 2026 07:58:54 GMT",',
+    '<http://archive.md/20260203192713/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="last memento"; datetime="Tue, 03 Feb 2026 19:27:13 GMT",',
+    '<http://archive.md/timemap/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="self"; type="application/link-format"',
+  ].join('\n');
+  assert.equal(newestArchiveCopy(timemap), 'https://archive.ph/20260203192713/https://www.hln.be/binnenland/x~adfc0aaa/', 'the last memento, on archive.ph');
+  assert.equal(
+    newestArchiveCopy('<http://archive.md/20260113075854/https://a.be/x>; rel="first last memento"; datetime="x"'),
+    'https://archive.ph/20260113075854/https://a.be/x',
+    'a single copy is both first and last'
+  );
+  assert.equal(newestArchiveCopy('<https://a.be/x>; rel="original"'), null, 'a timemap without copies gives none');
+  console.log('✅ Paid previews without a selector, and archive.ph timemaps');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

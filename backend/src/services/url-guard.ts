@@ -287,26 +287,47 @@ export async function readerProxyMarkdown(
 
 // The newest archive.today copy of a page (archive.ph and its mirror domains). archive.ph keeps
 // the full text of paywalled articles, where the Wayback Machine holds what the site shows
-// anyone, often only the free preview (wsj.com, 2026-10-06). `/newest/<url>` redirects to the
-// newest snapshot and answers 404 when there is none (checked 2026-10-06), which returns null
-// here. The answer can also be a server placeholder instead of the snapshot, so the caller
-// checks it (isArchiveSnapshot). archive.ph limits automated requests: after a few in a row it
-// sent nginx's "Welcome to nginx" page and then nothing at all, so a 20s headers timeout keeps
-// a silent archive.ph from holding up a save. Returns the snapshot's address too, because an
-// archive copy is read like a pasted archive link (its own markup, its own base URL).
+// anyone, often only the free preview (wsj.com, 2026-10-06).
+//
+// The timemap comes first: a few hundred bytes listing every copy, or 404 when there is none
+// (null here). `/newest/<url>` would download the whole copy just to learn that (1.27 MB for one
+// WSJ copy). Each copy is a line `<http://archive.md/<timestamp>/<url>>; rel="...memento";
+// datetime="..."`, the newest one marked `last memento`. The copy is then fetched from
+// archive.ph itself, with 45 seconds to start answering, since archive.ph is often slow (a NYT
+// copy took over 20 seconds on Railway, 2026-10-07).
+//
+// archive.ph limits automated requests: after about 10 in 10 minutes from one address it answers
+// HTTP 429 with a captcha page, for about half an hour. The answer can also be a server
+// placeholder instead of the snapshot, so the caller checks it (isArchiveSnapshot). Returns the
+// snapshot's address too, because an archive copy is read like a pasted archive link (its own
+// markup, its own base URL).
+const ARCHIVE_PH_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' };
+
 export async function archiveTodayFetch(rawUrl: string): Promise<{ html: string; url: string } | null> {
   await assertPublicHttpUrl(rawUrl);
-  const res = await safeFetch(
-    `https://archive.ph/newest/${rawUrl}`,
-    { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' } },
-    5,
-    20_000
-  );
-  if (res.status === 404) return null;
+  const map = await safeFetch(`https://archive.ph/timemap/${rawUrl}`, { headers: ARCHIVE_PH_HEADERS }, 5, 20_000);
+  if (map.status === 404) return null;
+  if (!map.ok) {
+    throw new Error(`archive.ph timemap answered HTTP ${map.status}`);
+  }
+  const copyUrl = newestArchiveCopy(await map.text());
+  if (!copyUrl) return null;
+  const res = await safeFetch(copyUrl, { headers: ARCHIVE_PH_HEADERS }, 5, 45_000);
   if (!res.ok) {
     throw new Error(`archive.ph answered HTTP ${res.status}`);
   }
   return { html: await res.text(), url: res.url };
+}
+
+/** The archive.ph address of the newest copy in an archive.today timemap, or null when it lists none. */
+export function newestArchiveCopy(timemap: string): string | null {
+  const copies = timemap
+    .split('\n')
+    .filter(line => /rel="[^"]*\bmemento\b/.test(line))
+    .map(line => ({ url: line.match(/<([^>]+)>/)?.[1] || '', last: /rel="[^"]*\blast memento\b/.test(line) }))
+    .filter(copy => /^https?:\/\/archive\.[a-z]+\/\d{14}\//.test(copy.url));
+  const newest = copies.find(copy => copy.last) || copies[copies.length - 1];
+  return newest ? newest.url.replace(/^https?:\/\/archive\.[a-z]+\//, 'https://archive.ph/') : null;
 }
 
 // The newest Internet Archive (Wayback Machine) copy of a page, as the page's own HTML: the

@@ -1729,113 +1729,216 @@ export function readerMarkdownPage(md: { title: string | null; publishedTime: st
   return `<!DOCTYPE html><html><head>${head}</head><body><article>${markdownToHtml(md.markdown)}</article></body></html>`;
 }
 
+// A paid page without a selector for its paid part holds only its preview below this much
+// story text (see isPaidPreview). HLN+ ships 850 characters for an article of 5,132.
+const PAID_PREVIEW_MAX_STORY_CHARS = 1500;
+// A copy found for a paid preview must hold this much more story text than the preview did,
+// or it is the same preview again (archive copies of a paywall page exist too).
+const PAID_COPY_MIN_EXTRA_CHARS = 1000;
+
+/** Text characters inside root outside links, scripts and styles, whitespace not counted. */
+function nonLinkTextChars(root: Element): number {
+  let chars = 0;
+  const walker = root.ownerDocument.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('a, script, style, noscript')) continue;
+    chars += (node.nodeValue || '').replace(/\s+/g, '').length;
+  }
+  return chars;
+}
+
 /**
- * For a page whose bot wall stopped our own requests. Each step runs only when the one before
- * failed or answered with a bot-check page or a paywall preview (see isPaywallPreview):
- * 1. the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
- * 2. the newest Wayback Machine copy (the page's own HTML, author and date included),
- * 3. the newest archive.ph copy (the full text of paywalled articles, where the Wayback copy of
- *    a wsj.com article held only its first four paragraphs, 2026-10-06),
- * 4. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
- *    archives do not hold yet, but names no author).
- * Also for a login form or a page without text in place of the article (`wall` names which, for
- * the error). Throws an ArticleUnavailableError when none of them yields the article, so a
- * bot-check page, a login form or the first paragraphs of a paywalled article are never stored
- * as the article. Returns the HTML and the address to read it as: the article's own, or the
- * archive.ph snapshot's, since an archive.ph copy has its own markup and links and is read
- * exactly like a pasted archive link.
+ * How much reader text the page's story holds: the most non-link text of any `<article>`,
+ * `<main>` or schema.org articleBody box, else of the body. Link text never counts, because
+ * menus and lists of other articles are links: on HLN's article page the story box counts 850
+ * characters (the intro, the byline, labels) and its 17 teaser links count nothing.
+ */
+export function storyTextChars(html: string): number {
+  const doc = new JSDOM(html).window.document;
+  const boxes = Array.from(doc.querySelectorAll('article, main, [itemprop="articleBody"]'));
+  if (boxes.length === 0) return doc.body ? nonLinkTextChars(doc.body) : 0;
+  return Math.max(...boxes.map(nonLinkTextChars));
+}
+
+/**
+ * True when the page is a paid article and holds only its preview: either isPaywallPreview (the
+ * paid part named by its selector is missing), or a JSON-LD node says `isAccessibleForFree`
+ * false (a boolean, or a string in any case) without naming the paid part, and the story holds
+ * under 1,500 characters. HLN+ marks its articles that second way and ships only the intro
+ * (2026-10-07). Sites that ship the whole paid part and hide it with CSS (smh.com.au, axios.com,
+ * demorgen.be) are never previews.
+ */
+export function isPaidPreview(html: string): boolean {
+  if (!/isAccessibleForFree/i.test(html)) return false;
+  if (isPaywallPreview(html)) return true;
+  const doc = new JSDOM(html).window.document;
+  let paid = false;
+  let named = false;
+  const visit = (node: any): void => {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!node || typeof node !== 'object') return;
+    const free = node.isAccessibleForFree;
+    if (free === false || String(free).toLowerCase() === 'false') {
+      paid = true;
+      if (typeof node.cssSelector === 'string') named = true;
+    }
+    Object.values(node).forEach(visit);
+  };
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    try {
+      visit(JSON.parse(script.textContent || ''));
+    } catch {
+      // A malformed block says nothing about a paywall
+    }
+  });
+  return paid && !named && storyTextChars(html) < PAID_PREVIEW_MAX_STORY_CHARS;
+}
+
+type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
+
+/**
+ * For a page that is not the article: a bot-check page, a login form, a page without text, or
+ * the preview of a paid article (`wall` names which). It looks for another copy, each step
+ * running only when the one before failed or gave a copy that is no good:
+ * - the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
+ * - the newest Wayback Machine copy (the page's own HTML, author and date included),
+ * - the newest archive.ph copy (the full text of paywalled articles, where the Wayback copy of
+ *   a wsj.com article held only its first four paragraphs, 2026-10-06),
+ * - the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
+ *   archives do not hold yet, but names no author).
+ * For a paid preview archive.ph goes first, since it is the step that holds paid text, and the
+ * reader proxy's Markdown is left out, because nothing in it shows whether it is the preview
+ * again. A copy is no good when it is a bot-check page, a login form, a page without text or a
+ * paid preview, and for a paid preview also when it holds less than 1,000 characters more story
+ * than the preview (`previewChars`).
+ *
+ * Throws an ArticleUnavailableError when no step yields the article, so none of these pages is
+ * ever stored as the article. Returns the HTML and the address to read it as: the article's own,
+ * or the archive.ph snapshot's, since an archive.ph copy has its own markup and links and is
+ * read exactly like a pasted archive link.
  */
 async function fetchPastBotWall(
   url: string,
-  wall: 'bot check' | 'login' | 'no text' = 'bot check'
+  wall: Wall = 'bot check',
+  previewChars = 0
 ): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
   // Why a copy is no good, or null when it is
-  const unusable = (html: string): string | null =>
-    isBotCheckPage(html) ? 'bot-check page'
-      : isLoginWall(html) ? 'login form'
-        : hasNoText(html) ? 'no text'
-          : isPaywallPreview(html) ? 'paywall preview'
-            : null;
+  const unusable = (html: string): string | null => {
+    if (isBotCheckPage(html)) return 'bot-check page';
+    if (isLoginWall(html)) return 'login form';
+    if (hasNoText(html)) return 'no text';
+    if (isPaidPreview(html)) return 'paywall preview';
+    if (wall === 'paywall' && storyTextChars(html) < previewChars + PAID_COPY_MIN_EXTRA_CHARS) return 'the same preview';
+    return null;
+  };
 
-  console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
-  try {
-    const html = await readerProxyFetch(url);
-    const problem = unusable(html);
-    if (problem) {
+  const readerHtml = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
+    try {
+      const html = await readerProxyFetch(url);
+      const problem = unusable(html);
+      if (!problem) {
+        console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
+        return { html, pageUrl: url };
+      }
       console.log(`[Fetcher] Reader proxy HTML is no good: ${problem}`);
       tried.push(`reader proxy HTML: ${problem}`);
-    } else {
-      console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
-      return { html, pageUrl: url };
+    } catch (error: any) {
+      console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
+      tried.push(`reader proxy HTML: ${error.message}`);
     }
-  } catch (error: any) {
-    console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
-    tried.push(`reader proxy HTML: ${error.message}`);
-  }
+    return null;
+  };
 
-  console.log('[Fetcher] Trying the newest Wayback Machine copy');
-  try {
-    const snapshot = await waybackSnapshotFetch(url);
-    const problem = snapshot ? unusable(snapshot.html) : null;
-    if (!snapshot) {
-      console.log('[Fetcher] The Wayback Machine holds no copy of this page');
-      tried.push('Wayback Machine: no copy');
-    } else if (problem) {
+  const wayback = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the newest Wayback Machine copy');
+    try {
+      const snapshot = await waybackSnapshotFetch(url);
+      if (!snapshot) {
+        console.log('[Fetcher] The Wayback Machine holds no copy of this page');
+        tried.push('Wayback Machine: no copy');
+        return null;
+      }
+      const problem = unusable(snapshot.html);
+      if (!problem) {
+        console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
+        return { html: snapshot.html, pageUrl: url };
+      }
       console.log(`[Fetcher] The Wayback copy from ${snapshot.timestamp} is no good: ${problem}`);
       tried.push(`Wayback Machine: ${problem}`);
-    } else {
-      console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
-      return { html: snapshot.html, pageUrl: url };
+    } catch (error: any) {
+      console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
+      tried.push(`Wayback Machine: ${error.message}`);
     }
-  } catch (error: any) {
-    console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
-    tried.push(`Wayback Machine: ${error.message}`);
-  }
+    return null;
+  };
 
-  // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
-  if (!isArchiveMirrorUrl(url)) {
+  const archivePh = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
+    if (isArchiveMirrorUrl(url)) return null;
     console.log('[Fetcher] Trying the newest archive.ph copy');
     try {
       const copy = await archiveTodayFetch(url);
       if (!copy) {
         console.log('[Fetcher] archive.ph holds no copy of this page');
         tried.push('archive.ph: no copy');
-      } else if (!/id="CONTENT"/.test(copy.html)) {
+        return null;
+      }
+      if (!/id="CONTENT"/.test(copy.html)) {
         // The snapshot box isArchiveSnapshot() looks for, checked here without a second parse
         const pageTitle = (copy.html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim().slice(0, 80);
         console.log(`[Fetcher] archive.ph answered "${pageTitle}" instead of a snapshot`);
         tried.push(`archive.ph: "${pageTitle}" instead of a snapshot`);
-      } else {
+        return null;
+      }
+      const problem = unusable(copy.html);
+      if (!problem) {
         console.log(`[Fetcher] Using the archive.ph copy ${copy.url}: ${copy.html.length} bytes of HTML`);
         return { html: copy.html, pageUrl: copy.url };
       }
+      console.log(`[Fetcher] The archive.ph copy is no good: ${problem}`);
+      tried.push(`archive.ph: ${problem}`);
     } catch (error: any) {
       console.log(`[Fetcher] archive.ph failed: ${error.message}`);
       tried.push(`archive.ph: ${error.message}`);
     }
-  }
+    return null;
+  };
 
-  console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
-  try {
-    const md = await readerProxyMarkdown(url);
-    if (md.title && BOT_CHECK_TITLE.test(md.title)) {
-      console.log('[Fetcher] Reader proxy Markdown is the bot-check page too');
-      tried.push('reader proxy Markdown: bot-check page');
-    } else {
+  const readerMarkdown = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
+    try {
+      const md = await readerProxyMarkdown(url);
+      if (md.title && BOT_CHECK_TITLE.test(md.title)) {
+        console.log('[Fetcher] Reader proxy Markdown is the bot-check page too');
+        tried.push('reader proxy Markdown: bot-check page');
+        return null;
+      }
       console.log(`[Fetcher] Using the reader proxy Markdown: ${md.markdown.length} characters, title "${md.title || '(none)'}"`);
       return { html: readerMarkdownPage(md), pageUrl: url };
+    } catch (error: any) {
+      console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
+      tried.push(`reader proxy Markdown: ${error.message}`);
     }
-  } catch (error: any) {
-    console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
-    tried.push(`reader proxy Markdown: ${error.message}`);
+    return null;
+  };
+
+  const steps = wall === 'paywall'
+    ? [archivePh, wayback, readerHtml]
+    : [readerHtml, wayback, archivePh, readerMarkdown];
+  for (const step of steps) {
+    const found = await step();
+    if (found) return found;
   }
 
   console.log(`[Fetcher] No way past the ${wall}: ${tried.join(' | ')}`);
   const reason = wall === 'login' ? 'This article is behind a login'
     : wall === 'no text' ? 'This page has no article text'
-      : 'This site blocks automated reading with a bot check';
-  throw new ArticleUnavailableError(`${reason}, and no other copy of the article could be found.`, url);
+      : wall === 'paywall' ? 'This article is behind a paywall'
+        : 'This site blocks automated reading with a bot check';
+  const copy = wall === 'paywall' ? 'no copy with the full text could be found' : 'no other copy of the article could be found';
+  throw new ArticleUnavailableError(`${reason}, and ${copy}.`, url);
 }
 
 export async function fetchArticleContent(url: string): Promise<ArticleContent> {
@@ -1863,10 +1966,34 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // The address the page is read as: the article's own, or the archive.ph snapshot's when the
     // bot-wall routes ended there (see fetchPastBotWall).
     let pageUrl = url;
-    const pastBotWall = async (wall: 'bot check' | 'login' | 'no text' = 'bot check') => {
-      const copy = await fetchPastBotWall(url, wall);
+    const pastBotWall = async (wall: Wall = 'bot check', previewChars = 0) => {
+      const copy = await fetchPastBotWall(url, wall, previewChars);
       pageUrl = copy.pageUrl;
       return copy.html;
+    };
+    // A page the site itself answered with may still not be the article: a bot check, a login
+    // form, a page without text, or the preview of a paid article. Each goes to the other copies.
+    const checkSitePage = async (page: string, status: number): Promise<string> => {
+      if (isBotCheckPage(page)) {
+        console.log(`[Fetcher] HTTP ${status} but the page is a bot check`);
+        return pastBotWall();
+      }
+      if (isLoginWall(page)) {
+        console.log(`[Fetcher] HTTP ${status} but the page is a login form`);
+        return pastBotWall('login');
+      }
+      if (hasNoText(page) && !isSubstackPage(page)) {
+        // A consent page that could not be passed, or a page built entirely by scripts. Not a
+        // Substack page: a note can carry its text in the page data only.
+        console.log(`[Fetcher] HTTP ${status} but the page has no text`);
+        return pastBotWall('no text');
+      }
+      if (isPaidPreview(page)) {
+        const previewChars = storyTextChars(page);
+        console.log(`[Fetcher] HTTP ${status} but the page is the preview of a paid article (${previewChars} characters of story)`);
+        return pastBotWall('paywall', previewChars);
+      }
+      return page;
     };
 
     let html: string;
@@ -1886,18 +2013,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
           console.log(`[Fetcher] The privacy gate let nothing through (HTTP ${passed.status})`);
         }
       }
-      if (isBotCheckPage(html)) {
-        console.log(`[Fetcher] HTTP ${response.status} but the page is a bot check`);
-        html = await pastBotWall();
-      } else if (isLoginWall(html)) {
-        console.log(`[Fetcher] HTTP ${response.status} but the page is a login form`);
-        html = await pastBotWall('login');
-      } else if (hasNoText(html) && !isSubstackPage(html)) {
-        // A consent page that could not be passed, or a page built entirely by scripts. Not a
-        // Substack page: a note can carry its text in the page data only.
-        console.log(`[Fetcher] HTTP ${response.status} but the page has no text`);
-        html = await pastBotWall('no text');
-      }
+      html = await checkSitePage(html, response.status);
     } else if (response.status === 403) {
       // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
       // does, seen live 2026-09-03). One retry with browser-like headers usually gets the
@@ -1915,12 +2031,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
         console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
         html = await pastBotWall();
-      } else if (isBotCheckPage(retry.body)) {
-        console.log(`[Fetcher] Browser-like retry got HTTP ${retry.statusCode} but the page is a bot check`);
-        html = await pastBotWall();
       } else {
-        console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
-        html = retry.body;
+        console.log(`[Fetcher] Browser-like retry answered HTTP ${retry.statusCode}`);
+        html = await checkSitePage(retry.body, retry.statusCode);
       }
     } else {
       // Other bot walls answer with another status and their own bot-check page. DataDome on
