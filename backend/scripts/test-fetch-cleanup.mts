@@ -3,8 +3,8 @@
 //       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
 //       Substack notes and blog post boxes, (0e) page-layout styles, (0f) print-hidden
 //       parts and empty video players, (0g) consent gates, login forms, captchas and
-//       empty pages, and (0h) paid previews and archive.ph timemaps, all on small fixtures
-//       (no network)
+//       empty pages, (0h) paid previews and archive.ph timemaps, and (0i) teaser copies and
+//       the error without an archive link, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -43,6 +43,8 @@ import {
   archiveSubmitUrl,
   isPaidPreview,
   storyTextChars,
+  copyProblem,
+  noCopyError,
 } from '../src/services/article-fetcher.js';
 import { newestArchiveCopy } from '../src/services/url-guard.js';
 
@@ -456,6 +458,48 @@ const dir = process.argv[2];
   );
   assert.equal(newestArchiveCopy('<https://a.be/x>; rel="original"'), null, 'a timemap without copies gives none');
   console.log('✅ Paid previews without a selector, and archive.ph timemaps');
+}
+
+// --- 0i. Teaser copies, and the error without an archive link ----------------------
+// The shape of archive.ph's copies of Knack articles (2026-10-07): the JSON-LD block kept but
+// emptied, so the paid flag is gone. A paid article's story box holds only the title, the
+// byline and a note on letters to the editor, its subscribe box sits after the footer.
+{
+  const story = (body: string) => '<html><head><script type="application/ld+json"></script><title>Knack</title></head><body><div id="CONTENT">'
+    + '<article><h1>Frankrijk is de nieuwe zieke man van Europa</h1><div>Ewald Pironet Senior writer 10:19 2 min leestijd</div>'
+    + body
+    + '<div>Reageren op dit artikel kan u door een e-mail te sturen naar <a href="mailto:x">lezersbrieven@knack.be</a>. Uw reactie wordt dan mogelijk meegenomen in het volgende nummer.</div></article>'
+    + '<footer><div>' + 'Knack is er voor mensen met een lenige geest. Kritisch, doordacht, diepgaand. '.repeat(20) + '</div></footer>'
+    + '<div>Wil je dit artikel verder lezen? Neem een Knack abonnement. Volledige digitale toegang tot alle artikels.</div></div></body></html>';
+  const teaser = story('');
+  const paragraph = (n: number) => '<div>' + 'Een volledige zin uit het gratis artikel over de superrijken. '.repeat(n) + '</div>';
+  const free = story(paragraph(70));
+  const problem = copyProblem(teaser, 'bot check');
+  assert.equal(problem?.preview, true, 'a copy with only a title and a byline is a preview');
+  assert.match(problem?.reason || '', /^too short \(\d+ characters of story\)$/, 'and the log says how short');
+  assert.equal(copyProblem(free, 'bot check'), null, 'the same copy with the whole story is the article');
+  assert.equal(copyProblem(free, 'login'), null, 'whatever wall sent us there');
+  const login = '<html><head><title>Knack</title></head><body><form><input type="password"></form></body></html>';
+  assert.deepEqual(copyProblem(login, 'bot check'), { reason: 'login form', preview: false }, 'a wall page is no preview');
+  const longer = story(paragraph(25));
+  assert.ok(storyTextChars(longer) > 1000 && storyTextChars(longer) < 1850, 'a copy just over the minimum');
+  assert.equal(copyProblem(longer, 'bot check'), null, 'passes on its own');
+  assert.match(copyProblem(longer, 'paywall', 850)?.reason || '', /^the same preview/, 'but not 1,000 characters past an 850-character preview');
+
+  const knack = 'https://www.knack.be/nieuws/wereld/europa/frankrijk-is-de-nieuwe-zieke-man-van-europa-kan-belgie-besmet-raken/';
+  const onlyPreview = noCopyError(knack, 'bot check', true);
+  assert.equal(
+    onlyPreview.message,
+    "This site blocks automated reading with a bot check, and archive.ph's copy holds only a preview of the article. Knack sends paid articles only to subscribers.",
+    'a preview on archive.ph says so, and names Knack'
+  );
+  assert.equal(onlyPreview.archiveSubmitUrl, null, 'and offers no archive link');
+  const hln = noCopyError('https://www.hln.be/binnenland/x~adfc0aaa/', 'paywall', true);
+  assert.equal(hln.message, "This article is behind a paywall, and archive.ph's copy holds only a preview of the article.", 'other sites get no Knack note');
+  const noCopy = noCopyError(knack, 'login', false);
+  assert.equal(noCopy.message, 'This article is behind a login, and no other copy of the article could be found.', 'without a copy the message stays');
+  assert.equal(noCopy.archiveSubmitUrl, archiveSubmitUrl(knack), 'and offers the archive link');
+  console.log('✅ Teaser copies, and the error without an archive link');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

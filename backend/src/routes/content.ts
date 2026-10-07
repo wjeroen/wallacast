@@ -854,11 +854,14 @@ router.post('/', async (req, res) => {
       } catch (fetchError) {
         // The fetcher's own message says why (a bot check, an HTTP error), so the Add tab can
         // show it instead of a generic failure. Nothing is stored. When no copy of the article
-        // was found, archive_submit_url lets the user make one on archive.ph and add it again.
+        // was found, archive_submit_url lets the user make one on archive.ph and add it again
+        // (left out when archive.ph's copy is only a preview).
         console.error('Article fetch failed:', fetchError);
         return res.status(502).json({
           error: `Could not fetch this article. ${(fetchError as Error).message}`,
-          ...(fetchError instanceof ArticleUnavailableError ? { archive_submit_url: fetchError.archiveSubmitUrl } : {}),
+          ...(fetchError instanceof ArticleUnavailableError && fetchError.archiveSubmitUrl
+            ? { archive_submit_url: fetchError.archiveSubmitUrl }
+            : {}),
         });
       } finally {
         if (progressId) clearFetchProgress(progressId);

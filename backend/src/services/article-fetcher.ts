@@ -1663,13 +1663,15 @@ export function archiveSubmitUrl(url: string): string {
  * A fetch that found no usable copy of the article (a bot check, a login form, or a page
  * without text, with no other copy anywhere). Carries the archive.ph address that makes a copy,
  * so the Add tab can offer it: once archive.ph holds a copy, adding the article again finds it.
+ * Without `offerArchive` it carries none, for when archive.ph's own copy is only a preview and
+ * a new copy would very likely be the same.
  */
 export class ArticleUnavailableError extends Error {
-  readonly archiveSubmitUrl: string;
-  constructor(message: string, url: string) {
+  readonly archiveSubmitUrl: string | null;
+  constructor(message: string, url: string, offerArchive = true) {
     super(message);
     this.name = 'ArticleUnavailableError';
-    this.archiveSubmitUrl = archiveSubmitUrl(url);
+    this.archiveSubmitUrl = offerArchive ? archiveSubmitUrl(url) : null;
   }
 }
 
@@ -1735,6 +1737,11 @@ const PAID_PREVIEW_MAX_STORY_CHARS = 1500;
 // A copy found for a paid preview must hold this much more story text than the preview did,
 // or it is the same preview again (archive copies of a paywall page exist too).
 const PAID_COPY_MIN_EXTRA_CHARS = 1000;
+// Any copy from another source needs this much story text, or it is a teaser or an empty
+// shell. archive.ph empties a page's JSON-LD, so isPaidPreview cannot see the paid flag in its
+// copies: the archive.ph copy of a paid Knack article holds 324 characters of story (title,
+// byline, a note on letters to the editor) where a free one holds 4,564 (2026-10-07).
+const MIN_COPY_STORY_CHARS = 1000;
 
 /** Text characters inside root outside links, scripts and styles, whitespace not counted. */
 function nonLinkTextChars(root: Element): number {
@@ -1794,7 +1801,7 @@ export function isPaidPreview(html: string): boolean {
   return paid && !named && storyTextChars(html) < PAID_PREVIEW_MAX_STORY_CHARS;
 }
 
-type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
+export type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
 
 /**
  * Reports what a slow fetch is doing, in words for the person waiting (the Add tab shows them
@@ -1817,6 +1824,45 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
   promise.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
 
 /**
+ * Why a copy from another source is not the article, or null when it is. `preview` is true when
+ * the copy holds too little story to be the article (a paid preview, a teaser), and false when
+ * it is a wall page of its own.
+ */
+export function copyProblem(html: string, wall: Wall, previewChars = 0): { reason: string; preview: boolean } | null {
+  if (isBotCheckPage(html)) return { reason: 'bot-check page', preview: false };
+  if (isLoginWall(html)) return { reason: 'login form', preview: false };
+  if (hasNoText(html)) return { reason: 'no text', preview: false };
+  if (isPaidPreview(html)) return { reason: 'paywall preview', preview: true };
+  const story = storyTextChars(html);
+  if (story < MIN_COPY_STORY_CHARS) return { reason: `too short (${story} characters of story)`, preview: true };
+  if (wall === 'paywall' && story < previewChars + PAID_COPY_MIN_EXTRA_CHARS) {
+    return { reason: `the same preview (${story} characters of story)`, preview: true };
+  }
+  return null;
+}
+
+/**
+ * The error when no source has the article. When archive.ph's copy was only a preview, a new
+ * copy would very likely be the same, so the error says that instead of offering the archive
+ * link. Knack sends the text of a paid article only to subscribers: in a real browser without a
+ * subscription its paid part is empty (2026-10-07), so no archive gets it either.
+ */
+export function noCopyError(url: string, wall: Wall, archivePhPreview: boolean): ArticleUnavailableError {
+  const reason = wall === 'login' ? 'This article is behind a login'
+    : wall === 'no text' ? 'This page has no article text'
+      : wall === 'paywall' ? 'This article is behind a paywall'
+        : 'This site blocks automated reading with a bot check';
+  if (archivePhPreview) {
+    let host = '';
+    try { host = new URL(url).hostname; } catch { /* the note below is left out */ }
+    const knack = host === 'knack.be' || host.endsWith('.knack.be') ? ' Knack sends paid articles only to subscribers.' : '';
+    return new ArticleUnavailableError(`${reason}, and archive.ph's copy holds only a preview of the article.${knack}`, url, false);
+  }
+  const copy = wall === 'paywall' ? 'no copy with the full text could be found' : 'no other copy of the article could be found';
+  return new ArticleUnavailableError(`${reason}, and ${copy}.`, url);
+}
+
+/**
  * For a page that is not the article: a bot-check page, a login form, a page without text, or
  * the preview of a paid article (`wall` names which). It looks for another copy, each step
  * running only when the one before failed or gave a copy that is no good:
@@ -1828,9 +1874,10 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
  *   archives do not hold yet, but names no author).
  * For a paid preview archive.ph goes first, since it is the step that holds paid text, and the
  * reader proxy's Markdown is left out, because nothing in it shows whether it is the preview
- * again. A copy is no good when it is a bot-check page, a login form, a page without text or a
- * paid preview, and for a paid preview also when it holds less than 1,000 characters more story
- * than the preview (`previewChars`).
+ * again. A copy is no good when it is a bot-check page, a login form, a page without text, a
+ * paid preview, or holds under 1,000 characters of story (a teaser), and for a paid preview also
+ * when it holds less than 1,000 characters more story than the preview (`previewChars`). See
+ * copyProblem.
  *
  * The two archive searches start together the first time either one is needed, because each
  * can take 20 seconds (the Wayback search, and archive.ph's copy list when it is busy), and the
@@ -1838,7 +1885,8 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
  * reader proxy gets past never spends archive.ph's small request allowance.
  *
  * Throws an ArticleUnavailableError when no step yields the article, so none of these pages is
- * ever stored as the article. Returns the HTML and the address to read it as: the article's own,
+ * ever stored as the article (without the archive link when archive.ph's copy was only a
+ * preview, see noCopyError). Returns the HTML and the address to read it as: the article's own,
  * or the archive.ph snapshot's, since an archive.ph copy has its own markup and links and is
  * read exactly like a pasted archive link.
  */
@@ -1849,16 +1897,11 @@ async function fetchPastBotWall(
   onProgress: FetchProgress = () => {}
 ): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
+  // Set when archive.ph's copy is only a preview, so the error offers no archive link
+  let archivePhPreview = false;
   onProgress(WALL_PROGRESS[wall]);
   // Why a copy is no good, or null when it is
-  const unusable = (html: string): string | null => {
-    if (isBotCheckPage(html)) return 'bot-check page';
-    if (isLoginWall(html)) return 'login form';
-    if (hasNoText(html)) return 'no text';
-    if (isPaidPreview(html)) return 'paywall preview';
-    if (wall === 'paywall' && storyTextChars(html) < previewChars + PAID_COPY_MIN_EXTRA_CHARS) return 'the same preview';
-    return null;
-  };
+  const unusable = (html: string): string | null => copyProblem(html, wall, previewChars)?.reason ?? null;
 
   // Both archive searches, started together on first use
   let searches: { wayback: Promise<Settled<string | null>>; archivePh: Promise<Settled<string | null>> } | null = null;
@@ -1949,13 +1992,14 @@ async function fetchPastBotWall(
         tried.push(`archive.ph: "${pageTitle}" instead of a snapshot`);
         return null;
       }
-      const problem = unusable(copy.html);
+      const problem = copyProblem(copy.html, wall, previewChars);
       if (!problem) {
         console.log(`[Fetcher] Using the archive.ph copy ${copy.url}: ${copy.html.length} bytes of HTML`);
         return { html: copy.html, pageUrl: copy.url };
       }
-      console.log(`[Fetcher] The archive.ph copy is no good: ${problem}`);
-      tried.push(`archive.ph: ${problem}`);
+      if (problem.preview) archivePhPreview = true;
+      console.log(`[Fetcher] The archive.ph copy is no good: ${problem.reason}`);
+      tried.push(`archive.ph: ${problem.reason}`);
     } catch (error: any) {
       console.log(`[Fetcher] archive.ph failed: ${error.message}`);
       tried.push(`archive.ph: ${error.message}`);
@@ -1973,8 +2017,15 @@ async function fetchPastBotWall(
         tried.push('reader proxy Markdown: bot-check page');
         return null;
       }
+      const page = readerMarkdownPage(md);
+      const story = storyTextChars(page);
+      if (story < MIN_COPY_STORY_CHARS) {
+        console.log(`[Fetcher] Reader proxy Markdown is too short: ${story} characters of story`);
+        tried.push(`reader proxy Markdown: too short (${story} characters of story)`);
+        return null;
+      }
       console.log(`[Fetcher] Using the reader proxy Markdown: ${md.markdown.length} characters, title "${md.title || '(none)'}"`);
-      return { html: readerMarkdownPage(md), pageUrl: url };
+      return { html: page, pageUrl: url };
     } catch (error: any) {
       console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
       tried.push(`reader proxy Markdown: ${error.message}`);
@@ -1991,12 +2042,7 @@ async function fetchPastBotWall(
   }
 
   console.log(`[Fetcher] No way past the ${wall}: ${tried.join(' | ')}`);
-  const reason = wall === 'login' ? 'This article is behind a login'
-    : wall === 'no text' ? 'This page has no article text'
-      : wall === 'paywall' ? 'This article is behind a paywall'
-        : 'This site blocks automated reading with a bot check';
-  const copy = wall === 'paywall' ? 'no copy with the full text could be found' : 'no other copy of the article could be found';
-  throw new ArticleUnavailableError(`${reason}, and ${copy}.`, url);
+  throw noCopyError(url, wall, archivePhPreview);
 }
 
 export async function fetchArticleContent(url: string, onProgress: FetchProgress = () => {}): Promise<ArticleContent> {
