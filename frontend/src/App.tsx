@@ -27,6 +27,15 @@ type Page = 'main' | 'settings';
 // crash left it stuck on 'ready'. So pollOperationThenRefresh keys on BOTH fields for 'ready'.
 const GENERATION_IN_PROGRESS = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'];
 
+// Any job on the item still running: audio/transcript/refetch work (see above), a summary,
+// or summary audio. Takes a full item or the lean status row of POST /content/status.
+type JobStatus = Pick<ContentItem, 'generation_status' | 'current_operation' | 'summary_status' | 'summary_audio_status'>;
+function isItemBusy(s: JobStatus): boolean {
+  const gs = s.generation_status || '';
+  return GENERATION_IN_PROGRESS.includes(gs) || (gs === 'ready' && !!s.current_operation)
+    || s.summary_status === 'generating' || s.summary_audio_status === 'generating';
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
@@ -448,9 +457,20 @@ function App() {
   // lost the race (refetch takes >1s, transcription takes minutes) and never touched the store.
   // Refetch sets generation_status 'fetching' while it runs (then 'completed'/'failed'), so
   // this correctly waits it out just like audio/transcript generation.
+  // Items one of the pollers below is following, counted because an audio job and a
+  // summary can overlap. The open-item follower further down skips them, so no item is
+  // polled twice.
+  const appPolledRef = useRef(new Map<number, number>());
+  const markAppPolled = (id: number, on: boolean) => {
+    const count = (appPolledRef.current.get(id) || 0) + (on ? 1 : -1);
+    if (count > 0) appPolledRef.current.set(id, count);
+    else appPolledRef.current.delete(id);
+  };
+
   const pollOperationThenRefresh = (id: number) => {
     let tries = 0;
     const maxTries = 300; // ~10 minutes at 2s intervals
+    markAppPolled(id, true);
     const poll = async () => {
       tries++;
       try {
@@ -478,8 +498,10 @@ function App() {
         const response = await contentAPI.getById(id);
         setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
         useContentStore.getState().updateItem(id, response.data);
+        markAppPolled(id, false);
       } catch (err) {
         console.error('pollOperationThenRefresh failed:', err);
+        markAppPolled(id, false);
       }
     };
     // First tick immediately: the start endpoints set their in-progress status before
@@ -550,6 +572,7 @@ function App() {
       // the card badge and the LibraryTab poller kick in for player-started summaries too.
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_status: 'generating' } : prev));
       useContentStore.getState().updateItem(id, { summary_status: 'generating' });
+      markAppPolled(id, true);
       let tries = 0;
       const maxTries = generateTranscript ? 200 : 30; // transcription first can take many minutes
       // Poll the LEAN status endpoint (a few hundred bytes) instead of getById (which
@@ -575,9 +598,11 @@ function App() {
             const response = await contentAPI.getById(id);
             setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
             useContentStore.getState().updateItem(id, response.data);
+            markAppPolled(id, false);
           }
         } catch {
-          /* stop polling on error */
+          // Stop polling on error. The open-item follower takes over while the player shows it.
+          markAppPolled(id, false);
         }
       };
       setTimeout(poll, 3000);
@@ -594,6 +619,7 @@ function App() {
       await contentAPI.generateSummaryAudio(id);
       setCurrentContent(prev => (prev && prev.id === id ? { ...prev, summary_audio_status: 'generating' as const } : prev));
       useContentStore.getState().updateItem(id, { summary_audio_status: 'generating' });
+      markAppPolled(id, true);
       let tries = 0;
       const maxTries = 60;
       const poll = async () => {
@@ -609,9 +635,11 @@ function App() {
             const response = await contentAPI.getById(id);
             setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
             useContentStore.getState().updateItem(id, response.data);
+            markAppPolled(id, false);
           }
         } catch {
-          /* stop polling on error */
+          // Stop polling on error. The open-item follower takes over while the player shows it.
+          markAppPolled(id, false);
         }
       };
       setTimeout(poll, 3000);
@@ -625,6 +653,85 @@ function App() {
     if (!currentContent) return;
     startSummaryAudioGeneration(currentContent.id);
   };
+
+  // The stop button on the player's progress line (same call as a library card's)
+  const handleCancelGeneration = async () => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    try {
+      await contentAPI.cancelGeneration(id);
+      const response = await contentAPI.getById(id);
+      setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
+      useContentStore.getState().updateItem(id, response.data);
+    } catch (error) {
+      console.error('Failed to cancel generation:', error);
+    }
+  };
+
+  // The X on a red error box in the player. Same as a library card's: the box goes at
+  // once (player and card), then the server clears the stored error.
+  const handleDismissError = async (kind: 'generation' | 'summary' | 'summary_audio') => {
+    if (!currentContent) return;
+    const id = currentContent.id;
+    const cleared: Partial<ContentItem> = kind === 'summary_audio'
+      ? { summary_audio_status: 'idle', summary_audio_error: undefined }
+      : kind === 'summary'
+        ? { summary_status: 'idle', summary_error: undefined }
+        : { generation_status: 'idle', generation_error: undefined, current_operation: undefined, generation_progress: 0 };
+    setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...cleared } : prev));
+    useContentStore.getState().updateItem(id, cleared);
+    try {
+      await contentAPI.update(id, { [`dismiss_${kind}_error`]: true } as any);
+    } catch (error) {
+      console.error('Failed to dismiss error:', error);
+      refreshItem(id);
+    }
+  };
+
+  // Keeps the open item live while any job on it runs, whatever started the job: a library
+  // card, a bulk action, the Add tab's automatic generation, or a job already running when
+  // the item opened. Jobs started from the player have their own poller above, so their
+  // ids are skipped. Every 2 seconds the lean status goes into the player and the store,
+  // and when the job ends the full item is fetched once (new audio, transcript, summary).
+  // The store counts as a source because a library card's handlers only update the store.
+  const openId = currentContent?.id ?? null;
+  const openBusyInStore = useContentStore(s => {
+    const item = openId === null ? undefined : s.allItems.find(i => i.id === openId);
+    return !!item && isItemBusy(item);
+  });
+  const openBusy = openBusyInStore || (!!currentContent && isItemBusy(currentContent));
+  useEffect(() => {
+    if (openId === null || !openBusy) return;
+    let cancelled = false;
+    let timer = 0;
+    const tick = async () => {
+      if (!appPolledRef.current.has(openId)) {
+        try {
+          const status = (await contentAPI.getStatuses([openId])).data[0];
+          if (cancelled) return;
+          if (status) {
+            useContentStore.getState().updateItem(openId, status);
+            if (!isItemBusy(status)) {
+              const response = await contentAPI.getById(openId);
+              if (cancelled) return;
+              setCurrentContent(prev => (prev && prev.id === openId ? response.data : prev));
+              useContentStore.getState().updateItem(openId, response.data);
+              return;
+            }
+            setCurrentContent(prev => (prev && prev.id === openId ? { ...prev, ...status } : prev));
+          }
+        } catch (err) {
+          console.error('Open item status poll failed:', err);
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(tick, 2000);
+    };
+    timer = window.setTimeout(tick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [openId, openBusy]);
 
   const handleGenerateSummary = async (regenerate: boolean) => {
     if (!currentContent) return;
@@ -988,6 +1095,8 @@ function App() {
             onRemoveSummary={handleRemoveSummary}
             onGenerateSummaryAudio={handleGenerateSummaryAudio}
             onRegenerateTranscript={handleRegenerateTranscript}
+            onCancelGeneration={handleCancelGeneration}
+            onDismissError={handleDismissError}
             preferSummaryAudio={preferSummaryAudio}
             onSetPreferSummaryAudio={setPreferSummaryAudio}
             onContentUpdated={(updated) => setCurrentContent(updated)}

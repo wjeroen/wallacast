@@ -29,6 +29,8 @@ interface AudioPlayerProps {
   onRemoveSummary?: () => void;
   onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
+  onCancelGeneration?: () => void;
+  onDismissError?: (kind: 'generation' | 'summary' | 'summary_audio') => void;
   onContentUpdated?: (updated: ContentItem) => void;
   isDark: boolean;
   themeMode?: 'dark' | 'light' | 'system';
@@ -62,7 +64,7 @@ interface AudioPlayerProps {
 
 export function AudioPlayer({
   content, onClose, onRefetch, onGenerateAudio, onRemoveAudio, onGenerateSummary, onRemoveSummary,
-  onGenerateSummaryAudio, onRegenerateTranscript, initialTab,
+  onGenerateSummaryAudio, onRegenerateTranscript, onCancelGeneration, onDismissError, initialTab,
   onContentUpdated, isDark, themeMode, onCycleTheme,
   onTrackEnded, onSkipNextTrack, onSkipPrevTrack, hasNextTrack = false, hasPrevTrack = false,
   autoPlayToken = 0, openToken = 0, onPlayQueueItem,
@@ -927,6 +929,8 @@ export function AudioPlayer({
           onRemoveSummary={onRemoveSummary}
           onGenerateSummaryAudio={onGenerateSummaryAudio}
           onRegenerateTranscript={onRegenerateTranscript}
+          onCancelGeneration={onCancelGeneration}
+          onDismissError={onDismissError}
           onContentUpdated={onContentUpdated}
           themeMode={themeMode || (isDark ? 'dark' : 'light')}
           onCycleTheme={onCycleTheme || (() => {})}

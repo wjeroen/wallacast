@@ -53,6 +53,7 @@ import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
+import { GenerationStatus } from './GenerationStatus';
 import { collectTagCounts } from '../tags';
 import { loadCopyContentOptions } from '../copy-settings';
 import { Tag as TagIcon, Plus as PlusIcon } from 'lucide-react';
@@ -116,6 +117,8 @@ interface FullscreenPlayerProps {
   onRemoveSummary?: () => void;
   onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
+  onCancelGeneration?: () => void;
+  onDismissError?: (kind: 'generation' | 'summary' | 'summary_audio') => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
   onCycleTheme: () => void;
@@ -402,6 +405,8 @@ export function FullscreenPlayer({
   onRemoveSummary,
   onGenerateSummaryAudio,
   onRegenerateTranscript,
+  onCancelGeneration,
+  onDismissError,
   onContentUpdated,
   themeMode,
   onCycleTheme,
@@ -925,7 +930,8 @@ export function FullscreenPlayer({
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
     const isArticleOrText = content.type === 'article' || content.type === 'text';
-    const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
+    // Audio, transcript or alignment work in progress. A refetch ('fetching') makes no audio.
+    const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed', 'fetching'].includes(content.generation_status);
     const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
 
     // Tab order: Description (podcasts) · Read-along · Content · History · Summary · Queue
@@ -943,14 +949,14 @@ export function FullscreenPlayer({
       tabs.push('read-along');
     }
 
-    if ((content.summary || '').trim()) tabs.push('summary');
+    if ((content.summary || '').trim() || content.summary_status === 'generating') tabs.push('summary');
     // Queue is a listening feature: audio-less items hide it (the queue only
     // lists audio items and autoplay skips them, while the prev/next buttons
     // walk everything, so showing it there would just contradict the buttons).
     // Summary audio counts: a summary-audio-only item is a playable audio item.
     if (hasAnyAudio(content)) tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
+  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, content.summary_status, hasAlignment, versions.length, content.versions_count]);
 
   // Auto-select first available tab if current one disappeared.
   // NOTE: this condition is mirrored in the scroll-reset effect below (it
@@ -1916,6 +1922,9 @@ export function FullscreenPlayer({
         return (
           <div className="tab-content-display">
             {summaryAudioBanner}
+            {articleTweets.length === 0 && content.summary_status === 'generating' && (
+              <p className="no-content">Summary is being generated...</p>
+            )}
             <div className="summary-thread">
               {articleTweets.map((tweet, i) => (
                 <p key={`a-${i}`} className="summary-tweet">{tweet}</p>
@@ -2266,6 +2275,18 @@ export function FullscreenPlayer({
                 </>
               );
             })()}
+            {/* Running jobs with their progress bar, and failures with Retry, the same
+                lines a library card shows. App.tsx keeps `content` live while a job runs. */}
+            <GenerationStatus
+              item={content}
+              onCancelGeneration={() => onCancelGeneration?.()}
+              onGenerateAudio={(regenerate) => onGenerateAudio?.(regenerate)}
+              onRegenerateTranscript={() => onRegenerateTranscript?.()}
+              onRefetch={() => onRefetch?.()}
+              onGenerateSummary={(regenerate) => onGenerateSummary?.(regenerate)}
+              onGenerateSummaryAudio={() => onGenerateSummaryAudio?.()}
+              onDismissError={(kind) => onDismissError?.(kind)}
+            />
           </div>
         </div>
         <div className="fullscreen-header-buttons">
@@ -2553,10 +2574,6 @@ export function FullscreenPlayer({
             <SkipForward size={22} />
           </button>
         </div>
-        )}
-
-        {content.generation_status === 'failed' && content.generation_error && (
-          <div className="player-error-banner">{content.generation_error}</div>
         )}
 
         {resumeTargetTime > 0 && (
