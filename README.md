@@ -20,7 +20,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 - **File Upload → Audio**: Upload `.html`/`.htm` or Markdown (`.md`, `.txt`) files directly, treated exactly like articles
 - **Texts → Audio**: Paste Markdown, plain text, or HTML, converted to audio with read-along alignment
 - **Editable**: Articles and texts can be edited in a built-in Markdown editor (round-trips with Obsidian); every edit/refetch/restore is snapshotted to version history
-- **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper
+- **Podcasts → Text**: Subscribe to podcast feeds, episodes are auto-transcribed via Whisper. Chapter times in an episode's description jump to that moment
 - **Newsletters → Audio**: Subscribe to newsletter RSS feeds (Substack, blogs), articles treated like regular content with TTS
 - **Unified Library**: All content types appear in one library with playback position tracking
 - **Tags**: Tag any item from its card or the player (hashtag chips, tap to edit), filter the library by one or more tags, add or remove tags on a whole selection at once, rename or delete a tag across the library from Settings → Tags, and tags sync both ways with Wallabag

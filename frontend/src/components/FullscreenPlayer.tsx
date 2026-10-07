@@ -48,6 +48,7 @@ import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
+import { linkDescriptionTimestamps } from '../timestamps';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -676,6 +677,20 @@ export function FullscreenPlayer({
   // seeking without touching the trees.
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = playingSummaryAudio ? () => {} : onSeek;
+
+  // A podcast description with its chapter times as buttons (timestamps.ts). Only for the
+  // full episode: during summary audio the description stays plain text, and onSeekRef
+  // ignores taps anyway. The length limit is the loaded file's own duration (dynamically
+  // inserted ads can change it), else the stored duration, never the summary audio's.
+  const descriptionMaxSeconds = !playingSummaryAudio && Number.isFinite(duration) && duration > 0
+    ? duration
+    : content.duration || 0;
+  const descriptionHtml = useMemo(
+    () => playingSummaryAudio
+      ? safeDescriptionHtml
+      : linkDescriptionTimestamps(safeDescriptionHtml, descriptionMaxSeconds),
+    [safeDescriptionHtml, playingSummaryAudio, descriptionMaxSeconds]
+  );
 
   const readAlongParts = useMemo(() => {
     if (!isLLMAlignment || !parsedAlignment?.elements) return null;
@@ -1680,7 +1695,15 @@ export function FullscreenPlayer({
               <div
                 className="article-content"
                 style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}
-                dangerouslySetInnerHTML={{ __html: safeDescriptionHtml }}
+                onClick={(e) => {
+                  // A chapter time moves the episode there. onSeek never starts or pauses
+                  // playback, so a playing episode plays on and a paused one stays paused.
+                  const time = (e.target as HTMLElement).closest<HTMLElement>('.description-timestamp');
+                  if (!time) return;
+                  const seconds = Number(time.dataset.seconds);
+                  if (Number.isFinite(seconds)) onSeekRef.current(seconds);
+                }}
+                dangerouslySetInnerHTML={{ __html: descriptionHtml }}
               />
             ) : (
               <p className="no-content">No description available</p>

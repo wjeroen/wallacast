@@ -20,6 +20,8 @@ export interface FeedEpisode {
   author?: string;
   podcast_title?: string;
   podcast_id?: number | null;
+  // Set on items from the feed_items cache, whose description arrives shortened
+  feed_item_id?: number;
 }
 
 // Shared cards for the Feed tab. The same markup used to be copy-pasted in

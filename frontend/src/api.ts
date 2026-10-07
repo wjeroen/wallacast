@@ -100,7 +100,8 @@ export const contentAPI = {
       summary_audio_status: ContentItem['summary_audio_status'];
     }>>('/content/status', { ids }),
 
-  create: (data: Partial<ContentItem>) => api.post<ContentItem>('/content', data),
+  // feed_item_id: the Feed tab's cached row, whose full description the server copies
+  create: (data: Partial<ContentItem> & { feed_item_id?: number }) => api.post<ContentItem>('/content', data),
 
   update: (id: number, data: Partial<ContentItem>) =>
     api.patch<ContentItem>(`/content/${id}`, data),

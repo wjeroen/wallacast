@@ -690,6 +690,7 @@ router.post('/', async (req, res) => {
       comments,
       summary,
       comment_summary,
+      feed_item_id,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -703,6 +704,19 @@ router.post('/', async (req, res) => {
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    // An episode added from the Feed tab's cached list arrives with only the start of its
+    // description (getCachedFeedItems), so the full stored text is copied from feed_items.
+    // Articles keep the short version, their body is fetched from the page anyway. The join
+    // limits the lookup to this user's own feeds.
+    const feedItemId = Number(feed_item_id);
+    if (type === 'podcast_episode' && feed_item_id != null && Number.isInteger(feedItemId) && feedItemId > 0) {
+      const feedItem = await query(
+        `SELECT fi.description FROM feed_items fi JOIN podcasts p ON p.id = fi.feed_id
+         WHERE fi.id = $1 AND p.user_id = $2`,
+        [feedItemId, req.user!.userId]
+      );
+      if (feedItem.rows[0]?.description) finalDescription = feedItem.rows[0].description;
+    }
     // FIX 1: Initialize finalPreviewPicture with the value passed from frontend
     let finalPreviewPicture = preview_picture || null;
     let finalPublishedAt = published_at;

@@ -3856,6 +3856,19 @@ blockquote.twitter-tweet.tweet-quoted {
   text-decoration: underline;
 }
 
+/* A chapter time in a podcast description (timestamps.ts): a button that looks like the
+   description's links */
+.article-content .description-timestamp {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font: inherit;
+  color: #3b82f6;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .article-content ul,
 .article-content ol {
   margin: 1em 0;

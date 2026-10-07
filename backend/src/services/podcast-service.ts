@@ -639,6 +639,17 @@ function cleanHtmlEntities(text: string): string {
 
 // --- Feed Caching Functions ---
 
+// A cached item keeps up to 20,000 characters of its cleaned description. Long show notes
+// fit (Nerdland's monthly chapter lists stay under 4,000), while a feed that carries
+// whole posts in <description> (EA Forum, LessWrong, 40,000+) stays bounded. The raw text
+// is cut at twice that before cleaning, because escaped markup (&lt;p&gt;) shrinks when
+// decoded, and cleaning a whole post would cost time on every refresh.
+const FEED_DESCRIPTION_MAX_CHARS = 20_000;
+// The Feed tab list carries only the start of each description (its cards show the teaser,
+// and search reads the start). Adding an episode to the library copies the full stored text
+// (POST /api/content with feed_item_id).
+const FEED_LIST_DESCRIPTION_CHARS = 2_000;
+
 /**
  * Fetches RSS feed from network, parses items, and saves to database cache
  * Also cleans up old items (keeps only 100 most recent per feed)
@@ -699,13 +710,16 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const url = isAudioEnclosure ? null : link;
       const audio_url = isAudioEnclosure ? enclosureUrl : null;
 
-      // Truncate description to 2000 chars to prevent abuse
-      const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
+      const cleanedDescription = description
+        ? cleanDescription(description.substring(0, FEED_DESCRIPTION_MAX_CHARS * 2)).slice(0, FEED_DESCRIPTION_MAX_CHARS) || null
+        : null;
       const teaser = itemIndex < TEASER_REFRESH_ITEMS && !hasTeaser.has(guid.slice(0, 500))
         ? buildTeaser(title, description, extractPostContent(itemXml))
         : null;
 
-      // Insert into feed_items. ON CONFLICT refreshes the author and fills in a missing teaser.
+      // Insert into feed_items. ON CONFLICT refreshes the author, fills in a missing teaser,
+      // and takes the feed's description when it differs from the stored one (this also
+      // completes descriptions cached under an older, shorter limit).
       try {
         const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(
@@ -713,7 +727,10 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
            (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author, teaser)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author,
-             teaser = COALESCE(EXCLUDED.teaser, feed_items.teaser)
+             teaser = COALESCE(EXCLUDED.teaser, feed_items.teaser),
+             description = CASE
+               WHEN EXCLUDED.description IS NOT NULL AND EXCLUDED.description IS DISTINCT FROM feed_items.description
+               THEN EXCLUDED.description ELSE feed_items.description END
            RETURNING id`,
           [
             feedId,
@@ -721,7 +738,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             // title and guid are VARCHAR(500); some feeds emit very long guids (full URLs)
             // Truncate so one oversized item can't fail the whole insert.
             cleanHtmlEntities(title).slice(0, 500),
-            truncatedDescription,
+            cleanedDescription,
             url,
             audio_url,
             pubDate ? new Date(pubDate) : new Date(),
@@ -840,6 +857,16 @@ export async function refreshAllFeedsFromNetwork(userId: number): Promise<{ tota
   return { totalFeeds: feeds.length, totalItemsAdded };
 }
 
+// Every feed_items column except the full description, which is cut to the list length.
+// feed_item_id names the row for POST /api/content, apart from the content ids the app uses.
+const FEED_ITEM_LIST_COLUMNS = `
+        fi.id, fi.id AS feed_item_id, fi.feed_id, fi.item_type, fi.title,
+        LEFT(fi.description, ${FEED_LIST_DESCRIPTION_CHARS}) AS description,
+        fi.url, fi.audio_url, fi.published_at, fi.duration, fi.preview_picture, fi.guid,
+        fi.author, fi.teaser, fi.created_at, fi.updated_at,
+        p.title as podcast_show_name,
+        p.type as feed_type`;
+
 /**
  * Gets cached feed items from database
  * @param userId - User ID to filter by their subscribed feeds
@@ -852,10 +879,7 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
 
   if (feedId) {
     queryText = `
-      SELECT
-        fi.*,
-        p.title as podcast_show_name,
-        p.type as feed_type
+      SELECT ${FEED_ITEM_LIST_COLUMNS}
       FROM feed_items fi
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND fi.feed_id = $2
@@ -865,10 +889,7 @@ export async function getCachedFeedItems(userId: number, feedId?: number, limit:
     queryParams = [userId, feedId, limit, offset];
   } else {
     queryText = `
-      SELECT
-        fi.*,
-        p.title as podcast_show_name,
-        p.type as feed_type
+      SELECT ${FEED_ITEM_LIST_COLUMNS}
       FROM feed_items fi
       JOIN podcasts p ON fi.feed_id = p.id
       WHERE p.user_id = $1 AND p.is_subscribed = TRUE

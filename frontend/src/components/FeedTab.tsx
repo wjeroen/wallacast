@@ -229,6 +229,7 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
           type: 'podcast_episode',
           title: episode.title,
           description: episode.description,
+          feed_item_id: episode.feed_item_id,
           audio_url: episode.audio_url,
           podcast_id: show.podcastId ?? undefined,
           podcast_show_name: show.name,
