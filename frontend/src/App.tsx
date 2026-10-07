@@ -458,8 +458,13 @@ function App() {
         const status = statuses.data[0];
         // Push the cheap status fields into the store on EVERY tick, so the library card
         // shows the progress banner for player-started operations too. Cards render from
-        // the store, and it used to learn about the operation only at the very end.
-        if (status) useContentStore.getState().updateItem(id, status);
+        // the store, and it used to learn about the operation only at the very end. The
+        // open player gets them too, so its Transcript tab says the transcript is being
+        // made (and hides its Generate buttons) for as long as the job runs.
+        if (status) {
+          useContentStore.getState().updateItem(id, status);
+          setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...status } : prev));
+        }
         // 'ready' means the audio landed, but transcription/alignment may still be running,
         // so keep polling while current_operation is set (it goes NULL when the item rests).
         const gs = status?.generation_status || '';

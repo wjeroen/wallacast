@@ -1755,21 +1755,46 @@ export function FullscreenPlayer({
           // Podcast: show word-by-word transcript or status messages.
           // The word spans come from the memoized transcriptTree (built once per
           // transcript); read-state and clicks are handled imperatively above.
+          // A summary in progress for an episode without a transcript is the chained
+          // transcript + summary job, so its transcript is being made too.
+          const transcriptInProgress = isTranscribing
+            || (!hasTranscript && content.summary_status === 'generating');
           let podcastMessage: string | null = null;
-          if (isTranscribing) {
+          if (transcriptInProgress) {
             podcastMessage = 'Transcript is being generated... This may take a minute.';
           } else if (!hasAudio && isGenerating) {
             podcastMessage = 'Audio is being generated...';
           } else if (isAligning) {
             podcastMessage = 'Aligning content with audio...';
           } else if (!hasTranscript) {
-            podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
+            podcastMessage = 'No transcript available.';
           }
+          // The same actions as the menu's "Generate transcript" and "Generate summary"
+          // (which confirms first, then makes the transcript and the summary in one job)
+          const showGenerateButtons = !hasTranscript && !transcriptInProgress && hasAudio;
 
           return (
             <div className="tab-read-along-display">
               {podcastMessage ? (
-                <p className="no-content">{podcastMessage}</p>
+                <>
+                  <p className="no-content">{podcastMessage}</p>
+                  {showGenerateButtons && (
+                    <div className="transcript-generate-buttons">
+                      {onRegenerateTranscript && (
+                        <button className="refetch-button" onClick={onRegenerateTranscript}>
+                          <Captions size={16} />
+                          Generate transcript
+                        </button>
+                      )}
+                      {onGenerateSummary && !content.summary && (
+                        <button className="refetch-button" onClick={() => onGenerateSummary(false)}>
+                          <MessageSquareText size={16} />
+                          Generate transcript and summary
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
               ) : transcriptTree ? (
                 transcriptTree
               ) : (

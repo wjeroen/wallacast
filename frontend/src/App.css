@@ -4346,6 +4346,14 @@ blockquote.twitter-tweet.tweet-quoted {
   padding: 2rem;
 }
 
+/* "Generate transcript" buttons under a podcast's empty Transcript tab */
+.transcript-generate-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
 /* LLM Read-Along Elements */
 
 .read-along-element {
