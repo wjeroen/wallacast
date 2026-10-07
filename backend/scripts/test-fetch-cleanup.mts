@@ -1,7 +1,8 @@
 // Scratch test for the fetch cleanups in article-fetcher.ts:
 //   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
-//       comment areas, archive date and lead photo, and (0d) bot walls, paywall previews,
-//       Substack notes and blog post boxes, all on small fixtures (no network)
+//       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
+//       Substack notes and blog post boxes, and (0e) page-layout styles, all on small
+//       fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -31,6 +32,7 @@ import {
   isPaywallPreview,
   substackNote,
   blogPostBox,
+  stripLayoutStyles,
 } from '../src/services/article-fetcher.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
@@ -301,6 +303,34 @@ const dir = process.argv[2];
   assert.equal(blogPostBox(blog('<div class="post"><p>Short.</p></div>')), null, 'a box under 500 characters does not count');
 
   console.log('✅ Bot walls, paywall previews, Substack notes and blog post boxes');
+}
+
+// --- 0e. Page-layout styles a phone reader cannot carry ----------------------------
+{
+  const root = new JSDOM('<body>'
+    + '<div id="note" style="margin-right: 420px; max-width: var(--feed-page-width)"><p>Note</p></div>'
+    + '<div id="wrap" style="position: relative; padding-bottom: 56.25%; height: 0px; overflow: hidden">'
+    + '<img id="img" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%"></div>'
+    + '<p id="indent" style="margin-left: 40px; font-style: italic">Indented quote</p>'
+    + '<div id="wide" style="width: 680px; display: flex; white-space: nowrap; text-align: center">Wide</div>'
+    + '<div id="narrow" style="width: 50%; min-width: 120px; display: none">Hidden</div>'
+    + '<span id="pre" style="white-space: pre-wrap">a  b</span>'
+    + '<figure id="fig" style="width: 56.25%; float: right"><img src="x.png"></figure>'
+    + '<div id="only" style="position: absolute; top: 3px">x</div>'
+    + '</body>').window.document;
+  stripLayoutStyles(root.body);
+  const style = (id: string) => root.getElementById(id)!.getAttribute('style');
+  assert.equal(style('note'), 'max-width: var(--feed-page-width)', 'the 420px margin goes, max-width stays');
+  assert.equal(style('wrap'), 'overflow: hidden', 'the aspect-ratio wrapper loses its position, percentage padding and height');
+  assert.equal(style('img'), 'width: 100%; height: 100%', 'an image keeps its own size, not its position');
+  assert.equal(style('indent'), 'margin-left: 40px; font-style: italic', 'a small indent and text styling stay');
+  assert.equal(style('wide'), 'text-align: center', 'a desktop width, flex and nowrap go');
+  assert.equal(style('narrow'), 'width: 50%; min-width: 120px; display: none', 'a percentage width, a small min-width and display none stay');
+  assert.equal(style('pre'), 'white-space: pre-wrap', 'pre-wrap stays');
+  assert.equal(style('fig'), 'width: 56.25%', 'a figure keeps its percentage width, not its float');
+  assert.equal(root.getElementById('only')!.hasAttribute('style'), false, 'an emptied style attribute is removed');
+  assert.equal(root.body.textContent, 'NoteIndented quoteWideHiddena  bx', 'no text changes');
+  console.log('✅ Page-layout styles');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

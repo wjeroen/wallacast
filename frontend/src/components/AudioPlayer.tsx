@@ -368,7 +368,23 @@ export function AudioPlayer({
     pendingResumeSeekRef.current = startPosition > 0 ? startPosition : 0;
     resumeAttemptsRef.current = 0;
     setResumeFailedAt(0);
-    audio.src = audioSrc;
+    if (audioSrc) {
+      audio.src = audioSrc;
+    } else {
+      // No audio: drop the source. Assigning '' makes the browser load the page itself
+      // as audio and fail with "MEDIA_ELEMENT_ERROR: Empty src attribute", which
+      // handleError then reported to the backend as an [AudioError] for no reason.
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    // Loading a new source pauses the element WITHOUT firing 'pause' (HTML spec, the
+    // media element load algorithm only sets paused to true), so isPlaying stayed true:
+    // the button kept showing Pause, and pressing it called pause() on an element that
+    // was already paused, which does nothing, so nothing could ever play again
+    // (reported 2026-10-06: summary audio playing in the mini player, then opening
+    // another article). The autoplay and variant-swap resumes below play() again, and
+    // their 'play' event sets it back to true.
+    setIsPlaying(false);
 
     const storedSpeed = getStoredSpeed();
     audio.playbackRate = storedSpeed;

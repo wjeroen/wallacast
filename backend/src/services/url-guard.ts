@@ -251,6 +251,30 @@ export async function readerProxyMarkdown(
   return { title: field('Title'), publishedTime: field('Published Time'), markdown };
 }
 
+// The newest archive.today copy of a page (archive.ph and its mirror domains). archive.ph keeps
+// the full text of paywalled articles, where the Wayback Machine holds what the site shows
+// anyone, often only the free preview (wsj.com, 2026-10-06). `/newest/<url>` redirects to the
+// newest snapshot and answers 404 when there is none (checked 2026-10-06), which returns null
+// here. The answer can also be a server placeholder instead of the snapshot, so the caller
+// checks it (isArchiveSnapshot). archive.ph limits automated requests: after a few in a row it
+// sent nginx's "Welcome to nginx" page and then nothing at all, so a 20s headers timeout keeps
+// a silent archive.ph from holding up a save. Returns the snapshot's address too, because an
+// archive copy is read like a pasted archive link (its own markup, its own base URL).
+export async function archiveTodayFetch(rawUrl: string): Promise<{ html: string; url: string } | null> {
+  await assertPublicHttpUrl(rawUrl);
+  const res = await safeFetch(
+    `https://archive.ph/newest/${rawUrl}`,
+    { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' } },
+    5,
+    20_000
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`archive.ph answered HTTP ${res.status}`);
+  }
+  return { html: await res.text(), url: res.url };
+}
+
 // The newest Internet Archive (Wayback Machine) copy of a page, as the page's own HTML: the
 // `id_` form leaves out the archive's toolbar and keeps every link and image pointing at the
 // original site. For pages whose bot wall stops every live fetch. Returns null when the

@@ -4642,6 +4642,27 @@ blockquote.twitter-tweet.tweet-quoted {
   text-align: center;
 }
 
+/* Which audio is loaded (summary or full), a switch when the item has both */
+.fullscreen-progress-bar .audio-source-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 6px;
+  margin-right: -0.75rem;
+  background: none;
+  border: none;
+  color: var(--t3);
+}
+
+.fullscreen-progress-bar button.audio-source-btn {
+  cursor: pointer;
+}
+
+.fullscreen-progress-bar button.audio-source-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .fullscreen-progress-bar .progress-slider {
   flex: 1;
   height: 6px;

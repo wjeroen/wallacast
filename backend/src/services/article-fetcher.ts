@@ -1,6 +1,6 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch } from './url-guard.js';
+import { safeFetch, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackSnapshotFetch, archiveTodayFetch } from './url-guard.js';
 import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
 
 // --- EA Forum domain handling ---
@@ -240,6 +240,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
   const dom = new JSDOM(post.htmlBody);
   stripInlineColors(dom.window.document.body);
+  stripLayoutStyles(dom.window.document.body);
   normalizeTweetEmbeds(dom.window.document.body);
   return {
     title: post.title,
@@ -604,7 +605,109 @@ function cleanSubstackContent(contentEl: Element): void {
   contentEl.querySelectorAll('[data-component-name="ShareMenuDialog"]').forEach(el => el.remove());
 }
 
+// A note reply's plain-text body as paragraphs. The text is escaped, since a reply that says
+// "a < b" is not HTML.
+function noteReplyComment(raw: any): Comment {
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const content = String(raw.body || '')
+    .split(/\n\s*\n/).map(part => part.trim()).filter(Boolean)
+    .map(part => `<p>${escape(part).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    id: String(raw.id),
+    username: raw.name || 'Anonymous',
+    date: raw.date || undefined,
+    karma: raw.reaction_count || undefined,
+    content,
+  };
+}
+
+const NOTE_REPLY_MAX_REQUESTS = 30;
+
+/**
+ * The replies to a Substack note as a comment tree. A note page has no `/comments` page, but
+ * `substack.com/api/v1/reader/comment/<id>/replies` answers without a login (checked
+ * 2026-10-06). Each answer holds a page of reply branches, each a reply with a few of its own
+ * replies, plus `nextCursor` for the next page. That cursor only works with the cookies of the
+ * first answer (without them the same first page comes back), so they are sent along. A reply
+ * with more replies than its branch shows gets its own request. The parent of each reply is the
+ * last id in its `ancestor_path`. At most 30 requests per note, and a failure keeps what was
+ * collected so far.
+ */
+async function fetchSubstackNoteReplies(noteId: string): Promise<Comment[]> {
+  const raws = new Map<string, any>();
+  const cookies = new Map<string, string>();
+  let requests = 0;
+
+  const loadThread = async (id: string) => {
+    let cursor: string | undefined;
+    do {
+      if (requests >= NOTE_REPLY_MAX_REQUESTS) return;
+      requests++;
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const res = await safeFetch(`https://substack.com/api/v1/reader/comment/${id}/replies${query}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          ...(cookies.size ? { 'Cookie': Array.from(cookies, ([name, value]) => `${name}=${value}`).join('; ') } : {}),
+        },
+      });
+      for (const header of res.headers.raw()['set-cookie'] || []) {
+        const [pair] = header.split(';');
+        const eq = pair.indexOf('=');
+        if (eq > 0) cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+      }
+      if (!res.ok) throw new Error(`replies of ${id} answered HTTP ${res.status}`);
+      const data: any = await res.json();
+      const before = raws.size;
+      const add = (comment: any) => {
+        if (comment?.id != null && !raws.has(String(comment.id))) raws.set(String(comment.id), comment);
+      };
+      for (const branch of data?.commentBranches || []) {
+        add(branch?.comment);
+        for (const descendant of branch?.descendantComments || []) {
+          if (descendant?.type === 'comment') add(descendant.comment);
+        }
+      }
+      // A cursor that brings nothing new would loop forever
+      cursor = raws.size > before ? data?.nextCursor || undefined : undefined;
+    } while (cursor);
+  };
+
+  const parentOf = (raw: any) => String(raw.ancestor_path || '').split('.').filter(Boolean);
+  try {
+    await loadThread(noteId);
+    // A Map visits entries added during the loop, so replies found deeper get their turn too
+    for (const [id, raw] of raws) {
+      const shown = Array.from(raws.values()).filter(other => parentOf(other).pop() === id).length;
+      if ((raw.children_count || 0) > shown) await loadThread(id);
+    }
+  } catch (error: any) {
+    console.log(`[Fetcher] Note replies stopped early: ${error.message}`);
+  }
+
+  // Build the tree. A reply whose parent was not loaded (the request cap) hangs under its
+  // nearest loaded ancestor, or at the top.
+  const nodes = new Map<string, Comment>();
+  for (const [id, raw] of raws) {
+    if (raw.deleted || !String(raw.body || '').trim()) continue;
+    nodes.set(id, noteReplyComment(raw));
+  }
+  const top: Comment[] = [];
+  for (const [id, raw] of raws) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    const parentId = parentOf(raw).reverse().find(ancestor => ancestor !== noteId && nodes.has(ancestor));
+    const parent = parentId ? nodes.get(parentId) : undefined;
+    if (parent) (parent.replies ||= []).push(node);
+    else top.push(node);
+  }
+  console.log(`[Fetcher] Note replies: ${nodes.size} in ${requests} request(s), ${top.length} at the top`);
+  return top;
+}
+
 export interface SubstackNote {
+  id: string;
   title?: string;
   author?: string;
   publishedDate?: string;
@@ -626,7 +729,8 @@ export interface SubstackNote {
 export function substackNote(html: string, doc: Document, url: string): SubstackNote | null {
   let path = '';
   try { path = new URL(url).pathname; } catch { return null; }
-  if (!/\/note\/c-\d+/.test(path)) return null;
+  const id = path.match(/\/note\/c-(\d+)/)?.[1];
+  if (!id) return null;
 
   const comment = parseSubstackPreloads(html)?.feedData?.feedItem?.comment;
   const box = doc.querySelector('.FeedProseMirror');
@@ -696,7 +800,7 @@ export function substackNote(html: string, doc: Document, url: string): Substack
   const author = typeof comment?.name === 'string' && comment.name.trim() ? comment.name.trim() : undefined;
   const publishedDate = typeof comment?.date === 'string' ? comment.date : undefined;
   console.log(`[Fetcher] Substack note by ${author || '(unknown)'}, ${content.querySelectorAll('p').length} paragraph(s), ${comment?.attachments?.length || 0} attachment(s)`);
-  return { title, author, publishedDate, content };
+  return { id, title, author, publishedDate, content };
 }
 
 // --- SUBSTACK HELPERS END ---
@@ -969,6 +1073,77 @@ function stripInlineColors(root: Element | Document): void {
       .filter((d) => {
         const prop = d.split(':')[0].trim().toLowerCase();
         return prop !== 'color' && prop !== 'background-color';
+      });
+    if (kept.length > 0) el.setAttribute('style', kept.join('; '));
+    else el.removeAttribute('style');
+  });
+}
+
+// Elements whose inline sizing describes the media itself. The reader's CSS already caps and
+// unpositions images, and the Markdown export keeps a figure's percentage width.
+const MEDIA_TAGS = new Set(['img', 'picture', 'source', 'video', 'audio', 'iframe', 'svg', 'canvas', 'figure']);
+
+// The lengths in a CSS value, in px (em and rem as 16px, pt as 4/3 px). Percentages and
+// viewport units are reported separately, since they size against the site's own layout.
+function cssLengths(value: string): { px: number[]; relative: boolean } {
+  const px: number[] = [];
+  let relative = false;
+  for (const m of value.matchAll(/(-?\d*\.?\d+)(px|em|rem|pt|%|vw|vh|vmin|vmax)/gi)) {
+    const n = Math.abs(parseFloat(m[1]));
+    const unit = m[2].toLowerCase();
+    if (unit === 'px') px.push(n);
+    else if (unit === 'em' || unit === 'rem') px.push(n * 16);
+    else if (unit === 'pt') px.push(n * 4 / 3);
+    else relative = true;
+  }
+  return { px, relative };
+}
+
+/**
+ * Strip inline page-layout styles that a phone reader cannot carry. Sites set them for their
+ * own desktop layout: a Substack note's wrapper had `margin-right: 420px`, which pressed the
+ * text against the left edge on a phone (2026-10-06), and image wrappers use
+ * `position: relative; padding-bottom: 56.25%; height: 0`. A survey of 45 articles
+ * (2026-10-06, the newest item of 24 feeds, the Hacker News front page, and known odd pages)
+ * found these on 10 sites. Removed:
+ * - positioning: position, top, right, bottom, left, inset, z-index, transform, float,
+ * - multi-column and flex/grid layout: columns, and display flex/grid (blocks stack instead),
+ * - white-space: nowrap (one line that scrolls sideways), while pre, pre-wrap, pre-line stay,
+ * - margins and paddings with a percentage, a viewport unit, or a length over 48px
+ *   (small ones stay, so an indent of 40px survives),
+ * - on anything but media: widths over 320px and fixed heights.
+ * Everything else stays: text styling, max-width, overflow, display none (hidden content), and
+ * the sizes of images, figures and other media. Only `style` attributes change, never the text.
+ */
+export function stripLayoutStyles(root: Element | Document): void {
+  root.querySelectorAll('[style]').forEach((el) => {
+    const style = el.getAttribute('style');
+    if (!style) return;
+    const isMedia = MEDIA_TAGS.has(el.tagName.toLowerCase());
+    const kept = style
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .filter((d) => {
+        const colon = d.indexOf(':');
+        if (colon < 0) return true;
+        const prop = d.slice(0, colon).trim().toLowerCase();
+        const value = d.slice(colon + 1).trim().toLowerCase();
+        if (/^(position|top|right|bottom|left|inset|z-index|transform|float|columns|column-count|column-width)$/.test(prop)) return false;
+        if (prop === 'display' && /\b(flex|grid)\b/.test(value)) return false;
+        if (prop === 'white-space' && value.startsWith('nowrap')) return false;
+        if (/^(margin|padding)(-(top|right|bottom|left|block|inline)(-(start|end))?)?$/.test(prop)) {
+          const { px, relative } = cssLengths(value);
+          return !relative && px.every((n) => n <= 48);
+        }
+        if (!isMedia && (prop === 'width' || prop === 'min-width')) {
+          const { px, relative } = cssLengths(value);
+          return !/v(w|h|min|max)/.test(value) && (relative || px.every((n) => n <= 320));
+        }
+        if (!isMedia && /^(min-|max-)?height$/.test(prop)) {
+          return cssLengths(value).px.length === 0 && !/v(h|w|min|max)/.test(value);
+        }
+        return true;
       });
     if (kept.length > 0) el.setAttribute('style', kept.join('; '));
     else el.removeAttribute('style');
@@ -1431,12 +1606,16 @@ export function readerMarkdownPage(md: { title: string | null; publishedTime: st
  * failed or answered with a bot-check page or a paywall preview (see isPaywallPreview):
  * 1. the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
  * 2. the newest Wayback Machine copy (the page's own HTML, author and date included),
- * 3. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
- *    archive does not hold yet, but names no author).
+ * 3. the newest archive.ph copy (the full text of paywalled articles, where the Wayback copy of
+ *    a wsj.com article held only its first four paragraphs, 2026-10-06),
+ * 4. the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
+ *    archives do not hold yet, but names no author).
  * Throws when none of them yields the article, so a bot-check page or the first paragraphs of
- * a paywalled article are never stored as the article.
+ * a paywalled article are never stored as the article. Returns the HTML and the address to
+ * read it as: the article's own, or the archive.ph snapshot's, since an archive.ph copy has
+ * its own markup and links and is read exactly like a pasted archive link.
  */
-async function fetchPastBotWall(url: string): Promise<string> {
+async function fetchPastBotWall(url: string): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
 
   console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
@@ -1450,7 +1629,7 @@ async function fetchPastBotWall(url: string): Promise<string> {
       tried.push('reader proxy HTML: paywall preview');
     } else {
       console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
-      return html;
+      return { html, pageUrl: url };
     }
   } catch (error: any) {
     console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
@@ -1471,11 +1650,34 @@ async function fetchPastBotWall(url: string): Promise<string> {
       tried.push('Wayback Machine: paywall preview');
     } else {
       console.log(`[Fetcher] Using the Wayback copy from ${snapshot.timestamp}: ${snapshot.html.length} bytes of HTML`);
-      return snapshot.html;
+      return { html: snapshot.html, pageUrl: url };
     }
   } catch (error: any) {
     console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
     tried.push(`Wayback Machine: ${error.message}`);
+  }
+
+  // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
+  if (!isArchiveMirrorUrl(url)) {
+    console.log('[Fetcher] Trying the newest archive.ph copy');
+    try {
+      const copy = await archiveTodayFetch(url);
+      if (!copy) {
+        console.log('[Fetcher] archive.ph holds no copy of this page');
+        tried.push('archive.ph: no copy');
+      } else if (!/id="CONTENT"/.test(copy.html)) {
+        // The snapshot box isArchiveSnapshot() looks for, checked here without a second parse
+        const pageTitle = (copy.html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim().slice(0, 80);
+        console.log(`[Fetcher] archive.ph answered "${pageTitle}" instead of a snapshot`);
+        tried.push(`archive.ph: "${pageTitle}" instead of a snapshot`);
+      } else {
+        console.log(`[Fetcher] Using the archive.ph copy ${copy.url}: ${copy.html.length} bytes of HTML`);
+        return { html: copy.html, pageUrl: copy.url };
+      }
+    } catch (error: any) {
+      console.log(`[Fetcher] archive.ph failed: ${error.message}`);
+      tried.push(`archive.ph: ${error.message}`);
+    }
   }
 
   console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
@@ -1486,7 +1688,7 @@ async function fetchPastBotWall(url: string): Promise<string> {
       tried.push('reader proxy Markdown: bot-check page');
     } else {
       console.log(`[Fetcher] Using the reader proxy Markdown: ${md.markdown.length} characters, title "${md.title || '(none)'}"`);
-      return readerMarkdownPage(md);
+      return { html: readerMarkdownPage(md), pageUrl: url };
     }
   } catch (error: any) {
     console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
@@ -1519,12 +1721,21 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('[Fetcher] Using simple fetch for standard scraping');
     const response = await safeFetch(url);
 
+    // The address the page is read as: the article's own, or the archive.ph snapshot's when the
+    // bot-wall routes ended there (see fetchPastBotWall).
+    let pageUrl = url;
+    const pastBotWall = async () => {
+      const copy = await fetchPastBotWall(url);
+      pageUrl = copy.pageUrl;
+      return copy.html;
+    };
+
     let html: string;
     if (response.ok) {
       html = await response.text();
       if (isBotCheckPage(html)) {
         console.log(`[Fetcher] HTTP ${response.status} but the page is a bot check`);
-        html = await fetchPastBotWall(url);
+        html = await pastBotWall();
       }
     } else if (response.status === 403) {
       // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
@@ -1542,10 +1753,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
         console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
-        html = await fetchPastBotWall(url);
+        html = await pastBotWall();
       } else if (isBotCheckPage(retry.body)) {
         console.log(`[Fetcher] Browser-like retry got HTTP ${retry.statusCode} but the page is a bot check`);
-        html = await fetchPastBotWall(url);
+        html = await pastBotWall();
       } else {
         console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
         html = retry.body;
@@ -1558,7 +1769,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       if (isBotCheckPage(body)) {
         const wall = response.headers.get('x-datadome') ? 'DataDome' : (response.headers.get('server') || 'unknown');
         console.log(`[Fetcher] HTTP ${response.status} with a bot-check page (${wall})`);
-        html = await fetchPastBotWall(url);
+        html = await pastBotWall();
       } else {
         console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -1572,7 +1783,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       console.log('[Fetcher] Detected Substack page (via substackcdn.com references)');
     }
 
-    const dom = new JSDOM(html, { url });
+    const dom = new JSDOM(html, { url: pageUrl });
     const doc = dom.window.document;
 
     // Read the schema.org JSON-LD author BEFORE the scripts are stripped below (it lives
@@ -1592,7 +1803,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // failed fetch: a refetch keeps the old body and the Add tab shows an error to retry. A long
     // answer without the box (an archive link that redirects on to the original site) is used
     // as before.
-    if (isArchiveMirrorUrl(url) && !isArchiveSnapshot(doc)) {
+    if (isArchiveMirrorUrl(pageUrl) && !isArchiveSnapshot(doc)) {
       const bodyChars = (doc.body?.textContent || '').trim().length;
       if (bodyChars < 1000) {
         const pageTitle = (doc.querySelector('title')?.textContent || '').trim().slice(0, 80);
@@ -1647,7 +1858,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // An archive.is copy's meta date is the moment of archiving. Prefer the date the archived
     // page itself shows (see archivedPublishedDate), and keep the archive time when it has none.
-    if (isArchiveMirrorUrl(url)) {
+    if (isArchiveMirrorUrl(pageUrl)) {
       const pageDate = archivedPublishedDate(doc, publishedDate);
       if (pageDate) {
         console.log(`[Fetcher] archive copy: publication date ${pageDate} from the page, not the archive time ${publishedDate || '(none)'}`);
@@ -1719,7 +1930,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // archive.is and friends rebuild a page as generic <div>s, so the mirrored copy has no
     // paragraphs at all. Restore them before the cleanup below runs.
-    if (contentEl && isArchiveMirrorUrl(url)) {
+    if (contentEl && isArchiveMirrorUrl(pageUrl)) {
       console.log('[Fetcher] archive mirror detected, restoring paragraphs');
       restoreArchivedParagraphs(contentEl);
 
@@ -1732,7 +1943,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       const leadSrc = leadFigure?.querySelector('img[src]')?.getAttribute('src');
       if (leadFigure && leadSrc) {
         try {
-          leadImageUrl = new URL(leadSrc, url).toString();
+          leadImageUrl = new URL(leadSrc, pageUrl).toString();
           console.log(`[Fetcher] archive copy: lead photo ${leadImageUrl} replaces the archive screenshot`);
         } catch {
           // An unparseable src keeps the screenshot as the thumbnail
@@ -1929,14 +2140,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         cleanSubstackContent(contentEl);
       }
 
-      // Resolve relative URLs in img/a/srcset to absolute, using the article URL
-      // as base. Sites like jefftk.com use root-relative paths ("/foo.jpg") that
+      // Resolve relative URLs in img/a/srcset to absolute, using the page's address
+      // (the article's, or the archive.ph snapshot's) as base. Sites like jefftk.com use root-relative paths ("/foo.jpg") that
       // would otherwise resolve against wallacast.com and 404. Done before dedup
       // so the seenImageSrcs Set sees the resolved URLs.
       const resolveUrl = (raw: string): string | null => {
         const trimmed = raw.trim();
         if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('#')) return null;
-        try { return new URL(trimmed, url).toString(); } catch { return null; }
+        try { return new URL(trimmed, pageUrl).toString(); } catch { return null; }
       };
       contentEl.querySelectorAll('img').forEach(img => {
         const src = img.getAttribute('src');
@@ -1985,6 +2196,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     flattenEmailTables(contentEl);
     stripInlineColors(contentEl);
+    stripLayoutStyles(contentEl);
     normalizeTweetEmbeds(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
@@ -1993,9 +2205,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let comments: Comment[] | undefined;
     let comment_source: string | undefined;
     let comment_count_total: number | undefined;
-    // A note's replies live elsewhere (a note page has no /comments page)
-    if (isSubstack && !note) {
-      comments = await fetchSubstackComments(url, html);
+    // A note's replies come from Substack's replies API (a note page has no /comments page)
+    if (isSubstack) {
+      comments = note ? await fetchSubstackNoteReplies(note.id) : await fetchSubstackComments(url, html);
       if (comments.length === 0) {
         comments = undefined;
       } else {

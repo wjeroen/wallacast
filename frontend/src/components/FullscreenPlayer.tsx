@@ -958,33 +958,46 @@ export function FullscreenPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, initialTab]);
 
-  // The default tab follows the audio actually PLAYING (user decision 2026-08-18):
-  // opening or advancing into an item whose effective audio is the summary snaps to
-  // the Summary tab (overriding tab persistence, since the read-along views would
-  // show text the playing audio does not narrate). Toggling the mode on an item
-  // with both audios flips between Summary and the item's normal default. Items
-  // playing their original audio keep the existing persistence behavior.
-  // NOTE: both branches below (playingVariant === 'summary', and the return-to-default
-  // when leaving summary playback) are mirrored in the scroll-reset effect below. Keep
-  // them in sync. prevTabFollowRef is written by a dedicated recorder effect DEFINED
-  // AFTER the scroll-reset effect, so this effect and the scroll-reset effect both read
-  // the true previous item/variant during the same commit.
-  const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
+  // The tab follows the summary audio once it actually PLAYS (user decisions 2026-08-18
+  // and 2026-10-06): when the summary audio starts, by Play, autoplay, or toggling the
+  // mode during playback, the player moves to the Summary tab, since the read-along
+  // views would show text that audio does not narrate. Opening an item whose audio
+  // would be the summary does NOT move it, so an item opened for reading stays on its
+  // normal tab until you press Play. It moves once per item, so a manual switch away
+  // while the summary plays sticks. When the audio becomes the original again (the mode
+  // toggled, or you moved on to an item playing its full audio, reported 2026-09-04: the
+  // next item stayed stuck on the Summary tab), a tab that this rule moved returns to
+  // the item's default.
+  // summaryFollowedId is STATE, not a ref, so the scroll-reset effect below reads the
+  // same value this effect decided from during the same commit.
+  // NOTE: followSummaryNow and leaveSummaryNow are mirrored in the scroll-reset effect.
+  const [summaryFollowedId, setSummaryFollowedId] = useState<number | null>(null);
+  const followSummaryNow = playingVariant === 'summary' && isPlaying && summaryFollowedId !== content.id;
+  const leaveSummaryNow = playingVariant === 'original' && summaryFollowedId !== null;
+  const followEffectItemRef = useRef<number | null>(null);
   useEffect(() => {
-    const prev = prevTabFollowRef.current;
-    if (playingVariant === 'summary') {
-      if (prev.id !== content.id || prev.variant !== 'summary') setActiveTab('summary');
+    const sameItem = followEffectItemRef.current === content.id;
+    followEffectItemRef.current = content.id;
+    if (followSummaryNow) {
+      setSummaryFollowedId(content.id);
+      // Play pressed on an open item: keep the tab's scroll for a switch back, then land
+      // where the summary audio is. On an item change the scroll-reset effect lands it.
+      if (sameItem && activeTab !== 'summary') {
+        if (tabContentRef.current) tabScrollPositions.current[activeTab] = tabContentRef.current.scrollTop;
+        setTimeout(() => {
+          if (autoScroll) snapSummaryRef.current();
+          else if (tabContentRef.current) tabContentRef.current.scrollTop = 0;
+        }, 100);
+      }
+      setActiveTab('summary');
       return;
     }
-    // Back on the original audio, either because the mode toggled on the SAME item or
-    // because we advanced from a summary-playing item into one playing its full audio
-    // (reported 2026-09-04: the next item stayed stuck on the Summary tab): return to
-    // the item's default tab.
-    if (prev.variant === 'summary' && playingVariant === 'original') {
-      setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+    if (playingVariant !== 'summary' && summaryFollowedId !== null) {
+      setSummaryFollowedId(null);
+      if (leaveSummaryNow) setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content.id, playingVariant]);
+  }, [content.id, playingVariant, isPlaying]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -1129,8 +1142,8 @@ export function FullscreenPlayer({
     let landingTab = activeTab;
     if (availableTabs.length > 0 && !availableTabs.includes(landingTab)) landingTab = availableTabs[0];
     if (initialTab === 'summary' && (content.summary || '').trim()) landingTab = 'summary';
-    if (playingVariant === 'summary') landingTab = 'summary';
-    else if (prevTabFollowRef.current.variant === 'summary' && playingVariant === 'original') {
+    if (followSummaryNow) landingTab = 'summary';
+    else if (leaveSummaryNow) {
       // Mirrors the follow-playing-summary effect's return-to-default branch.
       landingTab = content.type === 'podcast_episode' ? 'description' : 'read-along';
     }
@@ -1153,14 +1166,6 @@ export function FullscreenPlayer({
     // auto-scroll or switches tabs mid-item.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id]);
-
-  // Recorder for prevTabFollowRef, deliberately defined AFTER both effects that read it
-  // (follow-playing-summary and the scroll-reset above): React runs effects in definition
-  // order, so both readers see the PREVIOUS item/variant during the same commit and this
-  // then records the current one. KEEP LAST of this group.
-  useEffect(() => {
-    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
-  }, [content.id, playingVariant]);
 
   // Trigger scroll once when switching to read-along tab
   useEffect(() => {
@@ -2411,6 +2416,29 @@ export function FullscreenPlayer({
       <div className="fullscreen-player-controls">
         {playingVariant !== null && (
         <div className="fullscreen-progress-bar">
+          {(() => {
+            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
+            // for the full audio. With both audios it switches between them for this item
+            // only and keeps playing or paused, like the Summary tab banner's switch.
+            const isSummary = playingVariant === 'summary';
+            const SourceIcon = isSummary ? TAB_ICONS.summary : TAB_ICONS.content;
+            const canSwitch = !!(content.audio_url && content.summary_audio_url && onSelectAudioVariant);
+            const label = isSummary ? 'Summary audio' : 'Full audio';
+            return canSwitch ? (
+              <button
+                className="audio-source-btn"
+                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
+                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+              >
+                <SourceIcon size={16} />
+              </button>
+            ) : (
+              <span className="audio-source-btn" title={label} aria-label={label} role="img">
+                <SourceIcon size={16} />
+              </span>
+            );
+          })()}
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
             <input
