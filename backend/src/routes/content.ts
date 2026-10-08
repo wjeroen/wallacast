@@ -21,6 +21,8 @@ import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
 import { sourceUrls } from '../shared/format.js';
+import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
+import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -122,15 +124,16 @@ router.post('/status', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Read surface for outside tools (the Obsidian "Wallacast inbox" and "Import from
-// wallacast" commands, see implementation-plans/obsidian-article-import.md). These three
-// routes are the ONLY ones a read-only API token may call (services/api-tokens.ts). They
-// change nothing and trigger nothing: no audio, no summary, no fetch.
+// Read surface for outside tools (the Obsidian "Wallacast overview", "Wallacast import" and
+// "Wallacast import checked" commands, see implementation-plans/obsidian-article-import.md,
+// and API_TOKENS.md). An API token with read_library may call these three routes
+// (TOKEN_ROUTES in services/api-tokens.ts). They change nothing and trigger nothing: no
+// audio, no summary, no fetch.
 // ---------------------------------------------------------------------------
 
 // Lean library index: one small row per item, every item, newest first. Obsidian groups
 // and filters on its side. As lean as POST /status on purpose: GET / ships each item's full
-// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every inbox
+// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every overview
 // refresh (the 80GB-incident class of problem). Never content, html_content, comments,
 // transcript, transcript_words, tts_chunks, or content_alignment here. `url` and `alt_url`
 // are exactly what Copy content writes into `source` and `alt-source` (null for synthetic
@@ -375,6 +378,12 @@ router.post('/audio-error-log', (req, res) => {
 // partial state instead of corrupting it. This matches how PATCH /:id behaves.
 router.post('/bulk', async (req, res) => {
   try {
+    // An API token may only add existing tags, star and unstar, and every change it makes is
+    // logged so Settings can undo it (services/token-actions.ts).
+    if (req.apiToken) {
+      const r = await tokenBulk(req.apiToken, req.body);
+      return res.status(r.status).json(r.json);
+    }
     const userId = req.user!.userId;
     const { action, ids } = req.body as { action?: string; ids?: unknown };
 
@@ -649,6 +658,82 @@ router.post('/tags/remove', async (req, res) => {
 
 // Get single content item (includes large columns needed for display)
 // What a slow article fetch for the Add tab is doing (see services/fetch-progress.ts)
+// GET /preview?url= or ?feed_item_id= - Read an article without saving it: the page is fetched
+// exactly as an add would fetch it, and answered as the Markdown Copy content would give for
+// it under the caller's Copy & export settings. Nothing is stored. Meant for an API token that
+// helps decide what to add (a feed item's teaser is often too short to judge). For a token a
+// read counts against its item limits like an add, and a free url needs add_any (add_feed
+// tokens pass a feed_item_id). The read-only demo may not use it: it would make the public
+// demo an open fetcher. Defined before GET /:id.
+router.get('/preview', async (req, res) => {
+  try {
+    if (req.user!.demo) {
+      return res.status(403).json({ error: 'This action is not available in the read-only demo.', demo: true });
+    }
+    const token = req.apiToken;
+    let url: string | null = null;
+    if (req.query.feed_item_id !== undefined) {
+      const id = parsePositiveInt(req.query.feed_item_id);
+      if (!id) return res.status(400).json({ error: 'feed_item_id must be a positive whole number' });
+      const item = await lookupFeedItem(req.user!.userId, id);
+      if (!item) return res.status(404).json({ error: 'No item in your feeds has this feed_item_id' });
+      if (item.item_type !== 'article' || !item.url) {
+        return res.status(400).json({ error: 'Only feed articles have a page to read. An episode has its description in the feed.' });
+      }
+      url = item.url;
+    } else {
+      if (token && !token.permissions.includes('add_any')) {
+        return res.status(403).json({ error: 'This token may only read items from your feed. Send a feed_item_id.' });
+      }
+      url = parseHttpUrl(req.query.url);
+      if (!url) return res.status(400).json({ error: 'A url (http or https) or a feed_item_id is required' });
+    }
+    if (token) {
+      const reserved = await reserveItem(token, 'read', 'preview');
+      if (!reserved.ok) {
+        const r = limitRefusal(reserved);
+        return res.status(r.status).json({ error: r.error, ...r.extra });
+      }
+    }
+    let articleData;
+    try {
+      articleData = await fetchArticleContent(normalizeEAForumUrl(url));
+    } catch (fetchError) {
+      console.error('Preview fetch failed:', fetchError);
+      return res.status(502).json({
+        error: `Could not fetch this article. ${(fetchError as Error).message}`,
+        ...(fetchError instanceof ArticleUnavailableError && fetchError.archiveSubmitUrl
+          ? { archive_submit_url: fetchError.archiveSubmitUrl }
+          : {}),
+      });
+    }
+    // The row an add would have stored, shaped like MARKDOWN_ITEM_COLUMNS, never saved.
+    const now = new Date();
+    const row = {
+      id: 0, type: 'article', title: articleData.title || 'Untitled Article', url,
+      content: articleData.content, html_content: articleData.cleaned_html,
+      author: articleData.author || articleData.byline || null, description: articleData.excerpt || null,
+      audio_url: null, transcript: null, transcript_words: null, duration: null, podcast_id: null,
+      podcast_show_name: null, published_at: articleData.published_date || null, is_starred: false,
+      is_archived: false, tags: [], created_at: now, updated_at: now, karma: articleData.karma ?? null,
+      comments: articleData.comments || [], summary: null, comment_summary: null, summary_status: 'idle',
+      summary_audio_url: null, comment_count: articleData.comment_count_total || 0,
+    };
+    const markdown = renderItemMarkdown(row, await loadCopyContentOptions(req.user!.userId));
+    res.json({
+      title: row.title,
+      author: row.author,
+      published_at: row.published_at,
+      url,
+      comment_count: row.comment_count,
+      markdown,
+    });
+  } catch (error) {
+    console.error('Error reading an article without saving:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to read this article' });
+  }
+});
+
 router.get('/fetch-progress/:id', (req, res) => {
   const { id } = req.params;
   if (!isProgressId(id)) {
@@ -683,6 +768,20 @@ router.get('/:id', async (req, res) => {
 // Create new content item
 router.post('/', async (req, res) => {
   try {
+    // An API token sends only a url or a feed_item_id, plus existing tags. shapeTokenAdd turns
+    // that into the body the app itself would send, refuses what the token may not do (a free
+    // url without add_any, an address already in the library), and counts the add against the
+    // token's item limits. The rest of this route then runs as for the app.
+    const token = req.apiToken;
+    let tokenTags: string[] = [];
+    if (token) {
+      const shaped = await shapeTokenAdd(token, req.body);
+      if (!shaped.ok) {
+        return res.status(shaped.status).json({ error: shaped.error, ...(shaped.extra || {}) });
+      }
+      req.body = shaped.body;
+      tokenTags = shaped.tags;
+    }
     const {
       type,
       title,
@@ -968,11 +1067,33 @@ router.post('/', async (req, res) => {
     );
 
     const createdItem = result.rows[0];
-    
+
+    // An item a token added: the tags it set are logged like any tag it adds later, and what
+    // is generated follows the token's own choice (the app's auto-generation settings, or its
+    // own), each generation only when its minutes fit the token's limits. tokenReport tells
+    // the caller what started and what was skipped, and why.
+    if (token && tokenTags.length > 0) {
+      await logChanges(token, tokenTags.map((tag) => ({ itemId: createdItem.id, kind: 'tag_add' as const, tag })));
+    }
+    const tokenGen = token ? await resolveGeneration(token.userId, token.generation) : null;
+    const tokenReport: { started: string[]; skipped: Array<{ what: string; reason: string }> } = { started: [], skipped: [] };
+    const fitsTokenBudget = async (what: 'audio' | 'summary' | 'summary_audio' | 'transcript', minutes: number): Promise<boolean> => {
+      if (!token) return true;
+      const r = await reserveMinutes(token, minutes, what, createdItem.id);
+      if (r.ok) {
+        tokenReport.started.push(what);
+        return true;
+      }
+      tokenReport.skipped.push({ what, reason: r.message });
+      return false;
+    };
+    const itemMinutes = token ? textMinutes(String(processedContent || htmlContent || '').length + commentChars(extractedComments)) : 0;
+
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
-      const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
-      const shouldAutoGenerate = autoGenerateAudio === 'true';
+      const shouldAutoGenerate = tokenGen
+        ? tokenGen.audio
+        : (await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles')) === 'true';
 
       if (shouldAutoGenerate) {
         // Check max comment limit. Skip auto-generation if article has too many comments
@@ -982,6 +1103,9 @@ router.post('/', async (req, res) => {
 
         if (articleCommentCount > maxComments) {
           console.log(`Skipping auto-generation for ${createdItem.id}: ${articleCommentCount} comments exceeds max ${maxComments}`);
+          if (token) tokenReport.skipped.push({ what: 'audio', reason: `${articleCommentCount} comments is more than your maximum of ${maxComments} narrated comments` });
+        } else if (!(await fitsTokenBudget('audio', itemMinutes))) {
+          console.log(`Skipping auto-generation for ${createdItem.id}: over the token's minute limit`);
         } else {
         console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
@@ -1010,14 +1134,21 @@ router.post('/', async (req, res) => {
     // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
     // Skipped when the item arrived with its summary (Markdown import).
     if ((type === 'article' || type === 'text') && (processedContent || htmlContent) && !importedSummary) {
-      const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
-      if (autoGenerateSummary === 'true') {
+      const autoGenerateSummary = tokenGen
+        ? tokenGen.summary
+        : (await getUserSetting(req.user!.userId, 'auto_generate_summary')) === 'true';
+      if (autoGenerateSummary && (await fitsTokenBudget('summary', itemMinutes))) {
+        // For a token, summary audio is decided here rather than by the summarizer reading the
+        // setting, so its minutes count against the token too.
+        const summaryOptions = tokenGen
+          ? { generateAudio: tokenGen.summary_audio && (await fitsTokenBudget('summary_audio', SUMMARY_AUDIO_MINUTES)) }
+          : {};
         console.log(`Auto-generating summary for ${type} ${createdItem.id}`);
         await query(
           'UPDATE content_items SET summary_status = $1 WHERE id = $2',
           ['generating', createdItem.id]
         );
-        generateSummaryForContent(createdItem.id)
+        generateSummaryForContent(createdItem.id, summaryOptions)
           .then(() => console.log(`Summary generation finished for ${createdItem.id}`))
           .catch(async (error) => {
             console.error('Auto summary generation error:', error);
@@ -1031,10 +1162,10 @@ router.post('/', async (req, res) => {
 
     // Auto-generate transcript for podcast episodes
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
-      const autoTranscribe = await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
-      const shouldAutoTranscribe = autoTranscribe === null || autoTranscribe === 'true';
+      const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
+      const shouldAutoTranscribe = tokenGen ? tokenGen.transcribe : autoTranscribe === null || autoTranscribe === 'true';
 
-      if (shouldAutoTranscribe) {
+      if (shouldAutoTranscribe && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
 
         await query(
@@ -1070,6 +1201,23 @@ router.post('/', async (req, res) => {
       }
     }
 
+    if (token) {
+      // A token gets the item's id and identity, not its whole body: the Markdown endpoints
+      // serve the content, and an LLM caller should not receive the stored HTML.
+      console.log(`[ApiToken] token ${token.id} added item ${createdItem.id}: started=${tokenReport.started.join(',') || 'none'} skipped=${tokenReport.skipped.map((s) => s.what).join(',') || 'none'}`);
+      return res.status(201).json({
+        id: createdItem.id,
+        type: createdItem.type,
+        title: createdItem.title,
+        url: createdItem.url,
+        audio_url: createdItem.type === 'podcast_episode' ? createdItem.audio_url : null,
+        author: createdItem.author,
+        published_at: createdItem.published_at,
+        tags: createdItem.tags,
+        comment_count: createdItem.comment_count_total || 0,
+        generation: tokenReport,
+      });
+    }
     res.status(201).json(createdItem);
   } catch (error) {
     console.error('Error creating content item:', error);

@@ -9,7 +9,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
-import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI } from './api';
+import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
 import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio } from './format';
 import type { ContentItem } from './types';
 import './App.css';
@@ -233,6 +233,24 @@ function App() {
       // Silently fail - Wallabag is optional
       console.error('Failed to load Wallabag status:', err);
     }
+  };
+
+  // API tokens that hit a limit since the user last dismissed the notice. Loaded once per app
+  // load or login, never for the read-only demo. Kept with the user id, so a later login in
+  // the same tab never shows the previous user's notice.
+  const [tokenAlerts, setTokenAlerts] = useState<{ userId: number; alerts: TokenAlert[] } | null>(null);
+  const userId = user?.id;
+  const isDemoUser = !!user?.demo;
+  useEffect(() => {
+    if (!isAuthenticated || userId === undefined || isDemoUser) return;
+    authAPI.tokenAlerts()
+      .then(res => setTokenAlerts({ userId, alerts: res.data.alerts }))
+      .catch(err => console.error('Failed to load token limit alerts:', err));
+  }, [isAuthenticated, userId, isDemoUser]);
+  const shownTokenAlerts = tokenAlerts && tokenAlerts.userId === userId && !isDemoUser ? tokenAlerts.alerts : [];
+  const dismissTokenAlerts = () => {
+    setTokenAlerts(null);
+    authAPI.markTokenAlertsSeen().catch(err => console.error('Failed to dismiss token limit alerts:', err));
   };
 
   const handleSync = async () => {
@@ -989,6 +1007,16 @@ function App() {
         <div className="demo-banner">
           <span>You are browsing the read-only demo.</span>
           <button onClick={() => logout()}>Exit demo</button>
+        </div>
+      )}
+      {shownTokenAlerts.length > 0 && (
+        <div className="token-alert-banner">
+          <div className="token-alert-lines">
+            {shownTokenAlerts.map(a => (
+              <span key={a.id}>Token "{a.name}" hit a limit: {a.limit_hit}</span>
+            ))}
+          </div>
+          <button onClick={dismissTokenAlerts}>Dismiss</button>
         </div>
       )}
       {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}

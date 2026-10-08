@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, TokenPayload } from '../services/auth.js';
 import { isDatabaseReady } from '../database/db.js';
-import { isApiToken, authenticateApiToken, isReadTokenAllowed, touchApiToken } from '../services/api-tokens.js';
+import { isApiToken, authenticateApiToken, tokenRouteDecision, touchApiToken, type TokenPermission } from '../services/api-tokens.js';
+import type { TokenLimits, TokenGeneration } from '../services/token-limits.js';
 
 // Middleware to check if database is ready - returns 503 if not
 export function requireDatabaseReady(req: Request, res: Response, next: NextFunction) {
@@ -19,21 +20,28 @@ declare global {
   namespace Express {
     interface Request {
       user?: TokenPayload;
-      // Set only when the request was authenticated with a read-only API token (`wcr_...`),
-      // never for a JWT session. Routes that must stay JWT-only (token management) check it.
-      apiToken?: { id: number; scope: 'read' };
+      // Set only when the request was authenticated with an API token (`wcr_...`), never for
+      // a JWT session. Routes that must stay JWT-only (token management) check it, and routes
+      // a token may call read its permissions, limits and generation choice from it.
+      apiToken?: {
+        id: number;
+        userId: number;
+        name: string;
+        permissions: TokenPermission[];
+        limits: TokenLimits;
+        generation: TokenGeneration;
+      };
     }
   }
 }
 
-// Auth middleware - requires a valid access token (JWT) or a read-only API token.
+// Auth middleware - requires a valid access token (JWT) or an API token.
 //
-// Read-only API tokens (`wcr_...`, services/api-tokens.ts) take the first branch: the token
-// is looked up by hash, an unknown or revoked one is a 401, and then the allow-list decides.
-// A read token may call ONLY the library index and the Copy content Markdown endpoints.
-// Every other route, every other GET included, answers 403 { error: 'This token is read-only' }.
-// A valid token sets req.user like a normal session (never a demo session) plus req.apiToken.
-// The JWT path below is unchanged.
+// API tokens (`wcr_...`, services/api-tokens.ts) take the first branch: the token is looked
+// up by hash, an unknown or revoked one is a 401, and then TOKEN_ROUTES and the token's
+// permissions decide. A route missing from TOKEN_ROUTES, every other GET included, answers
+// 403. A valid token sets req.user like a normal session (never a demo session) plus
+// req.apiToken. The JWT path below is unchanged.
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
 
@@ -54,11 +62,19 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     if (auth === null) {
       return res.status(401).json({ error: 'Invalid or revoked API token' });
     }
-    if (!isReadTokenAllowed(req.method, req.originalUrl || '')) {
-      return res.status(403).json({ error: 'This token is read-only' });
+    const decision = tokenRouteDecision(auth.permissions, req.method, req.originalUrl || '');
+    if (!decision.allowed) {
+      return res.status(403).json({ error: decision.error });
     }
     req.user = { userId: auth.userId, username: auth.username };
-    req.apiToken = { id: auth.tokenId, scope: auth.scope };
+    req.apiToken = {
+      id: auth.tokenId,
+      userId: auth.userId,
+      name: auth.name,
+      permissions: auth.permissions,
+      limits: auth.limits,
+      generation: auth.generation,
+    };
     touchApiToken(auth.tokenId);
     return next();
   }

@@ -1,5 +1,5 @@
-// Scratch test for the server-side Copy content (services/markdown-export.ts), the URL
-// matcher (services/url-match.ts), and the read-token allow-list (services/api-tokens.ts).
+// Scratch test for the server-side Copy content (services/markdown-export.ts) and the URL
+// matcher (services/url-match.ts). API tokens have their own checks in test-api-tokens.mts.
 // Run from backend/:  npx tsx scripts/test-markdown-export.mts
 // Not wired into any build. Needs the frontend's node_modules too: the frontend module is
 // imported directly, so the two turndown installs render side by side.
@@ -554,42 +554,7 @@ assert.deepEqual(sourceUrls('wallacast://abc'), { source: null, altSource: null 
 assert.deepEqual(sourceUrls(null), { source: null, altSource: null });
 console.log('✅ archive originals and the source / alt-source pair');
 
-// ---- 5. read-token allow-list and token format ------------------------------------------
-const { isReadTokenAllowed, generateApiToken, isApiToken, hashApiToken } = await import('../src/services/api-tokens.ts');
-const allowed: Array<[string, string]> = [
-  ['GET', '/api/content/index'],
-  ['GET', '/api/content/index?x=1'],
-  ['GET', '/api/content/index/'],
-  ['GET', '/api/content/markdown?url=https%3A%2F%2Fa.b%2Fc'],
-  ['GET', '/api/content/123/markdown'],
-  ['HEAD', '/api/content/index'],
-];
-const denied: Array<[string, string]> = [
-  ['GET', '/api/content'],
-  ['GET', '/api/content/123'],
-  ['GET', '/api/content/123/export'],
-  ['GET', '/api/content/abc/markdown'],
-  ['GET', '/api/content/123/markdown/x'],
-  ['GET', '/api/content/tags/all'],
-  ['GET', '/api/users/settings'],
-  ['GET', '/api/auth/tokens'],
-  ['GET', '/api/auth/me'],
-  ['GET', '/api/wallabag/status'],
-  ['GET', '/api/queue'],
-  ['POST', '/api/content/index'],
-  ['POST', '/api/content/status'],
-  ['DELETE', '/api/content/123'],
-  ['PATCH', '/api/content/123'],
-  ['GET', ''],
-];
-for (const [m, p] of allowed) assert.ok(isReadTokenAllowed(m, p), `${m} ${p} must be allowed`);
-for (const [m, p] of denied) assert.ok(!isReadTokenAllowed(m, p), `${m} ${p} must be denied`);
-const tok = generateApiToken();
-assert.match(tok, /^wcr_[0-9a-f]{40}$/, 'token format');
-assert.ok(isApiToken(tok) && !isApiToken('eyJhbGciOiJIUzI1NiJ9.x.y'), 'token vs JWT detection');
-assert.match(hashApiToken(tok), /^[0-9a-f]{64}$/, 'sha256 hex');
-assert.notEqual(generateApiToken(), tok, 'random');
-console.log('✅ read-token allow-list and token format');
+// ---- 5. API token routes and format: see scripts/test-api-tokens.mts ------------------
 
 // ---- 6. file names inside the bulk Copy content zip ----------------------------------------
 const { markdownFileName, uniqueFileName } = backend;
@@ -611,4 +576,4 @@ assert.equal(uniqueFileName('A (2).md', used), 'A (2) (2).md', 'a real title tha
 assert.equal(uniqueFileName('B.md', used), 'B.md');
 console.log('✅ zip file names');
 
-console.log('\nALL MARKDOWN EXPORT / URL MATCH / TOKEN TESTS PASSED');
+console.log('\nALL MARKDOWN EXPORT / URL MATCH TESTS PASSED');

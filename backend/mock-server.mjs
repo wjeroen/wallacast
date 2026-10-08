@@ -43,15 +43,150 @@ app.post('/api/auth/register', (req, res) => res.json({ ...fakeTokens, user: fak
 app.post('/api/auth/refresh', (req, res) => res.json(fakeTokens));
 app.get('/api/auth/me', (req, res) => res.json({ user: fakeUser }));
 app.post('/api/auth/logout', (req, res) => res.json({ success: true }));
-// Read-only API tokens (Settings section). Fake tokens, kept in memory until the mock restarts,
-// so the one-time reveal and the token list can be previewed.
-const mockTokens = [];
-app.get('/api/auth/tokens', (req, res) => res.json({ tokens: mockTokens }));
+// API tokens (Settings section). Fake tokens, kept in memory until the mock restarts, with the
+// same validation as the real routes (routes/auth.ts), so the one-time reveal, the token list
+// and the editor can be previewed. "Preview token" starts with add, tag and star permissions,
+// made-up usage, a limit hit (the notice in the main view) and three changes. Any token that
+// gets the tag or star permission gets three fake changes too.
+const TOKEN_PERMISSIONS = ['read_library', 'feed', 'add_any', 'add_feed', 'tag', 'star'];
+const MAX_TOKEN_LIMITS = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000 };
+const TOKEN_GENERATION_KEYS = ['follow', 'audio', 'summary', 'summary_audio', 'transcribe'];
+const minutesAgo = (m) => new Date(Date.now() - m * 60000).toISOString();
+const zeroUsage = () => ({ items_hour: 0, items_2d: 0, minutes_hour: 0, minutes_2d: 0, changes_hour: 0 });
+
+function newMockToken(id, name) {
+  return {
+    id,
+    name,
+    created_at: new Date().toISOString(),
+    last_used_at: null,
+    permissions: ['read_library'],
+    limits: { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600 },
+    generation: { follow: true, audio: false, summary: false, summary_audio: false, transcribe: false },
+    usage_reset_at: null,
+    limit_hit: null,
+    limit_hit_at: null,
+    usage: zeroUsage(),
+    changes: null,
+    notice_seen_at: null,
+  };
+}
+
+function mockTokenChanges(t) {
+  if (!t.changes && (t.permissions.includes('tag') || t.permissions.includes('star'))) {
+    const base = t.id * 100;
+    t.changes = [
+      { id: base + 3, kind: 'tag_add', tag: 'ai-safety', content_item_id: 1, title: 'Fake article the token tagged', created_at: minutesAgo(5), undone_at: null },
+      { id: base + 2, kind: 'star', tag: null, content_item_id: 2, title: 'Fake article the token starred', created_at: minutesAgo(40), undone_at: null },
+      { id: base + 1, kind: 'unstar', tag: null, content_item_id: null, title: null, created_at: minutesAgo(180), undone_at: minutesAgo(90) },
+    ];
+  }
+  return t.changes || [];
+}
+
+// What PATCH answers: everything but usage and open_changes
+function mockTokenSettings(t) {
+  const { usage, changes, notice_seen_at, ...settings } = t;
+  return settings;
+}
+
+const mockTokens = [{
+  ...newMockToken(1, 'Preview token'),
+  created_at: minutesAgo(3 * 24 * 60),
+  last_used_at: minutesAgo(5),
+  permissions: ['read_library', 'feed', 'add_feed', 'tag', 'star'],
+  usage: { items_hour: 20, items_2d: 37, minutes_hour: 64.5, minutes_2d: 212.5, changes_hour: 2 },
+  limit_hit: 'This token reached its limit of 20 items per hour',
+  limit_hit_at: minutesAgo(12),
+}];
+const findMockToken = (req) => mockTokens.find(t => t.id === Number(req.params.id));
+
+// Newest first, like the real list
+app.get('/api/auth/tokens', (req, res) => res.json({
+  tokens: [...mockTokens].reverse().map(t => ({
+    ...mockTokenSettings(t),
+    usage: t.usage,
+    open_changes: mockTokenChanges(t).filter(c => !c.undone_at).length,
+  })),
+  max_limits: MAX_TOKEN_LIMITS,
+}));
 app.post('/api/auth/tokens', (req, res) => {
   const id = mockTokens.length ? Math.max(...mockTokens.map(t => t.id)) + 1 : 1;
   const name = req.body?.name || 'Token';
-  mockTokens.push({ id, name, created_at: new Date().toISOString(), last_used_at: null });
+  mockTokens.push(newMockToken(id, name));
   res.json({ id, name, token: 'wcr_' + '0123456789abcdef'.repeat(2) + '01234567' });
+});
+app.get('/api/auth/tokens/alerts', (req, res) => res.json({
+  alerts: mockTokens
+    .filter(t => t.limit_hit_at && (!t.notice_seen_at || t.limit_hit_at > t.notice_seen_at))
+    .map(t => ({ id: t.id, name: t.name, limit_hit: t.limit_hit, limit_hit_at: t.limit_hit_at })),
+}));
+app.post('/api/auth/tokens/alerts/seen', (req, res) => {
+  const now = new Date().toISOString();
+  mockTokens.forEach(t => { t.notice_seen_at = now; });
+  res.json({ success: true });
+});
+app.patch('/api/auth/tokens/:id', (req, res) => {
+  const t = findMockToken(req);
+  if (!t) return res.status(404).json({ error: 'Token not found' });
+  const { permissions, limits, generation } = req.body || {};
+  const next = { permissions: t.permissions, limits: { ...t.limits }, generation: { ...t.generation } };
+  if (permissions !== undefined) {
+    if (!Array.isArray(permissions)) return res.status(400).json({ error: 'permissions must be a list' });
+    const unknown = permissions.find(p => !TOKEN_PERMISSIONS.includes(p));
+    if (unknown !== undefined) return res.status(400).json({ error: `Unknown permission: ${unknown}` });
+    if (permissions.includes('add_any') && permissions.includes('add_feed')) {
+      return res.status(400).json({ error: 'Choose one of add_any and add_feed' });
+    }
+    next.permissions = TOKEN_PERMISSIONS.filter(p => permissions.includes(p));
+  }
+  if (limits !== undefined) {
+    if (!limits || typeof limits !== 'object' || Array.isArray(limits)) return res.status(400).json({ error: 'limits must be an object' });
+    for (const [key, v] of Object.entries(limits)) {
+      if (!(key in MAX_TOKEN_LIMITS)) return res.status(400).json({ error: `Unknown limit: ${key}` });
+      if (!Number.isInteger(v) || v < 0 || v > MAX_TOKEN_LIMITS[key]) {
+        return res.status(400).json({ error: `${key} must be a whole number from 0 to ${MAX_TOKEN_LIMITS[key]}` });
+      }
+      next.limits[key] = v;
+    }
+  }
+  if (generation !== undefined) {
+    if (!generation || typeof generation !== 'object' || Array.isArray(generation)) return res.status(400).json({ error: 'generation must be an object' });
+    for (const [key, v] of Object.entries(generation)) {
+      if (!TOKEN_GENERATION_KEYS.includes(key)) return res.status(400).json({ error: `Unknown generation setting: ${key}` });
+      if (typeof v !== 'boolean') return res.status(400).json({ error: `${key} must be true or false` });
+      next.generation[key] = v;
+    }
+  }
+  Object.assign(t, next);
+  res.json(mockTokenSettings(t));
+});
+app.post('/api/auth/tokens/:id/reset-usage', (req, res) => {
+  const t = findMockToken(req);
+  if (!t) return res.status(404).json({ error: 'Token not found' });
+  Object.assign(t, { usage: zeroUsage(), usage_reset_at: new Date().toISOString(), limit_hit: null, limit_hit_at: null });
+  res.json({ success: true });
+});
+app.get('/api/auth/tokens/:id/changes', (req, res) => {
+  const t = findMockToken(req);
+  res.json({ changes: t ? mockTokenChanges(t) : [] });
+});
+app.post('/api/auth/tokens/:id/changes/undo', (req, res) => {
+  const t = findMockToken(req);
+  const body = req.body || {};
+  const all = body.all === true;
+  if (!all && !(Array.isArray(body.ids) && body.ids.length > 0 && body.ids.every(n => Number.isInteger(n)))) {
+    return res.status(400).json({ error: 'Send { all: true } or { ids: [...] } (max 1000)' });
+  }
+  const now = new Date().toISOString();
+  let undone = 0;
+  for (const c of t ? mockTokenChanges(t) : []) {
+    if (!c.undone_at && (all || body.ids.includes(c.id))) {
+      c.undone_at = now;
+      undone++;
+    }
+  }
+  res.json({ undone });
 });
 app.delete('/api/auth/tokens/:id', (req, res) => {
   const i = mockTokens.findIndex(t => t.id === Number(req.params.id));

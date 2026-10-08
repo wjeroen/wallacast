@@ -281,6 +281,11 @@ export async function initializeDatabase() {
     const feedTeaserMigration = await fs.readFile(feedTeaserMigrationPath, 'utf-8');
     await client.query(feedTeaserMigration);
 
+    // Run migration adding API token permissions, limits and the token event log
+    const tokenPermissionsMigrationPath = path.join(__dirname, 'migrations', '031_api_token_permissions.sql');
+    const tokenPermissionsMigration = await fs.readFile(tokenPermissionsMigrationPath, 'utf-8');
+    await client.query(tokenPermissionsMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

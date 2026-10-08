@@ -1,6 +1,11 @@
 import express from 'express';
 import { query } from '../database/db.js';
 import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
+import { reserveRefresh } from '../services/token-limits.js';
+
+/** An API token gets at most this many feed items per request, the app's own page size
+ *  (FEED_PAGE_SIZE in the frontend's feedStore.ts). It pages on with offset. */
+const TOKEN_FEED_PAGE_MAX = 50;
 
 const router = express.Router();
 
@@ -184,9 +189,14 @@ router.get('/search-feed', async (req, res) => {
 router.get('/feed-items', async (req, res) => {
   try {
     const { feedId, limit, offset } = req.query;
-    const parsedFeedId = feedId ? parseInt(feedId as string) : undefined;
-    const parsedLimit = limit ? parseInt(limit as string) : 50;
-    const parsedOffset = offset ? parseInt(offset as string) : 0;
+    const whole = (raw: unknown, fallback: number) => {
+      const n = typeof raw === 'string' ? parseInt(raw, 10) : NaN;
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    };
+    const parsedFeedId = feedId ? whole(feedId, 0) || undefined : undefined;
+    let parsedLimit = whole(limit, 50) || 50;
+    if (req.apiToken) parsedLimit = Math.min(parsedLimit, TOKEN_FEED_PAGE_MAX);
+    const parsedOffset = whole(offset, 0);
 
     const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset);
     res.json(items);
@@ -198,9 +208,21 @@ router.get('/feed-items', async (req, res) => {
 
 // Refresh all subscribed feeds from network (fetches RSS and updates cache). The refresh runs
 // in the background and this answers 202 at once with its status, also when one is already
-// running for this user (see startFeedRefresh). The app polls GET /refresh-status.
-router.post('/refresh-feeds', (req, res) => {
-  res.status(202).json(startFeedRefresh(req.user!.userId));
+// running for this user (see startFeedRefresh). The app polls GET /refresh-status. An API
+// token may start one refresh every REFRESH_INTERVAL_MINUTES (429 with retry_after_seconds).
+router.post('/refresh-feeds', async (req, res) => {
+  try {
+    if (req.apiToken) {
+      const allowed = await reserveRefresh(req.apiToken);
+      if (!allowed.ok) {
+        return res.status(429).json({ error: allowed.message, retry_after_seconds: allowed.retryAfterSeconds });
+      }
+    }
+    res.status(202).json(startFeedRefresh(req.user!.userId));
+  } catch (error) {
+    console.error('Error starting a feed refresh:', error);
+    res.status(500).json({ error: 'Failed to start a feed refresh' });
+  }
 });
 
 // Status of this user's latest feed refresh: { running, startedAt, finishedAt, error,
