@@ -1683,9 +1683,9 @@ export class ArticleUnavailableError extends Error {
  * element out and holds only the first few paragraphs. A page that ships the paid part and
  * hides it with CSS still has the element, so it does not count.
  */
-export function isPaywallPreview(html: string): boolean {
-  if (!/isAccessibleForFree/i.test(html)) return false;
-  const doc = new JSDOM(html).window.document;
+export function isPaywallPreview(src: string | Document): boolean {
+  if (typeof src === 'string' && !/isAccessibleForFree/i.test(src)) return false;
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
   const selectors: string[] = [];
   const visit = (node: any): void => {
     if (Array.isArray(node)) { node.forEach(visit); return; }
@@ -1717,6 +1717,43 @@ export function isPaywallPreview(html: string): boolean {
 // markdownToHtml() needs a DOMParser, which Node lacks. markdown-export.ts installs the same
 // jsdom parser, installing it here too keeps the fetcher independent of import order.
 setHtmlParser(new (new JSDOM('').window.DOMParser)());
+
+/**
+ * The most text a fetched page may hold, once its scripts and styles are gone, before it is
+ * refused. Reading a page with jsdom blocks the whole server while it runs, every other
+ * request included. Measured 2026-10-09 on CNN's 5.8 MB article page: as it came it did not
+ * finish in 10 minutes (on Railway it froze the backend for about 20), and without its scripts
+ * and styles (0.6 MB left) it took 0.3 seconds. Stripped markup reads at about half a second
+ * per MB, so one read stays within a few seconds.
+ */
+const MAX_PAGE_CHARS = 5_000_000;
+
+/**
+ * How long a fetch may keep trying other copies of a page (fetchPastBotWall). No new step
+ * starts after this. A request already running still ends at its own timeout.
+ */
+export const FETCH_TIME_LIMIT_MS = 120_000;
+
+/**
+ * The page without what the fetcher never reads from the DOM: its <script> elements, except
+ * schema.org JSON-LD (read for the author and for paywalls), and its <style> elements. A
+ * script ends at its first </script, as it does in a browser. What the fetcher reads from the
+ * raw HTML (Substack's _preloads, substackcdn.com references) is read from the unchanged string.
+ */
+export function lightenHtml(html: string): string {
+  return html
+    .replace(/<script\b(?![^>]*\btype\s*=\s*["']?application\/ld\+json)[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+}
+
+/** Reads a fetched page with jsdom, lightened first. Refuses a page still over MAX_PAGE_CHARS. */
+export function parsePage(html: string, url?: string): JSDOM {
+  const light = lightenHtml(html);
+  if (light.length > MAX_PAGE_CHARS) {
+    throw new Error(`This page is too large to read: ${(light.length / 1_000_000).toFixed(1)} MB without its scripts and styles`);
+  }
+  return url ? new JSDOM(light, { url }) : new JSDOM(light);
+}
 
 // The reader proxy's Markdown answer as a small HTML page, so the usual pipeline reads its
 // title, date, and lead image from the same meta tags a real page carries.
@@ -1760,8 +1797,8 @@ function nonLinkTextChars(root: Element): number {
  * menus and lists of other articles are links: on HLN's article page the story box counts 850
  * characters (the intro, the byline, labels) and its 17 teaser links count nothing.
  */
-export function storyTextChars(html: string): number {
-  const doc = new JSDOM(html).window.document;
+export function storyTextChars(src: string | Document): number {
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
   const boxes = Array.from(doc.querySelectorAll('article, main, [itemprop="articleBody"]'));
   if (boxes.length === 0) return doc.body ? nonLinkTextChars(doc.body) : 0;
   return Math.max(...boxes.map(nonLinkTextChars));
@@ -1775,10 +1812,10 @@ export function storyTextChars(html: string): number {
  * (2026-10-07). Sites that ship the whole paid part and hide it with CSS (smh.com.au, axios.com,
  * demorgen.be) are never previews.
  */
-export function isPaidPreview(html: string): boolean {
-  if (!/isAccessibleForFree/i.test(html)) return false;
-  if (isPaywallPreview(html)) return true;
-  const doc = new JSDOM(html).window.document;
+export function isPaidPreview(src: string | Document): boolean {
+  if (typeof src === 'string' && !/isAccessibleForFree/i.test(src)) return false;
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
+  if (isPaywallPreview(doc)) return true;
   let paid = false;
   let named = false;
   const visit = (node: any): void => {
@@ -1798,7 +1835,7 @@ export function isPaidPreview(html: string): boolean {
       // A malformed block says nothing about a paywall
     }
   });
-  return paid && !named && storyTextChars(html) < PAID_PREVIEW_MAX_STORY_CHARS;
+  return paid && !named && storyTextChars(doc) < PAID_PREVIEW_MAX_STORY_CHARS;
 }
 
 export type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
@@ -1832,8 +1869,10 @@ export function copyProblem(html: string, wall: Wall, previewChars = 0): { reaso
   if (isBotCheckPage(html)) return { reason: 'bot-check page', preview: false };
   if (isLoginWall(html)) return { reason: 'login form', preview: false };
   if (hasNoText(html)) return { reason: 'no text', preview: false };
-  if (isPaidPreview(html)) return { reason: 'paywall preview', preview: true };
-  const story = storyTextChars(html);
+  // Read once, and only when the cheap string checks above found nothing
+  const doc = parsePage(html).window.document;
+  if (/isAccessibleForFree/i.test(html) && isPaidPreview(doc)) return { reason: 'paywall preview', preview: true };
+  const story = storyTextChars(doc);
   if (story < MIN_COPY_STORY_CHARS) return { reason: `too short (${story} characters of story)`, preview: true };
   if (wall === 'paywall' && story < previewChars + PAID_COPY_MIN_EXTRA_CHARS) {
     return { reason: `the same preview (${story} characters of story)`, preview: true };
@@ -1894,7 +1933,8 @@ async function fetchPastBotWall(
   url: string,
   wall: Wall = 'bot check',
   previewChars = 0,
-  onProgress: FetchProgress = () => {}
+  onProgress: FetchProgress = () => {},
+  deadline = Infinity
 ): Promise<{ html: string; pageUrl: string }> {
   const tried: string[] = [];
   // Set when archive.ph's copy is only a preview, so the error offers no archive link
@@ -2037,6 +2077,11 @@ async function fetchPastBotWall(
     ? [archivePh, wayback, readerHtml]
     : [readerHtml, wayback, archivePh, readerMarkdown];
   for (const step of steps) {
+    if (Date.now() > deadline) {
+      console.log(`[Fetcher] Stopping: the ${FETCH_TIME_LIMIT_MS / 1000}-second time limit has passed`);
+      tried.push(`stopped at the ${FETCH_TIME_LIMIT_MS / 1000}-second time limit`);
+      break;
+    }
     const found = await step();
     if (found) return found;
   }
@@ -2047,6 +2092,8 @@ async function fetchPastBotWall(
 
 export async function fetchArticleContent(url: string, onProgress: FetchProgress = () => {}): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
+  // Other copies of the page are only tried until this moment (see fetchPastBotWall)
+  const deadline = Date.now() + FETCH_TIME_LIMIT_MS;
 
   const isLessWrong = url.includes('lesswrong.com');
   const isEAForum = isEAForumUrl(url);
@@ -2071,10 +2118,12 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
     // bot-wall routes ended there (see fetchPastBotWall).
     let pageUrl = url;
     const pastBotWall = async (wall: Wall = 'bot check', previewChars = 0) => {
-      const copy = await fetchPastBotWall(url, wall, previewChars, onProgress);
+      const copy = await fetchPastBotWall(url, wall, previewChars, onProgress, deadline);
       pageUrl = copy.pageUrl;
       return copy.html;
     };
+    // The page as the paywall check read it, reused by the main read when it is the article
+    const checkedPage: { current: { html: string; dom: JSDOM } | null } = { current: null };
     // A page the site itself answered with may still not be the article: a bot check, a login
     // form, a page without text, or the preview of a paid article. Each goes to the other copies.
     const checkSitePage = async (page: string, status: number): Promise<string> => {
@@ -2092,10 +2141,15 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
         console.log(`[Fetcher] HTTP ${status} but the page has no text`);
         return pastBotWall('no text');
       }
-      if (isPaidPreview(page)) {
-        const previewChars = storyTextChars(page);
-        console.log(`[Fetcher] HTTP ${status} but the page is the preview of a paid article (${previewChars} characters of story)`);
-        return pastBotWall('paywall', previewChars);
+      if (/isAccessibleForFree/i.test(page)) {
+        const dom = parsePage(page, pageUrl);
+        if (isPaidPreview(dom.window.document)) {
+          const previewChars = storyTextChars(dom.window.document);
+          console.log(`[Fetcher] HTTP ${status} but the page is the preview of a paid article (${previewChars} characters of story)`);
+          return pastBotWall('paywall', previewChars);
+        }
+        // The article itself: the main read below uses this page as it is, no second read
+        checkedPage.current = { html: page, dom };
       }
       return page;
     };
@@ -2164,7 +2218,9 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
       console.log('[Fetcher] Detected Substack page (via substackcdn.com references)');
     }
 
-    const dom = new JSDOM(html, { url: pageUrl });
+    // Read once, without scripts and styles (parsePage). The paywall check above may have read
+    // this very page already.
+    const dom = checkedPage.current && checkedPage.current.html === html ? checkedPage.current.dom : parsePage(html, pageUrl);
     const doc = dom.window.document;
 
     // Read the schema.org JSON-LD author BEFORE the scripts are stripped below (it lives

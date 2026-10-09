@@ -1523,6 +1523,17 @@ button {
   gap: 0.5rem;
 }
 
+/* A generation an API token skipped because of its limits: the same row as an error, in
+   neutral colours, since nothing went wrong. */
+.generation-status.skipped {
+  background: var(--bg-raised);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
 .generation-status .error-message {
   flex: 1;
   min-width: 0;

@@ -89,25 +89,58 @@ export async function searchRSSByUrl(url: string): Promise<PodcastSearchResult[]
   }
 }
 
+/** A feed address without protocol, "www.", trailing slash and case, so the same feed typed
+ *  two ways is one subscription (the Feed tab's feedKey, plus "www."). */
+export function feedUrlKey(url: string | null | undefined): string {
+  return (url || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+/** Subscribing to a feed the user already follows. The route answers 409 "Already subscribed". */
+export class AlreadySubscribedError extends Error {
+  constructor(public podcast: any) {
+    super('Already subscribed');
+    this.name = 'AlreadySubscribedError';
+  }
+}
+
+/**
+ * Subscribe a user to a feed. A feed the user already follows is refused with
+ * AlreadySubscribedError, also when it comes in under another address: the same address
+ * written differently (feedUrlKey), an address that redirects to a followed one, or another
+ * address of the same publication (the same website, type and title, as when a Substack
+ * newsletter is found once under its own domain and once under substack.com). A feed the user
+ * unsubscribed from is subscribed again, its cached items included.
+ */
 export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
-    // Check if this user has this podcast (even if unsubscribed)
-    const existing = await query(
-      'SELECT * FROM podcasts WHERE feed_url = $1 AND user_id = $2',
-      [feedUrl, userId]
-    );
+    // Every feed this user has a row for, subscribed or not
+    const rows = (await query('SELECT * FROM podcasts WHERE user_id = $1', [userId])).rows;
+    const key = feedUrlKey(feedUrl);
+    let existing = rows.find((r: any) => feedUrlKey(r.feed_url) === key);
+    if (existing?.is_subscribed) throw new AlreadySubscribedError(existing);
 
     // Fetch fresh podcast details from feed
     const podcastDetails = await fetchPodcastDetails(feedUrl);
 
-    if (existing.rows.length > 0) {
+    if (!existing) {
+      const finalKey = feedUrlKey(podcastDetails.final_url);
+      const site = feedUrlKey(podcastDetails.website_url);
+      const title = (podcastDetails.title || '').trim().toLowerCase();
+      existing = rows.find((r: any) =>
+        (finalKey && feedUrlKey(r.feed_url) === finalKey)
+        || (site && title && feedUrlKey(r.website_url) === site && r.type === podcastDetails.type
+          && (r.title || '').trim().toLowerCase() === title));
+      if (existing?.is_subscribed) throw new AlreadySubscribedError(existing);
+    }
+
+    if (existing) {
       // Podcast exists - update it with fresh data and resubscribe
       const result = await query(
         `UPDATE podcasts
          SET title = $1, author = $2, description = $3, website_url = $4,
              preview_picture = $5, category = $6, language = $7, type = $8,
              is_subscribed = true, updated_at = CURRENT_TIMESTAMP
-         WHERE feed_url = $9 AND user_id = $10
+         WHERE id = $9 AND user_id = $10
          RETURNING *`,
         [
           podcastDetails.title,
@@ -118,7 +151,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
           podcastDetails.category,
           podcastDetails.language?.substring(0, 100) || null,
           podcastDetails.type,
-          feedUrl,
+          existing.id,
           userId,
         ]
       );
@@ -201,6 +234,8 @@ export async function fetchPodcastDetails(feedUrl: string) {
       category: cleanHtmlEntities(category),
       language,
       type,
+      // The address the feed answered from, after redirects
+      final_url: response.url || feedUrl,
     };
   } catch (error) {
     console.error('Error fetching podcast details:', error);

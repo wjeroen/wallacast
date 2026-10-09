@@ -45,6 +45,8 @@ import {
   storyTextChars,
   copyProblem,
   noCopyError,
+  lightenHtml,
+  parsePage,
 } from '../src/services/article-fetcher.js';
 import { newestArchiveCopy } from '../src/services/url-guard.js';
 
@@ -500,6 +502,33 @@ const dir = process.argv[2];
   assert.equal(noCopy.message, 'This article is behind a login, and no other copy of the article could be found.', 'without a copy the message stays');
   assert.equal(noCopy.archiveSubmitUrl, archiveSubmitUrl(knack), 'and offers the archive link');
   console.log('✅ Teaser copies, and the error without an archive link');
+}
+
+// --- 0j. Scripts and styles are cut before a page is read ---------------------------
+// CNN's 5.8 MB article page froze the backend for about 20 minutes on 2026-10-09: jsdom on the
+// page as it came did not finish in 10 minutes, and took 0.3 seconds without its scripts.
+{
+  const bigScript = '<script>window.__DATA__ = ' + JSON.stringify({ x: 'y'.repeat(300_000) }) + ';</script>';
+  const page = `<html><head><title>T</title>
+    <script type="application/ld+json">{"@type":"NewsArticle","author":{"name":"Ann Writer"},"isAccessibleForFree":false,"hasPart":{"isAccessibleForFree":false,"cssSelector":".paid"}}</script>
+    <script src="/app.js"></script>
+    <SCRIPT type="text/javascript">var a = "</div>";</SCRIPT>
+    <style>.paid { display: none }</style>
+    ${bigScript}
+  </head><body><article><p>Opening paragraph of the story.</p><div class="paid">${'Paid text. '.repeat(40)}</div></article>
+    <noscript><img src="https://a.b/lazy.jpg"></noscript></body></html>`;
+  const light = lightenHtml(page);
+  assert.ok(!/__DATA__|app\.js|display: none|var a/.test(light), 'scripts and styles are gone, uppercase tags too');
+  assert.ok(/application\/ld\+json/.test(light) && /Ann Writer/.test(light), 'JSON-LD stays');
+  assert.ok(/<noscript>/.test(light), 'noscript stays (lazy images)');
+  assert.ok(light.length < 2000, `the 300 KB script is gone (${light.length} characters left)`);
+  const doc = parsePage(page, 'https://example.com/a').window.document;
+  assert.equal(authorFromJsonLd(doc), 'Ann Writer', 'the author is still read from JSON-LD');
+  assert.equal(isPaywallPreview(doc), false, 'the paid part is there, so no preview (read from the page object)');
+  assert.equal(isPaywallPreview(page), false, 'the same from the string');
+  assert.ok(storyTextChars(doc) > 300, 'story text counted from the page object');
+  assert.throws(() => parsePage('<html><body>' + '<p>x</p>'.repeat(700_000) + '</body></html>'), /too large to read: 5\.6 MB/, 'a page still over 5 MB is refused');
+  console.log('✅ Scripts and styles are cut before a page is read, oversized pages are refused');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

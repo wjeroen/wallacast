@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
+import { AlreadySubscribedError, searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
 import { reserveRefresh } from '../services/token-limits.js';
 
 /** An API token gets at most this many feed items per request, the app's own page size
@@ -69,6 +69,9 @@ router.post('/subscribe', async (req, res) => {
     const podcast = await subscribeToPodcast(feed_url, req.user!.userId);
     res.status(201).json(podcast);
   } catch (error) {
+    if (error instanceof AlreadySubscribedError) {
+      return res.status(409).json({ error: 'Already subscribed', podcast: error.podcast });
+    }
     console.error('Error subscribing to podcast:', error);
     res.status(500).json({ error: 'Failed to subscribe to podcast' });
   }

@@ -8,7 +8,9 @@ import { getUserSetting } from './ai-providers.js';
  * Every token has four limits, set per token in Settings (a leaked token cannot change them,
  * token management only accepts a normal login):
  *   items_hour / items_2d       items added plus pages read without saving
- *   minutes_hour / minutes_2d   minutes of AI generation started for items the token added
+ *   minutes_hour / minutes_2d   minutes of AI generation started for items the token added: an
+ *                               article's audio counts its narration time, a transcript the
+ *                               episode's length, a summary a tenth of its article's narration time
  * "Per hour" and "per 2 days" are rolling windows (the last 60 minutes, the last 48 hours).
  * The Reset button in Settings sets usage_reset_at, and nothing before it counts.
  *
@@ -46,6 +48,11 @@ export const CHARS_PER_MINUTE = 900;
 export const UNKNOWN_EPISODE_MINUTES = 60;
 /** Summary audio narrates a summary of a few short paragraphs. */
 export const SUMMARY_AUDIO_MINUTES = 3;
+/** A summary counts this share of its article's minutes. Summarizing reads the text once and
+ *  writes a few paragraphs, far cheaper than narrating all of it: a summary of a 3,300-token
+ *  article cost cents on gpt-5.4-mini (production log, 2026-10-09), while one 27,600-character
+ *  article counted 31 minutes at the full share. */
+export const SUMMARY_SHARE = 0.1;
 
 export const CHANGE_KINDS = ['tag_add', 'star', 'unstar'] as const;
 export type ChangeKind = typeof CHANGE_KINDS[number];
@@ -137,6 +144,11 @@ export async function resolveGeneration(userId: number, gen: TokenGeneration): P
 
 export function textMinutes(chars: number): number {
   return Math.max(1, Math.ceil(Math.max(0, chars) / CHARS_PER_MINUTE));
+}
+
+/** The minutes a summary of a text counts: SUMMARY_SHARE of its narration, at least 1. */
+export function summaryMinutes(chars: number): number {
+  return Math.max(1, Math.ceil((Math.max(0, chars) / CHARS_PER_MINUTE) * SUMMARY_SHARE));
 }
 
 /** The plain-text length of a comment tree (the stored JSON, or the array). Comment bodies

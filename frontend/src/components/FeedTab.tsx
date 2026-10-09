@@ -177,7 +177,11 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   const handleSubscribe = async (feed: PodcastType) => {
     try {
       await subscribe(feed);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.response?.status === 409) {
+        alert('Already subscribed.');
+        return;
+      }
       console.error('Failed to subscribe:', error);
       alert('Could not subscribe to this feed. Check the URL and try again.');
     }

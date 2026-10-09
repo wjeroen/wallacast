@@ -44,7 +44,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 - `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more).
 - `GET /api/content/:id/markdown` and `GET /api/content/markdown?url=<address>`: the item exactly as the app's Copy content button gives it, in `markdown`. 404 when no item has that address.
-- `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none, and `summary_status` says whether one is being made (`generating`) or failed. The index's `summary_status` tells which ids are worth asking for (`completed`).
+- `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary_error", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none. `summary_status` is `generating` while one is being made, `failed` when making it failed, and `skipped` when a token's minute limit left it out, with the reason in `summary_error`. The index's `summary_status` tells which ids are worth asking for (`completed`).
 - `GET /api/content/tags/all`: `{ "tags": [{ "tag": "ai-safety", "count": 12 }, ...] }`.
 
 ### The feed
@@ -55,7 +55,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 ### Reading an article without saving it
 
-`GET /api/content/preview?feed_item_id=123` (or `?url=` with `add_any`): Wallacast fetches the page exactly as an add would, through its bot-check and archive fallbacks, and answers `{ title, author, published_at, url, comment_count, markdown }`. Nothing is stored. It counts as one item against the item limits. Episodes have no page, their text is the feed's `teaser` and `description`.
+`GET /api/content/preview?feed_item_id=123` (or `?url=` with `add_any`): Wallacast fetches the page exactly as an add would, through its bot-check and archive fallbacks, and answers `{ title, author, published_at, url, comment_count, markdown }`. Nothing is stored and nothing is generated, so it uses no generation minutes, but it counts as one item against the item limits. A page behind a bot check or a paywall can take a minute or more: other copies are tried for at most 2 minutes. A page that holds more than 5 MB once its scripts and styles are cut is refused. Episodes have no page, their text is the feed's `teaser` and `description`.
 
 ### Adding
 
@@ -72,11 +72,21 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 {
   "id": 2801, "type": "article", "title": "...", "url": "...", "audio_url": null, "author": "...",
   "published_at": "...", "tags": ["ai-safety"], "comment_count": 4,
-  "generation": { "started": ["summary"], "skipped": [{ "what": "audio", "reason": "This token reached its limit of 120 generation minutes per hour" }] }
+  "generation": {
+    "started": [],
+    "skipped": [
+      { "what": "summary", "reason": "This token reached its limit of 120 generation minutes per hour" },
+      { "what": "summary_audio", "reason": "Skipped because the summary was skipped" }
+    ]
+  },
+  "warnings": [
+    "Summary skipped: This token reached its limit of 120 generation minutes per hour",
+    "Summary audio skipped: Skipped because the summary was skipped"
+  ]
 }
 ```
 
-`generation` says what started for the item and what was skipped and why. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
+`generation` (one word, no "s") lists what started for the item (`audio`, `summary`, `summary_audio`, `transcript`) and what was skipped and why. `warnings` says the same in one plain sentence per skip, and is empty when nothing was skipped. A skipped summary or summary audio is also marked on the item: its `summary_status` or `summary_audio_status` is `skipped`, the reason is in `summary_error` or `summary_audio_error`, and the app shows it on the card with a Generate button. A skipped article audio or transcript is only in the answer and in the app's limit notice. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
 
 ### Tags and stars
 
@@ -93,7 +103,7 @@ Each token has four limits, set under the token in Settings. They are rolling wi
 | Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
 
-Minutes are estimated before a generation starts: an article's text (plus its comments) at 900 characters a minute, at least one minute, an episode by its duration (60 minutes when the feed gives none), summary audio as 3 minutes. Audio and the summary of one article each count its full length.
+Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
 - Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
@@ -114,7 +124,7 @@ Under each token, Settings has "Same as my auto-generation settings" (on for a n
 | `400` | A field is missing or wrong, an unknown tag |
 | `409` | Already in the library (`id` in the answer) |
 | `429` | A limit, see above |
-| `502` | The article page could not be fetched |
+| `502` | The article page could not be fetched: no copy found, the 2-minute limit passed, or the page is too large to read |
 
 ## Keeping a token safe
 

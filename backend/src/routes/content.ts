@@ -22,7 +22,7 @@ import { normalizeTag, normalizeTagList, findReservedTags } from '../services/ta
 import { findItem } from '../services/url-match.js';
 import { sourceUrls } from '../shared/format.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
-import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
+import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -361,8 +361,9 @@ router.get('/:id/markdown', async (req, res) => {
 // judges many items without reading their full text (API_TOKENS.md). At most
 // SUMMARIES_MAX_IDS ids, the caller's own items only, in the order asked, unknown ids left out.
 // `summary` and `comment_summary` are the stored texts, null when an item has none
-// (`summary_status` says whether one is being made or failed). `url` is the item's source
-// address as the index gives it. Read-only. Defined before GET /:id.
+// (`summary_status` says whether one is being made, failed, or was skipped because of an API
+// token's limits, and `summary_error` why). `url` is the item's source address as the index
+// gives it. Read-only. Defined before GET /:id.
 const SUMMARIES_MAX_IDS = 200;
 router.get('/summaries', async (req, res) => {
   try {
@@ -377,7 +378,7 @@ router.get('/summaries', async (req, res) => {
       return res.status(400).json({ error: `At most ${SUMMARIES_MAX_IDS} ids per request` });
     }
     const result = await query(
-      `SELECT id, type, title, url, summary_status, summary, comment_summary, summary_generated_at
+      `SELECT id, type, title, url, summary_status, summary_error, summary, comment_summary, summary_generated_at
          FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
       [req.user!.userId, ids]
     );
@@ -391,6 +392,7 @@ router.get('/summaries', async (req, res) => {
         title: r.title,
         url: sourceUrls(r.url).source,
         summary_status: r.summary_status,
+        summary_error: r.summary_status === 'failed' || r.summary_status === 'skipped' ? r.summary_error ?? null : null,
         summary: r.summary ?? null,
         comment_summary: r.comment_summary ?? null,
         summary_generated_at: r.summary_generated_at ?? null,
@@ -810,6 +812,14 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// What each generation is called in a token's warnings
+const GENERATION_WORDS: Record<string, string> = {
+  audio: 'Audio',
+  summary: 'Summary',
+  summary_audio: 'Summary audio',
+  transcript: 'Transcript',
+};
+
 // Create new content item
 router.post('/', async (req, res) => {
   try {
@@ -1116,12 +1126,16 @@ router.post('/', async (req, res) => {
     // An item a token added: the tags it set are logged like any tag it adds later, and what
     // is generated follows the token's own choice (the app's auto-generation settings, or its
     // own), each generation only when its minutes fit the token's limits. tokenReport tells
-    // the caller what started and what was skipped, and why.
+    // the caller what started and what was skipped, and why. A skipped summary or summary audio
+    // is also marked on the item (status 'skipped', the reason in summary_error or
+    // summary_audio_error), so the card and the index show it.
     if (token && tokenTags.length > 0) {
       await logChanges(token, tokenTags.map((tag) => ({ itemId: createdItem.id, kind: 'tag_add' as const, tag })));
     }
     const tokenGen = token ? await resolveGeneration(token.userId, token.generation) : null;
     const tokenReport: { started: string[]; skipped: Array<{ what: string; reason: string }> } = { started: [], skipped: [] };
+    // What the card says for a skip: the reason with the token's name
+    const skipReasons: Partial<Record<'audio' | 'summary' | 'summary_audio' | 'transcript', string>> = {};
     const fitsTokenBudget = async (what: 'audio' | 'summary' | 'summary_audio' | 'transcript', minutes: number): Promise<boolean> => {
       if (!token) return true;
       const r = await reserveMinutes(token, minutes, what, createdItem.id);
@@ -1130,9 +1144,11 @@ router.post('/', async (req, res) => {
         return true;
       }
       tokenReport.skipped.push({ what, reason: r.message });
+      skipReasons[what] = r.message.replace(/^This token/, `Token "${token.name}"`);
       return false;
     };
-    const itemMinutes = token ? textMinutes(String(processedContent || htmlContent || '').length + commentChars(extractedComments)) : 0;
+    const itemChars = token ? String(processedContent || htmlContent || '').length + commentChars(extractedComments) : 0;
+    const itemMinutes = token ? textMinutes(itemChars) : 0;
 
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
@@ -1182,12 +1198,29 @@ router.post('/', async (req, res) => {
       const autoGenerateSummary = tokenGen
         ? tokenGen.summary
         : (await getUserSetting(req.user!.userId, 'auto_generate_summary')) === 'true';
-      if (autoGenerateSummary && (await fitsTokenBudget('summary', itemMinutes))) {
+      const summaryFits = autoGenerateSummary && (await fitsTokenBudget('summary', summaryMinutes(itemChars)));
+      if (autoGenerateSummary && !summaryFits) {
+        // The summary audio would have narrated the summary, so it is skipped with it
+        if (tokenGen?.summary_audio) {
+          tokenReport.skipped.push({ what: 'summary_audio', reason: 'Skipped because the summary was skipped' });
+        }
+        await query(
+          `UPDATE content_items SET summary_status = 'skipped', summary_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary ?? 'Skipped']
+        );
+      }
+      if (summaryFits) {
         // For a token, summary audio is decided here rather than by the summarizer reading the
         // setting, so its minutes count against the token too.
         const summaryOptions = tokenGen
           ? { generateAudio: tokenGen.summary_audio && (await fitsTokenBudget('summary_audio', SUMMARY_AUDIO_MINUTES)) }
           : {};
+        if (skipReasons.summary_audio) {
+          await query(
+            `UPDATE content_items SET summary_audio_status = 'skipped', summary_audio_error = $2 WHERE id = $1`,
+            [createdItem.id, skipReasons.summary_audio]
+          );
+        }
         console.log(`Auto-generating summary for ${type} ${createdItem.id}`);
         await query(
           'UPDATE content_items SET summary_status = $1 WHERE id = $2',
@@ -1261,6 +1294,9 @@ router.post('/', async (req, res) => {
         tags: createdItem.tags,
         comment_count: createdItem.comment_count_total || 0,
         generation: tokenReport,
+        // One plain sentence per skipped generation, so a caller that reads nothing else still
+        // sees that a limit was reached
+        warnings: tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
       });
     }
     res.status(201).json(createdItem);

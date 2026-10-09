@@ -11,7 +11,7 @@ const {
 } = await import('../src/services/api-tokens.ts');
 const {
   effectiveLimits, validateLimits, DEFAULT_LIMITS, MAX_LIMITS, parseGeneration, validateGeneration,
-  textMinutes, commentChars, episodeMinutes, CHARS_PER_MINUTE, UNKNOWN_EPISODE_MINUTES,
+  textMinutes, summaryMinutes, commentChars, episodeMinutes, CHARS_PER_MINUTE, UNKNOWN_EPISODE_MINUTES,
 } = await import('../src/services/token-limits.ts');
 const { parseHttpUrl, parsePositiveInt } = await import('../src/services/token-actions.ts');
 
@@ -127,6 +127,9 @@ assert.equal(textMinutes(0), 1, 'a generation counts at least a minute');
 assert.equal(textMinutes(CHARS_PER_MINUTE), 1);
 assert.equal(textMinutes(CHARS_PER_MINUTE + 1), 2);
 assert.equal(textMinutes(27634), 31, 'the 27,634-character article from the production log is about 31 minutes');
+assert.equal(summaryMinutes(27634), 4, 'its summary counts a tenth, rounded up');
+assert.equal(summaryMinutes(99000), 11, "Zvi's AI #189 (110 minutes of narration) counts 11 for its summary");
+assert.equal(summaryMinutes(0), 1, 'a summary counts at least a minute');
 assert.equal(commentChars(JSON.stringify([{ content: '<p>abc</p>', replies: [{ content: 'de' }] }, { content: 'f' }])), 6);
 assert.equal(commentChars('not json'), 0);
 assert.equal(commentChars(null), 0);

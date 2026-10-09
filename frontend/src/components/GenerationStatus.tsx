@@ -220,6 +220,54 @@ export function GenerationStatus({
           </span>
         </div>
       )}
+      {item.summary_status === 'skipped' && (
+        <div className="generation-status skipped">
+          <span className="error-message">
+            Summary skipped
+            {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
+          </span>
+          <span className="error-actions">
+            <button
+              className="error-retry-btn"
+              onClick={(e) => { e.stopPropagation(); onGenerateSummary(false); }}
+              title="Generate the summary"
+            >
+              Generate
+            </button>
+            <button
+              className="error-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismissError('summary'); }}
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </span>
+        </div>
+      )}
+      {item.summary_audio_status === 'skipped' && (
+        <div className="generation-status skipped">
+          <span className="error-message">
+            Summary audio skipped
+            {item.summary_audio_error && <span className="error-detail">: {item.summary_audio_error}</span>}
+          </span>
+          <span className="error-actions">
+            <button
+              className="error-retry-btn"
+              onClick={(e) => { e.stopPropagation(); onGenerateSummaryAudio(); }}
+              title="Generate the summary audio"
+            >
+              Generate
+            </button>
+            <button
+              className="error-dismiss-btn"
+              onClick={(e) => { e.stopPropagation(); onDismissError('summary_audio'); }}
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </span>
+        </div>
+      )}
       {item.summary_audio_status === 'failed' && (
         <div className="generation-status error">
           <span className="error-message">
