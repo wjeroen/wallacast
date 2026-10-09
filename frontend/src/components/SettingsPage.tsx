@@ -951,7 +951,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </div>
               ))}
             </div>
-            <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's.</p>
+            <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its minutes.</p>
             <button type="button" disabled={busy} onClick={() => handleResetTokenUsage(t)}>Reset usage</button>
           </div>
         )}
