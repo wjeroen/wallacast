@@ -37,7 +37,7 @@ const LAST_USED_WRITE_INTERVAL_MS = 60_000;
 /**
  * What a token may do. A new token gets read_library only, which is what every token could
  * do before permissions existed.
- *   read_library  the library index, an item's Copy content Markdown, the tag list
+ *   read_library  the library index, an item's Copy content Markdown, summaries, the tag list
  *   feed          the subscriptions, the cached feed items, start and watch a feed refresh
  *   add_any       add an article by URL or a feed item, read a page without saving it
  *   add_feed      the same, but only items from the user's own feeds, never a free URL
@@ -271,6 +271,7 @@ export const TOKEN_ROUTES: readonly TokenRoute[] = [
   { method: 'GET', path: /^\/api\/content\/index$/, anyOf: ['read_library'] },
   { method: 'GET', path: /^\/api\/content\/markdown$/, anyOf: ['read_library'] },
   { method: 'GET', path: /^\/api\/content\/\d+\/markdown$/, anyOf: ['read_library'] },
+  { method: 'GET', path: /^\/api\/content\/summaries$/, anyOf: ['read_library'] },
   { method: 'GET', path: /^\/api\/content\/tags\/all$/, anyOf: ['read_library', 'tag'] },
   { method: 'GET', path: /^\/api\/podcasts$/, anyOf: ['feed'] },
   { method: 'GET', path: /^\/api\/podcasts\/feed-items$/, anyOf: ['feed'] },

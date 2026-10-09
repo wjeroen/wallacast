@@ -126,9 +126,9 @@ router.post('/status', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Read surface for outside tools (the Obsidian "Wallacast overview", "Wallacast import" and
 // "Wallacast import checked" commands, see implementation-plans/obsidian-article-import.md,
-// and API_TOKENS.md). An API token with read_library may call these three routes
-// (TOKEN_ROUTES in services/api-tokens.ts). They change nothing and trigger nothing: no
-// audio, no summary, no fetch.
+// and API_TOKENS.md). An API token with read_library may call these routes and GET
+// /summaries (TOKEN_ROUTES in services/api-tokens.ts). They change nothing and trigger
+// nothing: no audio, no summary, no fetch.
 // ---------------------------------------------------------------------------
 
 // Lean library index: one small row per item, every item, newest first. Obsidian groups
@@ -354,6 +354,51 @@ router.get('/:id/markdown', async (req, res) => {
   } catch (error) {
     console.error('Error rendering content markdown:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to render content markdown' });
+  }
+});
+
+// GET /summaries?ids=1,2,3 - Only the summaries of the given items, for an outside tool that
+// judges many items without reading their full text (API_TOKENS.md). At most
+// SUMMARIES_MAX_IDS ids, the caller's own items only, in the order asked, unknown ids left out.
+// `summary` and `comment_summary` are the stored texts, null when an item has none
+// (`summary_status` says whether one is being made or failed). `url` is the item's source
+// address as the index gives it. Read-only. Defined before GET /:id.
+const SUMMARIES_MAX_IDS = 200;
+router.get('/summaries', async (req, res) => {
+  try {
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const ids = Array.from(new Set(
+      raw.split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map((s) => parseInt(s, 10)).filter((n) => n > 0)
+    ));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a comma-separated list of content ids' });
+    }
+    if (ids.length > SUMMARIES_MAX_IDS) {
+      return res.status(400).json({ error: `At most ${SUMMARIES_MAX_IDS} ids per request` });
+    }
+    const result = await query(
+      `SELECT id, type, title, url, summary_status, summary, comment_summary, summary_generated_at
+         FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user!.userId, ids]
+    );
+    const byId = new Map<number, any>(result.rows.map((r: any) => [r.id, r]));
+    const items = ids
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((r) => ({
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        url: sourceUrls(r.url).source,
+        summary_status: r.summary_status,
+        summary: r.summary ?? null,
+        comment_summary: r.comment_summary ?? null,
+        summary_generated_at: r.summary_generated_at ?? null,
+      }));
+    res.json({ items });
+  } catch (error) {
+    console.error('Error reading summaries:', error);
+    res.status(500).json({ error: 'Failed to read summaries' });
   }
 });
 

@@ -28,6 +28,7 @@ for (const [m, p] of [
   ['GET', '/api/content/123/markdown'],
   ['HEAD', '/api/content/index'],
   ['GET', '/api/content/tags/all'],
+  ['GET', '/api/content/summaries?ids=1,2'],
   ['GET', '/api/auth/token'],
 ]) assert.ok(allowed(readOnly, m, p), `${m} ${p} must be allowed for a read-only token`);
 for (const [m, p] of [
@@ -66,6 +67,7 @@ assert.ok(!allowed(['feed'], 'GET', '/api/podcasts/12/preview-episodes'), 'other
 assert.ok(!allowed(['feed'], 'POST', '/api/podcasts/subscribe'));
 assert.ok(!allowed(['feed'], 'DELETE', '/api/podcasts/12'));
 assert.ok(!allowed(['feed'], 'GET', '/api/content/index'), 'feed alone does not read the library');
+assert.ok(!allowed(['feed', 'add_any', 'tag', 'star'], 'GET', '/api/content/summaries?ids=1'), 'summaries need read_library');
 for (const add of ['add_any', 'add_feed']) {
   assert.ok(allowed([add], 'POST', '/api/content'));
   assert.ok(allowed([add], 'GET', '/api/content/preview?url=x'));

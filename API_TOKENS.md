@@ -31,7 +31,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 | Permission | Routes |
 |---|---|
-| `read_library` | `GET /api/content/index`, `GET /api/content/markdown?url=`, `GET /api/content/:id/markdown`, `GET /api/content/tags/all` |
+| `read_library` | `GET /api/content/index`, `GET /api/content/markdown?url=`, `GET /api/content/:id/markdown`, `GET /api/content/summaries?ids=`, `GET /api/content/tags/all` |
 | `feed` | `GET /api/podcasts`, `GET /api/podcasts/feed-items`, `POST /api/podcasts/refresh-feeds`, `GET /api/podcasts/refresh-status` |
 | `add_any` | `POST /api/content` with `url` or `feed_item_id`, `GET /api/content/preview` with `url` or `feed_item_id` |
 | `add_feed` | the same two routes, but only with `feed_item_id`: items from your own feeds, never a free address |
@@ -44,6 +44,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 - `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more).
 - `GET /api/content/:id/markdown` and `GET /api/content/markdown?url=<address>`: the item exactly as the app's Copy content button gives it, in `markdown`. 404 when no item has that address.
+- `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none, and `summary_status` says whether one is being made (`generating`) or failed. The index's `summary_status` tells which ids are worth asking for (`completed`).
 - `GET /api/content/tags/all`: `{ "tags": [{ "tag": "ai-safety", "count": 12 }, ...] }`.
 
 ### The feed

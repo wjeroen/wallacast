@@ -3,6 +3,11 @@
 // Run from backend/:  npx tsx scripts/test-markdown-export.mts
 // Not wired into any build. Needs the frontend's node_modules too: the frontend module is
 // imported directly, so the two turndown installs render side by side.
+//
+// Comment dates render with toLocaleDateString('en-GB') in the server's own time zone, which
+// is UTC on Railway. The test sets the same zone, so it passes on any machine. Node reads TZ
+// each time a date is formatted, and nothing is formatted before this line runs.
+process.env.TZ = 'UTC';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
