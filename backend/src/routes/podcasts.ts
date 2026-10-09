@@ -191,7 +191,7 @@ router.get('/search-feed', async (req, res) => {
 // Get cached feed items from database (instant, no network requests)
 router.get('/feed-items', async (req, res) => {
   try {
-    const { feedId, limit, offset } = req.query;
+    const { feedId, limit, offset, since_id } = req.query;
     const whole = (raw: unknown, fallback: number) => {
       const n = typeof raw === 'string' ? parseInt(raw, 10) : NaN;
       return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -200,8 +200,16 @@ router.get('/feed-items', async (req, res) => {
     let parsedLimit = whole(limit, 50) || 50;
     if (req.apiToken) parsedLimit = Math.min(parsedLimit, TOKEN_FEED_PAGE_MAX);
     const parsedOffset = whole(offset, 0);
+    // ?since_id=N: only items above that feed_item_id, lowest id first (see getCachedFeedItems)
+    let parsedSinceId: number | undefined;
+    if (since_id !== undefined) {
+      parsedSinceId = typeof since_id === 'string' && /^\d+$/.test(since_id) ? parseInt(since_id, 10) : -1;
+      if (parsedSinceId < 0) {
+        return res.status(400).json({ error: 'since_id must be a whole number' });
+      }
+    }
 
-    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset);
+    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset, parsedSinceId);
     res.json(items);
   } catch (error) {
     console.error('Error fetching cached feed items:', error);

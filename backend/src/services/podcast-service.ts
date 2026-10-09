@@ -907,38 +907,38 @@ const FEED_ITEM_LIST_COLUMNS = `
         p.type as feed_type`;
 
 /**
- * Gets cached feed items from database
+ * Gets cached feed items from database, newest publish date first
  * @param userId - User ID to filter by their subscribed feeds
  * @param feedId - Optional: filter by specific feed
- * @param limit - Maximum number of items to return (default: 100)
+ * @param limit - Maximum number of items to return (default: 50)
+ * @param sinceId - Optional: only items above this feed_item_id, lowest id first. A refresh
+ *   gives every newly cached item a higher id, so a caller that keeps the highest id it has
+ *   judged gets exactly what entered the feed since, whatever its publish date. It pages on
+ *   with the last id it received.
  */
-export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0): Promise<any[]> {
-  let queryText: string;
-  let queryParams: any[];
-
+export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0, sinceId?: number): Promise<any[]> {
+  const where = ['p.user_id = $1'];
+  const params: any[] = [userId];
   if (feedId) {
-    queryText = `
-      SELECT ${FEED_ITEM_LIST_COLUMNS}
-      FROM feed_items fi
-      JOIN podcasts p ON fi.feed_id = p.id
-      WHERE p.user_id = $1 AND fi.feed_id = $2
-      ORDER BY fi.published_at DESC
-      LIMIT $3 OFFSET $4
-    `;
-    queryParams = [userId, feedId, limit, offset];
+    params.push(feedId);
+    where.push(`fi.feed_id = $${params.length}`);
   } else {
-    queryText = `
-      SELECT ${FEED_ITEM_LIST_COLUMNS}
-      FROM feed_items fi
-      JOIN podcasts p ON fi.feed_id = p.id
-      WHERE p.user_id = $1 AND p.is_subscribed = TRUE
-      ORDER BY fi.published_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-    queryParams = [userId, limit, offset];
+    where.push('p.is_subscribed = TRUE');
   }
-
-  const result = await query(queryText, queryParams);
+  if (sinceId !== undefined) {
+    params.push(sinceId);
+    where.push(`fi.id > $${params.length}`);
+  }
+  params.push(limit, offset);
+  const result = await query(
+    `SELECT ${FEED_ITEM_LIST_COLUMNS}
+       FROM feed_items fi
+       JOIN podcasts p ON fi.feed_id = p.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${sinceId !== undefined ? 'fi.id ASC' : 'fi.published_at DESC'}
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
   return result.rows;
 }
 

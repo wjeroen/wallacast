@@ -51,6 +51,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 - `GET /api/podcasts`: your subscriptions.
 - `GET /api/podcasts/feed-items?limit=50&offset=0`: cached feed items, newest first, at most 50 per request. Page on with `offset`. Each item has `feed_item_id`, `item_type` (`article` or `podcast_episode`), `title`, `teaser` (up to 1,200 characters of plain text, the best summary of what the item is), `description` (up to 2,000 characters), `url` or `audio_url`, `duration` (seconds), `author`, `published_at`, `podcast_show_name`.
+- `GET /api/podcasts/feed-items?since_id=1234`: only the items above that `feed_item_id`, lowest id first, 50 per request. A refresh gives every newly cached item a higher id, so a tool that keeps the highest id it has judged gets exactly what entered the feed since its last run, also an old post a feed only now shows. Page on with the last id received, until a page holds fewer than 50.
 - `POST /api/podcasts/refresh-feeds`: starts fetching every feed and answers `202` at once. Watch it with `GET /api/podcasts/refresh-status` until `running` is false. One refresh per 15 minutes per token, a second one answers `429` with `retry_after_seconds`.
 
 ### Reading an article without saving it
