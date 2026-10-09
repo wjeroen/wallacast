@@ -19,6 +19,34 @@
   --t2: #cbd5e1;  /* secondary headings */
   --t3: #94a3b8;  /* muted text */
   --t4: #64748b;  /* faint/icon text */
+
+  /* Status boxes: dark mode uses deep fills with pale text, light mode the reverse */
+  --success-bg: #065f46;
+  --success-fg: #d1fae5;
+  --error-bg: #991b1b;
+  --error-fg: #fecaca;
+  --error-border: #ef4444;
+  --info-bg: #1e40af;
+  --info-fg: #dbeafe;
+  --info-border: #3b82f6;
+  /* Buttons and tracks drawn ON a status box */
+  --on-status-tint: rgba(255, 255, 255, 0.15);
+  --on-status-tint-strong: rgba(255, 255, 255, 0.28);
+  --on-status-track: rgba(255, 255, 255, 0.2);
+  /* Status colors for text and icons on the page itself */
+  --danger-text: #f87171;
+  --ok-text: #22c55e;
+  --warn-text: #f59e0b;
+  --ai-text: #a78bfa;
+  /* Accent blue for links, selected tabs and chips, and accent icons. The logo and the
+     "wallacast" wordmark keep #60a5fa in both themes (logos have no contrast requirement). */
+  --accent-text: #60a5fa;
+
+  /* Native controls, scrollbars and the page behind .app follow the app theme,
+     not the OS (index.css is the Vite starter and follows the OS) */
+  color-scheme: dark;
+  background-color: var(--bg-app);
+  color: var(--t1);
 }
 
 [data-theme="light"] {
@@ -41,6 +69,39 @@
   --t2: #334155;
   --t3: #64748b;
   --t4: #94a3b8;
+
+  --success-bg: #d1fae5;
+  --success-fg: #065f46;
+  --error-bg: #fee2e2;
+  --error-fg: #991b1b;
+  --error-border: #fca5a5;
+  --info-bg: #dbeafe;
+  --info-fg: #1e40af;
+  --info-border: #93c5fd;
+  --on-status-tint: rgba(0, 0, 0, 0.06);
+  --on-status-tint-strong: rgba(0, 0, 0, 0.12);
+  --on-status-track: rgba(0, 0, 0, 0.1);
+  /* The dark-mode status colors are too pale on white */
+  --danger-text: #dc2626;
+  --ok-text: #15803d;
+  --warn-text: #b45309;
+  --ai-text: #7c3aed;
+  /* #60a5fa is 2.5:1 on white. #3b82f6, the primary button blue, is 3.7:1 and stays close
+     to the logo's blue. */
+  --accent-text: #3b82f6;
+
+  color-scheme: light;
+}
+
+/* Buttons without a background of their own get index.css's starter colors, which
+   follow the OS. These are the same two colors, tied to the app theme instead.
+   :where() keeps the light rule as weak as a plain element rule, so every class
+   that sets a background still wins. */
+button {
+  background-color: #1a1a1a;
+}
+:where([data-theme="light"]) button {
+  background-color: #f9f9f9;
 }
 
 * {
@@ -77,11 +138,6 @@
   height: 2.5rem;
   width: auto;
   object-fit: contain;
-}
-
-[data-theme="light"] .loading-logo {
-  border-radius: 0.5rem;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 .app-header h1 {
@@ -242,7 +298,7 @@
 }
 
 .bottom-nav button.active {
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-raised);
 }
 
@@ -261,6 +317,15 @@
   transform: scale(1.05);
 }
 
+/* On the Add tab the button keeps its blue instead of taking the grey background of the
+   other open tabs (the .active rule above). A blue ring marks it as open, the same
+   "selected" signal as a selected library card (.content-card.selected). */
+.bottom-nav .add-button.active {
+  background: #3b82f6;
+  color: white;
+  box-shadow: 0 0 0 3px var(--bg-surface), 0 0 0 5px #3b82f6;
+}
+
 /* Feed Tab */
 .feed-tab {
   width: 100%;
@@ -271,6 +336,14 @@
 
 .search-bar {
   margin-bottom: 1rem;
+}
+
+.search-error {
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--error-bg);
+  border-radius: 8px;
+  color: var(--error-fg);
 }
 
 .search-input-group {
@@ -568,7 +641,7 @@
 }
 
 .content-source-link a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -642,7 +715,7 @@
 
 .content-type-selector button.active {
   border-color: #3b82f6;
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-raised);
 }
 
@@ -681,14 +754,21 @@
   margin-bottom: 1rem;
 }
 
+/* What a slow article save is doing, under the Add tab's Save button */
+.save-progress {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--t3);
+}
+
 .message.success {
-  background: #065f46;
-  color: #d1fae5;
+  background: var(--success-bg);
+  color: var(--success-fg);
 }
 
 .message.error {
-  background: #991b1b;
-  color: #fecaca;
+  background: var(--error-bg);
+  color: var(--error-fg);
 }
 
 .submit-btn {
@@ -900,7 +980,7 @@
 .filter-buttons button.active {
   background: var(--bg-raised);
   border-color: #3b82f6;
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Status funnel button keeps its text label visible on mobile (it's the
@@ -1298,7 +1378,7 @@
 
 /* Blue for the Archive button (same accent blue as selected text/icons) */
 .content-actions button.active[title="Restore from archive"] {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .content-actions .delete-btn:hover {
@@ -1309,6 +1389,22 @@
 .content-actions button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Feed tab: an item already in the library. Same look as the plus it replaces, and no
+   hover change, since tapping it does nothing. */
+.content-actions button.in-library,
+.content-actions button.in-library:hover {
+  background: var(--bg-surface);
+  border-color: var(--bg-raised);
+  color: var(--t3);
+  cursor: default;
+}
+
+/* Feed tab card text: the teaser keeps a blank line between the description and the
+   opening of the post */
+.description.feed-description {
+  white-space: pre-line;
 }
 
 .dropdown-container {
@@ -1378,7 +1474,7 @@
 .dropdown-menu button:hover:not(:disabled) {
   background: var(--bg-hover-soft);
   border-color: var(--bg-raised); /* keep the divider neutral, no colored hover edges */
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .dropdown-menu button:disabled {
@@ -1402,32 +1498,40 @@
 }
 
 .generation-status.generating {
-  background: #1e40af;
-  color: #dbeafe;
-  border: 1px solid #3b82f6;
+  background: var(--info-bg);
+  color: var(--info-fg);
+  border: 1px solid var(--info-border);
 }
 
-[data-theme="light"] .generation-status.generating {
-  background: #dbeafe;
-  color: #1e40af;
-  border: 1px solid #93c5fd;
+/* The 5 seconds "Completed" line on a library card */
+.generation-status.completed {
+  color: #10b981;
+}
+
+[data-theme="light"] .generation-status.completed {
+  color: var(--ok-text);
 }
 
 /* Error banner: message on the left, Retry + dismiss X grouped together on the
    right. A flex row keeps every piece on one baseline so the heights line up. */
 .generation-status.error {
-  background: #991b1b;
-  color: #fecaca;
-  border: 1px solid #ef4444;
+  background: var(--error-bg);
+  color: var(--error-fg);
+  border: 1px solid var(--error-border);
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
 }
 
-[data-theme="light"] .generation-status.error {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
+/* A generation an API token skipped because of its limits: the same row as an error, in
+   neutral colours, since nothing went wrong. */
+.generation-status.skipped {
+  background: var(--bg-raised);
+  color: var(--t1);
+  border: 1px solid var(--bg-hover);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 
 .generation-status .error-message {
@@ -1453,14 +1557,14 @@
   padding: 0 0.6rem;
   font-size: 0.75rem;
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--on-status-tint);
   color: inherit;
   border: 1px solid currentColor;
   border-radius: 0.375rem;
   cursor: pointer;
 }
 .generation-status .error-retry-btn:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--on-status-tint-strong);
 }
 
 .generation-status .error-dismiss-btn {
@@ -1480,13 +1584,13 @@
 }
 .generation-status .error-dismiss-btn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--on-status-track);
 }
 
 .generation-status .progress-bar {
   width: 100%;
   height: 4px;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--on-status-track);
   border-radius: 2px;
   overflow: hidden;
   margin-top: 0.5rem;
@@ -1615,7 +1719,7 @@
 
 .playback-controls button:hover {
   background: var(--bg-hover-soft);
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .play-pause-btn {
@@ -1689,13 +1793,13 @@
 }
 
 .transcript-word:hover {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Read state is applied imperatively (classList) during playback, so the
    memoized span tree never re-renders; color must live here, not inline. */
 .transcript-word.read {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Comments Section */
@@ -1747,7 +1851,7 @@
 
 .comment-username {
   font-weight: 600;
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: calc(1rem * var(--reader-font-scale, 1));
 }
 
@@ -1801,7 +1905,7 @@
 }
 
 .comment-content a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: underline;
 }
 
@@ -2037,10 +2141,10 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
-  background: #991b1b;
-  border: 1px solid #ef4444;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   border-radius: 0.5rem;
-  color: #fecaca;
+  color: var(--error-fg);
   font-size: 0.875rem;
 }
 
@@ -2176,7 +2280,7 @@
 .home-login-toggle {
   background: none;
   border: none;
-  color: #60a5fa;
+  color: var(--accent-text);
   cursor: pointer;
   font-size: 0.875rem;
   padding: 0;
@@ -2318,7 +2422,7 @@
   height: 32px;
   border-radius: 0.5rem;
   background: var(--bg-raised);
-  color: #60a5fa;
+  color: var(--accent-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2472,7 +2576,7 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .home-cost-head span {
@@ -2505,7 +2609,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   font-weight: 500;
 }
@@ -2541,6 +2645,43 @@
 
 .demo-banner button:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+/* Notice that an API token hit a limit, one line per token, until dismissed. Same shape
+   as the demo banner. */
+.token-alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--bg-raised);
+  color: var(--warn-text);
+  font-size: 0.8rem;
+}
+
+.token-alert-lines {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.token-alert-banner button {
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--bg-hover);
+  border-radius: 0.375rem;
+  color: var(--t1);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+}
+
+.token-alert-banner button:hover {
+  background: var(--bg-hover);
 }
 
 .demo-toast {
@@ -2758,10 +2899,10 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   margin: 1rem;
-  background: #991b1b;
-  border: 1px solid #ef4444;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   border-radius: 0.5rem;
-  color: #fecaca;
+  color: var(--error-fg);
   font-size: 0.875rem;
 }
 
@@ -2951,7 +3092,7 @@
 .settings-section .secret-set {
   font-weight: normal;
   font-size: 0.75rem;
-  color: #22c55e;
+  color: var(--ok-text);
   margin-left: 0.25rem;
 }
 
@@ -3028,7 +3169,7 @@
   background: var(--bg-surface);
   border: 1px solid rgba(220, 38, 38, 0.4);
   border-radius: 0.375rem;
-  color: #f87171;
+  color: var(--danger-text);
   cursor: pointer;
   transition: border-color 0.2s;
   flex-shrink: 0;
@@ -3250,7 +3391,7 @@
   appearance: none;
   width: 12px;
   height: 12px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -3263,7 +3404,7 @@
 .mini-progress-slider::-moz-range-thumb {
   width: 12px;
   height: 12px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -3370,7 +3511,7 @@
 }
 
 .fullscreen-source-link a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -3473,7 +3614,7 @@
 }
 
 .tab-button.active {
-  color: #60a5fa;
+  color: var(--accent-text);
   background: var(--bg-app);
 }
 
@@ -3618,7 +3759,7 @@
 
 /* Footnotes. Inline reference markers + the definition section at the end (clickable). */
 .article-content sup.footnote-ref a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   cursor: pointer;
 }
@@ -3639,7 +3780,7 @@
   margin: 0.4em 0;
 }
 .article-content .footnote-backref {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
   margin-left: 0.35em;
   cursor: pointer;
@@ -3688,7 +3829,7 @@
 
 .article-content blockquote.twitter-tweet > a,
 .read-along-element blockquote.twitter-tweet > a {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.85rem;
   text-decoration: none;
 }
@@ -3750,7 +3891,7 @@ blockquote.twitter-tweet .tweet-footer {
 }
 
 blockquote.twitter-tweet .tweet-footer a {
-  color: #60a5fa;
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -3768,6 +3909,19 @@ blockquote.twitter-tweet.tweet-quoted {
 .article-content a {
   color: #3b82f6;
   text-decoration: underline;
+}
+
+/* A chapter time in a podcast description (timestamps.ts): a button that looks like the
+   description's links */
+.article-content .description-timestamp {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font: inherit;
+  color: #3b82f6;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .article-content ul,
@@ -3813,7 +3967,7 @@ blockquote.twitter-tweet.tweet-quoted {
   display: block;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 0.7rem;
-  color: #a78bfa;
+  color: var(--ai-text);
   background: rgba(139, 92, 246, 0.1);
   border: 1px solid rgba(139, 92, 246, 0.25);
   border-radius: 4px;
@@ -4066,10 +4220,10 @@ blockquote.twitter-tweet.tweet-quoted {
 .version-badge.version-refetch { color: #0891b2; border-color: #0891b255; }
 .version-badge.version-restore { color: #d97706; border-color: #d9770655; }
 /* Marks the snapshot the current audio narration was generated from */
-.version-badge.version-audio { color: #60a5fa; border-color: #60a5fa55; }
+.version-badge.version-audio { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent-text) 33%, transparent); }
 /* Audio-sync status line at the top of the History tab */
 .version-audio-note {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.8rem;
   margin: 0.35rem 0 0;
 }
@@ -4217,8 +4371,8 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .sleep-preset.active {
-  color: #60a5fa;
-  border-color: #60a5fa;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 /* Prefer-summary-audio toggle row: label left, checkmark right with a soft
@@ -4228,7 +4382,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .display-panel-toggle.prefer-summary-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .prefer-summary-check {
@@ -4245,6 +4399,14 @@ blockquote.twitter-tweet.tweet-quoted {
   color: var(--t3);
   text-align: center;
   padding: 2rem;
+}
+
+/* "Generate transcript" buttons under a podcast's empty Transcript tab */
+.transcript-generate-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
 /* LLM Read-Along Elements */
@@ -4264,7 +4426,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 .read-along-element.ra-active {
   background-color: rgba(96, 165, 250, 0.1);
-  border-left-color: #60a5fa;
+  border-left-color: var(--accent-text);
 }
 
 /* Autoscroll toggle in tabs bar */
@@ -4292,7 +4454,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .autoscroll-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Orange divider between content and comments in read-along tab.
@@ -4359,8 +4521,8 @@ blockquote.twitter-tweet.tweet-quoted {
   color: var(--t0);
 }
 .queue-shuffle-btn.active {
-  color: #60a5fa;
-  border-color: #60a5fa;
+  color: var(--accent-text);
+  border-color: var(--accent-text);
 }
 
 .queue-divider {
@@ -4397,8 +4559,8 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .queue-row.current {
-  border-color: #60a5fa;
-  background: color-mix(in srgb, #60a5fa 10%, var(--bg-surface));
+  border-color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, var(--bg-surface));
 }
 
 .queue-row-main {
@@ -4433,11 +4595,11 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .queue-row.current .queue-row-title {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 .queue-now-playing {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.85rem;
 }
 
@@ -4450,7 +4612,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 .queue-row-noaudio {
-  color: #f59e0b;
+  color: var(--warn-text);
 }
 
 .queue-row-move {
@@ -4529,7 +4691,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 /* Autoplay "On/Off" option toggle gets a blue tint when active */
 .fullscreen-player-options .option-toggle.active {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 
 /* Player Controls (in fullscreen) */
@@ -4556,6 +4718,27 @@ blockquote.twitter-tweet.tweet-quoted {
   text-align: center;
 }
 
+/* Which audio is loaded (summary or full), a switch when the item has both */
+.fullscreen-progress-bar .audio-source-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 6px;
+  margin-right: -0.75rem;
+  background: none;
+  border: none;
+  color: var(--t3);
+}
+
+.fullscreen-progress-bar button.audio-source-btn {
+  cursor: pointer;
+}
+
+.fullscreen-progress-bar button.audio-source-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .fullscreen-progress-bar .progress-slider {
   flex: 1;
   height: 6px;
@@ -4571,7 +4754,7 @@ blockquote.twitter-tweet.tweet-quoted {
   appearance: none;
   width: 16px;
   height: 16px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s;
@@ -4584,7 +4767,7 @@ blockquote.twitter-tweet.tweet-quoted {
 .fullscreen-progress-bar .progress-slider::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  background: #60a5fa;
+  background: var(--accent-text);
   border-radius: 50%;
   cursor: pointer;
   border: none;
@@ -4717,7 +4900,7 @@ blockquote.twitter-tweet.tweet-quoted {
   background: none;
   border: 1px solid #3b82f6;
   border-radius: 999px;
-  color: #60a5fa;
+  color: var(--accent-text);
   font-size: 0.8rem;
   font-weight: 600;
   padding: 0.3rem 0.8rem;
@@ -4847,7 +5030,7 @@ blockquote.twitter-tweet.tweet-quoted {
   white-space: nowrap;
 }
 .settings-tag-count {
-  color: var(--text-secondary);
+  color: var(--t3);
   font-size: 0.8rem;
 }
 .settings-tag-row button {
@@ -4856,6 +5039,26 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 .settings-tag-delete {
   color: #ef4444;
+}
+/* Wallabag "How to connect" box in Settings */
+.settings-info-box {
+  padding: 0.75rem;
+  background: #1e3a5f;
+  border: 1px solid #2563eb;
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+[data-theme="light"] .settings-info-box {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info-fg);
+}
+.settings-info-box .settings-collapse-toggle {
+  color: inherit;
+  padding: 0;
 }
 /* Read-only API tokens (Settings): the create row, the one-time reveal, one row per live token. */
 .settings-token-create {
@@ -4921,7 +5124,7 @@ blockquote.twitter-tweet.tweet-quoted {
   white-space: nowrap;
 }
 .settings-token-meta {
-  color: var(--text-secondary);
+  color: var(--t3);
   font-size: 0.8rem;
 }
 .settings-token-row button {
@@ -4931,11 +5134,96 @@ blockquote.twitter-tweet.tweet-quoted {
 .settings-token-revoke {
   color: #ef4444;
 }
+/* The editor panel under a token row (with .settings-collapse-body for the left rule):
+   permissions, limits, generation choice and the change log, one group each. */
+.settings-token-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin: 0.5rem 0 0.75rem;
+}
+.settings-token-editor-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.settings-token-editor-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--t2);
+}
+.settings-section .settings-token-editor label {
+  margin-bottom: 0;
+  cursor: pointer;
+}
+.settings-section .settings-token-editor input[type="checkbox"],
+.settings-section .settings-token-editor input[type="radio"] {
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+.settings-token-editor button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+/* "Add items" and its three choices on one line, wrapping on narrow screens */
+.settings-token-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  font-size: 0.875rem;
+  color: var(--t2);
+}
+.settings-token-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.75rem 1rem;
+  width: 100%;
+}
+.settings-token-limit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.settings-section .settings-token-limit input {
+  width: 8rem;
+  max-width: 100%;
+}
+.settings-section .settings-token-limit .settings-hint {
+  margin-top: 0;
+}
+.settings-token-changes {
+  width: 100%;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+.settings-token-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.6rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--bg-raised);
+  font-size: 0.8rem;
+}
+.settings-token-change-when {
+  color: var(--t3);
+}
+.settings-token-change-item {
+  flex: 1;
+  min-width: 8rem;
+  overflow-wrap: anywhere;
+}
+.settings-token-change.undone {
+  opacity: 0.55;
+}
 /* "(customized)" tag next to a custom-prompt label when it differs from the built-in default. */
 .settings-badge-custom {
   /* accent TEXT blue (the old undefined-var fallback #2563eb was needlessly
      dim on the dark background) */
-  color: #60a5fa;
+  color: var(--accent-text);
   font-weight: 600;
   font-size: 0.8rem;
 }
@@ -4953,10 +5241,10 @@ blockquote.twitter-tweet.tweet-quoted {
 /* Account: which features the configured API keys unlock */
 .feature-access { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.75rem; }
 .feature-access-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; color: var(--t2); }
-.feature-access-row.ok svg { color: #22c55e; flex-shrink: 0; }
+.feature-access-row.ok svg { color: var(--ok-text); flex-shrink: 0; }
 .feature-access-row.missing { color: var(--t3); }
-.feature-access-row.missing svg { color: #f87171; flex-shrink: 0; }
-.feature-access-all { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.75rem; font-size: 0.85rem; color: #22c55e; }
+.feature-access-row.missing svg { color: var(--danger-text); flex-shrink: 0; }
+.feature-access-all { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--ok-text); }
 .feature-access-link {
   background: none;
   border: none;
@@ -4985,7 +5273,7 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 .test-connection-button:hover:not(:disabled) { border-color: #3b82f6; }
 .test-connection-button:disabled { opacity: 0.5; cursor: not-allowed; }
-.test-connection-button.danger { color: #f87171; border-color: rgba(220, 38, 38, 0.4); }
+.test-connection-button.danger { color: var(--danger-text); border-color: rgba(220, 38, 38, 0.4); }
 .test-connection-button.danger:hover:not(:disabled) { border-color: #dc2626; background: rgba(220, 38, 38, 0.1); }
 
 /* Voice variety multi-select chips */
@@ -5017,7 +5305,7 @@ blockquote.twitter-tweet.tweet-quoted {
   font-size: 1rem;
 }
 .read-more-link {
-  color: #60a5fa;          /* same link blue as card links / active tab */
+  color: var(--accent-text);          /* same link blue as card links / active tab */
   font-weight: 600;
   cursor: pointer;
 }
@@ -5145,18 +5433,6 @@ blockquote.twitter-tweet.tweet-quoted {
   border-radius: 0 2px 2px 0;
 }
 
-/* Generation failures surfaced inside the player (the library card shows them too). */
-.player-error-banner {
-  margin: 0.35rem auto 0;
-  max-width: 640px;
-  padding: 0.35rem 0.8rem;
-  font-size: 0.8rem;
-  border-radius: 0.4rem;
-  border: 1px solid #ef444455;
-  color: #f87171;
-  text-align: center;
-}
-
 /* Shown when the automatic resume-seek permanently failed: manual jump chip. */
 .resume-chip {
   display: block;
@@ -5166,7 +5442,7 @@ blockquote.twitter-tweet.tweet-quoted {
   border-radius: 999px;
   border: 1px solid #3b82f6;
   background: transparent;
-  color: #60a5fa;
+  color: var(--accent-text);
   cursor: pointer;
 }
 
@@ -5273,7 +5549,7 @@ blockquote.twitter-tweet.tweet-quoted {
   gap: 0.5rem;
 }
 .tag-menu .tag-menu-list button.selected {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 .tag-menu-label {
   flex: 1;
@@ -5366,7 +5642,7 @@ blockquote.twitter-tweet.tweet-quoted {
   background: var(--bg-hover-soft);
 }
 .tag-editor-row.selected {
-  color: #60a5fa;
+  color: var(--accent-text);
 }
 .tag-editor-row-label {
   flex: 1;
@@ -5380,7 +5656,7 @@ blockquote.twitter-tweet.tweet-quoted {
   font-size: 0.75rem;
 }
 .tag-editor-create {
-  color: #60a5fa;
+  color: var(--accent-text);
   font-weight: 600;
 }
 .comment-warning-modal .tag-editor-hint {
@@ -5389,7 +5665,7 @@ blockquote.twitter-tweet.tweet-quoted {
   font-size: 0.85rem;
 }
 .comment-warning-modal .tag-editor-hint.tag-editor-error {
-  color: #f87171;
+  color: var(--danger-text);
 }
 .tag-editor-buttons {
   display: flex;
@@ -5403,5 +5679,5 @@ blockquote.twitter-tweet.tweet-quoted {
 .import-notice {
   margin-top: 0.5rem;
   font-size: 0.85rem;
-  color: #60a5fa;
+  color: var(--accent-text);
 }

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Podcast, Newspaper, SquareArrowOutUpRight } from 'lucide-react';
 import { cleanHtml, formatDuration, getDomainFromUrl, truncate } from '../format';
 import type { Podcast as PodcastType } from '../types';
@@ -7,6 +8,9 @@ import type { Podcast as PodcastType } from '../types';
 export interface FeedEpisode {
   title: string;
   description?: string;
+  // Plain-text card text built by the backend (buildTeaser in podcast-service.ts): the
+  // description, followed by the opening of the post when the feed carries the full post
+  teaser?: string | null;
   url?: string;
   audio_url?: string;
   preview_picture?: string;
@@ -16,6 +20,8 @@ export interface FeedEpisode {
   author?: string;
   podcast_title?: string;
   podcast_id?: number | null;
+  // Set on items from the feed_items cache, whose description arrives shortened
+  feed_item_id?: number;
 }
 
 // Shared cards for the Feed tab. The same markup used to be copy-pasted in
@@ -91,6 +97,12 @@ export function FeedCard({ feed, variant, onClick, actionButton }: {
   );
 }
 
+// Collapsed, an item's text shows its first 280 characters. "[more]" shows the rest, which
+// the backend caps at 1,200 characters (items cached before teasers existed show their
+// description, capped the same way).
+const COLLAPSED_TEXT_CHARS = 280;
+const EXPANDED_TEXT_CHARS = 1200;
+
 // An episode (podcast) or article (newsletter/blog) row with an
 // add-to-library action button rendered by the caller.
 // `showShowName` is the "Recent Updates" variant: the author line reads
@@ -100,6 +112,9 @@ export function FeedEpisodeCard({ episode, showShowName = false, actionButton }:
   showShowName?: boolean;
   actionButton: React.ReactNode;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const fullText = episode.teaser || cleanHtml(episode.description || '');
+  const canExpand = !expanded && fullText.length > COLLAPSED_TEXT_CHARS;
   return (
     <div className="content-card">
       <div className="content-info">
@@ -128,8 +143,21 @@ export function FeedEpisodeCard({ episode, showShowName = false, actionButton }:
             </a>
           </p>
         )}
-        {episode.description && (
-          <p className="description">{truncate(cleanHtml(episode.description), 280)}</p>
+        {fullText && (
+          <p className="description feed-description">
+            {truncate(fullText, expanded ? EXPANDED_TEXT_CHARS : COLLAPSED_TEXT_CHARS)}
+            {canExpand && (
+              <>
+                {' '}
+                <span
+                  className="read-more-link"
+                  onClick={(e) => { e.stopPropagation(); setExpanded(true); }}
+                >
+                  [more]
+                </span>
+              </>
+            )}
+          </p>
         )}
         <div className="metadata">
           <span className="type">

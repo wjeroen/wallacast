@@ -1,6 +1,10 @@
 // Scratch test for the fetch cleanups in article-fetcher.ts:
-//   0.  the JSON-LD author fallback, Tufte sidenotes, and (0c) the story box, share links,
-//       comment areas, archive date and lead photo, all on small fixtures (no network)
+//   0.  the JSON-LD author fallback, Tufte sidenotes, (0c) the story box, share links,
+//       comment areas, archive date and lead photo, (0d) bot walls, paywall previews,
+//       Substack notes and blog post boxes, (0e) page-layout styles, (0f) print-hidden
+//       parts and empty video players, (0g) consent gates, login forms, captchas and
+//       empty pages, (0h) paid previews and archive.ph timemaps, and (0i) teaser copies and
+//       the error without an archive link, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -26,7 +30,25 @@ import {
   nestedStoryArticle,
   archivedPublishedDate,
   archivedLeadFigure,
+  isBotCheckPage,
+  isPaywallPreview,
+  substackNote,
+  blogPostBox,
+  stripLayoutStyles,
+  removePrintHidden,
+  removeEmptyVideoPlayers,
+  isLoginWall,
+  hasNoText,
+  dpgPrivacyGateCallback,
+  archiveSubmitUrl,
+  isPaidPreview,
+  storyTextChars,
+  copyProblem,
+  noCopyError,
+  lightenHtml,
+  parsePage,
 } from '../src/services/article-fetcher.js';
+import { newestArchiveCopy } from '../src/services/url-guard.js';
 
 // --- 0. JSON-LD author fallback ----------------------------------------------------
 const ld = (json: string) =>
@@ -210,6 +232,303 @@ const dir = process.argv[2];
   assert.equal(isCommentArea(el('<a aria-label="There are 97 comments">97</a>')), false, 'a comment count link is left alone');
 
   console.log('✅ Story box, share links, comment areas, archive date and lead photo');
+}
+
+// --- 0d. Bot walls, paywall previews, Substack notes and blog post boxes -----------
+// Shapes from 2026-10-06: wsj.com's DataDome page (HTTP 401) and its Wayback copy, a Substack
+// note, and robert.ocallahan.org (no <article> or <main>, the archive list before the post).
+{
+  const DATADOME = '<html lang="en"><head><title>wsj.com</title><style>#cmsg{animation: A 1.5s;}</style></head>'
+    + '<body style="margin:0"><p id="cmsg">Please enable JS and disable any ad blocker</p>'
+    + '<script data-cfasync="false">var dd={\'rt\':\'c\'}</script>'
+    + '<script data-cfasync="false" src="https://ct.captcha-delivery.com/c.js"></script></body></html>';
+  assert.equal(isBotCheckPage(DATADOME), true, 'DataDome block page');
+
+  const ldPaywall = (body: string) => '<html><head><script type="application/ld+json">'
+    + '{"@type":"NewsArticle","isAccessibleForFree":false,'
+    + '"hasPart":{"@type":"WebPageElement","cssSelector":".paywall","isAccessibleForFree":false}}'
+    + `</script></head><body><article><p>Alicja Piecha found her first rogue AI swarm.</p>${body}</article></body></html>`;
+  assert.equal(isPaywallPreview(ldPaywall('')), true, 'the paid part is missing: a preview');
+  assert.equal(
+    isPaywallPreview(ldPaywall(`<div class="paywall"><p>${'The rest of the story. '.repeat(20)}</p></div>`)),
+    false,
+    'the paid part is there (hidden by CSS on the site): the whole article'
+  );
+  assert.equal(isPaywallPreview('<html><body><p>No markup at all.</p></body></html>'), false, 'no JSON-LD, no verdict');
+  assert.equal(
+    isPaywallPreview('<script type="application/ld+json">{ "isAccessibleForFree": false, broken</script>'),
+    false,
+    'a malformed block is skipped'
+  );
+
+  const preloads = {
+    feedData: {
+      feedItem: {
+        comment: {
+          name: 'Will MacAskill',
+          date: '2026-10-04T17:24:53.856Z',
+          body: 'Effective altruism\'s openness to strangeness is a big part of its strength.\n\nMy response:',
+          attachments: [
+            { type: 'image', imageUrl: 'https://substack-post-media.s3.amazonaws.com/public/images/a.png' },
+            { type: 'post', post: { canonical_url: 'https://www.planned-obsolescence.org/p/x', title: 'The attack surprised me' } },
+            { type: 'link', linkMetadata: { url: 'javascript:alert(1)', title: 'Never a link' } },
+            { type: 'comment', comment: { user: { name: 'Dan Williams' }, body: 'New episode!\n\nI enjoyed it.' } },
+            { type: 'video' },
+          ],
+        },
+      },
+    },
+  };
+  const notePage = '<html><head><meta name="author" content="Substack">'
+    + `<script>window._preloads = JSON.parse(${JSON.stringify(JSON.stringify(preloads))})</script></head><body>`
+    + '<div style="margin-right:420px"><h3>Make money doing the work you believe in</h3>'
+    + '<div class="ProseMirror FeedProseMirror"><p>Effective altruism\'s openness to strangeness is a big part of its strength.</p>'
+    + '<p>My response:</p></div><h4>Log in or sign up</h4></div></body></html>';
+  const noteDoc = new JSDOM(notePage).window.document;
+  const note = substackNote(notePage, noteDoc, 'https://substack.com/@willmacaskill/note/c-352811447');
+  assert.ok(note, 'a note page is a note');
+  assert.equal(note!.title, 'Effective altruism\'s openness to strangeness is a big part of its strength.', 'first line as title');
+  assert.equal(note!.author, 'Will MacAskill', 'the note author, not "Substack"');
+  assert.equal(note!.publishedDate, '2026-10-04T17:24:53.856Z', 'the note date');
+  const noteHtml = note!.content.innerHTML;
+  assert.ok(!/Make money|Log in|420px/.test(noteHtml), 'none of the page shell');
+  assert.equal(note!.content.querySelectorAll(':scope > p').length, 3, 'two note paragraphs and the post link');
+  assert.equal(note!.content.querySelector('figure img')?.getAttribute('src'), 'https://substack-post-media.s3.amazonaws.com/public/images/a.png', 'the image');
+  assert.equal(note!.content.querySelector('a[href="https://www.planned-obsolescence.org/p/x"]')?.textContent, 'The attack surprised me', 'the attached post');
+  assert.ok(!noteHtml.includes('javascript:'), 'a non-http link is dropped');
+  assert.equal(note!.content.querySelector('blockquote strong')?.textContent, 'Dan Williams', 'the quoted note author');
+  assert.equal(note!.content.querySelectorAll('blockquote p').length, 3, 'the quoted note author and two paragraphs');
+  assert.equal(
+    substackNote(notePage, new JSDOM(notePage).window.document, 'https://www.astralcodexten.com/p/an-open-letter'),
+    null,
+    'a post is not a note'
+  );
+  const longBody = { feedData: { feedItem: { comment: { name: 'A', body: 'x'.repeat(30) + ' ' + 'y'.repeat(90) + '\nline two' } } } };
+  const longPage = `<html><head><script>window._preloads = JSON.parse(${JSON.stringify(JSON.stringify(longBody))})</script></head><body></body></html>`;
+  const longNote = substackNote(longPage, new JSDOM(longPage).window.document, 'https://substack.com/@a/note/c-1');
+  assert.equal(longNote!.title, 'x'.repeat(30) + '...', 'a long first line is cut at a word');
+  assert.equal(longNote!.content.innerHTML, `<p>${'x'.repeat(30)} ${'y'.repeat(90)}<br>line two</p>`, 'without the rendered box, the plain text');
+
+  const blog = (posts: string) => new JSDOM('<body><h1>Eyes Above The Waves</h1><div id="main"><div id="nav"><h2>Archive</h2><ul>'
+    + '<li><a href="/2026/09/goodbye-google.html">Goodbye Google</a></li>'.repeat(40)
+    + `</ul></div><div id="body">${posts}</div></div></body>`).window.document;
+  const post = `<div class="post"><p class="date">Thursday 24 September 2026</p><h2>Goodbye Google</h2><p>${'I resign. '.repeat(60)}</p></div>`;
+  assert.equal(blogPostBox(blog(post))?.querySelector('h2')?.textContent, 'Goodbye Google', 'the one post box, not the archive');
+  assert.equal(blogPostBox(blog(post + post)), null, 'two posts (a list page) give no box');
+  assert.equal(blogPostBox(blog('<div class="post"><p>Short.</p></div>')), null, 'a box under 500 characters does not count');
+
+  console.log('✅ Bot walls, paywall previews, Substack notes and blog post boxes');
+}
+
+// --- 0e. Page-layout styles a phone reader cannot carry ----------------------------
+{
+  const root = new JSDOM('<body>'
+    + '<div id="note" style="margin-right: 420px; max-width: var(--feed-page-width)"><p>Note</p></div>'
+    + '<div id="wrap" style="position: relative; padding-bottom: 56.25%; height: 0px; overflow: hidden">'
+    + '<img id="img" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%"></div>'
+    + '<p id="indent" style="margin-left: 40px; font-style: italic">Indented quote</p>'
+    + '<div id="wide" style="width: 680px; display: flex; white-space: nowrap; text-align: center">Wide</div>'
+    + '<div id="narrow" style="width: 50%; min-width: 120px; display: none">Hidden</div>'
+    + '<span id="pre" style="white-space: pre-wrap">a  b</span>'
+    + '<figure id="fig" style="width: 56.25%; float: right"><img src="x.png"></figure>'
+    + '<div id="only" style="position: absolute; top: 3px">x</div>'
+    + '</body>').window.document;
+  stripLayoutStyles(root.body);
+  const style = (id: string) => root.getElementById(id)!.getAttribute('style');
+  assert.equal(style('note'), 'max-width: var(--feed-page-width)', 'the 420px margin goes, max-width stays');
+  assert.equal(style('wrap'), 'overflow: hidden', 'the aspect-ratio wrapper loses its position, percentage padding and height');
+  assert.equal(style('img'), 'width: 100%; height: 100%', 'an image keeps its own size, not its position');
+  assert.equal(style('indent'), 'margin-left: 40px; font-style: italic', 'a small indent and text styling stay');
+  assert.equal(style('wide'), 'text-align: center', 'a desktop width, flex and nowrap go');
+  assert.equal(style('narrow'), 'width: 50%; min-width: 120px; display: none', 'a percentage width, a small min-width and display none stay');
+  assert.equal(style('pre'), 'white-space: pre-wrap', 'pre-wrap stays');
+  assert.equal(style('fig'), 'width: 56.25%', 'a figure keeps its percentage width, not its float');
+  assert.equal(root.getElementById('only')!.hasAttribute('style'), false, 'an emptied style attribute is removed');
+  assert.equal(root.body.textContent, 'NoteIndented quoteWideHiddena  bx', 'no text changes');
+  console.log('✅ Page-layout styles');
+}
+
+// --- 0f. Print-hidden parts and empty video players ---------------------------------
+// The shape of smh.com.au's story box (2026-10-07): ads, a save tooltip and a Brightcove player
+// marked noPrint between the paragraphs, and the player's file loaded only by the site's script.
+{
+  const story = '<p>' + 'Labor is eyeing laws to force tech firms to be transparent. '.repeat(4) + '</p>';
+  const doc = new JSDOM('<body><div id="box">'
+    + '<div class="container"><div class="adWrapper noPrint" data-testid="ad"><small>Advertisement</small></div></div>'
+    + '<div class="noPrint" data-testid="article-actions"><div role="tooltip"><p>You have reached your maximum number of saved items.</p></div></div>'
+    + story
+    + '<div class="noPrint" data-testid="video"><div><video data-video-id="6405512121112" controls></video>'
+    + '<div><span>Loading</span></div></div><p></p></div>'
+    + story
+    + '<aside class="noPrint" data-testid="related-story"><h2>Related Article</h2></aside>'
+    + '</div></body>').window.document;
+  const box = doc.getElementById('box')!;
+  assert.equal(removePrintHidden(box), 4, 'the ad, the tooltip bar, the player and the related box go');
+  assert.equal(box.textContent!.replace(/\s+/g, ' ').trim(), (story + story).replace(/<\/?p>/g, '').trim(), 'only the story text is left');
+
+  const whole = new JSDOM('<body><div id="box"><div class="no-print">' + story + story + '</div><p>Short</p></div></body>').window.document;
+  assert.equal(removePrintHidden(whole.getElementById('box')!), 0, 'a story body marked print-hidden stays');
+
+  // Another site's player without print marks: the empty one goes with its "Loading" box, a
+  // captioned one keeps its caption, and a video with a file stays.
+  const players = new JSDOM('<body><div id="box">' + story
+    + '<div id="p1"><div><video data-account="1"></video><div><span>Loading</span></div></div></div>'
+    + '<figure id="p2"><div id="p2box"><video></video><span>Play</span></div><figcaption>The prime minister at the United Nations in New York.</figcaption></figure>'
+    + '<div id="p3"><video src="clip.mp4" controls></video></div>'
+    + '<div id="p4"><video controls><source src="clip.webm" type="video/webm"></video></div>'
+    + story + '</div></body>').window.document;
+  const pbox = players.getElementById('box')!;
+  assert.equal(removeEmptyVideoPlayers(pbox), 2, 'two players without a file go');
+  assert.equal(players.getElementById('p1'), null, 'the empty player and its Loading box are gone');
+  assert.equal(players.getElementById('p2box'), null, 'the captioned player box is gone');
+  assert.ok(players.getElementById('p2')!.querySelector('figcaption'), 'its caption stays');
+  assert.ok(players.getElementById('p3')!.querySelector('video'), 'a video with src stays');
+  assert.ok(players.getElementById('p4')!.querySelector('video'), 'a video with a <source> stays');
+  console.log('✅ Print-hidden parts and empty video players');
+}
+
+// --- 0g. Consent gates, login forms, captchas and empty pages ------------------------
+// Shapes from 2026-10-07: DPG Media's privacy gate (hln.be, demorgen.be), Roularta's login page
+// (knack.be on our server) and AWS WAF's captcha (knack.be from a phone).
+{
+  const article = 'https://www.hln.be/binnenland/een-artikel~adfc0aaa/';
+  const callback = `https://www.hln.be/privacy-gate/accept-tcf2?redirectUri=%2Fbinnenland%2Feen-artikel%7Eadfc0aaa%2F&authId=6eb89096-432c-42ed-a9ed-dc62a84484bf`;
+  const gate = `<!DOCTYPE html><html lang='nl'><head><script type="text/javascript">
+    const callbackUrl = new URL(decodeURIComponent('${encodeURIComponent(callback)}'))
+    window._privacy = window._privacy || [];</script><title>DPG Media Privacy Gate</title></head>
+    <body><noscript><iframe title="gtm" src="https://www.googletagmanager.com/ns.html?id=GTM-1"></iframe></noscript>
+    <div class="container"><div id="message" class="modal"><img src="logo.svg" alt="dpg media logo"><div aria-busy="true"></div></div></div></body></html>`;
+  const gateUrl = 'https://myprivacy.dpgmedia.be/consent?siteKey=Uqxf9TXhjmaG4pbQ&callbackUrl=x';
+  assert.equal(dpgPrivacyGateCallback(gateUrl, gate), callback, 'the gate gives its continue link');
+  assert.equal(dpgPrivacyGateCallback(article, '<html><title>Een artikel</title><p>Tekst</p></html>'), null, 'an ordinary page has none');
+  assert.equal(
+    dpgPrivacyGateCallback(gateUrl, gate.replace(encodeURIComponent(callback), encodeURIComponent('https://myprivacy.dpgmedia.be/x'))),
+    null,
+    'a link back to the gate itself does not count'
+  );
+  assert.equal(hasNoText(gate), true, 'the gate page has no text');
+  assert.equal(hasNoText('<html><head><title>Een artikel met een titel</title></head><body><p>' + 'Woord '.repeat(10) + '</p></body></html>'), false, 'a page with a sentence has text');
+
+  const login = '<html><head><title>Knack</title></head><body><div class="roul-wrapper"><h4>Vul hier je e-mailadres en wachtwoord in om aan te melden:</h4>'
+    + '<form><input type="email" name="email"><input type="password" name="password"><button>Aanmelden</button></form>'
+    + '<span>Nog geen account? <a href="/register">Maak er snel één aan.</a></span></div></body></html>';
+  assert.equal(isLoginWall(login), true, 'a short page with a password field is a login form');
+  const articleWithDialog = login.replace('</body>', '<article><p>' + 'Een lange zin uit het artikel. '.repeat(120) + '</p></article></body>');
+  assert.equal(isLoginWall(articleWithDialog), false, 'an article page hiding a login dialog is not');
+
+  const captcha = '<!DOCTYPE html><html lang="en"><head><title>Human Verification</title>'
+    + '<script src="https://x.token.awswaf.com/challenge.js"></script></head><body><div id="captcha-container"></div></body></html>';
+  assert.equal(isBotCheckPage(captcha), true, "AWS WAF's Human Verification captcha is a bot check");
+
+  assert.equal(archiveSubmitUrl(article), 'https://archive.ph/?run=1&url=' + encodeURIComponent(article), 'the archive.ph link carries the address');
+  console.log('✅ Consent gates, login forms, captchas and empty pages');
+}
+
+// --- 0h. Paid previews without a selector, and archive.ph timemaps -------------------
+// HLN+ (2026-10-07): `NewsArticle.isAccessibleForFree: false` without hasPart, the intro and a
+// list of teaser links in the story box. De Morgen names its paid part `.paywall` and ships it.
+{
+  const ld = (free: string, part = '') =>
+    `<script type="application/ld+json">{"@type":"NewsArticle","isAccessibleForFree":${free}${part}}</script>`;
+  const teasers = Array.from({ length: 17 }, (_, i) => `<a href="/a${i}"><p>Een ander artikel met een lange titel nummer ${i}</p></a>`).join('');
+  const intro = '<p>' + 'De argwaan tegenover AI is niet kleiner geworden. '.repeat(5) + '</p>';
+  const hlnPreview = `<html><head>${ld('false')}</head><body><main><article>${intro}${teasers}</article></main></body></html>`;
+  assert.ok(storyTextChars(hlnPreview) < 400, 'teaser links do not count as story text');
+  assert.equal(isPaidPreview(hlnPreview), true, 'a paid page without a selector and only an intro is a preview');
+  const fullStory = '<p>' + 'Een volledige alinea uit het betalende artikel. '.repeat(60) + '</p>';
+  const hlnFull = hlnPreview.replace(intro, intro + fullStory);
+  assert.equal(isPaidPreview(hlnFull), false, 'the same page with the whole story is not');
+  assert.equal(isPaidPreview(hlnPreview.replace(ld('false'), ld('true'))), false, 'a free article is never a preview');
+  assert.equal(isPaidPreview(hlnPreview.replace(ld('false'), ld('"False"'))), true, 'the flag may be a string in any case');
+  const shipped = `<html><head>${ld('false', ',"hasPart":{"@type":"WebPageElement","isAccessibleForFree":false,"cssSelector":".paywall"}')}</head>`
+    + `<body><article>${intro}<div class="paywall">${fullStory}</div></article></body></html>`;
+  assert.equal(isPaidPreview(shipped), false, 'a page that ships its named paid part is not a preview');
+  assert.equal(isPaidPreview(shipped.replace(`<div class="paywall">${fullStory}</div>`, '')), true, 'without the named part it is');
+
+  const timemap = [
+    '<https://www.hln.be/binnenland/x~adfc0aaa/>; rel="original",',
+    '<http://archive.md/timegate/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="timegate",',
+    '<http://archive.md/20260113075854/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="first memento"; datetime="Tue, 13 Jan 2026 07:58:54 GMT",',
+    '<http://archive.md/20260203192713/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="last memento"; datetime="Tue, 03 Feb 2026 19:27:13 GMT",',
+    '<http://archive.md/timemap/https://www.hln.be/binnenland/x~adfc0aaa/>; rel="self"; type="application/link-format"',
+  ].join('\n');
+  assert.equal(newestArchiveCopy(timemap), 'https://archive.ph/20260203192713/https://www.hln.be/binnenland/x~adfc0aaa/', 'the last memento, on archive.ph');
+  assert.equal(
+    newestArchiveCopy('<http://archive.md/20260113075854/https://a.be/x>; rel="first last memento"; datetime="x"'),
+    'https://archive.ph/20260113075854/https://a.be/x',
+    'a single copy is both first and last'
+  );
+  assert.equal(newestArchiveCopy('<https://a.be/x>; rel="original"'), null, 'a timemap without copies gives none');
+  console.log('✅ Paid previews without a selector, and archive.ph timemaps');
+}
+
+// --- 0i. Teaser copies, and the error without an archive link ----------------------
+// The shape of archive.ph's copies of Knack articles (2026-10-07): the JSON-LD block kept but
+// emptied, so the paid flag is gone. A paid article's story box holds only the title, the
+// byline and a note on letters to the editor, its subscribe box sits after the footer.
+{
+  const story = (body: string) => '<html><head><script type="application/ld+json"></script><title>Knack</title></head><body><div id="CONTENT">'
+    + '<article><h1>Frankrijk is de nieuwe zieke man van Europa</h1><div>Ewald Pironet Senior writer 10:19 2 min leestijd</div>'
+    + body
+    + '<div>Reageren op dit artikel kan u door een e-mail te sturen naar <a href="mailto:x">lezersbrieven@knack.be</a>. Uw reactie wordt dan mogelijk meegenomen in het volgende nummer.</div></article>'
+    + '<footer><div>' + 'Knack is er voor mensen met een lenige geest. Kritisch, doordacht, diepgaand. '.repeat(20) + '</div></footer>'
+    + '<div>Wil je dit artikel verder lezen? Neem een Knack abonnement. Volledige digitale toegang tot alle artikels.</div></div></body></html>';
+  const teaser = story('');
+  const paragraph = (n: number) => '<div>' + 'Een volledige zin uit het gratis artikel over de superrijken. '.repeat(n) + '</div>';
+  const free = story(paragraph(70));
+  const problem = copyProblem(teaser, 'bot check');
+  assert.equal(problem?.preview, true, 'a copy with only a title and a byline is a preview');
+  assert.match(problem?.reason || '', /^too short \(\d+ characters of story\)$/, 'and the log says how short');
+  assert.equal(copyProblem(free, 'bot check'), null, 'the same copy with the whole story is the article');
+  assert.equal(copyProblem(free, 'login'), null, 'whatever wall sent us there');
+  const login = '<html><head><title>Knack</title></head><body><form><input type="password"></form></body></html>';
+  assert.deepEqual(copyProblem(login, 'bot check'), { reason: 'login form', preview: false }, 'a wall page is no preview');
+  const longer = story(paragraph(25));
+  assert.ok(storyTextChars(longer) > 1000 && storyTextChars(longer) < 1850, 'a copy just over the minimum');
+  assert.equal(copyProblem(longer, 'bot check'), null, 'passes on its own');
+  assert.match(copyProblem(longer, 'paywall', 850)?.reason || '', /^the same preview/, 'but not 1,000 characters past an 850-character preview');
+
+  const knack = 'https://www.knack.be/nieuws/wereld/europa/frankrijk-is-de-nieuwe-zieke-man-van-europa-kan-belgie-besmet-raken/';
+  const onlyPreview = noCopyError(knack, 'bot check', true);
+  assert.equal(
+    onlyPreview.message,
+    "This site blocks automated reading with a bot check, and archive.ph's copy holds only a preview of the article. Knack sends paid articles only to subscribers.",
+    'a preview on archive.ph says so, and names Knack'
+  );
+  assert.equal(onlyPreview.archiveSubmitUrl, null, 'and offers no archive link');
+  const hln = noCopyError('https://www.hln.be/binnenland/x~adfc0aaa/', 'paywall', true);
+  assert.equal(hln.message, "This article is behind a paywall, and archive.ph's copy holds only a preview of the article.", 'other sites get no Knack note');
+  const noCopy = noCopyError(knack, 'login', false);
+  assert.equal(noCopy.message, 'This article is behind a login, and no other copy of the article could be found.', 'without a copy the message stays');
+  assert.equal(noCopy.archiveSubmitUrl, archiveSubmitUrl(knack), 'and offers the archive link');
+  console.log('✅ Teaser copies, and the error without an archive link');
+}
+
+// --- 0j. Scripts and styles are cut before a page is read ---------------------------
+// CNN's 5.8 MB article page froze the backend for about 20 minutes on 2026-10-09: jsdom on the
+// page as it came did not finish in 10 minutes, and took 0.3 seconds without its scripts.
+{
+  const bigScript = '<script>window.__DATA__ = ' + JSON.stringify({ x: 'y'.repeat(300_000) }) + ';</script>';
+  const page = `<html><head><title>T</title>
+    <script type="application/ld+json">{"@type":"NewsArticle","author":{"name":"Ann Writer"},"isAccessibleForFree":false,"hasPart":{"isAccessibleForFree":false,"cssSelector":".paid"}}</script>
+    <script src="/app.js"></script>
+    <SCRIPT type="text/javascript">var a = "</div>";</SCRIPT>
+    <style>.paid { display: none }</style>
+    ${bigScript}
+  </head><body><article><p>Opening paragraph of the story.</p><div class="paid">${'Paid text. '.repeat(40)}</div></article>
+    <noscript><img src="https://a.b/lazy.jpg"></noscript></body></html>`;
+  const light = lightenHtml(page);
+  assert.ok(!/__DATA__|app\.js|display: none|var a/.test(light), 'scripts and styles are gone, uppercase tags too');
+  assert.ok(/application\/ld\+json/.test(light) && /Ann Writer/.test(light), 'JSON-LD stays');
+  assert.ok(/<noscript>/.test(light), 'noscript stays (lazy images)');
+  assert.ok(light.length < 2000, `the 300 KB script is gone (${light.length} characters left)`);
+  const doc = parsePage(page, 'https://example.com/a').window.document;
+  assert.equal(authorFromJsonLd(doc), 'Ann Writer', 'the author is still read from JSON-LD');
+  assert.equal(isPaywallPreview(doc), false, 'the paid part is there, so no preview (read from the page object)');
+  assert.equal(isPaywallPreview(page), false, 'the same from the string');
+  assert.ok(storyTextChars(doc) > 300, 'story text counted from the page object');
+  assert.throws(() => parsePage('<html><body>' + '<p>x</p>'.repeat(700_000) + '</body></html>'), /too large to read: 5\.6 MB/, 'a page still over 5 MB is refused');
+  console.log('✅ Scripts and styles are cut before a page is read, oversized pages are refused');
 }
 
 // --- 1. Compact: header and share menu must stay out of the body -------------------

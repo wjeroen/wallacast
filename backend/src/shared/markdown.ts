@@ -1014,6 +1014,19 @@ function timestampedTranscript(raw: unknown): string | null {
   return paragraphs.join('\n\n');
 }
 
+/**
+ * Whether a Copy content export carries a "## Transcript" section: podcast episodes whose
+ * transcript holds any text. Articles and texts never get the section (their body is the
+ * article), even when they have a read-along transcript of generated audio. A transcript of
+ * only whitespace counts as none, so the section can never be an empty heading.
+ * `GET /api/content/index` answers the same question in SQL as `has_transcript` without
+ * reading the transcript: transcripts are never stored whitespace-only (transcription and
+ * Wallabag sync store an empty value instead), so there a non-empty value is enough.
+ */
+export function exportHasTranscript(item: Pick<ContentItem, 'type' | 'transcript'>): boolean {
+  return item.type === 'podcast_episode' && !!item.transcript?.trim();
+}
+
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
   const lines: string[] = [buildFrontmatter(item, comments)];
 
@@ -1030,8 +1043,8 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
   const body = item.type === 'podcast_episode'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
-        item.transcript
-          ? `## Transcript\n\n${(item.transcript_words && timestampedTranscript(item.transcript_words)) || item.transcript.trim()}`
+        exportHasTranscript(item)
+          ? `## Transcript\n\n${(item.transcript_words && timestampedTranscript(item.transcript_words)) || (item.transcript || '').trim()}`
           : '',
       ].filter(part => part.trim()).map(part => part.trim()).join('\n\n')
     : item.html_content

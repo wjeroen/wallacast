@@ -4,7 +4,8 @@ import { JSDOM } from 'jsdom';
 import fetch from 'node-fetch';
 import archiver from 'archiver';
 import { query } from '../database/db.js';
-import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes } from '../services/article-fetcher.js';
+import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalizeTweetEmbeds, normalizeSidenotes, ArticleUnavailableError } from '../services/article-fetcher.js';
+import { isProgressId, setFetchProgress, getFetchProgress, clearFetchProgress } from '../services/fetch-progress.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
 import { generateSummaryForContent } from '../services/summarizer.js';
@@ -20,6 +21,8 @@ import { snapshotContentVersion } from '../services/content-versions.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
 import { sourceUrls } from '../shared/format.js';
+import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
+import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -121,19 +124,30 @@ router.post('/status', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Read surface for outside tools (the Obsidian "Wallacast inbox" and "Import from
-// wallacast" commands, see implementation-plans/obsidian-article-import.md). These three
-// routes are the ONLY ones a read-only API token may call (services/api-tokens.ts). They
-// change nothing and trigger nothing: no audio, no summary, no fetch.
+// Read surface for outside tools (the Obsidian "Wallacast overview", "Wallacast import" and
+// "Wallacast import checked" commands, see implementation-plans/obsidian-article-import.md,
+// and API_TOKENS.md). An API token with read_library may call these routes and GET
+// /summaries (TOKEN_ROUTES in services/api-tokens.ts). They change nothing and trigger
+// nothing: no audio, no summary, no fetch.
 // ---------------------------------------------------------------------------
 
 // Lean library index: one small row per item, every item, newest first. Obsidian groups
 // and filters on its side. As lean as POST /status on purpose: GET / ships each item's full
-// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every inbox
+// plain text plus tts_chunks and transcript_words, far too heavy for a phone on every overview
 // refresh (the 80GB-incident class of problem). Never content, html_content, comments,
 // transcript, transcript_words, tts_chunks, or content_alignment here. `url` and `alt_url`
 // are exactly what Copy content writes into `source` and `alt-source` (null for synthetic
 // wallacast:// ones), and `description` is plain text cut to 300 characters.
+//
+// `has_transcript` (every row, a boolean) is true exactly when the item's Copy content export
+// carries a "## Transcript" section (exportHasTranscript in shared/markdown.ts): a podcast
+// episode whose transcript holds text. Always false for articles and texts, whose export never
+// has the section. It is computed without reading the transcript: octet_length() takes the
+// size from the value's header or TOAST pointer and never fetches the text ("We need not
+// detoast the input at all", textoctetlen in PostgreSQL's varlena.c). Transcripts are not
+// stored whitespace-only (see transcribeWithTimestamps and Wallabag sync), and the regex for
+// any older short whitespace-only value only runs on transcripts of at most 1,000 bytes, which
+// cost nothing to read.
 // Defined before GET /:id so 'index' is never read as an id.
 router.get('/index', async (req, res) => {
   try {
@@ -141,7 +155,11 @@ router.get('/index', async (req, res) => {
       `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
               is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
               COALESCE(comment_count_total, 0) AS comment_count,
-              LEFT(description, 1500) AS description
+              LEFT(description, 1500) AS description,
+              COALESCE(type = 'podcast_episode'
+                AND octet_length(transcript) > 0
+                AND (octet_length(transcript) > 1000 OR transcript ~ '[^[:space:]]'), false
+              ) AS has_transcript
          FROM content_items
         WHERE user_id = $1
         ORDER BY created_at DESC`,
@@ -339,6 +357,53 @@ router.get('/:id/markdown', async (req, res) => {
   }
 });
 
+// GET /summaries?ids=1,2,3 - Only the summaries of the given items, for an outside tool that
+// judges many items without reading their full text (API_TOKENS.md). At most
+// SUMMARIES_MAX_IDS ids, the caller's own items only, in the order asked, unknown ids left out.
+// `summary` and `comment_summary` are the stored texts, null when an item has none
+// (`summary_status` says whether one is being made, failed, or was skipped because of an API
+// token's limits, and `summary_error` why). `url` is the item's source address as the index
+// gives it. Read-only. Defined before GET /:id.
+const SUMMARIES_MAX_IDS = 200;
+router.get('/summaries', async (req, res) => {
+  try {
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const ids = Array.from(new Set(
+      raw.split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map((s) => parseInt(s, 10)).filter((n) => n > 0)
+    ));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids must be a comma-separated list of content ids' });
+    }
+    if (ids.length > SUMMARIES_MAX_IDS) {
+      return res.status(400).json({ error: `At most ${SUMMARIES_MAX_IDS} ids per request` });
+    }
+    const result = await query(
+      `SELECT id, type, title, url, summary_status, summary_error, summary, comment_summary, summary_generated_at
+         FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user!.userId, ids]
+    );
+    const byId = new Map<number, any>(result.rows.map((r: any) => [r.id, r]));
+    const items = ids
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((r) => ({
+        id: r.id,
+        type: r.type,
+        title: r.title,
+        url: sourceUrls(r.url).source,
+        summary_status: r.summary_status,
+        summary_error: r.summary_status === 'failed' || r.summary_status === 'skipped' ? r.summary_error ?? null : null,
+        summary: r.summary ?? null,
+        comment_summary: r.comment_summary ?? null,
+        summary_generated_at: r.summary_generated_at ?? null,
+      }));
+    res.json({ items });
+  } catch (error) {
+    console.error('Error reading summaries:', error);
+    res.status(500).json({ error: 'Failed to read summaries' });
+  }
+});
+
 // Debug endpoint: receives audio errors from the frontend and logs them to Railway.
 // IMPORTANT: must be defined before '/:id' so Express doesn't treat 'audio-error-log' as an id.
 router.post('/audio-error-log', (req, res) => {
@@ -360,6 +425,12 @@ router.post('/audio-error-log', (req, res) => {
 // partial state instead of corrupting it. This matches how PATCH /:id behaves.
 router.post('/bulk', async (req, res) => {
   try {
+    // An API token may only add existing tags, star and unstar, and every change it makes is
+    // logged so Settings can undo it (services/token-actions.ts).
+    if (req.apiToken) {
+      const r = await tokenBulk(req.apiToken, req.body);
+      return res.status(r.status).json(r.json);
+    }
     const userId = req.user!.userId;
     const { action, ids } = req.body as { action?: string; ids?: unknown };
 
@@ -633,6 +704,91 @@ router.post('/tags/remove', async (req, res) => {
 });
 
 // Get single content item (includes large columns needed for display)
+// What a slow article fetch for the Add tab is doing (see services/fetch-progress.ts)
+// GET /preview?url= or ?feed_item_id= - Read an article without saving it: the page is fetched
+// exactly as an add would fetch it, and answered as the Markdown Copy content would give for
+// it under the caller's Copy & export settings. Nothing is stored. Meant for an API token that
+// helps decide what to add (a feed item's teaser is often too short to judge). For a token a
+// read counts against its item limits like an add, and a free url needs add_any (add_feed
+// tokens pass a feed_item_id). The read-only demo may not use it: it would make the public
+// demo an open fetcher. Defined before GET /:id.
+router.get('/preview', async (req, res) => {
+  try {
+    if (req.user!.demo) {
+      return res.status(403).json({ error: 'This action is not available in the read-only demo.', demo: true });
+    }
+    const token = req.apiToken;
+    let url: string | null = null;
+    if (req.query.feed_item_id !== undefined) {
+      const id = parsePositiveInt(req.query.feed_item_id);
+      if (!id) return res.status(400).json({ error: 'feed_item_id must be a positive whole number' });
+      const item = await lookupFeedItem(req.user!.userId, id);
+      if (!item) return res.status(404).json({ error: 'No item in your feeds has this feed_item_id' });
+      if (item.item_type !== 'article' || !item.url) {
+        return res.status(400).json({ error: 'Only feed articles have a page to read. An episode has its description in the feed.' });
+      }
+      url = item.url;
+    } else {
+      if (token && !token.permissions.includes('add_any')) {
+        return res.status(403).json({ error: 'This token may only read items from your feed. Send a feed_item_id.' });
+      }
+      url = parseHttpUrl(req.query.url);
+      if (!url) return res.status(400).json({ error: 'A url (http or https) or a feed_item_id is required' });
+    }
+    if (token) {
+      const reserved = await reserveItem(token, 'read', 'preview');
+      if (!reserved.ok) {
+        const r = limitRefusal(reserved);
+        return res.status(r.status).json({ error: r.error, ...r.extra });
+      }
+    }
+    let articleData;
+    try {
+      articleData = await fetchArticleContent(normalizeEAForumUrl(url));
+    } catch (fetchError) {
+      console.error('Preview fetch failed:', fetchError);
+      return res.status(502).json({
+        error: `Could not fetch this article. ${(fetchError as Error).message}`,
+        ...(fetchError instanceof ArticleUnavailableError && fetchError.archiveSubmitUrl
+          ? { archive_submit_url: fetchError.archiveSubmitUrl }
+          : {}),
+      });
+    }
+    // The row an add would have stored, shaped like MARKDOWN_ITEM_COLUMNS, never saved.
+    const now = new Date();
+    const row = {
+      id: 0, type: 'article', title: articleData.title || 'Untitled Article', url,
+      content: articleData.content, html_content: articleData.cleaned_html,
+      author: articleData.author || articleData.byline || null, description: articleData.excerpt || null,
+      audio_url: null, transcript: null, transcript_words: null, duration: null, podcast_id: null,
+      podcast_show_name: null, published_at: articleData.published_date || null, is_starred: false,
+      is_archived: false, tags: [], created_at: now, updated_at: now, karma: articleData.karma ?? null,
+      comments: articleData.comments || [], summary: null, comment_summary: null, summary_status: 'idle',
+      summary_audio_url: null, comment_count: articleData.comment_count_total || 0,
+    };
+    const markdown = renderItemMarkdown(row, await loadCopyContentOptions(req.user!.userId));
+    res.json({
+      title: row.title,
+      author: row.author,
+      published_at: row.published_at,
+      url,
+      comment_count: row.comment_count,
+      markdown,
+    });
+  } catch (error) {
+    console.error('Error reading an article without saving:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to read this article' });
+  }
+});
+
+router.get('/fetch-progress/:id', (req, res) => {
+  const { id } = req.params;
+  if (!isProgressId(id)) {
+    return res.status(400).json({ error: 'Invalid progress id' });
+  }
+  res.json({ text: getFetchProgress(id, req.user!.userId) });
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
@@ -656,9 +812,31 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// What each generation is called in a token's warnings
+const GENERATION_WORDS: Record<string, string> = {
+  audio: 'Audio',
+  summary: 'Summary',
+  summary_audio: 'Summary audio',
+  transcript: 'Transcript',
+};
+
 // Create new content item
 router.post('/', async (req, res) => {
   try {
+    // An API token sends only a url or a feed_item_id, plus existing tags. shapeTokenAdd turns
+    // that into the body the app itself would send, refuses what the token may not do (a free
+    // url without add_any, an address already in the library), and counts the add against the
+    // token's item limits. The rest of this route then runs as for the app.
+    const token = req.apiToken;
+    let tokenTags: string[] = [];
+    if (token) {
+      const shaped = await shapeTokenAdd(token, req.body);
+      if (!shaped.ok) {
+        return res.status(shaped.status).json({ error: shaped.error, ...(shaped.extra || {}) });
+      }
+      req.body = shaped.body;
+      tokenTags = shaped.tags;
+    }
     const {
       type,
       title,
@@ -668,6 +846,7 @@ router.post('/', async (req, res) => {
       description,
       preview_picture,
       podcast_id,
+      podcast_show_name,
       audio_url,
       published_at,
       duration,
@@ -675,6 +854,8 @@ router.post('/', async (req, res) => {
       comments,
       summary,
       comment_summary,
+      feed_item_id,
+      progress_id,
     } = req.body;
 
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
@@ -688,6 +869,19 @@ router.post('/', async (req, res) => {
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    // An episode added from the Feed tab's cached list arrives with only the start of its
+    // description (getCachedFeedItems), so the full stored text is copied from feed_items.
+    // Articles keep the short version, their body is fetched from the page anyway. The join
+    // limits the lookup to this user's own feeds.
+    const feedItemId = Number(feed_item_id);
+    if (type === 'podcast_episode' && feed_item_id != null && Number.isInteger(feedItemId) && feedItemId > 0) {
+      const feedItem = await query(
+        `SELECT fi.description FROM feed_items fi JOIN podcasts p ON p.id = fi.feed_id
+         WHERE fi.id = $1 AND p.user_id = $2`,
+        [feedItemId, req.user!.userId]
+      );
+      if (feedItem.rows[0]?.description) finalDescription = feedItem.rows[0].description;
+    }
     // FIX 1: Initialize finalPreviewPicture with the value passed from frontend
     let finalPreviewPicture = preview_picture || null;
     let finalPublishedAt = published_at;
@@ -803,7 +997,29 @@ router.post('/', async (req, res) => {
 
     // Fetch article content if URL is provided
     if (type === 'article' && url && !content) {
-      const articleData = await fetchArticleContent(url);
+      let articleData;
+      // The Add tab sends a progress_id and shows the steps of a slow fetch while it waits
+      const progressId = isProgressId(progress_id) ? progress_id : null;
+      try {
+        articleData = await fetchArticleContent(
+          url,
+          progressId ? text => setFetchProgress(progressId, req.user!.userId, text) : undefined
+        );
+      } catch (fetchError) {
+        // The fetcher's own message says why (a bot check, an HTTP error), so the Add tab can
+        // show it instead of a generic failure. Nothing is stored. When no copy of the article
+        // was found, archive_submit_url lets the user make one on archive.ph and add it again
+        // (left out when archive.ph's copy is only a preview).
+        console.error('Article fetch failed:', fetchError);
+        return res.status(502).json({
+          error: `Could not fetch this article. ${(fetchError as Error).message}`,
+          ...(fetchError instanceof ArticleUnavailableError && fetchError.archiveSubmitUrl
+            ? { archive_submit_url: fetchError.archiveSubmitUrl }
+            : {}),
+        });
+      } finally {
+        if (progressId) clearFetchProgress(progressId);
+      }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;
 
@@ -886,6 +1102,11 @@ router.post('/', async (req, res) => {
         podcastShowName = podcastResult.rows[0].title;
       }
     }
+    // An episode added from the preview of a feed the user does not subscribe to has no
+    // podcast_id, so the Feed tab sends the show's title itself (VARCHAR(500) column).
+    if (!podcastShowName && typeof podcast_show_name === 'string' && podcast_show_name.trim()) {
+      podcastShowName = podcast_show_name.trim().slice(0, 500);
+    }
 
     const dbType = type;
 
@@ -901,11 +1122,39 @@ router.post('/', async (req, res) => {
     );
 
     const createdItem = result.rows[0];
-    
+
+    // An item a token added: the tags it set are logged like any tag it adds later, and what
+    // is generated follows the token's own choice (the app's auto-generation settings, or its
+    // own), each generation only when its minutes fit the token's limits. tokenReport tells
+    // the caller what started and what was skipped, and why. A skipped summary or summary audio
+    // is also marked on the item (status 'skipped', the reason in summary_error or
+    // summary_audio_error), so the card and the index show it.
+    if (token && tokenTags.length > 0) {
+      await logChanges(token, tokenTags.map((tag) => ({ itemId: createdItem.id, kind: 'tag_add' as const, tag })));
+    }
+    const tokenGen = token ? await resolveGeneration(token.userId, token.generation) : null;
+    const tokenReport: { started: string[]; skipped: Array<{ what: string; reason: string }> } = { started: [], skipped: [] };
+    // What the card says for a skip: the reason with the token's name
+    const skipReasons: Partial<Record<'audio' | 'summary' | 'summary_audio' | 'transcript', string>> = {};
+    const fitsTokenBudget = async (what: 'audio' | 'summary' | 'summary_audio' | 'transcript', minutes: number): Promise<boolean> => {
+      if (!token) return true;
+      const r = await reserveMinutes(token, minutes, what, createdItem.id);
+      if (r.ok) {
+        tokenReport.started.push(what);
+        return true;
+      }
+      tokenReport.skipped.push({ what, reason: r.message });
+      skipReasons[what] = r.message.replace(/^This token/, `Token "${token.name}"`);
+      return false;
+    };
+    const itemChars = token ? String(processedContent || htmlContent || '').length + commentChars(extractedComments) : 0;
+    const itemMinutes = token ? textMinutes(itemChars) : 0;
+
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
-      const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
-      const shouldAutoGenerate = autoGenerateAudio === 'true';
+      const shouldAutoGenerate = tokenGen
+        ? tokenGen.audio
+        : (await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles')) === 'true';
 
       if (shouldAutoGenerate) {
         // Check max comment limit. Skip auto-generation if article has too many comments
@@ -915,6 +1164,9 @@ router.post('/', async (req, res) => {
 
         if (articleCommentCount > maxComments) {
           console.log(`Skipping auto-generation for ${createdItem.id}: ${articleCommentCount} comments exceeds max ${maxComments}`);
+          if (token) tokenReport.skipped.push({ what: 'audio', reason: `${articleCommentCount} comments is more than your maximum of ${maxComments} narrated comments` });
+        } else if (!(await fitsTokenBudget('audio', itemMinutes))) {
+          console.log(`Skipping auto-generation for ${createdItem.id}: over the token's minute limit`);
         } else {
         console.log(`Auto-generating audio for ${type} ${createdItem.id}`);
 
@@ -943,14 +1195,38 @@ router.post('/', async (req, res) => {
     // No comment cutoff here (unlike audio): summaries are cheap and the user asked for none.
     // Skipped when the item arrived with its summary (Markdown import).
     if ((type === 'article' || type === 'text') && (processedContent || htmlContent) && !importedSummary) {
-      const autoGenerateSummary = await getUserSetting(req.user!.userId, 'auto_generate_summary');
-      if (autoGenerateSummary === 'true') {
+      const autoGenerateSummary = tokenGen
+        ? tokenGen.summary
+        : (await getUserSetting(req.user!.userId, 'auto_generate_summary')) === 'true';
+      const summaryFits = autoGenerateSummary && (await fitsTokenBudget('summary', summaryMinutes(itemChars)));
+      if (autoGenerateSummary && !summaryFits) {
+        // The summary audio would have narrated the summary, so it is skipped with it
+        if (tokenGen?.summary_audio) {
+          tokenReport.skipped.push({ what: 'summary_audio', reason: 'Skipped because the summary was skipped' });
+        }
+        await query(
+          `UPDATE content_items SET summary_status = 'skipped', summary_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary ?? 'Skipped']
+        );
+      }
+      if (summaryFits) {
+        // For a token, summary audio is decided here rather than by the summarizer reading the
+        // setting, so its minutes count against the token too.
+        const summaryOptions = tokenGen
+          ? { generateAudio: tokenGen.summary_audio && (await fitsTokenBudget('summary_audio', SUMMARY_AUDIO_MINUTES)) }
+          : {};
+        if (skipReasons.summary_audio) {
+          await query(
+            `UPDATE content_items SET summary_audio_status = 'skipped', summary_audio_error = $2 WHERE id = $1`,
+            [createdItem.id, skipReasons.summary_audio]
+          );
+        }
         console.log(`Auto-generating summary for ${type} ${createdItem.id}`);
         await query(
           'UPDATE content_items SET summary_status = $1 WHERE id = $2',
           ['generating', createdItem.id]
         );
-        generateSummaryForContent(createdItem.id)
+        generateSummaryForContent(createdItem.id, summaryOptions)
           .then(() => console.log(`Summary generation finished for ${createdItem.id}`))
           .catch(async (error) => {
             console.error('Auto summary generation error:', error);
@@ -964,10 +1240,10 @@ router.post('/', async (req, res) => {
 
     // Auto-generate transcript for podcast episodes
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
-      const autoTranscribe = await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
-      const shouldAutoTranscribe = autoTranscribe === null || autoTranscribe === 'true';
+      const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
+      const shouldAutoTranscribe = tokenGen ? tokenGen.transcribe : autoTranscribe === null || autoTranscribe === 'true';
 
-      if (shouldAutoTranscribe) {
+      if (shouldAutoTranscribe && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
 
         await query(
@@ -1003,6 +1279,26 @@ router.post('/', async (req, res) => {
       }
     }
 
+    if (token) {
+      // A token gets the item's id and identity, not its whole body: the Markdown endpoints
+      // serve the content, and an LLM caller should not receive the stored HTML.
+      console.log(`[ApiToken] token ${token.id} added item ${createdItem.id}: started=${tokenReport.started.join(',') || 'none'} skipped=${tokenReport.skipped.map((s) => s.what).join(',') || 'none'}`);
+      return res.status(201).json({
+        id: createdItem.id,
+        type: createdItem.type,
+        title: createdItem.title,
+        url: createdItem.url,
+        audio_url: createdItem.type === 'podcast_episode' ? createdItem.audio_url : null,
+        author: createdItem.author,
+        published_at: createdItem.published_at,
+        tags: createdItem.tags,
+        comment_count: createdItem.comment_count_total || 0,
+        generation: tokenReport,
+        // One plain sentence per skipped generation, so a caller that reads nothing else still
+        // sees that a limit was reached
+        warnings: tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
+      });
+    }
     res.status(201).json(createdItem);
   } catch (error) {
     console.error('Error creating content item:', error);

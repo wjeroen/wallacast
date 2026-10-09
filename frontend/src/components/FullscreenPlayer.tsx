@@ -48,10 +48,12 @@ import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
+import { linkDescriptionTimestamps } from '../timestamps';
 import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
+import { GenerationStatus } from './GenerationStatus';
 import { collectTagCounts } from '../tags';
 import { loadCopyContentOptions } from '../copy-settings';
 import { Tag as TagIcon, Plus as PlusIcon } from 'lucide-react';
@@ -115,6 +117,8 @@ interface FullscreenPlayerProps {
   onRemoveSummary?: () => void;
   onGenerateSummaryAudio?: () => void;
   onRegenerateTranscript?: () => void;
+  onCancelGeneration?: () => void;
+  onDismissError?: (kind: 'generation' | 'summary' | 'summary_audio') => void;
   onContentUpdated?: (updated: ContentItem) => void;
   themeMode: 'dark' | 'light' | 'system';
   onCycleTheme: () => void;
@@ -401,6 +405,8 @@ export function FullscreenPlayer({
   onRemoveSummary,
   onGenerateSummaryAudio,
   onRegenerateTranscript,
+  onCancelGeneration,
+  onDismissError,
   onContentUpdated,
   themeMode,
   onCycleTheme,
@@ -677,6 +683,20 @@ export function FullscreenPlayer({
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = playingSummaryAudio ? () => {} : onSeek;
 
+  // A podcast description with its chapter times as buttons (timestamps.ts). Only for the
+  // full episode: during summary audio the description stays plain text, and onSeekRef
+  // ignores taps anyway. The length limit is the loaded file's own duration (dynamically
+  // inserted ads can change it), else the stored duration, never the summary audio's.
+  const descriptionMaxSeconds = !playingSummaryAudio && Number.isFinite(duration) && duration > 0
+    ? duration
+    : content.duration || 0;
+  const descriptionHtml = useMemo(
+    () => playingSummaryAudio
+      ? safeDescriptionHtml
+      : linkDescriptionTimestamps(safeDescriptionHtml, descriptionMaxSeconds),
+    [safeDescriptionHtml, playingSummaryAudio, descriptionMaxSeconds]
+  );
+
   const readAlongParts = useMemo(() => {
     if (!isLLMAlignment || !parsedAlignment?.elements) return null;
     const elements = parsedAlignment.elements as LLMAlignmentElement[];
@@ -910,7 +930,8 @@ export function FullscreenPlayer({
   const availableTabs = useMemo(() => {
     const tabs: TabType[] = [];
     const isArticleOrText = content.type === 'article' || content.type === 'text';
-    const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
+    // Audio, transcript or alignment work in progress. A refetch ('fetching') makes no audio.
+    const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed', 'fetching'].includes(content.generation_status);
     const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
 
     // Tab order: Description (podcasts) · Read-along · Content · History · Summary · Queue
@@ -928,14 +949,14 @@ export function FullscreenPlayer({
       tabs.push('read-along');
     }
 
-    if ((content.summary || '').trim()) tabs.push('summary');
+    if ((content.summary || '').trim() || content.summary_status === 'generating') tabs.push('summary');
     // Queue is a listening feature: audio-less items hide it (the queue only
     // lists audio items and autoplay skips them, while the prev/next buttons
     // walk everything, so showing it there would just contradict the buttons).
     // Summary audio counts: a summary-audio-only item is a playable audio item.
     if (hasAnyAudio(content)) tabs.push('queue');
     return tabs;
-  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, hasAlignment, versions.length, content.versions_count]);
+  }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, content.summary_status, hasAlignment, versions.length, content.versions_count]);
 
   // Auto-select first available tab if current one disappeared.
   // NOTE: this condition is mirrored in the scroll-reset effect below (it
@@ -958,33 +979,46 @@ export function FullscreenPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, initialTab]);
 
-  // The default tab follows the audio actually PLAYING (user decision 2026-08-18):
-  // opening or advancing into an item whose effective audio is the summary snaps to
-  // the Summary tab (overriding tab persistence, since the read-along views would
-  // show text the playing audio does not narrate). Toggling the mode on an item
-  // with both audios flips between Summary and the item's normal default. Items
-  // playing their original audio keep the existing persistence behavior.
-  // NOTE: both branches below (playingVariant === 'summary', and the return-to-default
-  // when leaving summary playback) are mirrored in the scroll-reset effect below. Keep
-  // them in sync. prevTabFollowRef is written by a dedicated recorder effect DEFINED
-  // AFTER the scroll-reset effect, so this effect and the scroll-reset effect both read
-  // the true previous item/variant during the same commit.
-  const prevTabFollowRef = useRef<{ id: number | null; variant: 'original' | 'summary' | null }>({ id: null, variant: null });
+  // The tab follows the summary audio once it actually PLAYS (user decisions 2026-08-18
+  // and 2026-10-06): when the summary audio starts, by Play, autoplay, or toggling the
+  // mode during playback, the player moves to the Summary tab, since the read-along
+  // views would show text that audio does not narrate. Opening an item whose audio
+  // would be the summary does NOT move it, so an item opened for reading stays on its
+  // normal tab until you press Play. It moves once per item, so a manual switch away
+  // while the summary plays sticks. When the audio becomes the original again (the mode
+  // toggled, or you moved on to an item playing its full audio, reported 2026-09-04: the
+  // next item stayed stuck on the Summary tab), a tab that this rule moved returns to
+  // the item's default.
+  // summaryFollowedId is STATE, not a ref, so the scroll-reset effect below reads the
+  // same value this effect decided from during the same commit.
+  // NOTE: followSummaryNow and leaveSummaryNow are mirrored in the scroll-reset effect.
+  const [summaryFollowedId, setSummaryFollowedId] = useState<number | null>(null);
+  const followSummaryNow = playingVariant === 'summary' && isPlaying && summaryFollowedId !== content.id;
+  const leaveSummaryNow = playingVariant === 'original' && summaryFollowedId !== null;
+  const followEffectItemRef = useRef<number | null>(null);
   useEffect(() => {
-    const prev = prevTabFollowRef.current;
-    if (playingVariant === 'summary') {
-      if (prev.id !== content.id || prev.variant !== 'summary') setActiveTab('summary');
+    const sameItem = followEffectItemRef.current === content.id;
+    followEffectItemRef.current = content.id;
+    if (followSummaryNow) {
+      setSummaryFollowedId(content.id);
+      // Play pressed on an open item: keep the tab's scroll for a switch back, then land
+      // where the summary audio is. On an item change the scroll-reset effect lands it.
+      if (sameItem && activeTab !== 'summary') {
+        if (tabContentRef.current) tabScrollPositions.current[activeTab] = tabContentRef.current.scrollTop;
+        setTimeout(() => {
+          if (autoScroll) snapSummaryRef.current();
+          else if (tabContentRef.current) tabContentRef.current.scrollTop = 0;
+        }, 100);
+      }
+      setActiveTab('summary');
       return;
     }
-    // Back on the original audio, either because the mode toggled on the SAME item or
-    // because we advanced from a summary-playing item into one playing its full audio
-    // (reported 2026-09-04: the next item stayed stuck on the Summary tab): return to
-    // the item's default tab.
-    if (prev.variant === 'summary' && playingVariant === 'original') {
-      setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+    if (playingVariant !== 'summary' && summaryFollowedId !== null) {
+      setSummaryFollowedId(null);
+      if (leaveSummaryNow) setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content.id, playingVariant]);
+  }, [content.id, playingVariant, isPlaying]);
 
   // Scroll active element into view, with progressive intra-element scrolling for tall elements
   const scrollToActive = useCallback(() => {
@@ -1129,8 +1163,8 @@ export function FullscreenPlayer({
     let landingTab = activeTab;
     if (availableTabs.length > 0 && !availableTabs.includes(landingTab)) landingTab = availableTabs[0];
     if (initialTab === 'summary' && (content.summary || '').trim()) landingTab = 'summary';
-    if (playingVariant === 'summary') landingTab = 'summary';
-    else if (prevTabFollowRef.current.variant === 'summary' && playingVariant === 'original') {
+    if (followSummaryNow) landingTab = 'summary';
+    else if (leaveSummaryNow) {
       // Mirrors the follow-playing-summary effect's return-to-default branch.
       landingTab = content.type === 'podcast_episode' ? 'description' : 'read-along';
     }
@@ -1153,14 +1187,6 @@ export function FullscreenPlayer({
     // auto-scroll or switches tabs mid-item.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id]);
-
-  // Recorder for prevTabFollowRef, deliberately defined AFTER both effects that read it
-  // (follow-playing-summary and the scroll-reset above): React runs effects in definition
-  // order, so both readers see the PREVIOUS item/variant during the same commit and this
-  // then records the current one. KEEP LAST of this group.
-  useEffect(() => {
-    prevTabFollowRef.current = { id: content.id, variant: playingVariant };
-  }, [content.id, playingVariant]);
 
   // Trigger scroll once when switching to read-along tab
   useEffect(() => {
@@ -1445,7 +1471,7 @@ export function FullscreenPlayer({
   // tabs: "Fetched by wallacast/wallabag on [date]" (texts: "Last edited on
   // [date]") and "Audio generated on [date]".
   const renderProvenance = () => (
-    <div className="content-provenance" style={{ color: '#9ca3af', marginTop: '0.25rem', lineHeight: '1.6' }}>
+    <div className="content-provenance" style={{ color: 'var(--t3)', marginTop: '0.25rem', lineHeight: '1.6' }}>
       <div>
         {content.type === 'article'
           ? `Fetched by ${content.content_source || 'wallacast'} on ${(content.content_fetched_at || content.updated_at) ? new Date(content.content_fetched_at || content.updated_at!).toLocaleDateString('en-GB') : 'unknown date'}`
@@ -1675,7 +1701,15 @@ export function FullscreenPlayer({
               <div
                 className="article-content"
                 style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}
-                dangerouslySetInnerHTML={{ __html: safeDescriptionHtml }}
+                onClick={(e) => {
+                  // A chapter time moves the episode there. onSeek never starts or pauses
+                  // playback, so a playing episode plays on and a paused one stays paused.
+                  const time = (e.target as HTMLElement).closest<HTMLElement>('.description-timestamp');
+                  if (!time) return;
+                  const seconds = Number(time.dataset.seconds);
+                  if (Number.isFinite(seconds)) onSeekRef.current(seconds);
+                }}
+                dangerouslySetInnerHTML={{ __html: descriptionHtml }}
               />
             ) : (
               <p className="no-content">No description available</p>
@@ -1727,21 +1761,46 @@ export function FullscreenPlayer({
           // Podcast: show word-by-word transcript or status messages.
           // The word spans come from the memoized transcriptTree (built once per
           // transcript); read-state and clicks are handled imperatively above.
+          // A summary in progress for an episode without a transcript is the chained
+          // transcript + summary job, so its transcript is being made too.
+          const transcriptInProgress = isTranscribing
+            || (!hasTranscript && content.summary_status === 'generating');
           let podcastMessage: string | null = null;
-          if (isTranscribing) {
+          if (transcriptInProgress) {
             podcastMessage = 'Transcript is being generated... This may take a minute.';
           } else if (!hasAudio && isGenerating) {
             podcastMessage = 'Audio is being generated...';
           } else if (isAligning) {
             podcastMessage = 'Aligning content with audio...';
           } else if (!hasTranscript) {
-            podcastMessage = 'No transcript available. Transcripts can be generated from the library.';
+            podcastMessage = 'No transcript available.';
           }
+          // The same actions as the menu's "Generate transcript" and "Generate summary"
+          // (which confirms first, then makes the transcript and the summary in one job)
+          const showGenerateButtons = !hasTranscript && !transcriptInProgress && hasAudio;
 
           return (
             <div className="tab-read-along-display">
               {podcastMessage ? (
-                <p className="no-content">{podcastMessage}</p>
+                <>
+                  <p className="no-content">{podcastMessage}</p>
+                  {showGenerateButtons && (
+                    <div className="transcript-generate-buttons">
+                      {onRegenerateTranscript && (
+                        <button className="refetch-button" onClick={onRegenerateTranscript}>
+                          <Captions size={16} />
+                          Generate transcript
+                        </button>
+                      )}
+                      {onGenerateSummary && !content.summary && (
+                        <button className="refetch-button" onClick={() => onGenerateSummary(false)}>
+                          <MessageSquareText size={16} />
+                          Generate transcript and summary
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
               ) : transcriptTree ? (
                 transcriptTree
               ) : (
@@ -1863,6 +1922,9 @@ export function FullscreenPlayer({
         return (
           <div className="tab-content-display">
             {summaryAudioBanner}
+            {articleTweets.length === 0 && content.summary_status === 'generating' && (
+              <p className="no-content">Summary is being generated...</p>
+            )}
             <div className="summary-thread">
               {articleTweets.map((tweet, i) => (
                 <p key={`a-${i}`} className="summary-tweet">{tweet}</p>
@@ -2213,6 +2275,18 @@ export function FullscreenPlayer({
                 </>
               );
             })()}
+            {/* Running jobs with their progress bar, and failures with Retry, the same
+                lines a library card shows. App.tsx keeps `content` live while a job runs. */}
+            <GenerationStatus
+              item={content}
+              onCancelGeneration={() => onCancelGeneration?.()}
+              onGenerateAudio={(regenerate) => onGenerateAudio?.(regenerate)}
+              onRegenerateTranscript={() => onRegenerateTranscript?.()}
+              onRefetch={() => onRefetch?.()}
+              onGenerateSummary={(regenerate) => onGenerateSummary?.(regenerate)}
+              onGenerateSummaryAudio={() => onGenerateSummaryAudio?.()}
+              onDismissError={(kind) => onDismissError?.(kind)}
+            />
           </div>
         </div>
         <div className="fullscreen-header-buttons">
@@ -2233,7 +2307,7 @@ export function FullscreenPlayer({
             onClick={handleArchiveClick}
             className="header-button"
             title={content.is_archived ? 'Unarchive' : 'Archive'}
-            style={content.is_archived ? { color: '#60a5fa' } : undefined}
+            style={content.is_archived ? { color: 'var(--accent-text)' } : undefined}
           >
             {content.is_archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
           </button>
@@ -2411,6 +2485,29 @@ export function FullscreenPlayer({
       <div className="fullscreen-player-controls">
         {playingVariant !== null && (
         <div className="fullscreen-progress-bar">
+          {(() => {
+            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
+            // for the full audio. With both audios it switches between them for this item
+            // only and keeps playing or paused, like the Summary tab banner's switch.
+            const isSummary = playingVariant === 'summary';
+            const SourceIcon = isSummary ? TAB_ICONS.summary : TAB_ICONS.content;
+            const canSwitch = !!(content.audio_url && content.summary_audio_url && onSelectAudioVariant);
+            const label = isSummary ? 'Summary audio' : 'Full audio';
+            return canSwitch ? (
+              <button
+                className="audio-source-btn"
+                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
+                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+              >
+                <SourceIcon size={16} />
+              </button>
+            ) : (
+              <span className="audio-source-btn" title={label} aria-label={label} role="img">
+                <SourceIcon size={16} />
+              </span>
+            );
+          })()}
           <span className="time">{formatTime(currentTime)}</span>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
             <input
@@ -2477,10 +2574,6 @@ export function FullscreenPlayer({
             <SkipForward size={22} />
           </button>
         </div>
-        )}
-
-        {content.generation_status === 'failed' && content.generation_error && (
-          <div className="player-error-banner">{content.generation_error}</div>
         )}
 
         {resumeTargetTime > 0 && (

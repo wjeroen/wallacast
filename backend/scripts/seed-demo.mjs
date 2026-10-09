@@ -524,7 +524,16 @@ async function main() {
       console.log(`  Subscribed to "${sub.title}" (${sub.type}).`);
     }
     console.log('  Refreshing the feed cache (Recent Updates)...');
-    const { data: refreshed } = await apiFetch('POST', '/podcasts/refresh-feeds');
+    // The refresh runs in the background on the server: start it, then poll its status
+    await apiFetch('POST', '/podcasts/refresh-feeds');
+    let refreshed = { running: true };
+    for (let waited = 0; refreshed.running && waited < 600; waited += 3) {
+      await sleep(3000);
+      ({ data: refreshed } = await apiFetch('GET', '/podcasts/refresh-status'));
+    }
+    if (refreshed.running || refreshed.error) {
+      throw new Error(`Feed refresh did not finish: ${refreshed.error || 'still running after 10 minutes'}`);
+    }
     console.log(`  Feed cache refreshed: ${refreshed.totalFeeds} feeds, ${refreshed.totalItemsAdded} new items.`);
 
     // 5. Generate, sequentially, with progress.

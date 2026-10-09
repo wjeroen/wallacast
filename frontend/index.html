@@ -44,7 +44,11 @@
     <script>
       try {
         var t = localStorage.getItem('wallacast-theme');
-        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+        var light = t === 'light' || (t === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+        if (light) {
+          document.documentElement.setAttribute('data-theme', 'light');
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff');
+        }
       } catch(e) {}
     </script>
   </head>

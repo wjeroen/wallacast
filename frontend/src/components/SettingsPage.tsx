@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
-import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken } from '../api';
+import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
@@ -135,6 +135,27 @@ const CHAT_MODEL_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-3-flash-preview',
 };
 
+// The API token editor's limit fields and generation choices, in display order.
+const TOKEN_LIMIT_FIELDS: Array<{ key: keyof TokenLimits; label: string }> = [
+  { key: 'items_hour', label: 'Items per hour' },
+  { key: 'items_2d', label: 'Items per 2 days' },
+  { key: 'minutes_hour', label: 'Generation minutes per hour' },
+  { key: 'minutes_2d', label: 'Generation minutes per 2 days' },
+];
+const TOKEN_GENERATION_FLAGS: Array<{ key: 'audio' | 'summary' | 'summary_audio' | 'transcribe'; label: string }> = [
+  { key: 'audio', label: 'Audio for articles' },
+  { key: 'summary', label: 'Summary' },
+  { key: 'summary_audio', label: 'Summary audio' },
+  { key: 'transcribe', label: 'Transcript for podcasts' },
+];
+const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: string }> = [
+  { mode: 'none', label: 'No' },
+  { mode: 'add_feed', label: 'From the feed only' },
+  { mode: 'add_any', label: 'Any URL' },
+];
+const formatTokenTime = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const { user, logout } = useAuthStore();
   // The shared demo account may look at every setting but change none. Inputs are
@@ -217,6 +238,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summarize_comments: 'true',
     summary_max_words: '40',
     library_show_summary: 'false',
+    library_summary_paragraphs: '1',
     copy_include_summary: 'false',
     copy_include_comment_summary: 'true',
     copy_summary_code_label: '',
@@ -345,6 +367,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
         library_show_summary: loaded.library_show_summary !== undefined && loaded.library_show_summary !== null ? loaded.library_show_summary : 'false',
+        library_summary_paragraphs: loaded.library_summary_paragraphs || '1',
         copy_include_summary: loaded.copy_include_summary !== undefined && loaded.copy_include_summary !== null ? loaded.copy_include_summary : 'false',
         copy_include_comment_summary: loaded.copy_include_comment_summary !== undefined && loaded.copy_include_comment_summary !== null ? loaded.copy_include_comment_summary : 'true',
         copy_summary_code_label: loaded.copy_summary_code_label || '',
@@ -690,18 +713,30 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
-  // Read-only API tokens (for the Obsidian import). The list loads once with the page. A
-  // freshly created token is shown once, in `createdToken`, until the user dismisses it.
+  // API tokens (for the Obsidian import and a Claude routine). The list loads once with the
+  // page. A freshly created token is shown once, in `createdToken`, until the user dismisses it.
+  // One token at a time has its editor open (`editingTokenId`). Every editor change is saved
+  // right away, and `tokenEditBusy` holds the id of the token whose request is running.
   const [apiTokens, setApiTokens] = useState<ApiToken[] | null>(null);
+  const [maxTokenLimits, setMaxTokenLimits] = useState<TokenLimits | null>(null);
   const [newTokenName, setNewTokenName] = useState('');
   const [createdToken, setCreatedToken] = useState<{ name: string; token: string } | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenCopied, setTokenCopied] = useState(false);
+  const [editingTokenId, setEditingTokenId] = useState<number | null>(null);
+  const [tokenEditBusy, setTokenEditBusy] = useState<number | null>(null);
+  // Typed but not yet saved limit values of the open editor. A limit without a draft shows
+  // the saved value.
+  const [limitDrafts, setLimitDrafts] = useState<Partial<Record<keyof TokenLimits, string>>>({});
+  // The open editor's change log, null until "Show changes" loads it.
+  const [tokenChanges, setTokenChanges] = useState<TokenChange[] | null>(null);
+  const [showTokenChanges, setShowTokenChanges] = useState(false);
 
   const loadApiTokens = async () => {
     try {
       const response = await authAPI.listTokens();
       setApiTokens(response.data.tokens);
+      setMaxTokenLimits(response.data.max_limits);
     } catch (err) {
       console.error('Failed to load API tokens:', err);
       setApiTokens([]);
@@ -751,6 +786,247 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     } finally {
       setTokenBusy(false);
     }
+  };
+
+  const toggleTokenEditor = (id: number) => {
+    setEditingTokenId(current => (current === id ? null : id));
+    setLimitDrafts({});
+    setTokenChanges(null);
+    setShowTokenChanges(false);
+  };
+
+  // PATCH one part of a token and put the answer into its row. The answer has no usage and
+  // no open_changes, so the row keeps those.
+  const updateApiToken = async (token: ApiToken, patch: ApiTokenPatch): Promise<boolean> => {
+    setTokenEditBusy(token.id);
+    try {
+      const response = await authAPI.updateToken(token.id, patch);
+      setApiTokens(list => list && list.map(t => (t.id === token.id ? { ...t, ...response.data } : t)));
+      return true;
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Could not change the token');
+      return false;
+    } finally {
+      setTokenEditBusy(null);
+    }
+  };
+
+  const toggleTokenPermission = (token: ApiToken, permission: TokenPermission, on: boolean) => {
+    const others = token.permissions.filter(p => p !== permission);
+    updateApiToken(token, { permissions: on ? [...others, permission] : others });
+  };
+
+  // "Add items" is one choice: neither add permission, add_feed, or add_any.
+  const setTokenAddMode = (token: ApiToken, mode: 'none' | 'add_feed' | 'add_any') => {
+    const others = token.permissions.filter(p => p !== 'add_any' && p !== 'add_feed');
+    updateApiToken(token, { permissions: mode === 'none' ? others : [...others, mode] });
+  };
+
+  // Save a typed limit on blur or Enter, only when it is a changed whole number in range.
+  // Anything else, or a refused save, shows the saved value again.
+  const commitTokenLimit = async (token: ApiToken, key: keyof TokenLimits) => {
+    const raw = limitDrafts[key];
+    if (raw === undefined) return;
+    const value = Number(raw);
+    const max = maxTokenLimits?.[key] ?? Infinity;
+    if (raw.trim() !== '' && Number.isInteger(value) && value >= 0 && value <= max && value !== token.limits[key]) {
+      await updateApiToken(token, { limits: { [key]: value } });
+    }
+    setLimitDrafts(drafts => {
+      const next = { ...drafts };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const handleResetTokenUsage = async (token: ApiToken) => {
+    setTokenEditBusy(token.id);
+    try {
+      await authAPI.resetTokenUsage(token.id);
+      await loadApiTokens();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Could not reset the usage');
+    } finally {
+      setTokenEditBusy(null);
+    }
+  };
+
+  const loadTokenChanges = async (token: ApiToken) => {
+    try {
+      const response = await authAPI.listTokenChanges(token.id);
+      setTokenChanges(response.data.changes);
+    } catch (err) {
+      console.error('Failed to load token changes:', err);
+      setTokenChanges([]);
+    }
+  };
+
+  const toggleTokenChanges = async (token: ApiToken) => {
+    if (showTokenChanges) {
+      setShowTokenChanges(false);
+      return;
+    }
+    setShowTokenChanges(true);
+    setTokenChanges(null);
+    setTokenEditBusy(token.id);
+    await loadTokenChanges(token);
+    setTokenEditBusy(null);
+  };
+
+  const handleUndoTokenChanges = async (token: ApiToken, body: { ids: number[] } | { all: true }) => {
+    if ('all' in body && !confirm(`Undo all changes of "${token.name}"?`)) return;
+    setTokenEditBusy(token.id);
+    try {
+      await authAPI.undoTokenChanges(token.id, body);
+      await Promise.all([loadTokenChanges(token), loadApiTokens()]);
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Could not undo the changes');
+    } finally {
+      setTokenEditBusy(null);
+    }
+  };
+
+  // The editor panel under a token row. Limits and generation only apply to a token that may
+  // add items, the change log only to one that may tag or star.
+  const renderTokenEditor = (t: ApiToken) => {
+    const busy = tokenEditBusy === t.id;
+    const canAdd = t.permissions.includes('add_any') || t.permissions.includes('add_feed');
+    const addMode = t.permissions.includes('add_any') ? 'add_any' : t.permissions.includes('add_feed') ? 'add_feed' : 'none';
+    const permissionBox = (permission: TokenPermission, label: string) => (
+      <label>
+        <input
+          type="checkbox"
+          checked={t.permissions.includes(permission)}
+          disabled={busy}
+          onChange={(e) => toggleTokenPermission(t, permission, e.target.checked)}
+        />
+        {label}
+      </label>
+    );
+    return (
+      <div className="settings-collapse-body settings-token-editor">
+        <div className="settings-token-editor-group">
+          <span className="settings-token-editor-title">Permissions</span>
+          {permissionBox('read_library', 'Read the library')}
+          {permissionBox('feed', 'Read and refresh the feed')}
+          <div className="settings-token-add" role="radiogroup" aria-label="Add items">
+            <span>Add items</span>
+            {TOKEN_ADD_MODES.map(({ mode, label }) => (
+              <label key={mode}>
+                <input
+                  type="radio"
+                  name={`token-${t.id}-add`}
+                  checked={addMode === mode}
+                  disabled={busy}
+                  onChange={() => setTokenAddMode(t, mode)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          {permissionBox('tag', 'Add existing tags')}
+          {permissionBox('star', 'Star and unstar')}
+        </div>
+
+        {canAdd && (
+          <div className="settings-token-editor-group">
+            <span className="settings-token-editor-title">Limits</span>
+            <div className="settings-token-limits">
+              {TOKEN_LIMIT_FIELDS.map(({ key, label }) => (
+                <div key={key} className="settings-token-limit">
+                  <label htmlFor={`token-${t.id}-${key}`}>{label}</label>
+                  <input
+                    id={`token-${t.id}-${key}`}
+                    type="number"
+                    min={0}
+                    max={maxTokenLimits?.[key]}
+                    step={1}
+                    value={limitDrafts[key] ?? String(t.limits[key])}
+                    disabled={busy}
+                    onChange={(e) => setLimitDrafts(drafts => ({ ...drafts, [key]: e.target.value }))}
+                    onBlur={() => commitTokenLimit(t, key)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  />
+                  <small className="settings-hint">{t.usage[key]} used</small>
+                </div>
+              ))}
+            </div>
+            <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>
+            <button type="button" disabled={busy} onClick={() => handleResetTokenUsage(t)}>Reset usage</button>
+          </div>
+        )}
+
+        {canAdd && (
+          <div className="settings-token-editor-group">
+            <span className="settings-token-editor-title">Generation for items this token adds</span>
+            <label>
+              <input
+                type="checkbox"
+                checked={t.generation.follow}
+                disabled={busy}
+                onChange={(e) => updateApiToken(t, { generation: { follow: e.target.checked } })}
+              />
+              Same as my auto-generation settings
+            </label>
+            {!t.generation.follow && (
+              <div className="settings-indent settings-token-editor-group">
+                {TOKEN_GENERATION_FLAGS.map(({ key, label }) => (
+                  <label key={key}>
+                    <input
+                      type="checkbox"
+                      checked={t.generation[key]}
+                      disabled={busy}
+                      onChange={(e) => updateApiToken(t, { generation: { [key]: e.target.checked } })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(t.permissions.includes('tag') || t.permissions.includes('star')) && (
+          <div className="settings-token-editor-group">
+            <span className="settings-token-editor-title">Changes</span>
+            <button type="button" disabled={busy} onClick={() => toggleTokenChanges(t)} aria-expanded={showTokenChanges}>
+              {showTokenChanges ? 'Hide changes' : `Show changes (${t.open_changes})`}
+            </button>
+            {showTokenChanges && (tokenChanges === null ? (
+              <p className="settings-hint">Loading…</p>
+            ) : tokenChanges.length === 0 ? (
+              <p className="settings-hint">No changes yet.</p>
+            ) : (
+              <>
+                <div className="settings-token-changes">
+                  {tokenChanges.map((c) => (
+                    <div key={c.id} className={c.undone_at ? 'settings-token-change undone' : 'settings-token-change'}>
+                      <span className="settings-token-change-when">{formatTokenTime(c.created_at)}</span>
+                      <span>{c.kind === 'tag_add' ? `Added tag "${c.tag}"` : c.kind === 'star' ? 'Starred' : 'Unstarred'}</span>
+                      <span className="settings-token-change-item">{c.title ?? 'Deleted item'}</span>
+                      {c.undone_at ? (
+                        <span>Undone</span>
+                      ) : (
+                        <button type="button" disabled={busy} onClick={() => handleUndoTokenChanges(t, { ids: [c.id] })}>Undo</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {t.open_changes > 0 && (
+                  <button type="button" disabled={busy} onClick={() => handleUndoTokenChanges(t, { all: true })}>Undo all</button>
+                )}
+              </>
+            ))}
+          </div>
+        )}
+
+        {t.limit_hit && (
+          <p className="settings-hint">
+            {t.limit_hit}{t.limit_hit_at ? ` (${formatTokenTime(t.limit_hit_at)})` : ''}
+          </p>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -1078,6 +1354,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             </small>
           </div>
 
+          {formData.library_show_summary === 'true' && (
+            <div className="settings-indent">
+              <div className="form-group">
+                <label htmlFor="library_summary_paragraphs">Paragraphs shown</label>
+                <select
+                  id="library_summary_paragraphs"
+                  value={formData.library_summary_paragraphs}
+                  onChange={(e) => handleChange('library_summary_paragraphs', e.target.value)}
+                >
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
+            </div>
+          )}
+
           <button
             type="button"
             className="settings-collapse-toggle"
@@ -1225,12 +1519,13 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         </section>
 
-        {/* Read-only API tokens: the credential outside tools (the Obsidian import) use to
-            read the library index and the Copy content Markdown, and nothing else. */}
+        {/* API tokens: the credential outside tools (the Obsidian import, a Claude routine) use.
+            Each token can do only what its permissions allow, within its own limits, and the
+            editor under each row changes those. */}
         <section className="settings-section">
-          <h3><KeyRound size={20} /> Read-only API tokens</h3>
+          <h3><KeyRound size={20} /> API tokens</h3>
           <p className="section-description">
-            For tools that read your library from outside the app, such as the Obsidian import. A token can list your library and fetch the "Copy content" text of an item, nothing more: it cannot add, change, or delete anything, and it cannot read your settings or API keys.
+            For tools that use your library from outside the app, such as the Obsidian import or a Claude routine. A token can only do what is ticked under it. It can never read your settings or API keys.
           </p>
           <div className="settings-token-create">
             <input
@@ -1265,15 +1560,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           ) : (
             <div className="settings-token-list">
               {apiTokens.map((t) => (
-                <div key={t.id} className="settings-token-row">
-                  <div className="settings-token-info">
-                    <span className="settings-token-name">{t.name}</span>
-                    <span className="settings-token-meta">
-                      Created {new Date(t.created_at).toLocaleDateString()}
-                      {t.last_used_at ? `, last used ${new Date(t.last_used_at).toLocaleDateString()}` : ', never used'}
-                    </span>
+                <div key={t.id}>
+                  <div className="settings-token-row">
+                    <div className="settings-token-info">
+                      <span className="settings-token-name">{t.name}</span>
+                      <span className="settings-token-meta">
+                        Created {new Date(t.created_at).toLocaleDateString()}
+                        {t.last_used_at ? `, last used ${new Date(t.last_used_at).toLocaleDateString()}` : ', never used'}
+                      </span>
+                    </div>
+                    <button type="button" onClick={() => toggleTokenEditor(t.id)} aria-expanded={editingTokenId === t.id}>Edit</button>
+                    <button type="button" className="settings-token-revoke" onClick={() => handleRevokeToken(t)} disabled={tokenBusy}>Revoke</button>
                   </div>
-                  <button type="button" className="settings-token-revoke" onClick={() => handleRevokeToken(t)} disabled={tokenBusy}>Revoke</button>
+                  {editingTokenId === t.id && renderTokenEditor(t)}
                 </div>
               ))}
             </div>
@@ -1715,20 +2014,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             Wallabag sync
           </h3>
 
-          <div style={{
-            padding: '0.75rem',
-            background: '#1e3a5f',
-            borderRadius: '0.5rem',
-            fontSize: '0.875rem',
-            lineHeight: '1.5',
-            marginBottom: '1rem',
-            border: '1px solid #2563eb',
-            color: '#fff'
-          }}>
+          <div className="settings-info-box">
             <button
               type="button"
               className="settings-collapse-toggle"
-              style={{ color: '#fff', padding: 0 }}
               onClick={() => setShowWallabagHelp(v => !v)}
               aria-expanded={showWallabagHelp}
             >
@@ -1867,10 +2156,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
 
                 {connectionStatus === 'success' && (
-                  <span style={{ color: 'green' }}>✓ Connected</span>
+                  <span style={{ color: 'var(--ok-text)' }}>✓ Connected</span>
                 )}
                 {connectionStatus === 'failed' && (
-                  <span style={{ color: 'red' }}>✗ Failed</span>
+                  <span style={{ color: 'var(--danger-text)' }}>✗ Failed</span>
                 )}
               </div>
 
@@ -1878,9 +2167,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               {connectionError && (
                 <div className="form-group" style={{
                   padding: '0.5rem',
-                  background: '#fee',
+                  background: 'var(--error-bg)',
                   borderRadius: '4px',
-                  color: '#c33',
+                  color: 'var(--error-fg)',
                   fontSize: '0.9rem'
                 }}>
                   {connectionError}

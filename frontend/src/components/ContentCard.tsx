@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, X, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
+import { GenerationStatus } from './GenerationStatus';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
-// status, star/archive/delete buttons and the per-item dropdown menu. Extracted
-// from LibraryTab so the markup lives in one place; all state and handlers stay
-// in the parent and come in as props.
+// status (GenerationStatus, shared with the fullscreen player), star/archive/delete
+// buttons and the per-item dropdown menu. Extracted from LibraryTab so the markup
+// lives in one place; all state and handlers stay in the parent and come in as props.
 interface ContentCardProps {
   item: ContentItem;
   bulkMode: boolean;
@@ -16,6 +17,7 @@ interface ContentCardProps {
   onPlay: (item: ContentItem, opts?: { tab?: 'summary' }) => void;
   searchQuery: string;
   showSummary: boolean; // "Twitter feed" mode: summary instead of description
+  summaryParagraphs: number; // paragraphs shown before "[N more]" (Infinity = all)
   justCompleted: boolean; // show "✓ Completed" for a few seconds after generation
   dropdownOpen: boolean;
   dropdownRef: React.Ref<HTMLDivElement> | null;
@@ -46,6 +48,7 @@ export function ContentCard({
   onPlay,
   searchQuery,
   showSummary,
+  summaryParagraphs,
   justCompleted,
   dropdownOpen,
   dropdownRef,
@@ -70,160 +73,6 @@ export function ContentCard({
   // "Twitter feed" mode shows the first 3 summary tweets; [N more] expands the
   // rest inline on the card (article summary only, never the comment summary)
   const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const generationStatusDisplay = () => {
-    if (!item.generation_status || item.generation_status === 'idle') {
-      return null;
-    }
-
-    if (item.generation_status === 'completed') {
-      // Show "Completed ✓" for 5 seconds after completion
-      if (justCompleted) {
-        return (
-          <div className="generation-status completed" style={{ color: '#10b981' }}>
-            <span>✓ Completed</span>
-          </div>
-        );
-      }
-      return null;
-    }
-
-    if (item.generation_status === 'failed') {
-      // Retry the step that actually failed. The backend tags refetch/transcript failures
-      // via current_operation ('failed_refetch' / 'failed_transcript'); podcasts only ever
-      // fail on transcription; everything else is audio generation.
-      const retryGeneration = () => {
-        if (item.type === 'podcast_episode') return onRegenerateTranscript(item.id);
-        if (item.current_operation === 'failed_refetch') return onRefetch(item.id);
-        if (item.current_operation === 'failed_transcript') return onRegenerateTranscript(item.id);
-        return onGenerateAudio(item.id, true);
-      };
-      return (
-        <div className="generation-status error">
-          <span className="error-message">
-            Generation failed
-            {item.generation_error && <span className="error-detail">: {item.generation_error}</span>}
-          </span>
-          <span className="error-actions">
-            <button
-              className="error-retry-btn"
-              onClick={(e) => { e.stopPropagation(); retryGeneration(); }}
-              title="Retry"
-            >
-              Retry
-            </button>
-            <button
-              className="error-dismiss-btn"
-              onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'generation'); }}
-              title="Dismiss"
-            >
-              <X size={14} />
-            </button>
-          </span>
-        </div>
-      );
-    }
-
-    let statusMessage = '';
-    const progressPercent = item.generation_progress || 0;
-
-    // Check current_operation first (more specific than generation_status)
-    if (item.current_operation) {
-      switch (item.current_operation) {
-        case 'processing_images':
-          statusMessage = `Processing image descriptions... ${progressPercent}%`;
-          break;
-        case 'scripting_content':
-          statusMessage = `Preparing narration script... ${progressPercent}%`;
-          break;
-        case 'synthesizing_audio':
-          statusMessage = `Generating audio... ${progressPercent}%`;
-          break;
-        case 'concatenating_audio':
-          statusMessage = `Combining audio files... ${progressPercent}%`;
-          break;
-        case 'finalizing_audio':
-          statusMessage = `Finalizing audio... ${progressPercent}%`;
-          break;
-        case 'transcribing':
-          statusMessage = `Creating transcript... ${progressPercent}%`;
-          break;
-        case 'aligning_content':
-          statusMessage = `Aligning content... ${progressPercent}%`;
-          break;
-        default:
-          // Check for audio chunk pattern (e.g., "audio_chunk_3_of_10")
-          if (item.current_operation.startsWith('audio_chunk_')) {
-            const match = item.current_operation.match(/audio_chunk_(\d+)_of_(\d+)/);
-            if (match) {
-              const [, current, total] = match;
-              statusMessage = `Generating audio: chunk ${current}/${total} (${progressPercent}%)`;
-            } else {
-              statusMessage = `Generating audio... ${progressPercent}%`;
-            }
-          }
-          // Check for image processing pattern (e.g., "processing_image_3_of_10")
-          else if (item.current_operation.startsWith('processing_image_')) {
-            const match = item.current_operation.match(/processing_image_(\d+)_of_(\d+)/);
-            if (match) {
-              const [, current, total] = match;
-              statusMessage = `Processing image ${current}/${total}... ${progressPercent}%`;
-            } else {
-              statusMessage = `Processing images... ${progressPercent}%`;
-            }
-          }
-          else if (item.generation_status === 'starting') {
-            statusMessage = 'Starting...';
-          } else if (item.generation_status === 'extracting_content') {
-            statusMessage = 'Extracting content...';
-          } else if (item.generation_status === 'generating_transcript') {
-            statusMessage = `Generating transcript... ${progressPercent}%`;
-          } else {
-            statusMessage = `Processing... ${progressPercent}%`;
-          }
-      }
-    } else if (item.generation_status === 'starting') {
-      statusMessage = 'Starting...';
-    } else if (item.generation_status === 'extracting_content') {
-      statusMessage = 'Extracting content...';
-    } else if (item.generation_status === 'generating_transcript') {
-      statusMessage = `Generating transcript... ${progressPercent}%`;
-    } else {
-      statusMessage = `Processing... ${progressPercent}%`;
-    }
-
-    return (
-      <div className="generation-status generating">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-          <span style={{ flex: 1 }}>{statusMessage}</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onCancelGeneration(item.id);
-            }}
-            className="cancel-generation-btn"
-            title="Stop generation"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '0.25rem',
-              display: 'flex',
-              alignItems: 'center',
-              color: '#ef4444',
-            }}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        {progressPercent > 0 && (
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${progressPercent}%` }}></div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div
       className={`content-card ${selected ? 'selected' : ''}`}
@@ -266,9 +115,12 @@ export function ContentCard({
           </p>
         )}
         {showSummary && item.summary ? (() => {
+          // Collapsed, a card shows the first summaryParagraphs paragraphs (Settings, default 1:
+          // the default summary prompts ask the first one to state the central thesis or main
+          // takeaway). "[N more]" opens the rest.
           const tweets = toTweets(item.summary);
-          const shown = summaryExpanded ? tweets : tweets.slice(0, 3);
-          const hasMore = !summaryExpanded && tweets.length > 3;
+          const shown = summaryExpanded ? tweets : tweets.slice(0, summaryParagraphs);
+          const hasMore = !summaryExpanded && tweets.length > summaryParagraphs;
           const moreCount = tweets.length - shown.length;
           return (
             <div className="library-summary">
@@ -363,65 +215,17 @@ export function ContentCard({
             </button>
           )}
         </div>
-        {generationStatusDisplay()}
-        {item.summary_status === 'generating' && (
-          <div className="generation-status generating">
-            <span>Summarizing…</span>
-          </div>
-        )}
-        {item.summary_audio_status === 'generating' && (
-          <div className="generation-status generating">
-            <span>Generating summary audio…</span>
-          </div>
-        )}
-        {item.summary_status === 'failed' && (
-          <div className="generation-status error">
-            <span className="error-message">
-              Summary failed
-              {item.summary_error && <span className="error-detail">: {item.summary_error}</span>}
-            </span>
-            <span className="error-actions">
-              <button
-                className="error-retry-btn"
-                onClick={(e) => { e.stopPropagation(); onGenerateSummary(item.id, !!item.summary_generated_at); }}
-                title="Retry summary generation"
-              >
-                Retry
-              </button>
-              <button
-                className="error-dismiss-btn"
-                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary'); }}
-                title="Dismiss"
-              >
-                <X size={14} />
-              </button>
-            </span>
-          </div>
-        )}
-        {item.summary_audio_status === 'failed' && (
-          <div className="generation-status error">
-            <span className="error-message">
-              Summary audio failed
-              {item.summary_audio_error && <span className="error-detail">: {item.summary_audio_error}</span>}
-            </span>
-            <span className="error-actions">
-              <button
-                className="error-retry-btn"
-                onClick={(e) => { e.stopPropagation(); onGenerateSummaryAudio(item.id); }}
-                title="Retry summary audio generation"
-              >
-                Retry
-              </button>
-              <button
-                className="error-dismiss-btn"
-                onClick={(e) => { e.stopPropagation(); onDismissError(item.id, 'summary_audio'); }}
-                title="Dismiss"
-              >
-                <X size={14} />
-              </button>
-            </span>
-          </div>
-        )}
+        <GenerationStatus
+          item={item}
+          justCompleted={justCompleted}
+          onCancelGeneration={() => onCancelGeneration(item.id)}
+          onGenerateAudio={(regenerate) => onGenerateAudio(item.id, regenerate)}
+          onRegenerateTranscript={() => onRegenerateTranscript(item.id)}
+          onRefetch={() => onRefetch(item.id)}
+          onGenerateSummary={(regenerate) => onGenerateSummary(item.id, regenerate)}
+          onGenerateSummaryAudio={() => onGenerateSummaryAudio(item.id)}
+          onDismissError={(kind) => onDismissError(item.id, kind)}
+        />
       </div>
       {/* Star/archive stay visible in bulk mode. They show each item's state
           (filled star, highlighted archive) and still work as toggles.

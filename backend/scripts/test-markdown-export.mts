@@ -1,8 +1,13 @@
-// Scratch test for the server-side Copy content (services/markdown-export.ts), the URL
-// matcher (services/url-match.ts), and the read-token allow-list (services/api-tokens.ts).
+// Scratch test for the server-side Copy content (services/markdown-export.ts) and the URL
+// matcher (services/url-match.ts). API tokens have their own checks in test-api-tokens.mts.
 // Run from backend/:  npx tsx scripts/test-markdown-export.mts
 // Not wired into any build. Needs the frontend's node_modules too: the frontend module is
 // imported directly, so the two turndown installs render side by side.
+//
+// Comment dates render with toLocaleDateString('en-GB') in the server's own time zone, which
+// is UTC on Railway. The test sets the same zone, so it passes on any machine. Node reads TZ
+// each time a date is formatted, and nothing is formatted before this line runs.
+process.env.TZ = 'UTC';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -211,6 +216,24 @@ console.log('✅ rendered Markdown spot checks pass');
 // Markdown definitions. Checked through BOTH copies, because this is exactly the kind of
 // bug that hides behind a fixture covering only one shape.
 const sharedMarkdown = await import('../src/shared/markdown.ts');
+
+// ---- 2a. the "## Transcript" section and the index's has_transcript flag -----------------
+// exportHasTranscript() is the rule both follow: a podcast episode whose transcript holds
+// text. GET /api/content/index computes it in SQL (routes/content.ts), which these offline
+// tests cannot run, so they pin the export side the SQL mirrors.
+const { exportHasTranscript } = sharedMarkdown;
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: 'Hello there.' }), true, 'podcast with text');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: ' \n\t ' }), false, 'whitespace only counts as none');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: '' }), false, 'empty');
+assert.equal(exportHasTranscript({ type: 'podcast_episode', transcript: null }), false, 'null');
+assert.equal(exportHasTranscript({ type: 'article', transcript: 'Read-along transcript.' }), false, 'articles never get the section');
+assert.equal(exportHasTranscript({ type: 'text', transcript: 'Read-along transcript.' }), false, 'texts never get the section');
+const blankPod = backend.renderItemMarkdown({ ...podcastRow, transcript: '  \n ', transcript_words: null }, {});
+assert.ok(!blankPod.includes('## Transcript'), 'no empty Transcript heading for a whitespace-only transcript');
+assert.ok(blankPod.includes('Episode notes with a [link](https://x.y).'), 'the show notes stay');
+const plainPod = backend.renderItemMarkdown({ ...podcastRow, transcript_words: null }, {});
+assert.ok(plainPod.includes('## Transcript\n\nWelcome to the show. Still minute one. Into minute two.'), 'plain transcript without word timestamps');
+console.log('✅ Transcript section and the has_transcript rule');
 
 const FOOTNOTE_SHAPES: Array<[string, string, RegExp[]]> = [
   [
@@ -536,42 +559,7 @@ assert.deepEqual(sourceUrls('wallacast://abc'), { source: null, altSource: null 
 assert.deepEqual(sourceUrls(null), { source: null, altSource: null });
 console.log('✅ archive originals and the source / alt-source pair');
 
-// ---- 5. read-token allow-list and token format ------------------------------------------
-const { isReadTokenAllowed, generateApiToken, isApiToken, hashApiToken } = await import('../src/services/api-tokens.ts');
-const allowed: Array<[string, string]> = [
-  ['GET', '/api/content/index'],
-  ['GET', '/api/content/index?x=1'],
-  ['GET', '/api/content/index/'],
-  ['GET', '/api/content/markdown?url=https%3A%2F%2Fa.b%2Fc'],
-  ['GET', '/api/content/123/markdown'],
-  ['HEAD', '/api/content/index'],
-];
-const denied: Array<[string, string]> = [
-  ['GET', '/api/content'],
-  ['GET', '/api/content/123'],
-  ['GET', '/api/content/123/export'],
-  ['GET', '/api/content/abc/markdown'],
-  ['GET', '/api/content/123/markdown/x'],
-  ['GET', '/api/content/tags/all'],
-  ['GET', '/api/users/settings'],
-  ['GET', '/api/auth/tokens'],
-  ['GET', '/api/auth/me'],
-  ['GET', '/api/wallabag/status'],
-  ['GET', '/api/queue'],
-  ['POST', '/api/content/index'],
-  ['POST', '/api/content/status'],
-  ['DELETE', '/api/content/123'],
-  ['PATCH', '/api/content/123'],
-  ['GET', ''],
-];
-for (const [m, p] of allowed) assert.ok(isReadTokenAllowed(m, p), `${m} ${p} must be allowed`);
-for (const [m, p] of denied) assert.ok(!isReadTokenAllowed(m, p), `${m} ${p} must be denied`);
-const tok = generateApiToken();
-assert.match(tok, /^wcr_[0-9a-f]{40}$/, 'token format');
-assert.ok(isApiToken(tok) && !isApiToken('eyJhbGciOiJIUzI1NiJ9.x.y'), 'token vs JWT detection');
-assert.match(hashApiToken(tok), /^[0-9a-f]{64}$/, 'sha256 hex');
-assert.notEqual(generateApiToken(), tok, 'random');
-console.log('✅ read-token allow-list and token format');
+// ---- 5. API token routes and format: see scripts/test-api-tokens.mts ------------------
 
 // ---- 6. file names inside the bulk Copy content zip ----------------------------------------
 const { markdownFileName, uniqueFileName } = backend;
@@ -593,4 +581,4 @@ assert.equal(uniqueFileName('A (2).md', used), 'A (2) (2).md', 'a real title tha
 assert.equal(uniqueFileName('B.md', used), 'B.md');
 console.log('✅ zip file names');
 
-console.log('\nALL MARKDOWN EXPORT / URL MATCH / TOKEN TESTS PASSED');
+console.log('\nALL MARKDOWN EXPORT / URL MATCH TESTS PASSED');

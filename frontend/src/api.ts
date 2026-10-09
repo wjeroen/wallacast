@@ -100,7 +100,13 @@ export const contentAPI = {
       summary_audio_status: ContentItem['summary_audio_status'];
     }>>('/content/status', { ids }),
 
-  create: (data: Partial<ContentItem>) => api.post<ContentItem>('/content', data),
+  // feed_item_id: the Feed tab's cached row, whose full description the server copies.
+  // progress_id: the Add tab's id for fetchProgress below.
+  create: (data: Partial<ContentItem> & { feed_item_id?: number; progress_id?: string }) => api.post<ContentItem>('/content', data),
+
+  // What a slow article fetch started with that progress_id is doing (null when nothing yet)
+  fetchProgress: (progressId: string) =>
+    api.get<{ text: string | null }>(`/content/fetch-progress/${progressId}`),
 
   update: (id: number, data: Partial<ContentItem>) =>
     api.patch<ContentItem>(`/content/${id}`, data),
@@ -178,6 +184,16 @@ export const contentAPI = {
   }) => api.post('/content/audio-error-log', data),
 };
 
+// Status of the latest feed refresh (backend: startFeedRefresh in podcast-service.ts)
+export interface FeedRefreshStatus {
+  running: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  totalFeeds?: number;
+  totalItemsAdded?: number;
+}
+
 export const podcastAPI = {
   getAll: () => api.get<Podcast[]>('/podcasts'),
 
@@ -207,8 +223,13 @@ export const podcastAPI = {
   getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
     api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
+  // Starts a refresh of every subscribed feed in the background and answers at once. Poll
+  // getRefreshStatus until `running` is false.
   refreshFeeds: () =>
-    api.post<{ totalFeeds: number; totalItemsAdded: number }>('/podcasts/refresh-feeds'),
+    api.post<FeedRefreshStatus>('/podcasts/refresh-feeds'),
+
+  getRefreshStatus: () =>
+    api.get<FeedRefreshStatus>('/podcasts/refresh-status'),
 
   getLastRefresh: () =>
     api.get<{ lastRefresh: string | null }>('/podcasts/last-refresh'),
@@ -268,19 +289,96 @@ export const authAPI = {
   changePassword: (currentPassword: string, newPassword: string) =>
     api.post('/auth/change-password', { currentPassword, newPassword }),
 
-  // Read-only API tokens (Settings). The raw token is in the create response only.
-  listTokens: () => api.get<{ tokens: ApiToken[] }>('/auth/tokens'),
+  // API tokens (Settings). The raw token is in the create response only. A token can do only
+  // what its permissions allow, within its own limits, and these routes accept a normal login
+  // only, so a token can never change itself.
+  listTokens: () => api.get<{ tokens: ApiToken[]; max_limits: TokenLimits }>('/auth/tokens'),
   createToken: (name: string) =>
     api.post<{ id: number; name: string; token: string }>('/auth/tokens', { name }),
   revokeToken: (id: number) => api.delete<{ success: boolean }>(`/auth/tokens/${id}`),
+  // Each part is optional. Answers the updated token, 400 with { error } on invalid input.
+  updateToken: (id: number, patch: ApiTokenPatch) =>
+    api.patch<ApiTokenSettings>(`/auth/tokens/${id}`, patch),
+  // Usage counts from now on, and the last limit hit is cleared.
+  resetTokenUsage: (id: number) => api.post<{ success: boolean }>(`/auth/tokens/${id}/reset-usage`),
+  // The token's tag and star changes, newest first (max 200).
+  listTokenChanges: (id: number) => api.get<{ changes: TokenChange[] }>(`/auth/tokens/${id}/changes`),
+  undoTokenChanges: (id: number, body: { ids: number[] } | { all: true }) =>
+    api.post<{ undone: number }>(`/auth/tokens/${id}/changes/undo`, body),
+  // Tokens that hit a limit since the notice was last dismissed, and dismissing it.
+  tokenAlerts: () => api.get<{ alerts: TokenAlert[] }>('/auth/tokens/alerts'),
+  markTokenAlertsSeen: () => api.post<{ success: boolean }>('/auth/tokens/alerts/seen'),
 };
 
-// One live read-only API token as listed by GET /auth/tokens (never the token value itself).
-export interface ApiToken {
+// What a token may do. add_any and add_feed exclude each other.
+export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star';
+
+// Per-token limits on items added and minutes of AI generation started, in rolling windows.
+export interface TokenLimits {
+  items_hour: number;
+  items_2d: number;
+  minutes_hour: number;
+  minutes_2d: number;
+}
+
+// What is generated for items a token adds. With follow on, the app's auto-generation
+// settings decide and the four flags are ignored.
+export interface TokenGeneration {
+  follow: boolean;
+  audio: boolean;
+  summary: boolean;
+  summary_audio: boolean;
+  transcribe: boolean;
+}
+
+// Usage inside the limit windows since the last reset. Minutes may have one decimal.
+export interface TokenUsage extends TokenLimits {
+  changes_hour: number;
+}
+
+// One live API token as PATCH /auth/tokens/:id answers it (never the token value itself).
+export interface ApiTokenSettings {
   id: number;
   name: string;
   created_at: string;
   last_used_at: string | null;
+  permissions: TokenPermission[];
+  limits: TokenLimits;
+  generation: TokenGeneration;
+  usage_reset_at: string | null;
+  limit_hit: string | null;
+  limit_hit_at: string | null;
+}
+
+// One live API token as listed by GET /auth/tokens, with its usage and the number of tag and
+// star changes that are not undone.
+export interface ApiToken extends ApiTokenSettings {
+  usage: TokenUsage;
+  open_changes: number;
+}
+
+export interface ApiTokenPatch {
+  permissions?: TokenPermission[];
+  limits?: Partial<TokenLimits>;
+  generation?: Partial<TokenGeneration>;
+}
+
+// One tag or star change a token made. title is null when the item was deleted since.
+export interface TokenChange {
+  id: number;
+  kind: 'tag_add' | 'star' | 'unstar';
+  tag: string | null;
+  content_item_id: number | null;
+  title: string | null;
+  created_at: string;
+  undone_at: string | null;
+}
+
+export interface TokenAlert {
+  id: number;
+  name: string;
+  limit_hit: string;
+  limit_hit_at: string;
 }
 
 export const userSettingsAPI = {

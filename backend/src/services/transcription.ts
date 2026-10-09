@@ -397,7 +397,10 @@ export async function transcribeWithTimestamps(
       allWords = words;
     }
 
-    return { text: transcriptText, words: allWords };
+    // Whisper can answer silence with only spaces. Stored as an empty value instead, so a
+    // non-empty transcript always holds text (the has_transcript flag of GET /api/content/index
+    // relies on that, see exportHasTranscript in shared/markdown.ts).
+    return { text: transcriptText.trim() ? transcriptText : '', words: allWords };
   } catch (error) {
     console.error('Error transcribing:', error);
     throw error;

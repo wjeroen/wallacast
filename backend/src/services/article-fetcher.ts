@@ -1,6 +1,7 @@
 import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
-import { safeFetch, browserHeadersFetch, readerProxyFetch } from './url-guard.js';
+import { safeFetch, safeFetchWithCookies, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackNewestTimestamp, waybackCopyFetch, archiveTodayNewestCopy, archiveTodayCopyFetch } from './url-guard.js';
+import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -239,6 +240,7 @@ async function fetchForumMagnumPost(url: string, isEAForum: boolean): Promise<Ar
 
   const dom = new JSDOM(post.htmlBody);
   stripInlineColors(dom.window.document.body);
+  stripLayoutStyles(dom.window.document.body);
   normalizeTweetEmbeds(dom.window.document.body);
   return {
     title: post.title,
@@ -603,6 +605,204 @@ function cleanSubstackContent(contentEl: Element): void {
   contentEl.querySelectorAll('[data-component-name="ShareMenuDialog"]').forEach(el => el.remove());
 }
 
+// A note reply's plain-text body as paragraphs. The text is escaped, since a reply that says
+// "a < b" is not HTML.
+function noteReplyComment(raw: any): Comment {
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const content = String(raw.body || '')
+    .split(/\n\s*\n/).map(part => part.trim()).filter(Boolean)
+    .map(part => `<p>${escape(part).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    id: String(raw.id),
+    username: raw.name || 'Anonymous',
+    date: raw.date || undefined,
+    karma: raw.reaction_count || undefined,
+    content,
+  };
+}
+
+const NOTE_REPLY_MAX_REQUESTS = 30;
+
+/**
+ * The replies to a Substack note as a comment tree. A note page has no `/comments` page, but
+ * `substack.com/api/v1/reader/comment/<id>/replies` answers without a login (checked
+ * 2026-10-06). Each answer holds a page of reply branches, each a reply with a few of its own
+ * replies, plus `nextCursor` for the next page. That cursor only works with the cookies of the
+ * first answer (without them the same first page comes back), so they are sent along. A reply
+ * with more replies than its branch shows gets its own request. The parent of each reply is the
+ * last id in its `ancestor_path`. At most 30 requests per note, and a failure keeps what was
+ * collected so far.
+ */
+async function fetchSubstackNoteReplies(noteId: string): Promise<Comment[]> {
+  const raws = new Map<string, any>();
+  const cookies = new Map<string, string>();
+  let requests = 0;
+
+  const loadThread = async (id: string) => {
+    let cursor: string | undefined;
+    do {
+      if (requests >= NOTE_REPLY_MAX_REQUESTS) return;
+      requests++;
+      const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const res = await safeFetch(`https://substack.com/api/v1/reader/comment/${id}/replies${query}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+          ...(cookies.size ? { 'Cookie': Array.from(cookies, ([name, value]) => `${name}=${value}`).join('; ') } : {}),
+        },
+      });
+      for (const header of res.headers.raw()['set-cookie'] || []) {
+        const [pair] = header.split(';');
+        const eq = pair.indexOf('=');
+        if (eq > 0) cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+      }
+      if (!res.ok) throw new Error(`replies of ${id} answered HTTP ${res.status}`);
+      const data: any = await res.json();
+      const before = raws.size;
+      const add = (comment: any) => {
+        if (comment?.id != null && !raws.has(String(comment.id))) raws.set(String(comment.id), comment);
+      };
+      for (const branch of data?.commentBranches || []) {
+        add(branch?.comment);
+        for (const descendant of branch?.descendantComments || []) {
+          if (descendant?.type === 'comment') add(descendant.comment);
+        }
+      }
+      // A cursor that brings nothing new would loop forever
+      cursor = raws.size > before ? data?.nextCursor || undefined : undefined;
+    } while (cursor);
+  };
+
+  const parentOf = (raw: any) => String(raw.ancestor_path || '').split('.').filter(Boolean);
+  try {
+    await loadThread(noteId);
+    // A Map visits entries added during the loop, so replies found deeper get their turn too
+    for (const [id, raw] of raws) {
+      const shown = Array.from(raws.values()).filter(other => parentOf(other).pop() === id).length;
+      if ((raw.children_count || 0) > shown) await loadThread(id);
+    }
+  } catch (error: any) {
+    console.log(`[Fetcher] Note replies stopped early: ${error.message}`);
+  }
+
+  // Build the tree. A reply whose parent was not loaded (the request cap) hangs under its
+  // nearest loaded ancestor, or at the top.
+  const nodes = new Map<string, Comment>();
+  for (const [id, raw] of raws) {
+    if (raw.deleted || !String(raw.body || '').trim()) continue;
+    nodes.set(id, noteReplyComment(raw));
+  }
+  const top: Comment[] = [];
+  for (const [id, raw] of raws) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    const parentId = parentOf(raw).reverse().find(ancestor => ancestor !== noteId && nodes.has(ancestor));
+    const parent = parentId ? nodes.get(parentId) : undefined;
+    if (parent) (parent.replies ||= []).push(node);
+    else top.push(node);
+  }
+  console.log(`[Fetcher] Note replies: ${nodes.size} in ${requests} request(s), ${top.length} at the top`);
+  return top;
+}
+
+export interface SubstackNote {
+  id: string;
+  title?: string;
+  author?: string;
+  publishedDate?: string;
+  content: Element;
+}
+
+/**
+ * A Substack note (`substack.com/@name/note/c-123`): a short post without a title, inside
+ * Substack's app shell. The page has no `.body.markup` box like a post, so the generic fallback
+ * kept the whole shell: a promo banner, loading placeholders, "Log in or sign up", and a wrapper
+ * with a fixed 420px right margin that pressed the text against the left edge on a phone (Will
+ * MacAskill's note, 2026-10-06). The note's own text is the page's first `.FeedProseMirror` box:
+ * a reply's page shows only the reply, and a quoted note comes after the note. The author, the
+ * date, the text as plain paragraphs, and the attachments are in
+ * `_preloads.feedData.feedItem.comment`. Attachments are appended after the text: an image, a
+ * link to an attached post or page, and a quoted note as a blockquote. A video is left out.
+ * Returns null for any page that is not a note.
+ */
+export function substackNote(html: string, doc: Document, url: string): SubstackNote | null {
+  let path = '';
+  try { path = new URL(url).pathname; } catch { return null; }
+  const id = path.match(/\/note\/c-(\d+)/)?.[1];
+  if (!id) return null;
+
+  const comment = parseSubstackPreloads(html)?.feedData?.feedItem?.comment;
+  const box = doc.querySelector('.FeedProseMirror');
+  if (!comment && !box) return null;
+
+  const content = doc.createElement('div');
+  const addParagraphs = (parent: Element, text: string) => {
+    text.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean).forEach(part => {
+      const p = doc.createElement('p');
+      part.split('\n').forEach((line, i) => {
+        if (i > 0) p.appendChild(doc.createElement('br'));
+        p.appendChild(doc.createTextNode(line));
+      });
+      parent.appendChild(p);
+    });
+  };
+  const addLink = (href: unknown, text: unknown) => {
+    if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return;
+    const p = doc.createElement('p');
+    const a = doc.createElement('a');
+    a.setAttribute('href', href);
+    a.textContent = typeof text === 'string' && text.trim() ? text.trim() : href;
+    p.appendChild(a);
+    content.appendChild(p);
+  };
+
+  if (box) {
+    content.append(...Array.from(box.childNodes));
+  } else {
+    addParagraphs(content, String(comment.body || ''));
+  }
+
+  for (const attachment of Array.isArray(comment?.attachments) ? comment.attachments : []) {
+    if (attachment?.type === 'image' && typeof attachment.imageUrl === 'string') {
+      const figure = doc.createElement('figure');
+      const img = doc.createElement('img');
+      img.setAttribute('src', attachment.imageUrl);
+      img.setAttribute('alt', '');
+      figure.appendChild(img);
+      content.appendChild(figure);
+    } else if (attachment?.type === 'post') {
+      addLink(attachment.post?.canonical_url, attachment.post?.title);
+    } else if (attachment?.type === 'link') {
+      addLink(attachment.linkMetadata?.url, attachment.linkMetadata?.title);
+    } else if (attachment?.type === 'comment' && attachment.comment?.body) {
+      const quote = doc.createElement('blockquote');
+      const name = attachment.comment.user?.name;
+      if (typeof name === 'string' && name.trim()) {
+        const p = doc.createElement('p');
+        const strong = doc.createElement('strong');
+        strong.textContent = name.trim();
+        p.appendChild(strong);
+        quote.appendChild(p);
+      }
+      addParagraphs(quote, String(attachment.comment.body));
+      content.appendChild(quote);
+    }
+  }
+
+  // A note has no title, so its first line stands in for one (cut at a word after 100
+  // characters). Without any text the caller keeps the page title.
+  const firstLine = String(comment?.body || box?.textContent || '')
+    .split('\n').map(line => line.trim()).find(Boolean);
+  const title = !firstLine || firstLine.length <= 100
+    ? firstLine
+    : firstLine.slice(0, 100).replace(/\s+\S*$/, '') + '...';
+  const author = typeof comment?.name === 'string' && comment.name.trim() ? comment.name.trim() : undefined;
+  const publishedDate = typeof comment?.date === 'string' ? comment.date : undefined;
+  console.log(`[Fetcher] Substack note by ${author || '(unknown)'}, ${content.querySelectorAll('p').length} paragraph(s), ${comment?.attachments?.length || 0} attachment(s)`);
+  return { id, title, author, publishedDate, content };
+}
+
 // --- SUBSTACK HELPERS END ---
 
 // Flatten email-newsletter layout into normal block flow. Newsletters are built from
@@ -879,6 +1079,77 @@ function stripInlineColors(root: Element | Document): void {
   });
 }
 
+// Elements whose inline sizing describes the media itself. The reader's CSS already caps and
+// unpositions images, and the Markdown export keeps a figure's percentage width.
+const MEDIA_TAGS = new Set(['img', 'picture', 'source', 'video', 'audio', 'iframe', 'svg', 'canvas', 'figure']);
+
+// The lengths in a CSS value, in px (em and rem as 16px, pt as 4/3 px). Percentages and
+// viewport units are reported separately, since they size against the site's own layout.
+function cssLengths(value: string): { px: number[]; relative: boolean } {
+  const px: number[] = [];
+  let relative = false;
+  for (const m of value.matchAll(/(-?\d*\.?\d+)(px|em|rem|pt|%|vw|vh|vmin|vmax)/gi)) {
+    const n = Math.abs(parseFloat(m[1]));
+    const unit = m[2].toLowerCase();
+    if (unit === 'px') px.push(n);
+    else if (unit === 'em' || unit === 'rem') px.push(n * 16);
+    else if (unit === 'pt') px.push(n * 4 / 3);
+    else relative = true;
+  }
+  return { px, relative };
+}
+
+/**
+ * Strip inline page-layout styles that a phone reader cannot carry. Sites set them for their
+ * own desktop layout: a Substack note's wrapper had `margin-right: 420px`, which pressed the
+ * text against the left edge on a phone (2026-10-06), and image wrappers use
+ * `position: relative; padding-bottom: 56.25%; height: 0`. A survey of 45 articles
+ * (2026-10-06, the newest item of 24 feeds, the Hacker News front page, and known odd pages)
+ * found these on 10 sites. Removed:
+ * - positioning: position, top, right, bottom, left, inset, z-index, transform, float,
+ * - multi-column and flex/grid layout: columns, and display flex/grid (blocks stack instead),
+ * - white-space: nowrap (one line that scrolls sideways), while pre, pre-wrap, pre-line stay,
+ * - margins and paddings with a percentage, a viewport unit, or a length over 48px
+ *   (small ones stay, so an indent of 40px survives),
+ * - on anything but media: widths over 320px and fixed heights.
+ * Everything else stays: text styling, max-width, overflow, display none (hidden content), and
+ * the sizes of images, figures and other media. Only `style` attributes change, never the text.
+ */
+export function stripLayoutStyles(root: Element | Document): void {
+  root.querySelectorAll('[style]').forEach((el) => {
+    const style = el.getAttribute('style');
+    if (!style) return;
+    const isMedia = MEDIA_TAGS.has(el.tagName.toLowerCase());
+    const kept = style
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .filter((d) => {
+        const colon = d.indexOf(':');
+        if (colon < 0) return true;
+        const prop = d.slice(0, colon).trim().toLowerCase();
+        const value = d.slice(colon + 1).trim().toLowerCase();
+        if (/^(position|top|right|bottom|left|inset|z-index|transform|float|columns|column-count|column-width)$/.test(prop)) return false;
+        if (prop === 'display' && /\b(flex|grid)\b/.test(value)) return false;
+        if (prop === 'white-space' && value.startsWith('nowrap')) return false;
+        if (/^(margin|padding)(-(top|right|bottom|left|block|inline)(-(start|end))?)?$/.test(prop)) {
+          const { px, relative } = cssLengths(value);
+          return !relative && px.every((n) => n <= 48);
+        }
+        if (!isMedia && (prop === 'width' || prop === 'min-width')) {
+          const { px, relative } = cssLengths(value);
+          return !/v(w|h|min|max)/.test(value) && (relative || px.every((n) => n <= 320));
+        }
+        if (!isMedia && /^(min-|max-)?height$/.test(prop)) {
+          return cssLengths(value).px.length === 0 && !/v(h|w|min|max)/.test(value);
+        }
+        return true;
+      });
+    if (kept.length > 0) el.setAttribute('style', kept.join('; '));
+    else el.removeAttribute('style');
+  });
+}
+
 /**
  * Author from the page's schema.org JSON-LD block.
  *
@@ -1029,6 +1300,67 @@ export function removeShareLinks(root: Element): number {
   return removed;
 }
 
+// Class names that hide an element in the site's own print stylesheet: Nine's `noPrint`
+// (smh.com.au, The Age), Bootstrap's `d-print-none` and `hidden-print`, Tailwind's
+// `print:hidden`, and the usual spellings. A site leaves out of print exactly what is not the
+// article: ads, video players, save and share bars, related-story boxes.
+const PRINT_HIDDEN_SELECTOR =
+  '.noPrint, .noprint, .no-print, .d-print-none, .hidden-print, .print-hidden, .print\\:hidden';
+
+/** Characters of text inside el, whitespace not counted (page markup is full of indentation). */
+const textChars = (el: Element) => (el.textContent || '').replace(/\s+/g, '').length;
+
+/**
+ * Removes what the site hides when printing (see PRINT_HIDDEN_SELECTOR). An element holding more
+ * than a third of the text stays, so a site that marks its whole story body never loses it.
+ * Returns how many elements went.
+ *
+ * smh.com.au, 2026-10-07: every piece of furniture inside its story box carries `noPrint` (7
+ * "Advertisement" labels, an empty video player, two "maximum number of saved items" tooltips,
+ * related-story boxes, ad widgets), and no paragraph of the story does.
+ */
+export function removePrintHidden(root: Element): number {
+  const totalText = textChars(root);
+  let removed = 0;
+  for (const el of Array.from(root.querySelectorAll(PRINT_HIDDEN_SELECTOR))) {
+    if (!root.contains(el)) continue; // already gone with an outer match
+    if (textChars(el) > totalText / 3) continue;
+    el.remove();
+    removed++;
+  }
+  return removed;
+}
+
+// Text a player box may hold besides its video ("Loading", "Play", a duration) before it counts
+// as holding something else, such as a caption worth keeping.
+const PLAYER_TEXT_MAX_CHARS = 30;
+
+/**
+ * Removes video players with no video file: a `<video>` without `src` and without a
+ * `<source src>`, whose file only the site's own script loads (Brightcove, JW Player). The reader
+ * shows them as an empty player with the site's "Loading" text. The player box goes too, up to
+ * the first ancestor that holds more than a few words or any other media. A video with a file
+ * stays. Returns how many players went.
+ */
+export function removeEmptyVideoPlayers(root: Element): number {
+  let removed = 0;
+  for (const video of Array.from(root.querySelectorAll('video'))) {
+    if (!root.contains(video)) continue;
+    if (video.getAttribute('src') || video.querySelector('source[src]')) continue;
+    let box: Element = video;
+    for (let parent = box.parentElement; parent && parent !== root; parent = parent.parentElement) {
+      const otherText = textChars(parent) - textChars(box);
+      const otherMedia = Array.from(parent.querySelectorAll('img, picture, video, audio, iframe'))
+        .some(m => !box.contains(m));
+      if (otherText > PLAYER_TEXT_MAX_CHARS || otherMedia) break;
+      box = parent;
+    }
+    box.remove();
+    removed++;
+  }
+  return removed;
+}
+
 // Names pages give their story body. They are ids and attributes, not class names, so an
 // archive.is copy keeps them: FT's `#article-body`, the New York Times' `<section
 // name="articleBody">`, and schema.org's `itemprop="articleBody"`.
@@ -1044,12 +1376,31 @@ const MIN_STORY_BODY_CHARS = 500;
  * split over several markers gives null, since keeping one part would drop the rest.
  */
 export function findStoryBody(doc: Document): Element | null {
-  const found = Array.from(doc.querySelectorAll(STORY_BODY_MARKERS));
+  return singleMarkedBox(doc, STORY_BODY_MARKERS);
+}
+
+function singleMarkedBox(doc: Document, markers: string): Element | null {
+  const found = Array.from(doc.querySelectorAll(markers));
   const outermost = found.filter(el => !found.some(other => other !== el && other.contains(el)));
   if (outermost.length !== 1) return null;
   const body = outermost[0];
   if (insideCommentArea(body)) return null;
   return (body.textContent || '').trim().length >= MIN_STORY_BODY_CHARS ? body : null;
+}
+
+// The box that blog templates put one post in: Blogger's `.post` (with `.post-body` inside),
+// WordPress's `.entry-content`, and the `.post` and `.post-content` of Jekyll and Ghost themes.
+const BLOG_POST_MARKERS = '.post, .post-body, .post-content, .entry-content';
+
+/**
+ * The one blog post on a page that has neither an `<article>` nor a `<main>`, or null. Such a
+ * page used to be kept whole: robert.ocallahan.org puts its full archive of post titles (120 KB
+ * of links) before the post, so a copy to Obsidian opened with years of titles (2026-10-06).
+ * The same rule as findStoryBody applies: exactly one outermost match, outside the comments,
+ * with at least 500 characters of text.
+ */
+export function blogPostBox(doc: Document): Element | null {
+  return singleMarkedBox(doc, BLOG_POST_MARKERS);
 }
 
 const MIN_NESTED_STORY_CHARS = 1000;
@@ -1235,8 +1586,514 @@ export function restoreArchivedParagraphs(root: Element): void {
   }
 }
 
-export async function fetchArticleContent(url: string): Promise<ArticleContent> {
+/** The text a page shows: scripts, styles and tags removed, whitespace collapsed. */
+function visiblePageText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Titles of bot-check pages, also checked on the reader proxy's Markdown answer
+const BOT_CHECK_TITLE = /^(just a moment|attention required|verifying you are human|checking your browser|access denied|human verification)/i;
+
+/**
+ * A bot-check page served in place of the article: Cloudflare's "Just a moment..." JavaScript
+ * challenge, its older "Attention Required!" block page, DataDome's "Please enable JS and
+ * disable any ad blocker" page (wsj.com answers our requests with it and HTTP 401, seen
+ * 2026-10-06), AWS WAF's "Human Verification" captcha (knack.be answers with it and HTTP 405,
+ * 2026-10-07), and similar walls. Such a page has almost no visible text. Most normal pages
+ * behind Cloudflare also load its challenge-platform script, so that script alone never counts,
+ * only a short page with a bot-check title or text.
+ */
+export function isBotCheckPage(html: string): boolean {
+  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim();
+  const text = visiblePageText(html);
+  if (text.length > 3000) return false;
+  return BOT_CHECK_TITLE.test(title)
+    || /enable javascript and cookies to continue|verifying you are human|checking if the site connection is secure|checking your browser before accessing|please enable js and disable any ad blocker/i.test(text);
+}
+
+/**
+ * A login form served in place of the article: a password field on a page with little text.
+ * knack.be answered our server with Roularta's "Vul hier je e-mailadres en wachtwoord in"
+ * login page (12.8 KB, 2026-10-07), which was stored as the article. A real article page that
+ * hides a login dialog in its markup holds far more text than 3,000 characters.
+ */
+export function isLoginWall(html: string): boolean {
+  return /<input\b[^>]*\btype\s*=\s*["']?password\b/i.test(html) && visiblePageText(html).length < 3000;
+}
+
+/** True when a page body shows (almost) no text: fewer than 20 letters and digits, the title not counted. */
+export function hasNoText(html: string): boolean {
+  const body = html.replace(/<head[\s\S]*?<\/head>/i, ' ');
+  return (visiblePageText(body).match(/[\p{L}\p{N}]/gu) || []).length < 20;
+}
+
+/**
+ * The continue link of DPG Media's cookie consent page, or null for any other page. DPG sites
+ * (hln.be, demorgen.be, humo.be, ad.nl, volkskrant.nl and more) redirect a visitor without the
+ * consent cookie to myprivacy.dpgmedia.be, whose script sends the browser on to
+ * `callbackUrl`: the site's own `privacy-gate/accept-tcf2` (or `privacygate-confirm`) address
+ * with an `authId`. That address sets the cookie and redirects to the article. The page writes
+ * the link as `decodeURIComponent('...')`. Only a link back to an https site counts.
+ */
+export function dpgPrivacyGateCallback(pageUrl: string, html: string): string | null {
+  let host = '';
+  try { host = new URL(pageUrl).hostname; } catch { return null; }
+  if (host !== 'myprivacy.dpgmedia.be' && !/<title>\s*DPG Media Privacy Gate\s*<\/title>/i.test(html)) return null;
+  const encoded = html.match(/callbackUrl\s*=\s*new URL\(decodeURIComponent\('([^']+)'\)\)/)?.[1];
+  if (!encoded) return null;
+  try {
+    const callback = new URL(decodeURIComponent(encoded));
+    if (callback.protocol !== 'https:' || callback.hostname.endsWith('dpgmedia.be')) return null;
+    return callback.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** An archive.ph address that opens its "archive this page" form with url filled in and starts it. */
+export function archiveSubmitUrl(url: string): string {
+  return `https://archive.ph/?run=1&url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * A fetch that found no usable copy of the article (a bot check, a login form, or a page
+ * without text, with no other copy anywhere). Carries the archive.ph address that makes a copy,
+ * so the Add tab can offer it: once archive.ph holds a copy, adding the article again finds it.
+ * Without `offerArchive` it carries none, for when archive.ph's own copy is only a preview and
+ * a new copy would very likely be the same.
+ */
+export class ArticleUnavailableError extends Error {
+  readonly archiveSubmitUrl: string | null;
+  constructor(message: string, url: string, offerArchive = true) {
+    super(message);
+    this.name = 'ArticleUnavailableError';
+    this.archiveSubmitUrl = offerArchive ? archiveSubmitUrl(url) : null;
+  }
+}
+
+/**
+ * True when a page says part of it is for subscribers only and that part is missing from the
+ * HTML we got. News sites mark the paid part for search engines with schema.org JSON-LD:
+ * `hasPart: { isAccessibleForFree: false, cssSelector: ".paywall" }`. A copy made without a
+ * subscription (the Wayback Machine's copy of a wsj.com article, 2026-10-06) leaves that
+ * element out and holds only the first few paragraphs. A page that ships the paid part and
+ * hides it with CSS still has the element, so it does not count.
+ */
+export function isPaywallPreview(src: string | Document): boolean {
+  if (typeof src === 'string' && !/isAccessibleForFree/i.test(src)) return false;
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
+  const selectors: string[] = [];
+  const visit = (node: any): void => {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!node || typeof node !== 'object') return;
+    const free = node.isAccessibleForFree;
+    if ((free === false || String(free).toLowerCase() === 'false') && typeof node.cssSelector === 'string') {
+      selectors.push(node.cssSelector);
+    }
+    Object.values(node).forEach(visit);
+  };
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    try {
+      visit(JSON.parse(script.textContent || ''));
+    } catch {
+      // A malformed block says nothing about a paywall
+    }
+  });
+  if (selectors.length === 0) return false;
+  return selectors.every(selector => {
+    try {
+      const parts = Array.from(doc.querySelectorAll(selector));
+      return parts.every(el => (el.textContent || '').trim().length < 200);
+    } catch {
+      return false; // A selector jsdom cannot read proves nothing
+    }
+  });
+}
+
+// markdownToHtml() needs a DOMParser, which Node lacks. markdown-export.ts installs the same
+// jsdom parser, installing it here too keeps the fetcher independent of import order.
+setHtmlParser(new (new JSDOM('').window.DOMParser)());
+
+/**
+ * The most text a fetched page may hold, once its scripts and styles are gone, before it is
+ * refused. Reading a page with jsdom blocks the whole server while it runs, every other
+ * request included. Measured 2026-10-09 on CNN's 5.8 MB article page: as it came it did not
+ * finish in 10 minutes (on Railway it froze the backend for about 20), and without its scripts
+ * and styles (0.6 MB left) it took 0.3 seconds. Stripped markup reads at about half a second
+ * per MB, so one read stays within a few seconds.
+ */
+const MAX_PAGE_CHARS = 5_000_000;
+
+/**
+ * How long a fetch may keep trying other copies of a page (fetchPastBotWall). No new step
+ * starts after this. A request already running still ends at its own timeout.
+ */
+export const FETCH_TIME_LIMIT_MS = 120_000;
+
+/**
+ * The page without what the fetcher never reads from the DOM: its <script> elements, except
+ * schema.org JSON-LD (read for the author and for paywalls), and its <style> elements. A
+ * script ends at its first </script, as it does in a browser. What the fetcher reads from the
+ * raw HTML (Substack's _preloads, substackcdn.com references) is read from the unchanged string.
+ */
+export function lightenHtml(html: string): string {
+  return html
+    .replace(/<script\b(?![^>]*\btype\s*=\s*["']?application\/ld\+json)[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+}
+
+/** Reads a fetched page with jsdom, lightened first. Refuses a page still over MAX_PAGE_CHARS. */
+export function parsePage(html: string, url?: string): JSDOM {
+  const light = lightenHtml(html);
+  if (light.length > MAX_PAGE_CHARS) {
+    throw new Error(`This page is too large to read: ${(light.length / 1_000_000).toFixed(1)} MB without its scripts and styles`);
+  }
+  return url ? new JSDOM(light, { url }) : new JSDOM(light);
+}
+
+// The reader proxy's Markdown answer as a small HTML page, so the usual pipeline reads its
+// title, date, and lead image from the same meta tags a real page carries.
+export function readerMarkdownPage(md: { title: string | null; publishedTime: string | null; markdown: string }): string {
+  const attr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const leadImage = md.markdown.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)/)?.[1];
+  const head = [
+    md.title ? `<title>${attr(md.title)}</title><meta property="og:title" content="${attr(md.title)}">` : '',
+    md.publishedTime ? `<meta property="article:published_time" content="${attr(md.publishedTime)}">` : '',
+    leadImage ? `<meta property="og:image" content="${attr(leadImage)}">` : '',
+  ].join('');
+  return `<!DOCTYPE html><html><head>${head}</head><body><article>${markdownToHtml(md.markdown)}</article></body></html>`;
+}
+
+// A paid page without a selector for its paid part holds only its preview below this much
+// story text (see isPaidPreview). HLN+ ships 850 characters for an article of 5,132.
+const PAID_PREVIEW_MAX_STORY_CHARS = 1500;
+// A copy found for a paid preview must hold this much more story text than the preview did,
+// or it is the same preview again (archive copies of a paywall page exist too).
+const PAID_COPY_MIN_EXTRA_CHARS = 1000;
+// Any copy from another source needs this much story text, or it is a teaser or an empty
+// shell. archive.ph empties a page's JSON-LD, so isPaidPreview cannot see the paid flag in its
+// copies: the archive.ph copy of a paid Knack article holds 324 characters of story (title,
+// byline, a note on letters to the editor) where a free one holds 4,564 (2026-10-07).
+const MIN_COPY_STORY_CHARS = 1000;
+
+/** Text characters inside root outside links, scripts and styles, whitespace not counted. */
+function nonLinkTextChars(root: Element): number {
+  let chars = 0;
+  const walker = root.ownerDocument.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('a, script, style, noscript')) continue;
+    chars += (node.nodeValue || '').replace(/\s+/g, '').length;
+  }
+  return chars;
+}
+
+/**
+ * How much reader text the page's story holds: the most non-link text of any `<article>`,
+ * `<main>` or schema.org articleBody box, else of the body. Link text never counts, because
+ * menus and lists of other articles are links: on HLN's article page the story box counts 850
+ * characters (the intro, the byline, labels) and its 17 teaser links count nothing.
+ */
+export function storyTextChars(src: string | Document): number {
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
+  const boxes = Array.from(doc.querySelectorAll('article, main, [itemprop="articleBody"]'));
+  if (boxes.length === 0) return doc.body ? nonLinkTextChars(doc.body) : 0;
+  return Math.max(...boxes.map(nonLinkTextChars));
+}
+
+/**
+ * True when the page is a paid article and holds only its preview: either isPaywallPreview (the
+ * paid part named by its selector is missing), or a JSON-LD node says `isAccessibleForFree`
+ * false (a boolean, or a string in any case) without naming the paid part, and the story holds
+ * under 1,500 characters. HLN+ marks its articles that second way and ships only the intro
+ * (2026-10-07). Sites that ship the whole paid part and hide it with CSS (smh.com.au, axios.com,
+ * demorgen.be) are never previews.
+ */
+export function isPaidPreview(src: string | Document): boolean {
+  if (typeof src === 'string' && !/isAccessibleForFree/i.test(src)) return false;
+  const doc = typeof src === 'string' ? parsePage(src).window.document : src;
+  if (isPaywallPreview(doc)) return true;
+  let paid = false;
+  let named = false;
+  const visit = (node: any): void => {
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (!node || typeof node !== 'object') return;
+    const free = node.isAccessibleForFree;
+    if (free === false || String(free).toLowerCase() === 'false') {
+      paid = true;
+      if (typeof node.cssSelector === 'string') named = true;
+    }
+    Object.values(node).forEach(visit);
+  };
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    try {
+      visit(JSON.parse(script.textContent || ''));
+    } catch {
+      // A malformed block says nothing about a paywall
+    }
+  });
+  return paid && !named && storyTextChars(doc) < PAID_PREVIEW_MAX_STORY_CHARS;
+}
+
+export type Wall = 'bot check' | 'login' | 'no text' | 'paywall';
+
+/**
+ * Reports what a slow fetch is doing, in words for the person waiting (the Add tab shows them
+ * under its Save button, see fetch-progress.ts). Called at each step that can take seconds.
+ */
+export type FetchProgress = (text: string) => void;
+
+// Why a page is not the article, as the Add tab says it while the other copies are tried
+const WALL_PROGRESS: Record<Wall, string> = {
+  'bot check': 'The site blocks automated reading. Looking for another copy...',
+  login: 'The article is behind a login. Looking for another copy...',
+  'no text': 'The page has no text. Looking for another copy...',
+  paywall: 'This is a paid article. Looking for a full copy...',
+};
+
+// A promise's outcome without ever rejecting, for lookups started before they are needed: a
+// rejection nobody awaits yet would otherwise crash the process.
+type Settled<T> = { ok: true; value: T } | { ok: false; error: Error };
+const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
+  promise.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
+
+/**
+ * Why a copy from another source is not the article, or null when it is. `preview` is true when
+ * the copy holds too little story to be the article (a paid preview, a teaser), and false when
+ * it is a wall page of its own.
+ */
+export function copyProblem(html: string, wall: Wall, previewChars = 0): { reason: string; preview: boolean } | null {
+  if (isBotCheckPage(html)) return { reason: 'bot-check page', preview: false };
+  if (isLoginWall(html)) return { reason: 'login form', preview: false };
+  if (hasNoText(html)) return { reason: 'no text', preview: false };
+  // Read once, and only when the cheap string checks above found nothing
+  const doc = parsePage(html).window.document;
+  if (/isAccessibleForFree/i.test(html) && isPaidPreview(doc)) return { reason: 'paywall preview', preview: true };
+  const story = storyTextChars(doc);
+  if (story < MIN_COPY_STORY_CHARS) return { reason: `too short (${story} characters of story)`, preview: true };
+  if (wall === 'paywall' && story < previewChars + PAID_COPY_MIN_EXTRA_CHARS) {
+    return { reason: `the same preview (${story} characters of story)`, preview: true };
+  }
+  return null;
+}
+
+/**
+ * The error when no source has the article. When archive.ph's copy was only a preview, a new
+ * copy would very likely be the same, so the error says that instead of offering the archive
+ * link. Knack sends the text of a paid article only to subscribers: in a real browser without a
+ * subscription its paid part is empty (2026-10-07), so no archive gets it either.
+ */
+export function noCopyError(url: string, wall: Wall, archivePhPreview: boolean): ArticleUnavailableError {
+  const reason = wall === 'login' ? 'This article is behind a login'
+    : wall === 'no text' ? 'This page has no article text'
+      : wall === 'paywall' ? 'This article is behind a paywall'
+        : 'This site blocks automated reading with a bot check';
+  if (archivePhPreview) {
+    let host = '';
+    try { host = new URL(url).hostname; } catch { /* the note below is left out */ }
+    const knack = host === 'knack.be' || host.endsWith('.knack.be') ? ' Knack sends paid articles only to subscribers.' : '';
+    return new ArticleUnavailableError(`${reason}, and archive.ph's copy holds only a preview of the article.${knack}`, url, false);
+  }
+  const copy = wall === 'paywall' ? 'no copy with the full text could be found' : 'no other copy of the article could be found';
+  return new ArticleUnavailableError(`${reason}, and ${copy}.`, url);
+}
+
+/**
+ * For a page that is not the article: a bot-check page, a login form, a page without text, or
+ * the preview of a paid article (`wall` names which). It looks for another copy, each step
+ * running only when the one before failed or gave a copy that is no good:
+ * - the reader proxy's HTML (the whole page, so the usual cleanup and metadata apply),
+ * - the newest Wayback Machine copy (the page's own HTML, author and date included),
+ * - the newest archive.ph copy (the full text of paywalled articles, where the Wayback copy of
+ *   a wsj.com article held only its first four paragraphs, 2026-10-06),
+ * - the reader proxy's Markdown, rendered in a real browser (works for brand-new articles the
+ *   archives do not hold yet, but names no author).
+ * For a paid preview archive.ph goes first, since it is the step that holds paid text, and the
+ * reader proxy's Markdown is left out, because nothing in it shows whether it is the preview
+ * again. A copy is no good when it is a bot-check page, a login form, a page without text, a
+ * paid preview, or holds under 1,000 characters of story (a teaser), and for a paid preview also
+ * when it holds less than 1,000 characters more story than the preview (`previewChars`). See
+ * copyProblem.
+ *
+ * The two archive searches start together the first time either one is needed, because each
+ * can take 20 seconds (the Wayback search, and archive.ph's copy list when it is busy), and the
+ * copies are then tried in the order above. archive.ph is not asked before that, so a site the
+ * reader proxy gets past never spends archive.ph's small request allowance.
+ *
+ * Throws an ArticleUnavailableError when no step yields the article, so none of these pages is
+ * ever stored as the article (without the archive link when archive.ph's copy was only a
+ * preview, see noCopyError). Returns the HTML and the address to read it as: the article's own,
+ * or the archive.ph snapshot's, since an archive.ph copy has its own markup and links and is
+ * read exactly like a pasted archive link.
+ */
+async function fetchPastBotWall(
+  url: string,
+  wall: Wall = 'bot check',
+  previewChars = 0,
+  onProgress: FetchProgress = () => {},
+  deadline = Infinity
+): Promise<{ html: string; pageUrl: string }> {
+  const tried: string[] = [];
+  // Set when archive.ph's copy is only a preview, so the error offers no archive link
+  let archivePhPreview = false;
+  onProgress(WALL_PROGRESS[wall]);
+  // Why a copy is no good, or null when it is
+  const unusable = (html: string): string | null => copyProblem(html, wall, previewChars)?.reason ?? null;
+
+  // Both archive searches, started together on first use
+  let searches: { wayback: Promise<Settled<string | null>>; archivePh: Promise<Settled<string | null>> } | null = null;
+  const archiveSearches = () => {
+    if (!searches) {
+      onProgress('Searching the Wayback Machine and archive.ph...');
+      searches = {
+        wayback: settle(waybackNewestTimestamp(url)),
+        // Not for an archive link itself: asking archive.ph for its own copy of a copy is pointless
+        archivePh: isArchiveMirrorUrl(url) ? Promise.resolve({ ok: true as const, value: null }) : settle(archiveTodayNewestCopy(url)),
+      };
+    }
+    return searches;
+  };
+
+  const readerHtml = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the reader proxy (r.jina.ai) HTML');
+    onProgress('Trying a reader service...');
+    try {
+      const html = await readerProxyFetch(url);
+      const problem = unusable(html);
+      if (!problem) {
+        console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
+        return { html, pageUrl: url };
+      }
+      console.log(`[Fetcher] Reader proxy HTML is no good: ${problem}`);
+      tried.push(`reader proxy HTML: ${problem}`);
+    } catch (error: any) {
+      console.log(`[Fetcher] Reader proxy HTML failed: ${error.message}`);
+      tried.push(`reader proxy HTML: ${error.message}`);
+    }
+    return null;
+  };
+
+  const wayback = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the newest Wayback Machine copy');
+    const search = await archiveSearches().wayback;
+    if (!search.ok) {
+      console.log(`[Fetcher] Wayback Machine failed: ${search.error.message}`);
+      tried.push(`Wayback Machine: ${search.error.message}`);
+      return null;
+    }
+    const timestamp = search.value;
+    if (!timestamp) {
+      console.log('[Fetcher] The Wayback Machine holds no copy of this page');
+      tried.push('Wayback Machine: no copy');
+      return null;
+    }
+    onProgress('Downloading the Wayback Machine copy...');
+    try {
+      const html = await waybackCopyFetch(url, timestamp);
+      const problem = unusable(html);
+      if (!problem) {
+        console.log(`[Fetcher] Using the Wayback copy from ${timestamp}: ${html.length} bytes of HTML`);
+        return { html, pageUrl: url };
+      }
+      console.log(`[Fetcher] The Wayback copy from ${timestamp} is no good: ${problem}`);
+      tried.push(`Wayback Machine: ${problem}`);
+    } catch (error: any) {
+      console.log(`[Fetcher] Wayback Machine failed: ${error.message}`);
+      tried.push(`Wayback Machine: ${error.message}`);
+    }
+    return null;
+  };
+
+  const archivePh = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    if (isArchiveMirrorUrl(url)) return null;
+    console.log('[Fetcher] Trying the newest archive.ph copy');
+    const search = await archiveSearches().archivePh;
+    if (!search.ok) {
+      console.log(`[Fetcher] archive.ph failed: ${search.error.message}`);
+      tried.push(`archive.ph: ${search.error.message}`);
+      return null;
+    }
+    const copyUrl = search.value;
+    if (!copyUrl) {
+      console.log('[Fetcher] archive.ph holds no copy of this page');
+      tried.push('archive.ph: no copy');
+      return null;
+    }
+    onProgress('Downloading the archive.ph copy...');
+    try {
+      const copy = await archiveTodayCopyFetch(copyUrl);
+      if (!/id="CONTENT"/.test(copy.html)) {
+        // The snapshot box isArchiveSnapshot() looks for, checked here without a second parse
+        const pageTitle = (copy.html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').trim().slice(0, 80);
+        console.log(`[Fetcher] archive.ph answered "${pageTitle}" instead of a snapshot`);
+        tried.push(`archive.ph: "${pageTitle}" instead of a snapshot`);
+        return null;
+      }
+      const problem = copyProblem(copy.html, wall, previewChars);
+      if (!problem) {
+        console.log(`[Fetcher] Using the archive.ph copy ${copy.url}: ${copy.html.length} bytes of HTML`);
+        return { html: copy.html, pageUrl: copy.url };
+      }
+      if (problem.preview) archivePhPreview = true;
+      console.log(`[Fetcher] The archive.ph copy is no good: ${problem.reason}`);
+      tried.push(`archive.ph: ${problem.reason}`);
+    } catch (error: any) {
+      console.log(`[Fetcher] archive.ph failed: ${error.message}`);
+      tried.push(`archive.ph: ${error.message}`);
+    }
+    return null;
+  };
+
+  const readerMarkdown = async (): Promise<{ html: string; pageUrl: string } | null> => {
+    console.log('[Fetcher] Trying the reader proxy Markdown (browser-rendered)');
+    onProgress('Trying a reader service that renders the page...');
+    try {
+      const md = await readerProxyMarkdown(url);
+      if (md.title && BOT_CHECK_TITLE.test(md.title)) {
+        console.log('[Fetcher] Reader proxy Markdown is the bot-check page too');
+        tried.push('reader proxy Markdown: bot-check page');
+        return null;
+      }
+      const page = readerMarkdownPage(md);
+      const story = storyTextChars(page);
+      if (story < MIN_COPY_STORY_CHARS) {
+        console.log(`[Fetcher] Reader proxy Markdown is too short: ${story} characters of story`);
+        tried.push(`reader proxy Markdown: too short (${story} characters of story)`);
+        return null;
+      }
+      console.log(`[Fetcher] Using the reader proxy Markdown: ${md.markdown.length} characters, title "${md.title || '(none)'}"`);
+      return { html: page, pageUrl: url };
+    } catch (error: any) {
+      console.log(`[Fetcher] Reader proxy Markdown failed: ${error.message}`);
+      tried.push(`reader proxy Markdown: ${error.message}`);
+    }
+    return null;
+  };
+
+  const steps = wall === 'paywall'
+    ? [archivePh, wayback, readerHtml]
+    : [readerHtml, wayback, archivePh, readerMarkdown];
+  for (const step of steps) {
+    if (Date.now() > deadline) {
+      console.log(`[Fetcher] Stopping: the ${FETCH_TIME_LIMIT_MS / 1000}-second time limit has passed`);
+      tried.push(`stopped at the ${FETCH_TIME_LIMIT_MS / 1000}-second time limit`);
+      break;
+    }
+    const found = await step();
+    if (found) return found;
+  }
+
+  console.log(`[Fetcher] No way past the ${wall}: ${tried.join(' | ')}`);
+  throw noCopyError(url, wall, archivePhPreview);
+}
+
+export async function fetchArticleContent(url: string, onProgress: FetchProgress = () => {}): Promise<ArticleContent> {
   console.log(`[Fetcher] Fetching article from: ${url}`);
+  // Other copies of the page are only tried until this moment (see fetchPastBotWall)
+  const deadline = Date.now() + FETCH_TIME_LIMIT_MS;
 
   const isLessWrong = url.includes('lesswrong.com');
   const isEAForum = isEAForumUrl(url);
@@ -1257,9 +2114,64 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     console.log('[Fetcher] Using simple fetch for standard scraping');
     const response = await safeFetch(url);
 
+    // The address the page is read as: the article's own, or the archive.ph snapshot's when the
+    // bot-wall routes ended there (see fetchPastBotWall).
+    let pageUrl = url;
+    const pastBotWall = async (wall: Wall = 'bot check', previewChars = 0) => {
+      const copy = await fetchPastBotWall(url, wall, previewChars, onProgress, deadline);
+      pageUrl = copy.pageUrl;
+      return copy.html;
+    };
+    // The page as the paywall check read it, reused by the main read when it is the article
+    const checkedPage: { current: { html: string; dom: JSDOM } | null } = { current: null };
+    // A page the site itself answered with may still not be the article: a bot check, a login
+    // form, a page without text, or the preview of a paid article. Each goes to the other copies.
+    const checkSitePage = async (page: string, status: number): Promise<string> => {
+      if (isBotCheckPage(page)) {
+        console.log(`[Fetcher] HTTP ${status} but the page is a bot check`);
+        return pastBotWall();
+      }
+      if (isLoginWall(page)) {
+        console.log(`[Fetcher] HTTP ${status} but the page is a login form`);
+        return pastBotWall('login');
+      }
+      if (hasNoText(page) && !isSubstackPage(page)) {
+        // A consent page that could not be passed, or a page built entirely by scripts. Not a
+        // Substack page: a note can carry its text in the page data only.
+        console.log(`[Fetcher] HTTP ${status} but the page has no text`);
+        return pastBotWall('no text');
+      }
+      if (/isAccessibleForFree/i.test(page)) {
+        const dom = parsePage(page, pageUrl);
+        if (isPaidPreview(dom.window.document)) {
+          const previewChars = storyTextChars(dom.window.document);
+          console.log(`[Fetcher] HTTP ${status} but the page is the preview of a paid article (${previewChars} characters of story)`);
+          return pastBotWall('paywall', previewChars);
+        }
+        // The article itself: the main read below uses this page as it is, no second read
+        checkedPage.current = { html: page, dom };
+      }
+      return page;
+    };
+
     let html: string;
     if (response.ok) {
       html = await response.text();
+      // DPG Media's cookie consent page (hln.be, demorgen.be) stands in for the article until
+      // its continue link is followed with the cookie it sets (see dpgPrivacyGateCallback).
+      const gateCallback = dpgPrivacyGateCallback(response.url, html);
+      if (gateCallback) {
+        console.log('[Fetcher] DPG Media privacy gate, following its continue link');
+        const passed = await safeFetchWithCookies(gateCallback);
+        const passedHtml = await passed.text();
+        if (passed.ok && !dpgPrivacyGateCallback(passed.url, passedHtml)) {
+          console.log(`[Fetcher] Past the privacy gate: ${passedHtml.length} bytes of HTML`);
+          html = passedHtml;
+        } else {
+          console.log(`[Fetcher] The privacy gate let nothing through (HTTP ${passed.status})`);
+        }
+      }
+      html = await checkSitePage(html, response.status);
     } else if (response.status === 403) {
       // Cloudflare-style bot walls answer the plain fetch with an instant 403 (openai.com
       // does, seen live 2026-09-03). One retry with browser-like headers usually gets the
@@ -1276,32 +2188,29 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         const snippet = (retry.body || '').replace(/\s+/g, ' ').slice(0, 200);
         console.log(`[Fetcher] Browser-like retry blocked too: HTTP ${retry.statusCode}`);
         console.log(`[Fetcher] Block details: cf-mitigated=${mitigated}, server=${server}, body starts: ${snippet}`);
-        // Third and last step: the r.jina.ai reader proxy opens the page in its own real
-        // browser (which passes JavaScript challenges) and returns the rendered HTML.
-        console.log('[Fetcher] Trying the reader proxy (r.jina.ai) as a last resort');
-        try {
-          html = await readerProxyFetch(url);
-          console.log(`[Fetcher] Reader proxy succeeded: ${html.length} bytes of HTML`);
-        } catch (proxyError: any) {
-          console.log(`[Fetcher] Reader proxy failed too: ${proxyError.message}`);
-          throw new Error(
-            `HTTP 403: Forbidden (browser-like retry got HTTP ${retry.statusCode}, reader proxy: ${proxyError.message})`
-          );
-        }
+        html = await pastBotWall();
       } else {
-        console.log(`[Fetcher] Browser-like retry succeeded: HTTP ${retry.statusCode}`);
-        html = retry.body;
+        console.log(`[Fetcher] Browser-like retry answered HTTP ${retry.statusCode}`);
+        html = await checkSitePage(retry.body, retry.statusCode);
       }
     } else {
-      console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      // Other bot walls answer with another status and their own bot-check page. DataDome on
+      // wsj.com answers HTTP 401 (seen 2026-10-06), and the browser-like retry above gets the
+      // same 401, so it goes straight to the other routes.
+      const body = await response.text();
+      if (isBotCheckPage(body)) {
+        const wall = response.headers.get('x-datadome') ? 'DataDome' : (response.headers.get('server') || 'unknown');
+        console.log(`[Fetcher] HTTP ${response.status} with a bot-check page (${wall})`);
+        html = await pastBotWall();
+      } else if (isLoginWall(body)) {
+        console.log(`[Fetcher] HTTP ${response.status} with a login form`);
+        html = await pastBotWall('login');
+      } else {
+        console.log(`[Fetcher] HTTP error: ${response.status} ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
     }
     console.log(`[Fetcher] Received ${html.length} bytes of HTML`);
-
-    // Log if potential Cloudflare challenge but continue anyway
-    if (html.includes('challenge-platform') || html.includes('Verifying you are human')) {
-      console.log('[Fetcher] ⚠️ Potential Cloudflare challenge detected, but attempting to parse anyway');
-    }
 
     // Detect Substack BEFORE removing scripts (needs to check for substackcdn.com links)
     const isSubstack = isSubstackPage(html);
@@ -1309,7 +2218,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       console.log('[Fetcher] Detected Substack page (via substackcdn.com references)');
     }
 
-    const dom = new JSDOM(html, { url });
+    // Read once, without scripts and styles (parsePage). The paywall check above may have read
+    // this very page already.
+    const dom = checkedPage.current && checkedPage.current.html === html ? checkedPage.current.dom : parsePage(html, pageUrl);
     const doc = dom.window.document;
 
     // Read the schema.org JSON-LD author BEFORE the scripts are stripped below (it lives
@@ -1329,7 +2240,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     // failed fetch: a refetch keeps the old body and the Add tab shows an error to retry. A long
     // answer without the box (an archive link that redirects on to the original site) is used
     // as before.
-    if (isArchiveMirrorUrl(url) && !isArchiveSnapshot(doc)) {
+    if (isArchiveMirrorUrl(pageUrl) && !isArchiveSnapshot(doc)) {
       const bodyChars = (doc.body?.textContent || '').trim().length;
       if (bodyChars < 1000) {
         const pageTitle = (doc.querySelector('title')?.textContent || '').trim().slice(0, 80);
@@ -1338,8 +2249,12 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       }
     }
 
+    // A Substack note brings its own text, author and date (see substackNote).
+    const note = isSubstack ? substackNote(html, doc, url) : null;
+
     // Extract metadata from meta tags
     const title =
+      note?.title ||
       doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
       doc.querySelector('title')?.textContent ||
       'Untitled';
@@ -1371,12 +2286,16 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       author = jsonLdAuthor;
     }
 
+    // A note page's meta author is "Substack" itself
+    if (note?.author) author = note.author;
+
     let publishedDate =
+      note?.publishedDate ||
       doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') || undefined;
 
     // An archive.is copy's meta date is the moment of archiving. Prefer the date the archived
     // page itself shows (see archivedPublishedDate), and keep the archive time when it has none.
-    if (isArchiveMirrorUrl(url)) {
+    if (isArchiveMirrorUrl(pageUrl)) {
       const pageDate = archivedPublishedDate(doc, publishedDate);
       if (pageDate) {
         console.log(`[Fetcher] archive copy: publication date ${pageDate} from the page, not the archive time ${publishedDate || '(none)'}`);
@@ -1394,7 +2313,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     let contentEl;
 
     // Substack-specific selectors (more precise). Works on custom domains too.
-    if (isSubstack) {
+    if (note) {
+      contentEl = note.content;
+    } else if (isSubstack) {
       console.log('[Fetcher] Using Substack-specific content selectors');
       contentEl = doc.querySelector('.available-content .body.markup') ||
                   doc.querySelector('.body.markup') ||
@@ -1434,13 +2355,19 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         if (preferInnerMain) {
           console.log('[Fetcher] Using the <main> inside <article> (page header excluded)');
         }
-        contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main') || doc.body;
+        contentEl = (preferInnerMain ? innerMain : article) || doc.querySelector('main');
+        if (!contentEl) {
+          // Neither <article> nor <main>: a blog post box beats the whole <body> (see blogPostBox)
+          const post = blogPostBox(doc);
+          if (post) console.log(`[Fetcher] No <article> or <main>, using the blog post box (.${post.classList[0] || post.tagName.toLowerCase()})`);
+          contentEl = post || doc.body;
+        }
       }
     }
 
     // archive.is and friends rebuild a page as generic <div>s, so the mirrored copy has no
     // paragraphs at all. Restore them before the cleanup below runs.
-    if (contentEl && isArchiveMirrorUrl(url)) {
+    if (contentEl && isArchiveMirrorUrl(pageUrl)) {
       console.log('[Fetcher] archive mirror detected, restoring paragraphs');
       restoreArchivedParagraphs(contentEl);
 
@@ -1453,7 +2380,7 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       const leadSrc = leadFigure?.querySelector('img[src]')?.getAttribute('src');
       if (leadFigure && leadSrc) {
         try {
-          leadImageUrl = new URL(leadSrc, url).toString();
+          leadImageUrl = new URL(leadSrc, pageUrl).toString();
           console.log(`[Fetcher] archive copy: lead photo ${leadImageUrl} replaces the archive screenshot`);
         } catch {
           // An unparseable src keeps the screenshot as the thumbnail
@@ -1473,6 +2400,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     // Clean up UI noise (keep this gentle - only remove obvious UI chrome)
     if (contentEl) {
+      // What the site leaves out of print, and video players with no video file (see both
+      // functions). First, so the rules below work on the story alone.
+      const printHidden = removePrintHidden(contentEl);
+      const emptyPlayers = removeEmptyVideoPlayers(contentEl);
+      if (printHidden || emptyPlayers) {
+        console.log(`[Fetcher] Removed ${printHidden} print-hidden element(s) and ${emptyPlayers} empty video player(s)`);
+      }
+
       // Remove social interaction bars (like/comment/share buttons)
       contentEl.querySelectorAll('.post-ufi, .ufi, .pencraft-ufi').forEach(el => el.remove());
 
@@ -1542,9 +2477,10 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
       // Remove share button containers
       contentEl.querySelectorAll('[class*="share-buttons"], [class*="share-tools"], [class*="social-share"]').forEach(el => el.remove());
 
-      // Remove the first <h1> if it matches the already-extracted title (prevents title being narrated twice)
+      // Remove the first <h1> if it matches the already-extracted title (prevents title being
+      // narrated twice). Without an <h1>, the first <h2> (a blog post box titles its post with one).
       if (title && title !== 'Untitled') {
-        const firstH1 = contentEl.querySelector('h1');
+        const firstH1 = contentEl.querySelector('h1') || contentEl.querySelector('h2');
         if (firstH1) {
           const h1Text = firstH1.textContent?.trim() || '';
           // Normalize both for comparison (collapse whitespace, ignore case)
@@ -1555,9 +2491,11 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         }
       }
 
-      // Remove subtitle/dek that matches the og:description (often repeated under title in lede sections)
+      // Remove subtitle/dek that matches the og:description (often repeated under title in lede
+      // sections). Not on a Substack note, whose og:description is the note itself, so a note of
+      // one paragraph would lose all its text.
       const ogDescription = doc.querySelector('meta[property="og:description"]')?.getAttribute('content');
-      if (ogDescription) {
+      if (ogDescription && !note) {
         const normalizeText = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
         const normalizedDesc = normalizeText(ogDescription);
         // Search all paragraphs. The dek might be anywhere in the lede wrapper.
@@ -1647,14 +2585,14 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
         cleanSubstackContent(contentEl);
       }
 
-      // Resolve relative URLs in img/a/srcset to absolute, using the article URL
-      // as base. Sites like jefftk.com use root-relative paths ("/foo.jpg") that
+      // Resolve relative URLs in img/a/srcset to absolute, using the page's address
+      // (the article's, or the archive.ph snapshot's) as base. Sites like jefftk.com use root-relative paths ("/foo.jpg") that
       // would otherwise resolve against wallacast.com and 404. Done before dedup
       // so the seenImageSrcs Set sees the resolved URLs.
       const resolveUrl = (raw: string): string | null => {
         const trimmed = raw.trim();
         if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('#')) return null;
-        try { return new URL(trimmed, url).toString(); } catch { return null; }
+        try { return new URL(trimmed, pageUrl).toString(); } catch { return null; }
       };
       contentEl.querySelectorAll('img').forEach(img => {
         const src = img.getAttribute('src');
@@ -1703,16 +2641,25 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
 
     flattenEmailTables(contentEl);
     stripInlineColors(contentEl);
+    stripLayoutStyles(contentEl);
     normalizeTweetEmbeds(contentEl);
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
+
+    // An article without text or pictures is never stored: before 2026-10-07 DPG Media's consent
+    // page was saved as two empty articles. A comic or a Substack note may be just a picture.
+    if (!note && (textContent.match(/[\p{L}\p{N}]/gu) || []).length < 20 && !contentEl.querySelector('img, picture, video')) {
+      console.log('[Fetcher] The page holds no article text after cleanup');
+      throw new ArticleUnavailableError('This page has no article text.', url);
+    }
 
     // Fetch Substack comments from /comments page (uses structured JSON, not CSS selectors)
     let comments: Comment[] | undefined;
     let comment_source: string | undefined;
     let comment_count_total: number | undefined;
+    // A note's replies come from Substack's replies API (a note page has no /comments page)
     if (isSubstack) {
-      comments = await fetchSubstackComments(url, html);
+      comments = note ? await fetchSubstackNoteReplies(note.id) : await fetchSubstackComments(url, html);
       if (comments.length === 0) {
         comments = undefined;
       } else {
@@ -1737,7 +2684,9 @@ export async function fetchArticleContent(url: string): Promise<ArticleContent> 
     };
 
   } catch (error) {
+    // The message says why (a bot check, an HTTP status, a timeout). The Add tab and a failed
+    // refetch's card show it, so it is passed on as it is.
     console.error('[Fetcher] ✗ Error fetching article:', error);
-    throw new Error('Failed to fetch article content');
+    throw error instanceof Error && error.message ? error : new Error('Failed to fetch article content');
   }
 }

@@ -16,18 +16,9 @@ const SHOTS = [
   { src: '/landing/shot-summary.svg', caption: 'AI summaries' },
 ];
 
-// Same initial-theme rules as index.html and App.tsx: stored 'light' wins, 'system'
-// follows the OS, anything else is dark.
-function initialIsLight(): boolean {
-  try {
-    const stored = localStorage.getItem('wallacast-theme');
-    if (stored === 'light') return true;
-    if (stored === 'system') return window.matchMedia('(prefers-color-scheme: light)').matches;
-  } catch { /* default dark */ }
-  return false;
-}
-
-export function HomePage() {
+// The theme belongs to App (it stays mounted while this page shows), so the toggle
+// here and the one in the user menu can never disagree after logging in.
+export function HomePage({ isLight, onToggleTheme }: { isLight: boolean; onToggleTheme: () => void }) {
   const { login, register, demoLogin, isLoading, error, clearError } = useAuthStore();
 
   // Login dropdown (lives top-right, where the user menu sits once logged in)
@@ -50,8 +41,6 @@ export function HomePage() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
-
-  const [isLight, setIsLight] = useState(initialIsLight);
 
   // Screenshot carousel
   const [shot, setShot] = useState(1);
@@ -98,14 +87,6 @@ export function HomePage() {
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [loginOpen]);
-
-  const toggleTheme = () => {
-    const next = !isLight;
-    setIsLight(next);
-    const t = next ? 'light' : 'dark';
-    try { localStorage.setItem('wallacast-theme', t); } catch { /* fine */ }
-    document.documentElement.setAttribute('data-theme', t);
-  };
 
   const openAccountForm = (registerMode: boolean) => {
     setIsRegister(registerMode);
@@ -178,7 +159,7 @@ export function HomePage() {
           <h1>wallacast</h1>
         </div>
         <div className="header-right">
-          <button className="home-icon-btn" onClick={toggleTheme} title="Toggle theme">
+          <button className="home-icon-btn" onClick={onToggleTheme} title="Toggle theme">
             {isLight ? <Sun size={17} /> : <Moon size={17} />}
           </button>
           <div className="user-menu-container" ref={loginRef}>
@@ -474,7 +455,7 @@ export function HomePage() {
           <h3 className="home-section-title">What you get</h3>
           <div className="home-features">
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><BookOpen size={16} /><span>Read along</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><BookOpen size={16} /><span>Read along</span></div>
               <div className="home-feature-desc">Text lights up in sync with the audio.</div>
             </div>
             <div className="home-feature">
@@ -482,19 +463,19 @@ export function HomePage() {
               <div className="home-feature-desc">Subscribe to shows and get transcripts.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><FileText size={16} /><span>AI summaries</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><FileText size={16} /><span>AI summaries</span></div>
               <div className="home-feature-desc">Short summaries of long reads.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><MessageCircle size={16} /><span>Comments too</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><MessageCircle size={16} /><span>Comments too</span></div>
               <div className="home-feature-desc">Support for Substack, LessWrong and EA Forum.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><RefreshCw size={16} /><span>Wallabag sync</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><RefreshCw size={16} /><span>Wallabag sync</span></div>
               <div className="home-feature-desc">Two way sync with your Wallabag library.</div>
             </div>
             <div className="home-feature">
-              <div className="home-feature-head" style={{ color: '#60a5fa' }}><KeyRound size={16} /><span>Your own keys</span></div>
+              <div className="home-feature-head" style={{ color: 'var(--accent-text)' }}><KeyRound size={16} /><span>Your own keys</span></div>
               <div className="home-feature-desc">Bring API keys from OpenAI and friends.</div>
             </div>
           </div>

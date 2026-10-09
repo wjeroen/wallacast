@@ -100,7 +100,7 @@ export function shortDescription(raw: string | null | undefined, max = 300): str
  * Windows, macOS and Obsidian refuse in a file name taken out (`\ / : * ? " < > |`, plus
  * `# ^ [ ]`, which break Obsidian links), control characters and whitespace collapsed,
  * trailing dots dropped (illegal on Windows), capped at 120 characters. Unicode letters
- * stay, so "Café" is still "Café". Matches the link names the Obsidian inbox builds from
+ * stay, so "Café" is still "Café". Matches the link names the Obsidian overview builds from
  * the same titles.
  */
 export function markdownFileName(title: string | null | undefined): string {

@@ -89,25 +89,58 @@ export async function searchRSSByUrl(url: string): Promise<PodcastSearchResult[]
   }
 }
 
+/** A feed address without protocol, "www.", trailing slash and case, so the same feed typed
+ *  two ways is one subscription (the Feed tab's feedKey, plus "www."). */
+export function feedUrlKey(url: string | null | undefined): string {
+  return (url || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+/** Subscribing to a feed the user already follows. The route answers 409 "Already subscribed". */
+export class AlreadySubscribedError extends Error {
+  constructor(public podcast: any) {
+    super('Already subscribed');
+    this.name = 'AlreadySubscribedError';
+  }
+}
+
+/**
+ * Subscribe a user to a feed. A feed the user already follows is refused with
+ * AlreadySubscribedError, also when it comes in under another address: the same address
+ * written differently (feedUrlKey), an address that redirects to a followed one, or another
+ * address of the same publication (the same website, type and title, as when a Substack
+ * newsletter is found once under its own domain and once under substack.com). A feed the user
+ * unsubscribed from is subscribed again, its cached items included.
+ */
 export async function subscribeToPodcast(feedUrl: string, userId: number) {
   try {
-    // Check if this user has this podcast (even if unsubscribed)
-    const existing = await query(
-      'SELECT * FROM podcasts WHERE feed_url = $1 AND user_id = $2',
-      [feedUrl, userId]
-    );
+    // Every feed this user has a row for, subscribed or not
+    const rows = (await query('SELECT * FROM podcasts WHERE user_id = $1', [userId])).rows;
+    const key = feedUrlKey(feedUrl);
+    let existing = rows.find((r: any) => feedUrlKey(r.feed_url) === key);
+    if (existing?.is_subscribed) throw new AlreadySubscribedError(existing);
 
     // Fetch fresh podcast details from feed
     const podcastDetails = await fetchPodcastDetails(feedUrl);
 
-    if (existing.rows.length > 0) {
+    if (!existing) {
+      const finalKey = feedUrlKey(podcastDetails.final_url);
+      const site = feedUrlKey(podcastDetails.website_url);
+      const title = (podcastDetails.title || '').trim().toLowerCase();
+      existing = rows.find((r: any) =>
+        (finalKey && feedUrlKey(r.feed_url) === finalKey)
+        || (site && title && feedUrlKey(r.website_url) === site && r.type === podcastDetails.type
+          && (r.title || '').trim().toLowerCase() === title));
+      if (existing?.is_subscribed) throw new AlreadySubscribedError(existing);
+    }
+
+    if (existing) {
       // Podcast exists - update it with fresh data and resubscribe
       const result = await query(
         `UPDATE podcasts
          SET title = $1, author = $2, description = $3, website_url = $4,
              preview_picture = $5, category = $6, language = $7, type = $8,
              is_subscribed = true, updated_at = CURRENT_TIMESTAMP
-         WHERE feed_url = $9 AND user_id = $10
+         WHERE id = $9 AND user_id = $10
          RETURNING *`,
         [
           podcastDetails.title,
@@ -118,7 +151,7 @@ export async function subscribeToPodcast(feedUrl: string, userId: number) {
           podcastDetails.category,
           podcastDetails.language?.substring(0, 100) || null,
           podcastDetails.type,
-          feedUrl,
+          existing.id,
           userId,
         ]
       );
@@ -201,6 +234,8 @@ export async function fetchPodcastDetails(feedUrl: string) {
       category: cleanHtmlEntities(category),
       language,
       type,
+      // The address the feed answered from, after redirects
+      final_url: response.url || feedUrl,
     };
   } catch (error) {
     console.error('Error fetching podcast details:', error);
@@ -328,11 +363,12 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
   return xml;
 }
 
-function parseOneItem(itemXml: string): any | null {
+function parseOneItem(itemXml: string, withTeaser = true): any | null {
   const title = extractXMLTag(itemXml, 'title');
   if (!title) return null;
 
   const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const teaser = withTeaser ? buildTeaser(title, description, extractPostContent(itemXml)) : null;
   const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
   const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
   const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
@@ -356,6 +392,7 @@ function parseOneItem(itemXml: string): any | null {
     return {
       title: cleanHtmlEntities(title),
       description: cleanDescription(description),
+      teaser,
       audio_url: enclosureUrl,
       published_at: pubDate ? new Date(pubDate) : new Date(),
       duration: parseDuration(duration),
@@ -367,6 +404,7 @@ function parseOneItem(itemXml: string): any | null {
     return {
       title: cleanHtmlEntities(title),
       description: cleanDescription(description),
+      teaser,
       url: link,
       published_at: pubDate ? new Date(pubDate) : new Date(),
       item_type: 'article',
@@ -409,15 +447,16 @@ export async function searchFeedEpisodes(feedUrl: string, searchQuery: string): 
   const q = searchQuery.toLowerCase();
   const results: any[] = [];
 
+  // A long feed holds hundreds of items, so teasers are built for the matches only
   while ((match = itemRegex.exec(xml)) !== null) {
-    const ep = parseOneItem(match[0]);
+    const ep = parseOneItem(match[0], false);
     if (!ep) continue;
     if (
       (ep.title && ep.title.toLowerCase().includes(q)) ||
       (ep.description && ep.description.toLowerCase().includes(q)) ||
       (ep.author && ep.author.toLowerCase().includes(q))
     ) {
-      results.push(ep);
+      results.push(parseOneItem(match[0]));
     }
   }
   return results;
@@ -507,13 +546,122 @@ function cleanDescription(description: string): string {
   return cleaned.trim();
 }
 
+// --- Feed card teaser ---
+// The text a Feed tab card shows under an item's title: plain text with a blank line between
+// paragraphs. Many newsletter feeds (Substack among them) carry only a one-line subtitle,
+// nothing, or "..." in <description>, and the whole post in <content:encoded>. The teaser is
+// then the subtitle followed by the opening of the post, so a title alone never has to decide
+// whether an item is worth adding. When the post already opens with the description (WordPress
+// excerpts, feeds that repeat their show notes), the description is not shown twice. Feeds
+// without post content (EA Forum, LessWrong, most podcasts) get their description as the teaser.
+// The library item keeps the feed's plain description, the teaser is only for the Feed tab.
+const TEASER_MAX_CHARS = 1200;
+// Only the start of a post is parsed. Substack posts run to 80,000+ characters of HTML.
+const TEASER_HTML_SCAN = 15_000;
+// A refresh builds teasers for the newest items of a feed only (older ones show their
+// description), and never again for an item that already has one.
+const TEASER_REFRESH_ITEMS = 30;
+// Parts of a post that are not its words: media and their captions, subscribe and share
+// buttons, embedded posts and publications, footnotes and their number links.
+const TEASER_SKIP = [
+  'figure', 'figcaption', 'picture', 'img', 'svg', 'video', 'audio', 'iframe', 'script', 'style',
+  'noscript', 'button', 'form', 'table',
+  '.subscription-widget-wrap', '.subscription-widget-wrap-editor', '.subscription-widget',
+  '.button-wrapper', '.captioned-image-container', '.image-gallery-embed', '.embedded-post-wrap',
+  '.digest-post-embed', '.embedded-publication-wrap', '.youtube-wrap', '.tweet',
+  '.native-audio-embed', '.poll-embed', '.footnote', '.footnotes', '.footnote-anchor',
+  'a[href^="#fn"]', 'a[href^="#footnote"]',
+].join(', ');
+// One HTML parser for all teasers and entity decoding (cleanHtmlEntities). A new JSDOM
+// window per item cost 20-75 ms, and a refresh parses hundreds of items.
+const htmlParser = new (new JSDOM('').window.DOMParser)();
+// Megaphone adds this line to every episode description
+const TEASER_BOILERPLATE = /^Learn more about your ad choices\. Visit megaphone\.fm\/adchoices\.?$/i;
+
+// A post's full content: RSS <content:encoded>, else Atom <content> (never <content:encoded>,
+// which the Atom pattern leaves alone because it needs a space or ">" right after the name).
+function extractPostContent(itemXml: string): string {
+  const encoded = extractXMLTag(itemXml, 'content:encoded');
+  if (encoded) return encoded;
+  const atom = itemXml.match(/<content(?:\s[^>]*)?>([\s\S]*?)<\/content>/i);
+  return atom ? atom[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim() : '';
+}
+
+// Feed HTML as plain text, paragraphs separated by a blank line, list items as "• " lines.
+function htmlToTeaserText(rawHtml: string): string {
+  if (!rawHtml) return '';
+  let html = rawHtml.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  // Entity-escaped markup (&lt;p&gt;...) is decoded into real markup first
+  if (!/<[a-z!/]/i.test(html) && /&lt;\/?[a-z]/i.test(html)) html = cleanHtmlEntities(html);
+  // EA Forum and LessWrong open every item with "Published on <date> GMT"
+  html = html.replace(/^Published on [a-zA-Z]+ \d{1,2}, \d{4}.*?GMT\s*(?:<br\s*\/?>\s*)+/i, '');
+  const doc = htmlParser.parseFromString(`<!DOCTYPE html><html><body>${html.slice(0, TEASER_HTML_SCAN)}</body></html>`, 'text/html');
+  doc.querySelectorAll(TEASER_SKIP).forEach(el => el.remove());
+  // Line breaks in the HTML source are plain spaces. Only <br> and block ends break lines.
+  const walker = doc.createTreeWalker(doc.body, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    node.nodeValue = (node.nodeValue || '').replace(/\s+/g, ' ');
+  }
+  doc.querySelectorAll('br').forEach(el => el.replaceWith('\n'));
+  doc.querySelectorAll('li').forEach(el => el.prepend('• '));
+  doc.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6, blockquote, pre, ul, ol').forEach(el => el.append('\n\n'));
+  return (doc.body.textContent || '')
+    // Entities escaped twice in the feed (&amp;nbsp;) are still visible after one decode
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(line => !TEASER_BOILERPLATE.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Letters and digits only, for "does the post open with the description?"
+const plainKey = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+function truncateAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.search(/\s\S*$/);
+  return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
+
+export function buildTeaser(title: string, descriptionRaw: string, contentRaw: string): string | null {
+  try {
+    return composeTeaser(title, descriptionRaw, contentRaw);
+  } catch (error) {
+    // A teaser is a nice-to-have. A post that breaks it must never break a refresh.
+    console.error('Teaser failed for feed item:', (error as Error).message);
+    return null;
+  }
+}
+
+function composeTeaser(title: string, descriptionRaw: string, contentRaw: string): string | null {
+  let description = htmlToTeaserText(descriptionRaw);
+  // "...", "…", or the title once more say nothing about the item
+  if (!/[\p{L}\p{N}]/u.test(description) || plainKey(description) === plainKey(htmlToTeaserText(title))) {
+    description = '';
+  }
+  const post = contentRaw ? htmlToTeaserText(contentRaw) : '';
+  let teaser = description;
+  if (post) {
+    const descriptionStart = plainKey(description).slice(0, 40);
+    const postRepeatsDescription = !descriptionStart || plainKey(post.slice(0, 800)).includes(descriptionStart);
+    teaser = postRepeatsDescription ? post : `${description}\n\n${post}`;
+  }
+  return teaser ? truncateAtWord(teaser, TEASER_MAX_CHARS) : null;
+}
+
 function cleanHtmlEntities(text: string): string {
   if (!text) return '';
 
-  // Use JSDOM to decode ALL HTML entities (including numeric ones like &#8217;, &#163;, etc.)
+  // Decode ALL HTML entities (numeric ones like &#8217; and &#163; too) with the shared
+  // parser. A new JSDOM per call made this 3 to 4 times slower on real feeds, with the same
+  // output (252 real descriptions compared, 2026-10-07).
   try {
-    const dom = new JSDOM(`<!DOCTYPE html><html><body>${text}</body></html>`);
-    return dom.window.document.body.textContent || text;
+    const doc = htmlParser.parseFromString(`<!DOCTYPE html><html><body>${text}</body></html>`, 'text/html');
+    return doc.body.textContent || text;
   } catch (e) {
     // Fallback to basic replacements if JSDOM fails
     return text
@@ -527,6 +675,17 @@ function cleanHtmlEntities(text: string): string {
 }
 
 // --- Feed Caching Functions ---
+
+// A cached item keeps up to 20,000 characters of its cleaned description. Long show notes
+// fit (Nerdland's monthly chapter lists stay under 4,000), while a feed that carries
+// whole posts in <description> (EA Forum, LessWrong, 40,000+) stays bounded. The raw text
+// is cut at twice that before cleaning, because escaped markup (&lt;p&gt;) shrinks when
+// decoded, and cleaning a whole post would cost time on every refresh.
+const FEED_DESCRIPTION_MAX_CHARS = 20_000;
+// The Feed tab list carries only the start of each description (its cards show the teaser,
+// and search reads the start). Adding an episode to the library copies the full stored text
+// (POST /api/content with feed_item_id).
+const FEED_LIST_DESCRIPTION_CHARS = 2_000;
 
 /**
  * Fetches RSS feed from network, parses items, and saves to database cache
@@ -547,8 +706,14 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
 
     let itemsAdded = 0;
 
+    const withTeaser = await query(
+      'SELECT guid FROM feed_items WHERE feed_id = $1 AND teaser IS NOT NULL',
+      [feedId]
+    );
+    const hasTeaser = new Set<string>(withTeaser.rows.map((row: { guid: string }) => row.guid));
+
     // Parse and save items (limit to 100 most recent)
-    for (const itemXml of itemMatches.slice(0, 100)) {
+    for (const [itemIndex, itemXml] of itemMatches.slice(0, 100).entries()) {
       const title = extractXMLTag(itemXml, 'title');
       const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
@@ -582,25 +747,35 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       const url = isAudioEnclosure ? null : link;
       const audio_url = isAudioEnclosure ? enclosureUrl : null;
 
-      // Truncate description to 2000 chars to prevent abuse
-      const truncatedDescription = description ? cleanDescription(description.substring(0, 2000)) : null;
+      const cleanedDescription = description
+        ? cleanDescription(description.substring(0, FEED_DESCRIPTION_MAX_CHARS * 2)).slice(0, FEED_DESCRIPTION_MAX_CHARS) || null
+        : null;
+      const teaser = itemIndex < TEASER_REFRESH_ITEMS && !hasTeaser.has(guid.slice(0, 500))
+        ? buildTeaser(title, description, extractPostContent(itemXml))
+        : null;
 
-      // Insert into feed_items (ON CONFLICT update author for existing items that lack it)
+      // Insert into feed_items. ON CONFLICT refreshes the author, fills in a missing teaser,
+      // and takes the feed's description when it differs from the stored one (this also
+      // completes descriptions cached under an older, shorter limit).
       try {
         const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(
           `INSERT INTO feed_items
-           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author
-           RETURNING id`,
+           (feed_id, item_type, title, description, url, audio_url, published_at, duration, preview_picture, guid, author, teaser)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (feed_id, guid) DO UPDATE SET author = EXCLUDED.author,
+             teaser = COALESCE(EXCLUDED.teaser, feed_items.teaser),
+             description = CASE
+               WHEN EXCLUDED.description IS NOT NULL AND EXCLUDED.description IS DISTINCT FROM feed_items.description
+               THEN EXCLUDED.description ELSE feed_items.description END
+           RETURNING (xmax = 0) AS inserted`,
           [
             feedId,
             item_type,
             // title and guid are VARCHAR(500); some feeds emit very long guids (full URLs)
             // Truncate so one oversized item can't fail the whole insert.
             cleanHtmlEntities(title).slice(0, 500),
-            truncatedDescription,
+            cleanedDescription,
             url,
             audio_url,
             pubDate ? new Date(pubDate) : new Date(),
@@ -608,10 +783,13 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
             preview_picture,
             guid ? guid.slice(0, 500) : guid,
             cleanAuthor,
+            teaser,
           ]
         );
 
-        if (result.rowCount && result.rowCount > 0) {
+        // The command counts updated rows too. A row the INSERT itself created has
+        // xmax 0, a row that ON CONFLICT updated does not.
+        if (result.rows[0]?.inserted) {
           itemsAdded++;
         }
       } catch (err: any) {
@@ -635,6 +813,57 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
     console.error(`Error refreshing feed ${feedId}:`, error);
     throw error;
   }
+}
+
+// --- Background refresh ---
+// A refresh of 100+ feeds takes about a minute (68 s for 114 feeds, measured 2026-10-05). The
+// request used to stay open that long, and a phone that put the app in the background closed
+// it (HTTP 499 in the Railway logs), so the app reported a failure while the server finished
+// the refresh anyway. POST /refresh-feeds now starts the refresh and answers at once, and the
+// app polls GET /refresh-status. The status lives in memory, one entry per user, which fits
+// the single backend instance. A restart during a refresh loses it, and the app then reports
+// a failure.
+export interface FeedRefreshStatus {
+  running: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  totalFeeds?: number;
+  totalItemsAdded?: number;
+}
+
+const feedRefreshes = new Map<number, FeedRefreshStatus>();
+
+export function getFeedRefreshStatus(userId: number): FeedRefreshStatus {
+  return feedRefreshes.get(userId) ?? { running: false };
+}
+
+// Starts a refresh unless one of this user is already running, and returns its status
+export function startFeedRefresh(userId: number): FeedRefreshStatus {
+  const current = feedRefreshes.get(userId);
+  if (current?.running) return current;
+
+  const startedAt = new Date().toISOString();
+  const status: FeedRefreshStatus = { running: true, startedAt };
+  feedRefreshes.set(userId, status);
+  console.log(`User ${userId} refreshing all feeds from network`);
+
+  refreshAllFeedsFromNetwork(userId)
+    .then((result) => {
+      console.log(`Refresh complete: ${result.totalFeeds} feeds, ${result.totalItemsAdded} new items`);
+      feedRefreshes.set(userId, { running: false, startedAt, finishedAt: new Date().toISOString(), ...result });
+    })
+    .catch((error) => {
+      console.error('Error refreshing feeds:', error);
+      feedRefreshes.set(userId, {
+        running: false,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        error: 'Failed to refresh feeds',
+      });
+    });
+
+  return status;
 }
 
 /**
@@ -667,45 +896,49 @@ export async function refreshAllFeedsFromNetwork(userId: number): Promise<{ tota
   return { totalFeeds: feeds.length, totalItemsAdded };
 }
 
+// Every feed_items column except the full description, which is cut to the list length.
+// feed_item_id names the row for POST /api/content, apart from the content ids the app uses.
+const FEED_ITEM_LIST_COLUMNS = `
+        fi.id, fi.id AS feed_item_id, fi.feed_id, fi.item_type, fi.title,
+        LEFT(fi.description, ${FEED_LIST_DESCRIPTION_CHARS}) AS description,
+        fi.url, fi.audio_url, fi.published_at, fi.duration, fi.preview_picture, fi.guid,
+        fi.author, fi.teaser, fi.created_at, fi.updated_at,
+        p.title as podcast_show_name,
+        p.type as feed_type`;
+
 /**
- * Gets cached feed items from database
+ * Gets cached feed items from database, newest publish date first
  * @param userId - User ID to filter by their subscribed feeds
  * @param feedId - Optional: filter by specific feed
- * @param limit - Maximum number of items to return (default: 100)
+ * @param limit - Maximum number of items to return (default: 50)
+ * @param sinceId - Optional: only items above this feed_item_id, lowest id first. A refresh
+ *   gives every newly cached item a higher id, so a caller that keeps the highest id it has
+ *   judged gets exactly what entered the feed since, whatever its publish date. It pages on
+ *   with the last id it received.
  */
-export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0): Promise<any[]> {
-  let queryText: string;
-  let queryParams: any[];
-
+export async function getCachedFeedItems(userId: number, feedId?: number, limit: number = 50, offset: number = 0, sinceId?: number): Promise<any[]> {
+  const where = ['p.user_id = $1'];
+  const params: any[] = [userId];
   if (feedId) {
-    queryText = `
-      SELECT
-        fi.*,
-        p.title as podcast_show_name,
-        p.type as feed_type
-      FROM feed_items fi
-      JOIN podcasts p ON fi.feed_id = p.id
-      WHERE p.user_id = $1 AND fi.feed_id = $2
-      ORDER BY fi.published_at DESC
-      LIMIT $3 OFFSET $4
-    `;
-    queryParams = [userId, feedId, limit, offset];
+    params.push(feedId);
+    where.push(`fi.feed_id = $${params.length}`);
   } else {
-    queryText = `
-      SELECT
-        fi.*,
-        p.title as podcast_show_name,
-        p.type as feed_type
-      FROM feed_items fi
-      JOIN podcasts p ON fi.feed_id = p.id
-      WHERE p.user_id = $1 AND p.is_subscribed = TRUE
-      ORDER BY fi.published_at DESC
-      LIMIT $2 OFFSET $3
-    `;
-    queryParams = [userId, limit, offset];
+    where.push('p.is_subscribed = TRUE');
   }
-
-  const result = await query(queryText, queryParams);
+  if (sinceId !== undefined) {
+    params.push(sinceId);
+    where.push(`fi.id > $${params.length}`);
+  }
+  params.push(limit, offset);
+  const result = await query(
+    `SELECT ${FEED_ITEM_LIST_COLUMNS}
+       FROM feed_items fi
+       JOIN podcasts p ON fi.feed_id = p.id
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${sinceId !== undefined ? 'fi.id ASC' : 'fi.published_at DESC'}
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
   return result.rows;
 }
 

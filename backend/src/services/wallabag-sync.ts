@@ -375,7 +375,9 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 WHERE id = $12`,
                 [
                   entry.title,
-                  entry.content,  // Wallabag content → transcript for podcasts
+                  // Wallabag content → transcript for podcasts. Only whitespace is stored as no
+                  // transcript (see exportHasTranscript in shared/markdown.ts).
+                  entry.content?.trim() ? entry.content : null,
                   starToStore,
                   archivedToStore,
                   tagsToStore,
@@ -460,7 +462,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 type,
                 entry.title,
                 entry.url,
-                entry.content,  // Wallabag content = transcript
+                entry.content?.trim() ? entry.content : null,  // Wallabag content = transcript
                 entry.is_starred === 1,
                 entry.is_archived === 1,
                 remoteTags,
