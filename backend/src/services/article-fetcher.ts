@@ -2,6 +2,7 @@ import { gotScraping } from 'got-scraping';
 import { JSDOM } from 'jsdom';
 import { safeFetch, safeFetchWithCookies, browserHeadersFetch, readerProxyFetch, readerProxyMarkdown, waybackNewestTimestamp, waybackCopyFetch, archiveTodayNewestCopy, archiveTodayCopyFetch } from './url-guard.js';
 import { markdownToHtml, setHtmlParser } from '../shared/markdown.js';
+import { renewingHtmlParser } from './html-parser.js';
 
 // --- EA Forum domain handling ---
 // The EA Forum runs a bot-friendly mirror at forum-bots.effectivealtruism.org. We rewrite
@@ -1716,7 +1717,7 @@ export function isPaywallPreview(src: string | Document): boolean {
 
 // markdownToHtml() needs a DOMParser, which Node lacks. markdown-export.ts installs the same
 // jsdom parser, installing it here too keeps the fetcher independent of import order.
-setHtmlParser(new (new JSDOM('').window.DOMParser)());
+setHtmlParser(renewingHtmlParser());
 
 /**
  * The most text a fetched page may hold, once its scripts and styles are gone, before it is

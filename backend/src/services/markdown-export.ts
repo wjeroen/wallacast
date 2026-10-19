@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom';
+import { renewingHtmlParser } from './html-parser.js';
 import { query } from '../database/db.js';
 import { withAudioToken } from './audio-token.js';
 import { setHtmlParser, contentToMarkdown, type CopyContentOptions } from '../shared/markdown.js';
@@ -23,8 +23,9 @@ import type { ContentItem, Comment } from '../shared/types.js';
  */
 
 // jsdom stands in for the browser's DOMParser. One parser for the whole process, installed
-// once at import time, before the first conversion can run.
-setHtmlParser(new (new JSDOM('').window.DOMParser)());
+// once at import time, before the first conversion can run. It renews its window every 500
+// pages, because one window keeps memory for every page it parses (html-parser.ts).
+setHtmlParser(renewingHtmlParser());
 
 /** The four "Copy & export" settings, with the same defaults as frontend/src/copy-settings.ts. */
 export const COPY_SETTING_KEYS = [

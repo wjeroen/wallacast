@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { safeFetch } from './url-guard.js';
 import { query } from '../database/db.js';
-import { JSDOM } from 'jsdom';
+import { renewingHtmlParser } from './html-parser.js';
 
 export interface PodcastSearchResult {
   title: string;
@@ -573,8 +573,9 @@ const TEASER_SKIP = [
   'a[href^="#fn"]', 'a[href^="#footnote"]',
 ].join(', ');
 // One HTML parser for all teasers and entity decoding (cleanHtmlEntities). A new JSDOM
-// window per item cost 20-75 ms, and a refresh parses hundreds of items.
-const htmlParser = new (new JSDOM('').window.DOMParser)();
+// window per item cost 20-75 ms, and a refresh parses hundreds of items. It renews its window
+// every 500 pages, because one window keeps memory for every page it parses (html-parser.ts).
+const htmlParser = renewingHtmlParser();
 // Megaphone adds this line to every episode description
 const TEASER_BOILERPLATE = /^Learn more about your ad choices\. Visit megaphone\.fm\/adchoices\.?$/i;
 
