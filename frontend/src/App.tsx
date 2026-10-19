@@ -375,7 +375,10 @@ function App() {
   // played or skipped).
   // `mode` = 'ended': track ended naturally. Respects autoplay gating via getNextItem.
   // `mode` = 'skip': user hit skip-next. Ignores autoplay gating via peekNextItem.
-  const advanceToNextTrack = async (mode: 'ended' | 'skip') => {
+  // `play`: whether the next item starts playing. A track that ended was playing, so it
+  // always does. A skip passes whether the audio was playing, so skipping from an item that
+  // is paused or was only opened opens the next one paused too.
+  const advanceToNextTrack = async (mode: 'ended' | 'skip', play = true) => {
     const currentId = currentContent?.id ?? null;
 
     if (currentId !== null) {
@@ -399,7 +402,7 @@ function App() {
         } catch {
           setCurrentContent(resetIfNearlyFinished(nextItem));
         }
-        setAutoPlayToken(t => t + 1);
+        if (play) setAutoPlayToken(t => t + 1);
         return;
       }
       // Manual item without audio, prompt user
@@ -440,11 +443,13 @@ function App() {
     advanceToNextTrack('ended');
   };
 
-  const handleSkipNext = () => {
-    advanceToNextTrack('skip');
+  // `wasPlaying`: whether the audio was playing when the button was pressed (see
+  // advanceToNextTrack). Previous follows the same rule.
+  const handleSkipNext = (wasPlaying: boolean) => {
+    advanceToNextTrack('skip', wasPlaying);
   };
 
-  const handleSkipPrev = async () => {
+  const handleSkipPrev = async (wasPlaying: boolean) => {
     const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
     if (!prev) return;
     let item: ContentItem;
@@ -456,9 +461,9 @@ function App() {
     }
     item = resetIfNearlyFinished(item);
     setCurrentContent(item);
-    // Only try to play when there is something to play (prev can now land on
-    // an audio-less item, which just opens for reading).
-    if (hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
+    // Only play when the audio was playing and there is something to play (prev can now
+    // land on an audio-less item, which just opens for reading).
+    if (wasPlaying && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?

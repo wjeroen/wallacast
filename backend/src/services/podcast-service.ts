@@ -705,6 +705,8 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
     const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
     let itemsAdded = 0;
+    // Every item the feed lists now, which the cleanup below never deletes
+    const feedGuids: string[] = [];
 
     const withTeaser = await query(
       'SELECT guid FROM feed_items WHERE feed_id = $1 AND teaser IS NOT NULL',
@@ -741,6 +743,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
         (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
       if (!title) continue;
+      feedGuids.push(guid.slice(0, 500));
 
       const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
       const item_type = isAudioEnclosure ? 'podcast_episode' : 'article';
@@ -804,8 +807,8 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
       [feedId]
     );
 
-    // Clean up old items (keep only 100 most recent)
-    await cleanupOldFeedItems(feedId, 100);
+    // Clean up old items (keep the 100 most recent, plus whatever the feed lists now)
+    await cleanupOldFeedItems(feedId, 100, feedGuids);
 
     console.log(`Feed ${feedId} refreshed: ${itemsAdded} new items added`);
     return { itemsAdded, feedId };
@@ -957,10 +960,15 @@ export async function getLastRefreshTime(userId: number): Promise<Date | null> {
 }
 
 /**
- * Cleans up old feed items, keeping only the N most recent per feed
+ * Cleans up old feed items, keeping the N most recent per feed and every item the feed lists
+ * now (`feedGuids`). An item stays in the cache after the publisher removes it from the feed,
+ * so a removed episode newer than the feed's oldest items used to push those out: they were
+ * deleted right after the refresh stored them, and stored and counted as new again on the next
+ * refresh (Doom Debates, 2 such episodes, every refresh from 2026-10-12 to 2026-10-18).
  */
-async function cleanupOldFeedItems(feedId: number, keepCount: number = 100): Promise<number> {
-  // Delete items beyond the keepCount limit (ordered by published_at DESC)
+async function cleanupOldFeedItems(feedId: number, keepCount: number = 100, feedGuids: string[] = []): Promise<number> {
+  // Delete items beyond the keepCount limit (ordered by published_at DESC) that the feed no
+  // longer lists
   const result = await query(
     `DELETE FROM feed_items
      WHERE id IN (
@@ -968,8 +976,9 @@ async function cleanupOldFeedItems(feedId: number, keepCount: number = 100): Pro
        WHERE feed_id = $1
        ORDER BY published_at DESC
        OFFSET $2
-     )`,
-    [feedId, keepCount]
+     )
+     AND NOT (guid = ANY($3::text[]))`,
+    [feedId, keepCount, feedGuids]
   );
 
   const deletedCount = result.rowCount || 0;

@@ -37,8 +37,9 @@ interface AudioPlayerProps {
   onCycleTheme?: () => void;
   // Queue integration, parent owns the queue store, player just calls up
   onTrackEnded?: () => void;
-  onSkipNextTrack?: () => void;
-  onSkipPrevTrack?: () => void;
+  // Called with whether the audio was playing, which the next item then follows
+  onSkipNextTrack?: (wasPlaying: boolean) => void;
+  onSkipPrevTrack?: (wasPlaying: boolean) => void;
   hasNextTrack?: boolean;
   hasPrevTrack?: boolean;
   /**

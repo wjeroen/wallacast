@@ -123,8 +123,9 @@ interface FullscreenPlayerProps {
   themeMode: 'dark' | 'light' | 'system';
   onCycleTheme: () => void;
   // Queue integration
-  onSkipNextTrack?: () => void;
-  onSkipPrevTrack?: () => void;
+  // Called with whether the audio was playing, which the next item then follows
+  onSkipNextTrack?: (wasPlaying: boolean) => void;
+  onSkipPrevTrack?: (wasPlaying: boolean) => void;
   hasNextTrack?: boolean;
   hasPrevTrack?: boolean;
   onPlayQueueItem?: (item: ContentItem) => void;
@@ -2543,7 +2544,7 @@ export function FullscreenPlayer({
         {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
           <button
-            onClick={() => onSkipPrevTrack?.()}
+            onClick={() => onSkipPrevTrack?.(isPlaying)}
             title="Previous track"
             className="track-skip-btn"
             disabled={!hasPrevTrack}
@@ -2566,7 +2567,7 @@ export function FullscreenPlayer({
           </button>
 
           <button
-            onClick={() => onSkipNextTrack?.()}
+            onClick={() => onSkipNextTrack?.(isPlaying)}
             title="Next track"
             className="track-skip-btn"
             disabled={!hasNextTrack}
@@ -2591,7 +2592,7 @@ export function FullscreenPlayer({
           ) : (
             // No audio: previous and next flank the display button in this single row.
             <button
-              onClick={() => onSkipPrevTrack?.()}
+              onClick={() => onSkipPrevTrack?.(isPlaying)}
               title="Previous track"
               className="track-skip-btn"
               disabled={!hasPrevTrack}
@@ -2697,7 +2698,7 @@ export function FullscreenPlayer({
             </div>
           ) : (
             <button
-              onClick={() => onSkipNextTrack?.()}
+              onClick={() => onSkipNextTrack?.(isPlaying)}
               title="Next track"
               className="track-skip-btn"
               disabled={!hasNextTrack}
