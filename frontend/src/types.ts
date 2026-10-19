@@ -23,6 +23,9 @@ export interface ContentItem {
   // { word, start, end } at runtime. Consumers must accept both shapes (see
   // AudioPlayer.tsx parsedTranscriptWords and markdown.ts timestampedTranscript).
   transcript_words?: string | Array<{ word: string; start: number; end: number }>;
+  // The list endpoints (library, queue, update answers) send only whether word timestamps
+  // exist, never the timestamps: read it with hasWordTimings() in format.ts.
+  has_word_timings?: boolean;
   tts_chunks?: string; // JSON string of TTS chunk metadata
   content_alignment?: string; // JSON string of content-to-transcript alignment data
   duration?: number;

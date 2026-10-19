@@ -88,6 +88,10 @@ export function GenerationStatus({
     // Check current_operation first (more specific than generation_status)
     if (item.current_operation) {
       switch (item.current_operation) {
+        case 'waiting_for_audio_slot':
+          // At most two audio generations run at once on the server (openai-tts.ts)
+          statusMessage = 'Waiting for other audio to finish...';
+          break;
         case 'processing_images':
           statusMessage = `Processing image descriptions... ${progressPercent}%`;
           break;

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -170,7 +170,7 @@ export function ContentCard({
           )}
           {/* All types, not just podcasts: articles/texts get a Whisper transcript
               of their generated audio too (it powers the Transcript tab) */}
-          {item.transcript_words && (
+          {hasWordTimings(item) && (
             <span className="badge transcript"><Captions size={12} /> Transcript</span>
           )}
           {/* One chip for listening state: "34% • 1h 23m" while in progress, just the
@@ -358,10 +358,10 @@ export function ContentCard({
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}
                   >
-                    {/* transcript_words, not transcript. The list endpoint doesn't send
-                        the (large) transcript column, so checking it always said "Generate" */}
+                    {/* Word timings, not transcript. The list endpoint doesn't send the
+                        (large) transcript column, so checking it always said "Generate" */}
                     <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-                    {item.transcript_words ? 'Regenerate transcript' : 'Generate transcript'}
+                    {hasWordTimings(item) ? 'Regenerate transcript' : 'Generate transcript'}
                   </button>
                 )}
                 <button onClick={() => onAddToQueue(item)}>

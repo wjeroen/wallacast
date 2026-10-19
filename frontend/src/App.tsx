@@ -10,7 +10,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio } from './format';
+import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio, hasWordTimings } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -935,8 +935,8 @@ function App() {
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
 
-    const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
-    const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
+    const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
+    const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.

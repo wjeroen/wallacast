@@ -8,7 +8,7 @@ import { TagEditor } from './TagEditor';
 import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
 import { loadCopyContentOptions } from '../copy-settings';
-import { isVeryLongArticle } from '../format';
+import { isVeryLongArticle, hasWordTimings } from '../format';
 import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
@@ -585,8 +585,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     );
     // Podcasts without a transcript need Whisper first, so ask via the modal instead
     // of silently spending transcription credits
-    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
-    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
+    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
+    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.
@@ -680,7 +680,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     // Podcasts summarize their TRANSCRIPT (not the episode description). If there's no
     // transcript yet, ask before kicking off Whisper + summary
     const item = allItems.find(c => c.id === id);
-    if (item && item.type === 'podcast_episode' && !item.transcript_words) {
+    if (item && item.type === 'podcast_episode' && !hasWordTimings(item)) {
       setTranscriptWarning({ podcastIds: [id], readyIds: [] });
       return;
     }

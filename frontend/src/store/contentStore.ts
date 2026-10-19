@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
+import { hasWordTimings } from '../format';
 
 // Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
@@ -123,7 +124,7 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   if (f.tags.length > 0 && !f.tags.some(t => item.tags?.includes(t))) return false;
 
   // Facets: every non-null row must match. Summary/transcript presence mirrors
-  // the library card badges (summary_generated_at / transcript_words, since the
+  // the library card badges (summary_generated_at / hasWordTimings, since the
   // list endpoint never sends the large transcript column).
   const { archive, star, audio, summary, transcript } = f.facets;
   if (archive === 'active' && item.is_archived) return false;
@@ -134,8 +135,8 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   if (audio === 'no_audio' && item.audio_url) return false;
   if (summary === 'summary' && !item.summary_generated_at) return false;
   if (summary === 'no_summary' && item.summary_generated_at) return false;
-  if (transcript === 'transcript' && !item.transcript_words) return false;
-  if (transcript === 'no_transcript' && item.transcript_words) return false;
+  if (transcript === 'transcript' && !hasWordTimings(item)) return false;
+  if (transcript === 'no_transcript' && hasWordTimings(item)) return false;
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;

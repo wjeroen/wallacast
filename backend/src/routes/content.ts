@@ -50,9 +50,12 @@ router.get('/', async (req, res) => {
   try {
     const { type, archived, starred } = req.query;
 
-    // Exclude large columns (html_content, comments, transcript) for performance
+    // Exclude large columns (html_content, comments, transcript) for performance. Word timings
+    // are sent only as has_word_timings: the full transcript_words of every item (23 MB stored,
+    // several times that as objects) was read and serialized on every library load, twice per
+    // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -1693,9 +1696,10 @@ router.patch('/:id', async (req, res) => {
     // CRITICAL FIX: Never use RETURNING *. It includes audio_data (BYTEA, 10-50MB),
     // which was being sent in every response, causing ~7GB/hour of data transfer
     // during playback (saves every 10s). For playback-only updates, return minimal data.
-    // For content updates, return the same columns as the list endpoint.
+    // For content updates, return the same columns as the list endpoint (has_word_timings, not
+    // the word timings themselves).
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position'
       : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;

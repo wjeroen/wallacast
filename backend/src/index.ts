@@ -10,6 +10,8 @@ import { ensureStorageDirectories, isPersistentVolume } from './config/storage.j
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/podcast-cache.js';
 import { createReadStream } from 'fs';
+import type { Readable } from 'stream';
+import { startHourlyMemoryLog } from './services/memory-log.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -77,6 +79,24 @@ app.use('/api/auth', requireDatabaseReady, authRouter);
 // asks for more). Returns null when the header is malformed or the range cannot be satisfied,
 // so the caller can answer 416 with "Content-Range: bytes */<size>" instead of emitting a NaN
 // Content-Length.
+
+// Sends an audio stream (a file, or a podcast's own server through the proxy) to the browser.
+// When the browser stops listening before the end (it seeks, skips, or closes the page), the
+// source is destroyed. A plain pipe() left it paused, with its file or connection open until
+// the process restarted. node-fetch joins the proxy's body to the upstream response with
+// stream.pipeline(), so destroying the body also closes the upstream connection.
+function sendAudioStream(
+  res: express.Response,
+  source: Readable,
+  onError: (err: Error) => void
+): void {
+  source.on('error', onError);
+  res.on('close', () => {
+    if (!res.writableFinished) source.destroy();
+  });
+  source.pipe(res);
+}
+
 function parseAudioRange(
   rangeHeader: string,
   totalSize: number,
@@ -174,7 +194,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
           'Content-Type': 'audio/mpeg',
           'Cache-Control': 'public, max-age=31536000',
         });
-        createAudioReadStream(summaryKey, start, end).on('error', onSummaryStreamError).pipe(res);
+        sendAudioStream(res, createAudioReadStream(summaryKey, start, end), onSummaryStreamError);
       } else {
         res.writeHead(200, {
           'Content-Length': summarySize,
@@ -182,7 +202,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
           'Content-Type': 'audio/mpeg',
           'Cache-Control': 'public, max-age=31536000',
         });
-        createAudioReadStream(summaryKey).on('error', onSummaryStreamError).pipe(res);
+        sendAudioStream(res, createAudioReadStream(summaryKey), onSummaryStreamError);
       }
       return;
     }
@@ -216,14 +236,14 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
             'Content-Length': end - start + 1,
             'Content-Type': 'audio/mpeg',
           });
-          createReadStream(cachedPath, { start, end }).on('error', onCacheError).pipe(res);
+          sendAudioStream(res, createReadStream(cachedPath, { start, end }), onCacheError);
         } else {
           res.writeHead(200, {
             'Content-Length': cachedSize,
             'Accept-Ranges': 'bytes',
             'Content-Type': 'audio/mpeg',
           });
-          createReadStream(cachedPath).on('error', onCacheError).pipe(res);
+          sendAudioStream(res, createReadStream(cachedPath), onCacheError);
         }
         return;
       }
@@ -261,10 +281,10 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
       if (!upstreamRes.body) return res.end();
 
       // node-fetch body is a Node.js ReadableStream, pipe it directly to the
-      // Express response. Same pattern used by transcription.ts for podcast audio.
-      // Never buffers the full file: each chunk flows through as it arrives.
-      upstreamRes.body.pipe(res);
-      upstreamRes.body.on('error', (err: Error) => {
+      // Express response. Never buffers the full file: each chunk flows through as it
+      // arrives.
+      // node-fetch types the body as NodeJS.ReadableStream, at runtime it is a PassThrough
+      sendAudioStream(res, upstreamRes.body as unknown as Readable, (err: Error) => {
         console.error('[AudioProxy] Stream error:', err.message);
         if (!res.writableEnded) res.end();
       });
@@ -298,7 +318,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
           'Content-Type': 'audio/mpeg',
           'Cache-Control': 'public, max-age=31536000',
         });
-        createAudioReadStream(req.params.id, start, end).on('error', onStreamError).pipe(res);
+        sendAudioStream(res, createAudioReadStream(req.params.id, start, end), onStreamError);
       } else {
         res.writeHead(200, {
           'Content-Length': diskSize,
@@ -306,7 +326,7 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
           'Content-Type': 'audio/mpeg',
           'Cache-Control': 'public, max-age=31536000',
         });
-        createAudioReadStream(req.params.id).on('error', onStreamError).pipe(res);
+        sendAudioStream(res, createAudioReadStream(req.params.id), onStreamError);
       }
       return;
     }
@@ -468,6 +488,7 @@ async function start() {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Wallacast API server running on http://0.0.0.0:${PORT}`);
   });
+  startHourlyMemoryLog();
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
