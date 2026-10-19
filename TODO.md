@@ -62,7 +62,6 @@
 
 ### Bug Fixes
 - [ ] **[P1]** Each long audio generation leaves the backend about 170 MB bigger (91, 271, 435 MB after two jobs on 2026-10-18). Read the `[Memory]` lines after the next jobs: a heap that stays up means a leak in the audio pipeline, an rss that stays up while the heap falls back means memory Node keeps (found 2026-10-18)
-- [ ] **[P2]** `GET /api/content/:id/original-html` fetches the item's address with plain `fetch`, not `safeFetch`, so it skips the check against private and internal addresses (found 2026-10-18 in a code review, not fixed)
 - [ ] **[P3]** Speech generation and summaries make a new jsdom window for every comment (`htmlToNarrationText` in openai-tts.ts, `commentsToText` in summarizer.ts), so a thread of 500 comments costs 500 windows: slow and a memory peak, not a leak (found 2026-10-18)
 - [ ] **[P3]** The `content_items` table takes 2.1 GB on disk while its columns hold about 60 MB, probably space left by the audio blobs moved to the volume. `VACUUM FULL` would return it but locks the table for minutes (found 2026-10-18)
 - [ ] **[P3]** Reuters articles cannot be saved. Idea: save them through a syndicated copy of the same story on another site (found 2026-10-07, not started)
@@ -150,6 +149,7 @@
 
 ## Completed Recently ✅
 
+- [x] **Removed `GET /api/content/:id/original-html`** (2026-10-18, user chose removing it over adding the address check): a debugging route no screen used, which fetched the item's stored address with plain `fetch` and so skipped the check against private and internal addresses.
 - [x] **Memory: the library list, parallel audio jobs, open audio files, and a memory log** (2026-10-18, user chose these four): the library list sends `has_word_timings` instead of every item's word timestamps (23 MB stored, read twice per library load), at most two audio generations run at once (the rest wait in line), an audio file or podcast connection closes when the listener skips or stops (20 cancelled requests left 20 files open), and the logs show the process's memory every hour and after each audio job. The feed XML cache deletes each feed after its 5 minutes instead of keeping up to 20 for days.
 - [x] **The backend no longer gets slower every day after a deploy** (2026-10-18, user chose the fix): the jsdom parser shared by feed cleaning, teasers and Markdown conversions kept about 7 KB for every page it parsed, so the backend grew from 300 MB to 2.1 GB in ten days and a feed refresh went from about a minute to 46. `renewingHtmlParser()` moves to a new window every 500 pages. Check the memory graph (`railway metrics --memory`) a few days after the deploy.
 - [x] **A feed refresh skips items the cache already has** (2026-10-18, user chose this, with the library getting the current text): a refresh processed all 3,564 items of 114 feeds to find 6 new ones. Adding an episode to the library now reads its current description from the feed, and falls back to the cached one.

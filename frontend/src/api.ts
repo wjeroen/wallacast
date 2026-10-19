@@ -161,9 +161,6 @@ export const contentAPI = {
   refetch: (id: number) =>
     api.post<{ message: string }>(`/content/${id}/refetch`),
 
-  getOriginalHtml: (id: number) =>
-    api.get<string>(`/content/${id}/original-html`, { responseType: 'text' as any }),
-
   exportZip: (id: number) =>
     api.get(`/content/${id}/export`, { responseType: 'arraybuffer' }),
 
