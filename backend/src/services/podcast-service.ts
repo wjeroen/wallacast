@@ -359,7 +359,13 @@ async function fetchFeedXml(feedUrl: string, headersTimeoutMs?: number): Promise
     const oldestKey = xmlCache.keys().next().value;
     if (oldestKey) xmlCache.delete(oldestKey);
   }
-  xmlCache.set(feedUrl, { xml, timestamp: Date.now() });
+  const entry = { xml, timestamp: Date.now() };
+  xmlCache.set(feedUrl, entry);
+  // Dropped once it is stale. Until 2026-10-18 an entry stayed until 20 other feeds pushed it
+  // out, so up to 20 whole feeds (some several MB) sat in memory for days.
+  setTimeout(() => {
+    if (xmlCache.get(feedUrl) === entry) xmlCache.delete(feedUrl);
+  }, XML_CACHE_TTL).unref();
   return xml;
 }
 
