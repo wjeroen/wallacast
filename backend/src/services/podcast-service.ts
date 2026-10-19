@@ -342,7 +342,7 @@ const xmlCache = new Map<string, { xml: string; timestamp: number }>();
 const XML_CACHE_TTL = 5 * 60 * 1000;
 const XML_CACHE_MAX = 20;
 
-async function fetchFeedXml(feedUrl: string): Promise<string> {
+async function fetchFeedXml(feedUrl: string, headersTimeoutMs?: number): Promise<string> {
   const cached = xmlCache.get(feedUrl);
   if (cached && Date.now() - cached.timestamp < XML_CACHE_TTL) {
     return cached.xml;
@@ -352,7 +352,7 @@ async function fetchFeedXml(feedUrl: string): Promise<string> {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-  });
+  }, 5, headersTimeoutMs);
   const xml = await response.text();
 
   if (xmlCache.size >= XML_CACHE_MAX) {
@@ -686,6 +686,42 @@ const FEED_DESCRIPTION_MAX_CHARS = 20_000;
 // and search reads the start). Adding an episode to the library copies the full stored text
 // (POST /api/content with feed_item_id).
 const FEED_LIST_DESCRIPTION_CHARS = 2_000;
+// Every <item> (RSS) or <entry> (Atom) of a feed
+const FEED_ITEM_PATTERN = /<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi;
+// How long adding an episode waits for its feed before it uses the cached description
+const FRESH_DESCRIPTION_TIMEOUT_MS = 10_000;
+
+// An item's stable key: its guid, else its Atom id, its link or its enclosure address
+function feedItemGuid(itemXml: string): string {
+  const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
+  return extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || extractXMLAttribute(itemXml, 'enclosure', 'url');
+}
+
+// An item's description as the cache stores it, cleaned and cut (FEED_DESCRIPTION_MAX_CHARS)
+function feedItemDescription(itemXml: string): string | null {
+  const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  return description
+    ? cleanDescription(description.substring(0, FEED_DESCRIPTION_MAX_CHARS * 2)).slice(0, FEED_DESCRIPTION_MAX_CHARS) || null
+    : null;
+}
+
+/**
+ * An item's description as its feed lists it now, cleaned like the cache stores it, or null
+ * when the feed cannot be read in time or no longer lists the item. A refresh never reads an
+ * item the cache already has again, so a description the publisher edited later stays old in
+ * the cache. Adding an episode to the library reads it here, so the library gets the current
+ * text (POST /api/content with feed_item_id). `guid` is the cached one, cut to 500 characters.
+ */
+export async function freshFeedItemDescription(feedUrl: string, guid: string): Promise<string | null> {
+  try {
+    const xml = await fetchFeedXml(feedUrl, FRESH_DESCRIPTION_TIMEOUT_MS);
+    const item = (xml.match(FEED_ITEM_PATTERN) || []).find(itemXml => feedItemGuid(itemXml).slice(0, 500) === guid);
+    return item ? feedItemDescription(item) : null;
+  } catch (error) {
+    console.log(`Could not read the current description from ${feedUrl}: ${(error as Error).message}`);
+    return null;
+  }
+}
 
 /**
  * Fetches RSS feed from network, parses items, and saves to database cache
@@ -702,33 +738,36 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
     });
     const xml = await response.text();
 
-    const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
+    const itemMatches = xml.match(FEED_ITEM_PATTERN) || [];
 
     let itemsAdded = 0;
     // Every item the feed lists now, which the cleanup below never deletes
     const feedGuids: string[] = [];
 
-    const withTeaser = await query(
-      'SELECT guid FROM feed_items WHERE feed_id = $1 AND teaser IS NOT NULL',
-      [feedId]
-    );
-    const hasTeaser = new Set<string>(withTeaser.rows.map((row: { guid: string }) => row.guid));
+    // Items the cache already has are skipped. Cleaning every item's description again took
+    // nearly all of a refresh's time (3,564 items for 6 new ones, 2026-10-18), and adding an
+    // episode to the library reads its current description from the feed anyway
+    // (freshFeedItemDescription).
+    const stored = await query('SELECT guid FROM feed_items WHERE feed_id = $1', [feedId]);
+    const storedGuids = new Set<string>(stored.rows.map((row: { guid: string }) => row.guid));
 
     // Parse and save items (limit to 100 most recent)
     for (const [itemIndex, itemXml] of itemMatches.slice(0, 100).entries()) {
       const title = extractXMLTag(itemXml, 'title');
-      const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+      const guid = feedItemGuid(itemXml);
+
+      // No guid/link/enclosure means no stable key. UNIQUE (feed_id, guid) treats NULLs as
+      // distinct, so such items would re-insert as duplicates on every refresh. They can't be
+      // opened anyway, so skip them entirely.
+      if (!guid || !title) continue;
+      feedGuids.push(guid.slice(0, 500));
+      if (storedGuids.has(guid.slice(0, 500))) continue;
+
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
       const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
       const duration = extractXMLTag(itemXml, 'itunes:duration');
       const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
-      const guid = extractXMLTag(itemXml, 'guid') || extractXMLTag(itemXml, 'id') || link || enclosureUrl;
-
-      // No guid/link/enclosure means no stable key. UNIQUE (feed_id, guid) treats NULLs as
-      // distinct, so such items would re-insert as duplicates on every refresh. They can't be
-      // opened anyway, so skip them entirely.
-      if (!guid) continue;
 
       // Extract per-item author (dc:creator for EA Forum/LessWrong, author/itunes:author as fallbacks)
       const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
@@ -742,24 +781,18 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
         extractNestedXMLTag(itemXml, 'image', 'url') ||
         (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
-      if (!title) continue;
-      feedGuids.push(guid.slice(0, 500));
-
       const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
       const item_type = isAudioEnclosure ? 'podcast_episode' : 'article';
       const url = isAudioEnclosure ? null : link;
       const audio_url = isAudioEnclosure ? enclosureUrl : null;
 
-      const cleanedDescription = description
-        ? cleanDescription(description.substring(0, FEED_DESCRIPTION_MAX_CHARS * 2)).slice(0, FEED_DESCRIPTION_MAX_CHARS) || null
-        : null;
-      const teaser = itemIndex < TEASER_REFRESH_ITEMS && !hasTeaser.has(guid.slice(0, 500))
-        ? buildTeaser(title, description, extractPostContent(itemXml))
+      const cleanedDescription = feedItemDescription(itemXml);
+      const teaser = itemIndex < TEASER_REFRESH_ITEMS
+        ? buildTeaser(title, extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary'), extractPostContent(itemXml))
         : null;
 
-      // Insert into feed_items. ON CONFLICT refreshes the author, fills in a missing teaser,
-      // and takes the feed's description when it differs from the stored one (this also
-      // completes descriptions cached under an older, shorter limit).
+      // Insert into feed_items. ON CONFLICT only happens when the feed lists one guid twice: it
+      // refreshes the author, fills in a missing teaser, and takes the later description.
       try {
         const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : null;
         const result = await query(

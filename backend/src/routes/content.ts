@@ -18,6 +18,7 @@ import { summaryAudioKey, generateSummaryAudioForContent } from '../services/sum
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
+import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
 import { sourceUrls } from '../shared/format.js';
@@ -870,17 +871,23 @@ router.post('/', async (req, res) => {
     let finalAuthor = author;
     let finalDescription = description;
     // An episode added from the Feed tab's cached list arrives with only the start of its
-    // description (getCachedFeedItems), so the full stored text is copied from feed_items.
-    // Articles keep the short version, their body is fetched from the page anyway. The join
-    // limits the lookup to this user's own feeds.
+    // description (getCachedFeedItems), so the full text comes from its feed as it reads now
+    // (a refresh never reads a cached item again, see freshFeedItemDescription), else from the
+    // cache when the feed does not answer in time or no longer lists it. Articles keep the
+    // short version, their body is fetched from the page anyway. The join limits the lookup to
+    // this user's own feeds.
     const feedItemId = Number(feed_item_id);
     if (type === 'podcast_episode' && feed_item_id != null && Number.isInteger(feedItemId) && feedItemId > 0) {
       const feedItem = await query(
-        `SELECT fi.description FROM feed_items fi JOIN podcasts p ON p.id = fi.feed_id
+        `SELECT fi.description, fi.guid, p.feed_url FROM feed_items fi JOIN podcasts p ON p.id = fi.feed_id
          WHERE fi.id = $1 AND p.user_id = $2`,
         [feedItemId, req.user!.userId]
       );
-      if (feedItem.rows[0]?.description) finalDescription = feedItem.rows[0].description;
+      const row = feedItem.rows[0];
+      if (row) {
+        const fresh = row.guid && row.feed_url ? await freshFeedItemDescription(row.feed_url, row.guid) : null;
+        if (fresh || row.description) finalDescription = fresh || row.description;
+      }
     }
     // FIX 1: Initialize finalPreviewPicture with the value passed from frontend
     let finalPreviewPicture = preview_picture || null;
