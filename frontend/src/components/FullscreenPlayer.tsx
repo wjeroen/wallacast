@@ -44,6 +44,8 @@ import {
   History,
   ListMusic,
   TvMinimalPlay,
+  PanelTopClose,
+  PanelTopOpen,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
@@ -85,6 +87,9 @@ interface FullscreenPlayerProps {
   // tabs, and why it cannot play when YouTube refused it
   video?: React.ReactNode;
   videoError?: string | null;
+  // Video items: whether the video box is hidden, and the toggle (hiding pauses the video)
+  videoHidden?: boolean;
+  onToggleVideo?: () => void;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -390,6 +395,8 @@ export function FullscreenPlayer({
   content,
   video,
   videoError,
+  videoHidden = false,
+  onToggleVideo,
   isPlaying,
   currentTime,
   duration,
@@ -2504,6 +2511,19 @@ export function FullscreenPlayer({
           >
             <ArrowDownToLine size={14} />
             <span className="tab-label">Auto-scroll</span>
+          </button>
+        )}
+        {/* Video items: hide the video box to give the tabs room (pauses it), or show it
+            again. Play also shows it. Kept out of the video box, since nothing may be
+            drawn over YouTube's player. */}
+        {onToggleVideo && (
+          <button
+            className="autoscroll-toggle"
+            onClick={onToggleVideo}
+            title={videoHidden ? 'Show the video' : 'Hide the video (pauses it)'}
+          >
+            {videoHidden ? <PanelTopOpen size={14} /> : <PanelTopClose size={14} />}
+            <span className="tab-label">{videoHidden ? 'Show video' : 'Hide video'}</span>
           </button>
         )}
       </div>

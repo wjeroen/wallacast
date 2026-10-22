@@ -116,7 +116,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     if (pd && !publishedDate) { setPublishedDate(pd); detected.push('date'); }
     const rawTags = m.tags ?? m.tag;
     const tagList = Array.isArray(rawTags) ? rawTags : rawTags ? String(rawTags).split(',') : [];
-    const cleaned = parseTagInput(tagList.join(','));  // type tags (article/text/podcast) are dropped
+    const cleaned = parseTagInput(tagList.join(','));  // type tags (article/text/podcast/video) are dropped
     if (cleaned.length > 0 && !tagsInput) {
       setTagsInput(cleaned.join(', '));
       detected.push(`${cleaned.length} tag${cleaned.length === 1 ? '' : 's'}`);

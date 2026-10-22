@@ -160,6 +160,10 @@ export function AudioPlayer({
   const videoDurationSavedForRef = useRef<number | null>(null);
   const [videoRate, setVideoRate] = useState(1);
   const [videoError, setVideoError] = useState<string | null>(null);
+  // The video box can be hidden to give the tabs room. Hiding pauses the video, Play shows
+  // it again. The ref mirrors the state for handlers that run before a re-render.
+  const [videoHidden, setVideoHidden] = useState(false);
+  const videoHiddenRef = useRef(false);
   // Mirrors isExpanded synchronously: the autoplay check in the setup effect runs in the
   // same commit as the openToken effect that expands the player.
   const isExpandedRef = useRef(true);
@@ -417,10 +421,17 @@ export function AudioPlayer({
         setDuration(content.duration || 0);
         setVideoError(null);
         setIsPlaying(false);
+        videoHiddenRef.current = false;
+        setVideoHidden(false);
       }
       // Only a visible video may start by itself (YouTube's embed rules). An item reached
       // by autoplay while the player is minimized waits for Play.
       if (shouldAutoPlay && isExpandedRef.current) {
+        // An explicit play (a tap in the Queue tab) shows a hidden video again
+        if (videoHiddenRef.current) {
+          videoHiddenRef.current = false;
+          setVideoHidden(false);
+        }
         const player = ytPlayerRef.current;
         if (player) {
           try { player.playVideo(); } catch { /* player gone */ }
@@ -502,11 +513,11 @@ export function AudioPlayer({
         // trims trailing silence post-Whisper, and the browser would happily
         // report the bogus pre-trim value, undoing that fix.
         if (!content.duration || content.duration === 0) {
-          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
         } else if (realDuration < content.duration - 2) {
           // Browser says the file is SHORTER than DB, trust the browser
           // (file probably truncated). Update DB so the timeline isn't too long.
-          contentAPI.update(content.id, { duration: realDuration } as any).catch(() => {});
+          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
         }
       }
       if (shouldAutoPlay || resumePlayAfterVariantSwapRef.current) {
@@ -755,11 +766,14 @@ export function AudioPlayer({
         try { player?.pauseVideo(); } catch { /* player gone */ }
         return;
       }
-      if (!isExpandedRef.current) {
-        // Play from the mini player: the video may only play visibly, so the player
-        // opens and the new YouTube player starts once it is ready
+      if (!isExpandedRef.current || videoHiddenRef.current) {
+        // Play from the mini player, or with the video hidden: the video may only play
+        // visibly, so the player opens, the video shows, and the new YouTube player
+        // starts once it is ready
         isExpandedRef.current = true;
         setIsExpanded(true);
+        videoHiddenRef.current = false;
+        setVideoHidden(false);
         videoPlayPendingRef.current = true;
         return;
       }
@@ -1121,19 +1135,34 @@ export function AudioPlayer({
     isExpandedRef.current = true;
     setIsExpanded(true);
   };
+  // The video leaves the screen (the player minimizes, or the video is hidden). YouTube
+  // allows playback only while the video is visible, so it pauses, and its player is
+  // destroyed with its box.
+  const pauseVideoLeavingScreen = () => {
+    try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
+    stopVideoClock();
+    setIsPlaying(false);
+    savePlaybackPosition(videoTimeRef.current);
+    ytPlayerRef.current = null;
+    videoPlayPendingRef.current = false;
+  };
+
   const handleMinimize = () => {
-    // A video may only play while it is visible, and the mini player has no room for it,
-    // so minimizing pauses it. Its player is destroyed with the fullscreen view.
-    if (contentRef.current?.type === 'video') {
-      try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
-      stopVideoClock();
-      setIsPlaying(false);
-      savePlaybackPosition(videoTimeRef.current);
-      ytPlayerRef.current = null;
-      videoPlayPendingRef.current = false;
-    }
+    if (contentRef.current?.type === 'video') pauseVideoLeavingScreen();
     isExpandedRef.current = false;
     setIsExpanded(false);
+  };
+
+  // Hide or show the video box. Showing never starts playback, Play does.
+  const handleToggleVideo = () => {
+    if (videoHiddenRef.current) {
+      videoHiddenRef.current = false;
+      setVideoHidden(false);
+      return;
+    }
+    pauseVideoLeavingScreen();
+    videoHiddenRef.current = true;
+    setVideoHidden(true);
   };
 
   if (!content) return null;
@@ -1159,11 +1188,15 @@ export function AudioPlayer({
       {isExpanded || !hasPlayableMedia(content) ? (
         <FullscreenPlayer
           content={content}
-          video={videoId ? (
+          videoHidden={videoHidden}
+          onToggleVideo={videoId ? handleToggleVideo : undefined}
+          video={videoId && !videoHidden ? (
             <YouTubeVideo
               key={videoId}
               videoId={videoId}
-              startSeconds={videoTimeRef.current}
+              // On the first render of a newly opened video, the setup effect has not yet
+              // moved videoTimeRef to this item, so its saved position counts instead
+              startSeconds={lastVideoItemRef.current === content.id ? videoTimeRef.current : (content.playback_position || 0)}
               onReady={handleVideoReady}
               onStateChange={handleVideoStateChange}
               onRateChange={setVideoRate}

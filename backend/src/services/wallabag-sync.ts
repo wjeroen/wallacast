@@ -66,9 +66,10 @@ function detectTypeFromWallabag(entry: WallabagEntry): 'article' | 'text' | 'pod
   // Check explicit type tags first
   if (tagSlugs.includes('podcast')) return 'podcast_episode';
   if (tagSlugs.includes('text')) return 'text';
-  // A YouTube address is a video before the 'article' tag counts: videos are pushed to
-  // Wallabag with that tag (typeTagFor). Only new entries take this type, an item that
-  // already exists locally keeps the type it has.
+  if (tagSlugs.includes('video')) return 'video';
+  // A YouTube address is a video even with the 'article' tag, which YouTube items added
+  // before the video type carry. Only new entries take this type, an item that already
+  // exists locally keeps the type it has.
   if (youtubeVideoId(entry.url)) return 'video';
   if (tagSlugs.includes('article')) return 'article';
 
