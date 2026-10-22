@@ -281,13 +281,15 @@ export const CHAT_PROVIDERS: Record<string, ChatProviderDef> = {
 // Model-aware input character cap for scriptwriter/chat prompts. Baseline 400000 chars
 // (~100k tokens) fits every supported model, larger caps for known big-context models so
 // long articles are not needlessly truncated on models that can handle them.
-// - /gpt-5/ -> 1200000 (400k-token context)
+// - /gpt-[56]/ -> 800000 (~200k tokens). gpt-5-mini and gpt-5.4-mini accept at most
+//   272,000 input tokens, and gpt-6-luna accepts 922,000 but bills a prompt over 272,000
+//   tokens at 2x input and 1.5x output for the whole request (OpenAI model pages, 2026-10-22)
 // - /gemini/ -> 1500000
 // - /claude-(sonnet-5|sonnet-4-6|opus-4|fable)/ -> 1500000 (1M-token contexts)
 // claude-haiku is deliberately NOT matched (200k context, baseline is right).
 export function chatInputCharCap(model: string): number {
   const m = (model || '').toLowerCase();
-  if (/gpt-5/.test(m)) return 1200000;
+  if (/gpt-[56]/.test(m)) return 800000;
   if (/gemini/.test(m)) return 1500000;
   if (/claude-(sonnet-5|sonnet-4-6|opus-4|fable)/.test(m)) return 1500000;
   return 400000;
