@@ -42,7 +42,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 ### Reading the library
 
-- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more).
+- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more). `type` is `article`, `text`, `podcast_episode` or `video` (a YouTube video, its `url` is the `youtube.com/watch?v=` address).
 - `GET /api/content/:id/markdown` and `GET /api/content/markdown?url=<address>`: the item exactly as the app's Copy content button gives it, in `markdown`. 404 when no item has that address.
 - `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary_error", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none. `summary_status` is `generating` while one is being made, `failed` when making it failed, and `skipped` when a token's minute limit left it out, with the reason in `summary_error`. The index's `summary_status` tells which ids are worth asking for (`completed`).
 - `GET /api/content/tags/all`: `{ "tags": [{ "tag": "ai-safety", "count": 12 }, ...] }`.

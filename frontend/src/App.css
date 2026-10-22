@@ -1325,6 +1325,7 @@ button {
 .type-article { background: #3b82f6; color: #fff; }
 .type-text { background: #10b981; color: #fff; }
 .type-podcast_episode { background: #a855f7; color: #fff; }
+.type-video { background: #dc2626; color: #fff; }
 .type-pdf { background: var(--bg-raised); color: var(--t2); }
 
 .content-actions {
@@ -3570,6 +3571,43 @@ button {
   background: var(--bg-hover-soft);
   border-color: var(--bg-hover);
   color: var(--t1);
+}
+
+/* A video item's YouTube player, between the header and the tabs. YouTube requires an
+   embedded player of at least 200x200 px, hence the minimum height. The height cap keeps
+   room for the tabs on a phone, YouTube letterboxes the picture inside. */
+.fullscreen-video-area {
+  flex-shrink: 0;
+  background: #000;
+}
+
+.fullscreen-video {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  aspect-ratio: 16 / 9;
+  max-height: 40vh;
+  min-height: 200px;
+}
+
+.fullscreen-video iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.video-error {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  color: var(--error-fg);
+  background: var(--error-bg);
+}
+
+.video-error a {
+  color: inherit;
+  text-decoration: underline;
 }
 
 /* Tabs */

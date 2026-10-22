@@ -227,25 +227,43 @@ app.get('/api/content/:id', (req, res) => {
   res.json(item);
 });
 
-app.post('/api/content', (req, res) => {
+// A YouTube address becomes a video item, as in the real backend (routes/content.ts). The
+// title and channel come from YouTube's public oEmbed lookup, the rest is fake.
+function mockYoutubeId(url) {
+  const m = String(url || '').match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+app.post('/api/content', async (req, res) => {
   const now = new Date().toISOString();
-  let title = req.body.title;
+  const videoId = (req.body.type || 'article') === 'article' && !req.body.content ? mockYoutubeId(req.body.url) : null;
+  let video = null;
+  if (videoId) {
+    try {
+      const r = await fetch(`https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=${videoId}`);
+      video = r.ok ? await r.json() : {};
+    } catch { video = {}; }
+  }
+  let title = video?.title || req.body.title;
   if (!title && req.body.url) {
     try { title = new URL(req.body.url).hostname; } catch { title = 'Untitled'; }
   }
   const item = {
     id: db.nextContentId++,
-    type: req.body.type || 'article',
+    type: videoId ? 'video' : (req.body.type || 'article'),
     title: title || 'Untitled preview item',
-    url: req.body.url,
+    url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : req.body.url,
     content: req.body.content,
-    author: req.body.author || 'Preview Author',
+    author: video?.author_name || req.body.author || 'Preview Author',
+    preview_picture: videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : undefined,
     audio_url: req.body.audio_url,
     duration: req.body.duration,
     podcast_id: req.body.podcast_id || null,
     // Same rule as the real backend: the subscription's title, else the name the Feed tab sent
     podcast_show_name: db.podcasts.find(p => p.id === req.body.podcast_id)?.title || req.body.podcast_show_name || null,
-    description: 'Fake preview content, not a real saved article.',
+    description: videoId
+      ? 'Fake preview description with chapters.\n\n0:00 Start\n1:00 One minute in\n2:30 Two and a half minutes in'
+      : 'Fake preview content, not a real saved article.',
     is_starred: false,
     is_archived: false,
     playback_position: 0,

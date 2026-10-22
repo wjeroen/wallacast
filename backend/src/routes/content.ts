@@ -20,7 +20,8 @@ import { snapshotContentVersion } from '../services/content-versions.js';
 import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
-import { sourceUrls } from '../shared/format.js';
+import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
+import { fetchYouTubeMetadata, YouTubeUnavailableError } from '../services/youtube.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
@@ -841,7 +842,7 @@ router.post('/', async (req, res) => {
       tokenTags = shaped.tags;
     }
     const {
-      type,
+      type: requestedType,
       title,
       url: rawUrl,
       content,
@@ -861,10 +862,23 @@ router.post('/', async (req, res) => {
       progress_id,
     } = req.body;
 
+    // A YouTube address added as an article (the Add tab, a token, the Feed tab) becomes a
+    // video item: it is stored with YouTube's details instead of a fetched article, and
+    // nothing is generated for it, since every generation step below checks the type. An
+    // article that arrives with its content (a Markdown import) stays an article.
+    const youtubeId = (requestedType === 'article' || requestedType === 'video') && !content
+      ? youtubeVideoId(rawUrl)
+      : null;
+    if (requestedType === 'video' && !youtubeId) {
+      return res.status(400).json({ error: 'Only YouTube video addresses can be added as a video.' });
+    }
+    const type = youtubeId ? 'video' : requestedType;
+
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
     // forum-bots.effectivealtruism.org). Applies to BOTH the Add tab and RSS "add to library",
     // since both add paths go through this endpoint. Non-EA-Forum links are left untouched.
-    const url = normalizeEAForumUrl(rawUrl);
+    // A video is stored under its plain watch address, whichever form was added.
+    const url = youtubeId ? youtubeWatchUrl(youtubeId) : normalizeEAForumUrl(rawUrl);
 
     let processedContent = content;
     let htmlContent = null;
@@ -872,6 +886,7 @@ router.post('/', async (req, res) => {
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    let finalDuration = duration || null;
     // An episode added from the Feed tab's cached list arrives with only the start of its
     // description (getCachedFeedItems), so the full text comes from its feed as it reads now
     // (a refresh never reads a cached item again, see freshFeedItemDescription), else from the
@@ -1071,8 +1086,26 @@ router.post('/', async (req, res) => {
       commentCountTotal = articleData.comment_count_total || 0;
     }
 
+    if (youtubeId) {
+      let video;
+      try {
+        video = await fetchYouTubeMetadata(youtubeId);
+      } catch (videoError) {
+        if (videoError instanceof YouTubeUnavailableError) {
+          return res.status(502).json({ error: `Could not add this video. ${videoError.message}` });
+        }
+        throw videoError;
+      }
+      if ((!finalTitle || finalTitle === 'Untitled') && video.title) finalTitle = video.title;
+      if (!finalAuthor && video.author) finalAuthor = video.author;
+      if (!finalDescription && video.description) finalDescription = video.description;
+      if (!finalPreviewPicture) finalPreviewPicture = video.preview_picture;
+      if (!finalPublishedAt && video.published_at) finalPublishedAt = video.published_at;
+      if (!finalDuration && video.duration) finalDuration = video.duration;
+    }
+
     if (!finalTitle || finalTitle === 'Untitled') {
-      finalTitle = 'Untitled Article';
+      finalTitle = type === 'video' ? 'Untitled video' : 'Untitled Article';
     }
 
     // Comments supplied by the caller (a Markdown import round-tripping an exported
@@ -1127,7 +1160,7 @@ router.post('/', async (req, res) => {
        (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, finalDuration, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
     );
 
     const createdItem = result.rows[0];

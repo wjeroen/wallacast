@@ -9,7 +9,8 @@ export interface Comment {
 
 export interface ContentItem {
   id: number;
-  type: 'article' | 'podcast_episode' | 'pdf' | 'text';
+  // 'video' is a YouTube video, played in YouTube's embedded player (url = its watch address)
+  type: 'article' | 'podcast_episode' | 'pdf' | 'text' | 'video';
   title: string;
   url?: string;
   content?: string;

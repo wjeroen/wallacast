@@ -610,7 +610,7 @@ function isoDate(value?: string | null): string | null {
 /**
  * The Obsidian-properties block for an item. Only keys Obsidian understands natively get
  * special treatment (`tags` is a real tag list, ISO dates become Date properties); the rest
- * are plain text. The first tag is always the item's type tag (article / text / podcast).
+ * are plain text. The first tag is always the item's type tag (article / text / podcast / video).
  * `source` is the human URL (the EA Forum bot mirror is rewritten back), never a synthetic
  * `wallacast://` one. No internal ids: an import creates a NEW item, it never overwrites.
  */
@@ -643,12 +643,13 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   }
   out.push('tags:');
   for (const t of tags) out.push(`  - ${t}`);
-  // A podcast's description IS the body (see contentToMarkdown), so no property for it.
-  if (item.type !== 'podcast_episode' && item.description) {
+  // A podcast's or video's description IS the body (see contentToMarkdown), so no property for it.
+  const descriptionIsBody = item.type === 'podcast_episode' || item.type === 'video';
+  if (!descriptionIsBody && item.description) {
     const d = cleanHtml(item.description).replace(/\s+/g, ' ').trim();
     if (d) out.push(`description: ${yamlStr(d)}`);
   }
-  if (item.type === 'podcast_episode' && item.duration) {
+  if (descriptionIsBody && item.duration) {
     out.push(`duration: ${yamlStr(formatDuration(item.duration))}`);
   }
   if (item.karma !== undefined && item.karma !== null) out.push(`upvotes: ${item.karma}`);
@@ -1037,10 +1038,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
 
   lines.push('', `# ${item.title}`);
 
-  // Podcasts: description first, then the transcript, each only when present
-  // (the `content` field is deliberately not used for podcasts). Articles/texts
-  // keep the html_content body with the plain-content fallback.
-  const body = item.type === 'podcast_episode'
+  // Podcasts and videos: description first, then the transcript, each only when present
+  // (the `content` field is deliberately not used for them). Articles/texts keep the
+  // html_content body with the plain-content fallback.
+  const body = item.type === 'podcast_episode' || item.type === 'video'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
         exportHasTranscript(item)

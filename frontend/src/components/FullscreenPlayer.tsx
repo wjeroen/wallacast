@@ -43,13 +43,14 @@ import {
   FolderDown,
   History,
   ListMusic,
+  TvMinimalPlay,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { linkDescriptionTimestamps } from '../timestamps';
-import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
+import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasPlayableMedia } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
@@ -80,6 +81,10 @@ interface LLMAlignmentElement {
 
 interface FullscreenPlayerProps {
   content: ContentItem;
+  // A video item's YouTube player (built by AudioPlayer), shown between the header and the
+  // tabs, and why it cannot play when YouTube refused it
+  video?: React.ReactNode;
+  videoError?: string | null;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -162,6 +167,12 @@ const TAB_ICONS: Record<TabType, LucideIcon> = {
   'history': History,
   'queue': ListMusic,
 };
+
+// The tab an item opens on: the description for podcasts and videos, the Transcript tab
+// ('read-along') for articles and texts.
+function defaultTabFor(content: ContentItem): TabType {
+  return content.type === 'podcast_episode' || content.type === 'video' ? 'description' : 'read-along';
+}
 
 // Human-readable label for a version snapshot's source (the action that overwrote it).
 function versionSourceLabel(source: ContentVersion['source']): string {
@@ -377,6 +388,8 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
 
 export function FullscreenPlayer({
   content,
+  video,
+  videoError,
   isPlaying,
   currentTime,
   duration,
@@ -435,10 +448,9 @@ export function FullscreenPlayer({
     () => getNonManualItems(content.id),
     [getNonManualItems, content.id, manualItems, libraryContext, shuffleNonManual]
   );
-  // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
-  const [activeTab, setActiveTab] = useState<TabType>(
-    content.type === 'podcast_episode' ? 'description' : 'read-along'
-  );
+  // Default tab: 'description' for podcasts and videos, 'read-along' (labeled "Transcript")
+  // for everything else
+  const [activeTab, setActiveTab] = useState<TabType>(defaultTabFor(content));
   // Per-tab scroll position memory: save when leaving a tab, restore when entering
   const tabScrollPositions = useRef<Record<string, number>>({});
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -935,10 +947,13 @@ export function FullscreenPlayer({
     const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed', 'fetching'].includes(content.generation_status);
     const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
 
-    // Tab order: Description (podcasts) · Read-along · Content · History · Summary · Queue
+    // Tab order: Description (podcasts, videos) · Read-along · Content · History · Summary · Queue
     if (content.type === 'podcast_episode') {
       tabs.push('description');
       tabs.push('read-along');
+    } else if (content.type === 'video') {
+      // No transcript for videos yet, so only their YouTube description
+      tabs.push('description');
     } else if (isArticleOrText) {
       if (hasReadAlongData) tabs.push('read-along');
       tabs.push('content');
@@ -954,8 +969,9 @@ export function FullscreenPlayer({
     // Queue is a listening feature: audio-less items hide it (the queue only
     // lists audio items and autoplay skips them, while the prev/next buttons
     // walk everything, so showing it there would just contradict the buttons).
-    // Summary audio counts: a summary-audio-only item is a playable audio item.
-    if (hasAnyAudio(content)) tabs.push('queue');
+    // Summary audio counts: a summary-audio-only item is a playable audio item, and a
+    // video plays too.
+    if (hasPlayableMedia(content)) tabs.push('queue');
     return tabs;
   }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, content.summary_status, hasAlignment, versions.length, content.versions_count]);
 
@@ -1016,7 +1032,7 @@ export function FullscreenPlayer({
     }
     if (playingVariant !== 'summary' && summaryFollowedId !== null) {
       setSummaryFollowedId(null);
-      if (leaveSummaryNow) setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+      if (leaveSummaryNow) setActiveTab(defaultTabFor(content));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, playingVariant, isPlaying]);
@@ -1167,7 +1183,7 @@ export function FullscreenPlayer({
     if (followSummaryNow) landingTab = 'summary';
     else if (leaveSummaryNow) {
       // Mirrors the follow-playing-summary effect's return-to-default branch.
-      landingTab = content.type === 'podcast_episode' ? 'description' : 'read-along';
+      landingTab = defaultTabFor(content);
     }
 
     const jumpToHighlight = landingTab === 'read-along' && autoScroll;
@@ -1697,7 +1713,7 @@ export function FullscreenPlayer({
       case 'description':
         return (
           <div className="tab-content-display">
-            <h3>Podcast Description</h3>
+            <h3>{content.type === 'video' ? 'Video Description' : 'Podcast Description'}</h3>
             {content.description ? (
               <div
                 className="article-content"
@@ -2039,7 +2055,7 @@ export function FullscreenPlayer({
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
           const f = libraryContext.filter;
-          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
+          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts', videos: 'Videos' }[f.typeFilter];
           // Short human tags for the captured facet filter (audio is implied for
           // anything playable, so it is skipped to keep the label compact).
           const facetLabels: string[] = [];
@@ -2176,9 +2192,9 @@ export function FullscreenPlayer({
               />
             )}
             <button
-              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              onClick={hasPlayableMedia(content) ? onMinimize : onClose}
               className="fullscreen-close-button"
-              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+              title={hasPlayableMedia(content) ? 'Minimize' : 'Close'}
             >
               <ArrowLeft size={18} />
             </button>
@@ -2190,13 +2206,13 @@ export function FullscreenPlayer({
                 without audio there is no mini player so it closes. */}
             <h2
               className="fullscreen-title"
-              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              onClick={hasPlayableMedia(content) ? onMinimize : onClose}
               style={{ cursor: 'pointer' }}
-              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+              title={hasPlayableMedia(content) ? 'Minimize' : 'Close'}
             >
               {content.title}
             </h2>
-            {content.type === 'article' && content.url && (
+            {(content.type === 'article' || content.type === 'video') && content.url && (
               <p className="fullscreen-source-link">
                 <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
                   {getDomainFromUrl(displayUrl(content.url))}
@@ -2442,6 +2458,22 @@ export function FullscreenPlayer({
         </div>
       </div>
 
+      {/* A video item's YouTube player. It stays put while the tabs below scroll, and
+          nothing may cover it (YouTube's embed rules), so a playback error shows under it. */}
+      {video && (
+        <div className="fullscreen-video-area">
+          {video}
+          {videoError && (
+            <p className="video-error">
+              {videoError}{' '}
+              {content.url && (
+                <a href={content.url} target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Tabs with autoscroll toggle. Only the tab list scrolls horizontally on
           narrow screens, the autoscroll toggle stays pinned outside the scroll area. */}
       <div className="fullscreen-tabs">
@@ -2491,9 +2523,10 @@ export function FullscreenPlayer({
             // for the full audio. With both audios it switches between them for this item
             // only and keeps playing or paused, like the Summary tab banner's switch.
             const isSummary = playingVariant === 'summary';
-            const SourceIcon = isSummary ? TAB_ICONS.summary : TAB_ICONS.content;
+            const isVideo = content.type === 'video';
+            const SourceIcon = isSummary ? TAB_ICONS.summary : isVideo ? TvMinimalPlay : TAB_ICONS.content;
             const canSwitch = !!(content.audio_url && content.summary_audio_url && onSelectAudioVariant);
-            const label = isSummary ? 'Summary audio' : 'Full audio';
+            const label = isSummary ? 'Summary audio' : isVideo ? 'Video' : 'Full audio';
             return canSwitch ? (
               <button
                 className="audio-source-btn"

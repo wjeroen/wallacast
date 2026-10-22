@@ -32,9 +32,13 @@ export function reservedTagReason(label: string): string | null {
   return null;
 }
 
+// The type tag the Markdown export writes first. A video gets 'video' there, but Wallabag
+// keeps receiving 'article' for it (backend services/tags.ts), and 'video' is not reserved,
+// so it stays usable as an ordinary tag.
 export function typeTagFor(type: ContentItem['type']): string {
   if (type === 'podcast_episode') return 'podcast';
   if (type === 'text') return 'text';
+  if (type === 'video') return 'video';
   return 'article';
 }
 

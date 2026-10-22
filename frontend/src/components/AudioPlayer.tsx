@@ -3,7 +3,8 @@ import type { ContentItem } from '../types';
 import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
-import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasAnyAudio, type AudioVariant } from '../format';
+import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, youtubeVideoId, type AudioVariant } from '../format';
 
 function getStoredSpeed(): number {
   try {
@@ -80,8 +81,11 @@ export function AudioPlayer({
   // must not drive any highlighting. The override only applies while its target
   // audio actually exists (it could have been removed since).
   const requestedOverride = overrideForId && content && overrideForId.id === content.id ? overrideForId.variant : null;
+  // A video is its own original media: it gets the full controls, and its position saves
+  // to playback_position like an original audio.
   const effectiveVariant: AudioVariant | null =
-    requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
+    content?.type === 'video' ? 'original'
+    : requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
     : requestedOverride === 'original' && content?.audio_url ? 'original'
     : content ? getEffectiveAudio(content, preferSummaryAudio) : null;
   const [isPlaying, setIsPlaying] = useState(false);
@@ -142,6 +146,35 @@ export function AudioPlayer({
   // replaces audio.src (which pauses), so the loadedmetadata handler resumes.
   const resumePlayAfterVariantSwapRef = useRef(false);
 
+  // ---- YouTube videos ----
+  // A video plays in YouTube's embedded player (YouTubeVideo), which only exists while the
+  // fullscreen view shows it. Minimizing destroys it, and expanding builds a new one that
+  // starts at videoTimeRef, so the position lives here and not in the player.
+  const videoId = content?.type === 'video' ? youtubeVideoId(content.url) : null;
+  const ytPlayerRef = useRef<YouTubePlayer | null>(null);
+  const videoTimeRef = useRef(0);
+  // Play as soon as the player is ready (autoplay, or Play pressed while it was loading)
+  const videoPlayPendingRef = useRef(false);
+  const videoClockRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastVideoItemRef = useRef<number | null>(null);
+  const videoDurationSavedForRef = useRef<number | null>(null);
+  const [videoRate, setVideoRate] = useState(1);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  // Mirrors isExpanded synchronously: the autoplay check in the setup effect runs in the
+  // same commit as the openToken effect that expands the player.
+  const isExpandedRef = useRef(true);
+  // Latest duration, for the save-on-leave cleanup, which runs with an old closure
+  const durationRef = useRef(0);
+  // YouTube's player has no time event, so while it plays the position is read four
+  // times a second (readVideoTime). That drives the timeline exactly as audio's
+  // timeupdate does.
+  const stopVideoClock = () => {
+    if (videoClockRef.current) {
+      clearInterval(videoClockRef.current);
+      videoClockRef.current = null;
+    }
+  };
+
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
@@ -164,8 +197,15 @@ export function AudioPlayer({
   // (see the openToken prop docs). Runs once on mount too, harmlessly, since
   // isExpanded already starts true.
   useEffect(() => {
-    if (openToken > 0) setIsExpanded(true);
+    if (openToken > 0) {
+      isExpandedRef.current = true;
+      setIsExpanded(true);
+    }
   }, [openToken]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
 
   // Clear the per-item override on every genuine track change. Its own render-time
   // check (overrideForId.id === content.id) already ignores it while on any OTHER
@@ -189,6 +229,12 @@ export function AudioPlayer({
     if (!content) return;
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
+    // A video plays inside YouTube's frame, which owns its own media session, and the
+    // handlers below drive the <audio> element. So none are set, and no stale title stays.
+    if (content.type === 'video') {
+      ms.metadata = null;
+      return;
+    }
 
     ms.metadata = new window.MediaMetadata({
       title: content.title || 'wallacast',
@@ -346,6 +392,51 @@ export function AudioPlayer({
     const shouldAutoPlay = autoPlayToken > 0 && autoPlayToken !== lastAutoPlayTokenRef.current;
     if (shouldAutoPlay) {
       lastAutoPlayTokenRef.current = autoPlayToken;
+    }
+
+    // A video plays in YouTube's player (see YouTubeVideo), never in the <audio> element.
+    if (content.type === 'video') {
+      if (lastAudioSrcRef.current) {
+        lastAudioSrcRef.current = '';
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      if (content.id !== lastVideoItemRef.current) {
+        lastVideoItemRef.current = content.id;
+        // The previous video's player was destroyed with its YouTubeVideo, before this ran
+        ytPlayerRef.current = null;
+        videoPlayPendingRef.current = false;
+        stopVideoClock();
+        videoTimeRef.current = startPosition;
+        positionFieldRef.current = 'playback_position';
+        lastSavedPositionRef.current = -1;
+        pendingResumeSeekRef.current = 0;
+        resumeAttemptsRef.current = 0;
+        setResumeFailedAt(0);
+        setCurrentTime(startPosition);
+        setDuration(content.duration || 0);
+        setVideoError(null);
+        setIsPlaying(false);
+      }
+      // Only a visible video may start by itself (YouTube's embed rules). An item reached
+      // by autoplay while the player is minimized waits for Play.
+      if (shouldAutoPlay && isExpandedRef.current) {
+        const player = ytPlayerRef.current;
+        if (player) {
+          try { player.playVideo(); } catch { /* player gone */ }
+        } else {
+          videoPlayPendingRef.current = true;
+        }
+      }
+      return;
+    }
+    if (lastVideoItemRef.current !== null) {
+      // Leaving a video: its player went away with its YouTubeVideo, and no pause event came
+      lastVideoItemRef.current = null;
+      ytPlayerRef.current = null;
+      videoPlayPendingRef.current = false;
+      stopVideoClock();
+      setIsPlaying(false);
     }
 
     // Guard against redundant src resets. The parent replaces `content` with
@@ -610,9 +701,9 @@ export function AudioPlayer({
     if (!content?.id) return;
     lastSavedPositionRef.current = -1; // Reset debounce on content change
     const interval = setInterval(() => {
-      if (isPlayingRef.current && audioRef.current) {
-        savePlaybackPosition(audioRef.current.currentTime);
-      }
+      if (!isPlayingRef.current) return;
+      if (contentRef.current?.type === 'video') savePlaybackPosition(videoTimeRef.current);
+      else if (audioRef.current) savePlaybackPosition(audioRef.current.currentTime);
     }, 10000);
     return () => clearInterval(interval);
   }, [content?.id]);
@@ -620,6 +711,17 @@ export function AudioPlayer({
   // Save position on unmount or content change
   useEffect(() => {
     return () => {
+      // A video's position is videoTimeRef (its player may already be gone). Within 10
+      // seconds of the end it counts as finished, as below.
+      if (content?.type === 'video') {
+        const dur = content.duration || durationRef.current;
+        const nearEnd = dur > 0 && dur - videoTimeRef.current < 10;
+        contentAPI.update(content.id, {
+          playback_position: nearEnd ? 0 : Math.floor(videoTimeRef.current),
+          last_played_at: new Date().toISOString(),
+        }).catch(() => {});
+        return;
+      }
       // Same guard as savePlaybackPosition: if the resume-seek never stuck, the
       // element still sits at the wrong spot, and saving here is what turned
       // "open a podcast, close it" into wiping its saved position to 0.
@@ -646,6 +748,28 @@ export function AudioPlayer({
   }, [content?.id]);
 
   const togglePlay = () => {
+    if (contentRef.current?.type === 'video') {
+      const player = ytPlayerRef.current;
+      if (isPlaying) {
+        savePlaybackPosition(videoTimeRef.current);
+        try { player?.pauseVideo(); } catch { /* player gone */ }
+        return;
+      }
+      if (!isExpandedRef.current) {
+        // Play from the mini player: the video may only play visibly, so the player
+        // opens and the new YouTube player starts once it is ready
+        isExpandedRef.current = true;
+        setIsExpanded(true);
+        videoPlayPendingRef.current = true;
+        return;
+      }
+      if (player) {
+        try { player.playVideo(); } catch { /* player gone */ }
+      } else {
+        videoPlayPendingRef.current = true;
+      }
+      return;
+    }
     if (!audioRef.current) return;
     if (isPlaying) {
       userPausedRef.current = true; // explicit user pause, block OS-initiated resumes
@@ -668,6 +792,24 @@ export function AudioPlayer({
   };
 
   const handleSeek = (time: number) => {
+    if (contentRef.current?.type === 'video') {
+      videoTimeRef.current = time;
+      setCurrentTime(time);
+      savePlaybackPosition(time);
+      const player = ytPlayerRef.current;
+      if (!player || !videoId) return;
+      try {
+        // seekTo starts a video that has not played yet or has ended, and a seek must never
+        // start or pause playback, so such a video is cued at the new spot instead
+        const state = player.getPlayerState();
+        if (state === VIDEO_STATE.UNSTARTED || state === VIDEO_STATE.CUED || state === VIDEO_STATE.ENDED) {
+          player.cueVideoById({ videoId, startSeconds: time });
+        } else {
+          player.seekTo(time, true);
+        }
+      } catch { /* player gone */ }
+      return;
+    }
     if (!audioRef.current) return;
     const audio = audioRef.current;
     // An explicit user seek takes over from any still-pending resume-seek.
@@ -693,8 +835,12 @@ export function AudioPlayer({
   const handleSkipForward = () => handleSeek(Math.min(duration, currentTime + 15));
 
   const handleSpeedChange = (speed: number) => {
-    if (!audioRef.current) return;
-    audioRef.current.playbackRate = speed;
+    if (contentRef.current?.type === 'video') {
+      if (ytPlayerRef.current) applyVideoSpeed(ytPlayerRef.current, speed);
+    } else {
+      if (!audioRef.current) return;
+      audioRef.current.playbackRate = speed;
+    }
     setPlaybackSpeed(speed);
     // Save globally: localStorage for instant recall, backend for cross-device sync
     localStorage.setItem('playbackSpeed', String(speed));
@@ -727,6 +873,7 @@ export function AudioPlayer({
           audioRef.current.pause();
           setIsPlaying(false);
         }
+        try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
         setSleepTimer(null);
         setSleepTimerEndAt(null);
       }, minutes * 60 * 1000);
@@ -878,8 +1025,116 @@ export function AudioPlayer({
     handleSeek(estimatedPosition);
   };
 
-  const handleExpand = () => setIsExpanded(true);
-  const handleMinimize = () => setIsExpanded(false);
+  // ---------------------------------------------------------------------------
+  // YOUTUBE VIDEO PLAYER
+  // ---------------------------------------------------------------------------
+  const readVideoTime = () => {
+    const player = ytPlayerRef.current;
+    if (!player) return;
+    try {
+      const t = player.getCurrentTime();
+      if (Number.isFinite(t)) {
+        videoTimeRef.current = t;
+        setCurrentTime(t);
+      }
+    } catch { /* player gone */ }
+    readVideoDuration();
+  };
+
+  const readVideoDuration = () => {
+    const player = ytPlayerRef.current;
+    if (!player) return;
+    try {
+      const d = player.getDuration();
+      if (Number.isFinite(d) && d > 0) {
+        setDuration(d);
+        // The stored length fills the card before the first play. Saved once per item,
+        // when it is missing or longer than the real video.
+        const c = contentRef.current;
+        if (c && videoDurationSavedForRef.current !== c.id) {
+          videoDurationSavedForRef.current = c.id;
+          const real = Math.floor(d);
+          if (!c.duration || real < c.duration - 2) {
+            contentAPI.update(c.id, { duration: real }).catch(() => {});
+          }
+        }
+      }
+    } catch { /* player gone */ }
+  };
+
+  // The fastest speed YouTube offers that is not above the chosen one (YouTube offers
+  // 0.25x to 2x), so a 2.5x choice plays videos at 2x. The button shows the real speed.
+  const applyVideoSpeed = (player: YouTubePlayer, wanted: number) => {
+    try {
+      const rates = player.getAvailablePlaybackRates() || [1];
+      const rate = rates.filter(r => r <= wanted).sort((a, b) => b - a)[0] ?? 1;
+      player.setPlaybackRate(rate);
+      setVideoRate(rate);
+    } catch { /* player gone */ }
+  };
+
+  const handleVideoReady = (player: YouTubePlayer) => {
+    ytPlayerRef.current = player;
+    applyVideoSpeed(player, getStoredSpeed());
+    // Only the length: the player's clock says 0 until the video plays, and the position
+    // to show is videoTimeRef, where the new player starts
+    readVideoDuration();
+    if (videoPlayPendingRef.current) {
+      videoPlayPendingRef.current = false;
+      try { player.playVideo(); } catch { /* player gone */ }
+    }
+  };
+
+  const handleVideoStateChange = (state: number) => {
+    if (state === VIDEO_STATE.PLAYING) {
+      setIsPlaying(true);
+      readVideoTime();
+      if (!videoClockRef.current) videoClockRef.current = setInterval(readVideoTime, 250);
+    } else if (state === VIDEO_STATE.PAUSED) {
+      stopVideoClock();
+      readVideoTime();
+      setIsPlaying(false);
+      savePlaybackPosition(videoTimeRef.current);
+    } else if (state === VIDEO_STATE.ENDED) {
+      stopVideoClock();
+      setIsPlaying(false);
+      videoTimeRef.current = 0;
+      savePlaybackPosition(0);
+      setTimeout(() => onTrackEndedRef.current?.(), 0);
+    }
+  };
+
+  const handleVideoError = (code: number) => {
+    stopVideoClock();
+    setIsPlaying(false);
+    videoPlayPendingRef.current = false;
+    console.warn(`[AudioPlayer] YouTube player error ${code} for item ${contentRef.current?.id}`);
+    setVideoError(
+      code === -1 ? 'The YouTube player did not load. Check the connection, or an ad or tracker blocker.'
+      : code === 100 ? 'YouTube says this video is private or was removed.'
+      : code === 101 || code === 150 ? 'The owner does not allow this video to play outside YouTube.'
+      : `YouTube could not play this video here (error ${code}).`
+    );
+  };
+
+  const handleExpand = () => {
+    isExpandedRef.current = true;
+    setIsExpanded(true);
+  };
+  const handleMinimize = () => {
+    // A video may only play while it is visible, and the mini player has no room for it,
+    // so minimizing pauses it. Its player is destroyed with the fullscreen view.
+    if (contentRef.current?.type === 'video') {
+      try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
+      stopVideoClock();
+      setIsPlaying(false);
+      savePlaybackPosition(videoTimeRef.current);
+      ytPlayerRef.current = null;
+      videoPlayPendingRef.current = false;
+    }
+    isExpandedRef.current = false;
+    setIsExpanded(false);
+  };
 
   if (!content) return null;
 
@@ -889,21 +1144,37 @@ export function AudioPlayer({
   // to the mini player mid-read. Guarded setState during render converges in one
   // pass (React's sanctioned "adjusting state when props change" pattern).
   // "Audio" here includes summary audio: a summary-audio-only item is playable
-  // and gets the mini player like any other audio item.
-  if (!hasAnyAudio(content) && !isExpanded) setIsExpanded(true);
+  // and gets the mini player like any other audio item. So does a video, which pauses
+  // when minimized.
+  if (!hasPlayableMedia(content) && !isExpanded) {
+    isExpandedRef.current = true;
+    setIsExpanded(true);
+  }
 
   return (
     <>
       <audio ref={audioRef} />
       {/* Items without audio only exist in fullscreen, the mini player is pure
           playback chrome (timeline, play button) and would be dead UI for them */}
-      {isExpanded || !hasAnyAudio(content) ? (
+      {isExpanded || !hasPlayableMedia(content) ? (
         <FullscreenPlayer
           content={content}
+          video={videoId ? (
+            <YouTubeVideo
+              key={videoId}
+              videoId={videoId}
+              startSeconds={videoTimeRef.current}
+              onReady={handleVideoReady}
+              onStateChange={handleVideoStateChange}
+              onRateChange={setVideoRate}
+              onError={handleVideoError}
+            />
+          ) : null}
+          videoError={videoError}
           isPlaying={isPlaying}
           currentTime={currentTime}
           duration={duration}
-          playbackSpeed={playbackSpeed}
+          playbackSpeed={videoId ? videoRate : playbackSpeed}
           resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
           sleepTimerEndAt={sleepTimerEndAt}

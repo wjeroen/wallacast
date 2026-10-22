@@ -195,6 +195,41 @@ export function hasAnyAudio(item: { audio_url?: string | null; summary_audio_url
   return !!item.audio_url || !!item.summary_audio_url;
 }
 
+// Whether the player has something to play: any audio, or a YouTube video (played in
+// YouTube's embedded player). Decides the play flows and the mini player. The queue's
+// "Up next" stream and autoplay continuation stay audio-only (hasAnyAudio), because a
+// video may only play while it is visible on screen.
+export function hasPlayableMedia(item: { type?: string; audio_url?: string | null; summary_audio_url?: string | null }): boolean {
+  return hasAnyAudio(item) || item.type === 'video';
+}
+
+// ---- YouTube videos -------------------------------------------------------------
+// The 11-character id in a YouTube video address, or null for any other address.
+// Watch, youtu.be, Shorts, live and embed addresses on the www, m, music and
+// youtube-nocookie hosts all count. The backend uses the same function (shared copy)
+// to decide that an added address is a video.
+export function youtubeVideoId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  const valid = (id: string | null | undefined) => (id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null);
+  if (host === 'youtu.be') return valid(u.pathname.split('/')[1]);
+  if (host !== 'youtube.com' && host !== 'youtube-nocookie.com') return null;
+  if (u.pathname === '/watch') return valid(u.searchParams.get('v'));
+  const m = u.pathname.match(/^\/(?:shorts|live|embed|v)\/([^/]+)/);
+  return m ? valid(m[1]) : null;
+}
+
+export function youtubeWatchUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
 // Whether an item has word timestamps (a transcript the player can read along with). A full
 // item (GET /api/content/:id) carries the timestamps themselves, a list item only
 // has_word_timings, so the timestamps decide whenever they were loaded.

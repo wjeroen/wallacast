@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings } from '../format';
@@ -105,8 +105,8 @@ export function ContentCard({
             )}
           </p>
         )}
-        {/* Only show domain URL for articles (not podcasts/texts) */}
-        {item.url && item.type === 'article' && (
+        {/* Only show domain URL for articles and videos (not podcasts/texts) */}
+        {item.url && (item.type === 'article' || item.type === 'video') && (
           <p className="content-source-link">
             <a href={displayUrl(item.url)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
               {getDomainFromUrl(displayUrl(item.url))}
@@ -159,6 +159,7 @@ export function ContentCard({
             {item.type === 'article' && <><Newspaper size={14} /> <span className="type-label">Article</span></>}
             {item.type === 'text' && <><NotebookPen size={14} /> <span className="type-label">Text</span></>}
             {item.type === 'podcast_episode' && <><Podcast size={14} /> <span className="type-label">Podcast</span></>}
+            {item.type === 'video' && <><TvMinimalPlay size={14} /> <span className="type-label">Video</span></>}
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}

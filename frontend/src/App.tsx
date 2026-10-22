@@ -10,7 +10,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio, hasWordTimings } from './format';
+import { isVeryLongArticle, hasPlayableMedia, getEffectiveAudio, hasWordTimings } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -304,7 +304,8 @@ function App() {
   // shorter summary audio. Only the effective variant's position is touched,
   // never both, because card progress is original-audio-only by design.
   const resetIfNearlyFinished = (item: ContentItem): ContentItem => {
-    const variant = getEffectiveAudio(item, preferSummaryAudio);
+    // A video counts like full audio: its position and length are the original's
+    const variant = item.type === 'video' ? 'original' : getEffectiveAudio(item, preferSummaryAudio);
     if (!variant) return item;
     const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
     const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
@@ -328,7 +329,7 @@ function App() {
     setOpenToken(t => t + 1);
     const item = resetIfNearlyFinished(content);
     setCurrentContent(item);
-    if (autoplayOnOpen && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
+    if (autoplayOnOpen && hasPlayableMedia(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
@@ -336,7 +337,7 @@ function App() {
   // without audio trigger the generate-or-skip prompt (only manuals can be
   // in this state, non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
-    if (hasAnyAudio(item)) {
+    if (hasPlayableMedia(item)) {
       try {
         const res = await contentAPI.getById(item.id);
         setCurrentContent(resetIfNearlyFinished(res.data));
@@ -395,7 +396,7 @@ function App() {
       if (!nextItem) {
         return;
       }
-      if (hasAnyAudio(nextItem)) {
+      if (hasPlayableMedia(nextItem)) {
         try {
           const res = await contentAPI.getById(nextItem.id);
           setCurrentContent(resetIfNearlyFinished(res.data));
@@ -463,7 +464,7 @@ function App() {
     setCurrentContent(item);
     // Only play when the audio was playing and there is something to play (prev can now
     // land on an audio-less item, which just opens for reading).
-    if (wasPlaying && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
+    if (wasPlaying && hasPlayableMedia(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?

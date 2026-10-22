@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, TvMinimalPlay, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -268,16 +268,19 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // same debounced pace the list filters at, so the number stays calm while
   // typing. The count is shown on the ACTIVE type chip.
   const typeCounts = useMemo(() => {
-    const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
+    const counts = { all: 0, articles: 0, texts: 0, podcasts: 0, videos: 0 };
     for (const i of allItems) {
       if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
+      else if (i.type === 'video') counts.videos++;
     }
     return counts;
   }, [allItems, facets, tagFilter, searchQuery]);
+  // The Videos chip only appears once the library holds a video
+  const hasVideos = useMemo(() => allItems.some(i => i.type === 'video'), [allItems]);
 
   // The item count lives in the search box placeholder at every width, not on
   // the type chips, so switching types never changes a chip's width. It
@@ -1028,6 +1031,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <Podcast size={16} />
                 <span className="filter-label">Podcasts</span>
               </button>
+              {(hasVideos || typeFilter === 'videos') && (
+                <button
+                  className={typeFilter === 'videos' ? 'active' : ''}
+                  onClick={() => changeTypeFilter('videos')}
+                >
+                  <TvMinimalPlay size={16} />
+                  <span className="filter-label">Videos</span>
+                </button>
+              )}
             </div>
             </div>
           </div>
