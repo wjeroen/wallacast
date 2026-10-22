@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS feed_items (
     -- Item metadata
     item_type VARCHAR(50) NOT NULL, -- 'podcast_episode' or 'article'
     title VARCHAR(500) NOT NULL,
-    description TEXT, -- Limited to 2000 chars on insert (stores RSS description/summary)
+    description TEXT, -- RSS description/summary, cleaned, up to 20,000 chars (FEED_DESCRIPTION_MAX_CHARS in podcast-service.ts)
 
     -- URLs
     url TEXT, -- Article URL (for newsletters/blogs)

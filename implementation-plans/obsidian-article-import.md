@@ -8,8 +8,8 @@ Two things arrived after the first build and are included: a bulk "Copy content 
 
 Jeroen keeps his research notes in an Obsidian vault. Every source note there (`Content Creation/Sources/`) is a Wallacast "Copy content" export, pasted by hand: frontmatter, the `ad-summary` block, `# Title`, the turndown body, `# Comments`. He wants two Templater commands in Obsidian, on desktop and phone:
 
-1. **Wallacast inbox**: a note that lists his library grouped by priority (starred and not archived first, then not archived, then archived, and at the end the items that already exist as notes), each row a `[[Title]]` link plus the article URL, author, date and tags. Clicking a link creates the note.
-2. **Import from wallacast**: run inside a note that holds an article URL (or a note created from an inbox link), it fetches the Copy content markdown for the library item with that URL, writes it into the note, renames it after the title, and moves it into Sources. Run again later, it refreshes the note (a summary that appeared after the import gets in).
+1. **Wallacast overview**: a note that lists his library grouped by priority (starred and not archived first, then not archived, then archived, and at the end the items that already exist as notes), each row a `[[Title]]` link plus the article URL, author, date and tags. Clicking a link creates the note.
+2. **Wallacast import**: run inside a note that holds an article URL (or a note created from an overview link), it fetches the Copy content markdown for the library item with that URL, writes it into the note, renames it after the title, and moves it into Sources. Run again later, it refreshes the note (a summary that appeared after the import gets in).
 
 Wallacast is read, never written. Nothing in this plan adds items, changes items, or triggers audio or summary generation. The identity of an item, seen from the vault, is its URL, not its database id.
 
@@ -24,13 +24,13 @@ Two facts force the design:
 
 - Migration 029, following the `db.ts` safety rules (`IF NOT EXISTS`, `DO $$` blocks, nothing without try/catch): `api_tokens (id, user_id, name, token_hash, scope, created_at, last_used_at, revoked_at)`. `scope` is `'read'` for now, so a wider scope can exist later without a schema change.
 - Token format `wcr_` + 40 random hex characters, shown once at creation, stored as a sha256 hash like refresh tokens (`hashRefreshToken`).
-- `requireAuth` (`backend/src/middleware/auth.ts`): when the Bearer value starts with `wcr_`, look the hash up, reject revoked, set `req.user` like a normal session (never demo), update `last_used_at` (at most once a minute per token, so a busy inbox refresh does not write on every request). Then enforce the allow-list: a read token may call ONLY the three routes below. Every other route answers 403 `{ error: 'This token is read-only' }`, including every GET elsewhere (`GET /api/users/settings` exists and has no business being reachable with a vault token). The JWT path stays exactly as it is.
+- `requireAuth` (`backend/src/middleware/auth.ts`): when the Bearer value starts with `wcr_`, look the hash up, reject revoked, set `req.user` like a normal session (never demo), update `last_used_at` (at most once a minute per token, so a busy overview refresh does not write on every request). Then enforce the allow-list: a read token may call ONLY the three routes below. Every other route answers 403 `{ error: 'This token is read-only' }`, including every GET elsewhere (`GET /api/users/settings` exists and has no business being reachable with a vault token). The JWT path stays exactly as it is.
 - Routes under `/api/auth`: `POST /tokens { name }` returns `{ id, name, token }`, `GET /tokens` lists id, name, created_at, last_used_at, `DELETE /tokens/:id` revokes. JWT sessions only, demo sessions get 403 on create, a dedicated `tokenLimiter` (30 per hour per IP) on create and revoke. Listing is not limited, Settings lists on every open. At most 20 live tokens per user.
 - Settings page: a "Read-only API tokens" section (create with a name, list with last used, revoke), so he can copy a token into the Templater command on each device.
 
 ### 2. Lean index: `GET /api/content/index`
 
-The existing `GET /api/content` returns every item's full plain text plus `tts_chunks` and `transcript_words`, far too heavy to pull into a phone on every inbox refresh (same class of problem as the 80GB incident in ARCHITECTURE.md, keep this one as lean as `POST /status`).
+The existing `GET /api/content` returns every item's full plain text plus `tts_chunks` and `transcript_words`, far too heavy to pull into a phone on every overview refresh (same class of problem as the 80GB incident in ARCHITECTURE.md, keep this one as lean as `POST /status`).
 
 - Define it before `GET /:id`, like `/status`.
 - One row per item of the user, ordered by `created_at DESC`, no filters needed (Obsidian groups and filters client-side): `id, type, title, url, author, published_at, created_at, updated_at, tags, is_starred, is_archived, summary_status, comment_count, karma`, plus `description` as plain text (HTML stripped) cut to 300 characters. Never `content`, `html_content`, `comments`, `transcript`, `transcript_words`, `tts_chunks`, `content_alignment`.
@@ -52,8 +52,8 @@ ARCHITECTURE.md (Quick Reference rows, the three endpoints, the token section un
 
 For the contract, not for you to build. Both commands send `Authorization: Bearer wcr_...`.
 
-- **Wallacast inbox** calls `/index`, decides "already in Sources" by matching each item's `url` against the `source` property of the vault's source notes (same normalisation as above, applied in Obsidian), and writes the grouped table. Link names are the titles with the characters Obsidian forbids in file names taken out.
-- **Import from wallacast** finds a URL in the note (a bare URL line, or the `source` property of an already imported note), or, for an empty note created by clicking an inbox link, looks the note's name up in the inbox table to get the URL. It sends the note's `source` AND its `alt-source` as repeated parameters, `GET /markdown?url=<source>&url=<alt-source>`, writes `markdown`, renames the note to `title`, moves it into Sources. A rerun in an imported note repeats the call and replaces the note.
+- **Wallacast overview** calls `/index`, decides "already in Sources" by matching each item's `url` against the `source` property of the vault's source notes (same normalisation as above, applied in Obsidian), and writes the grouped table. Link names are the titles with the characters Obsidian forbids in file names taken out.
+- **Wallacast import** finds a URL in the note (a bare URL line, or the `source` property of an already imported note), or, for an empty note created by clicking an overview link, looks the note's name up in the overview table to get the URL. It sends the note's `source` AND its `alt-source` as repeated parameters, `GET /markdown?url=<source>&url=<alt-source>`, writes `markdown`, renames the note to `title`, moves it into Sources. A rerun in an imported note repeats the call and replaces the note.
 
 ### `source` and `alt-source`
 
@@ -65,7 +65,7 @@ One article can have two addresses, and a note may be filed under either:
 So the note carries `source` (the article's own address) and optionally `alt-source` (the second one), and both sides handle the pair:
 
 - `GET /markdown` takes a repeatable `url` parameter (max 10), tries them in the given order, and returns `matched_url` saying which one resolved. Send `source` first so it wins when both match.
-- `GET /index` returns `url` and `alt_url` per item, so the inbox can compare a note against either.
+- `GET /index` returns `url` and `alt_url` per item, so the overview can compare a note against either.
 - Copy content fills the pair in automatically **for archive mirrors only**: an address of the form `https://archive.ph/<snapshot>/https://real.url` yields `source: https://real.url` and `alt-source: <the mirror>`. A short-code snapshot (`archive.is/aBc12`) names no original and stays the `source`, so that one is still a manual edit in the vault. Matching resolves archive addresses the same way, so a note whose `source` is the real article finds the item even before anyone writes an `alt-source`.
 - A **crosspost's** second address cannot be filled in automatically: Wallacast stores one URL per item and keeps no canonical or crosspost link. Write `alt-source` by hand in the vault; the lookup then finds the item from either side.
 

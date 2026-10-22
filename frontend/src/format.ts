@@ -195,6 +195,13 @@ export function hasAnyAudio(item: { audio_url?: string | null; summary_audio_url
   return !!item.audio_url || !!item.summary_audio_url;
 }
 
+// Whether an item has word timestamps (a transcript the player can read along with). A full
+// item (GET /api/content/:id) carries the timestamps themselves, a list item only
+// has_word_timings, so the timestamps decide whenever they were loaded.
+export function hasWordTimings(item: { transcript_words?: unknown; has_word_timings?: boolean }): boolean {
+  return item.transcript_words !== undefined ? !!item.transcript_words : !!item.has_word_timings;
+}
+
 export function getEffectiveAudio(
   item: { audio_url?: string | null; summary_audio_url?: string | null },
   preferSummaryAudio: boolean

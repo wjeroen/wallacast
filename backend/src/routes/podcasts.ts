@@ -1,6 +1,11 @@
 import express from 'express';
 import { query } from '../database/db.js';
-import { searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, refreshAllFeedsFromNetwork, getLastRefreshTime } from '../services/podcast-service.js';
+import { AlreadySubscribedError, searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
+import { reserveRefresh } from '../services/token-limits.js';
+
+/** An API token gets at most this many feed items per request, the app's own page size
+ *  (FEED_PAGE_SIZE in the frontend's feedStore.ts). It pages on with offset. */
+const TOKEN_FEED_PAGE_MAX = 50;
 
 const router = express.Router();
 
@@ -64,6 +69,9 @@ router.post('/subscribe', async (req, res) => {
     const podcast = await subscribeToPodcast(feed_url, req.user!.userId);
     res.status(201).json(podcast);
   } catch (error) {
+    if (error instanceof AlreadySubscribedError) {
+      return res.status(409).json({ error: 'Already subscribed', podcast: error.podcast });
+    }
     console.error('Error subscribing to podcast:', error);
     res.status(500).json({ error: 'Failed to subscribe to podcast' });
   }
@@ -183,12 +191,25 @@ router.get('/search-feed', async (req, res) => {
 // Get cached feed items from database (instant, no network requests)
 router.get('/feed-items', async (req, res) => {
   try {
-    const { feedId, limit, offset } = req.query;
-    const parsedFeedId = feedId ? parseInt(feedId as string) : undefined;
-    const parsedLimit = limit ? parseInt(limit as string) : 50;
-    const parsedOffset = offset ? parseInt(offset as string) : 0;
+    const { feedId, limit, offset, since_id } = req.query;
+    const whole = (raw: unknown, fallback: number) => {
+      const n = typeof raw === 'string' ? parseInt(raw, 10) : NaN;
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    };
+    const parsedFeedId = feedId ? whole(feedId, 0) || undefined : undefined;
+    let parsedLimit = whole(limit, 50) || 50;
+    if (req.apiToken) parsedLimit = Math.min(parsedLimit, TOKEN_FEED_PAGE_MAX);
+    const parsedOffset = whole(offset, 0);
+    // ?since_id=N: only items above that feed_item_id, lowest id first (see getCachedFeedItems)
+    let parsedSinceId: number | undefined;
+    if (since_id !== undefined) {
+      parsedSinceId = typeof since_id === 'string' && /^\d+$/.test(since_id) ? parseInt(since_id, 10) : -1;
+      if (parsedSinceId < 0) {
+        return res.status(400).json({ error: 'since_id must be a whole number' });
+      }
+    }
 
-    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset);
+    const items = await getCachedFeedItems(req.user!.userId, parsedFeedId, parsedLimit, parsedOffset, parsedSinceId);
     res.json(items);
   } catch (error) {
     console.error('Error fetching cached feed items:', error);
@@ -196,17 +217,30 @@ router.get('/feed-items', async (req, res) => {
   }
 });
 
-// Refresh all subscribed feeds from network (fetches RSS and updates cache)
+// Refresh all subscribed feeds from network (fetches RSS and updates cache). The refresh runs
+// in the background and this answers 202 at once with its status, also when one is already
+// running for this user (see startFeedRefresh). The app polls GET /refresh-status. An API
+// token may start one refresh every REFRESH_INTERVAL_MINUTES (429 with retry_after_seconds).
 router.post('/refresh-feeds', async (req, res) => {
   try {
-    console.log(`User ${req.user!.userId} refreshing all feeds from network`);
-    const result = await refreshAllFeedsFromNetwork(req.user!.userId);
-    console.log(`Refresh complete: ${result.totalFeeds} feeds, ${result.totalItemsAdded} new items`);
-    res.json(result);
+    if (req.apiToken) {
+      const allowed = await reserveRefresh(req.apiToken);
+      if (!allowed.ok) {
+        return res.status(429).json({ error: allowed.message, retry_after_seconds: allowed.retryAfterSeconds });
+      }
+    }
+    res.status(202).json(startFeedRefresh(req.user!.userId));
   } catch (error) {
-    console.error('Error refreshing feeds:', error);
-    res.status(500).json({ error: 'Failed to refresh feeds' });
+    console.error('Error starting a feed refresh:', error);
+    res.status(500).json({ error: 'Failed to start a feed refresh' });
   }
+});
+
+// Status of this user's latest feed refresh: { running, startedAt, finishedAt, error,
+// totalFeeds, totalItemsAdded }, or { running: false } when there was none since the server
+// started.
+router.get('/refresh-status', (req, res) => {
+  res.json(getFeedRefreshStatus(req.user!.userId));
 });
 
 // Get last refresh timestamp for user's feeds

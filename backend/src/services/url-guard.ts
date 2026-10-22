@@ -160,6 +160,40 @@ export async function safeFetch(
   throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
 }
 
+// safeFetch that keeps the cookies each host sets and sends them back to that host on the next
+// hops, the way a browser does. For a consent gate that hands over to the site through a redirect
+// whose cookie the next hop needs: DPG Media's privacy gate continue link sets it, then sends the
+// browser on to the article (hln.be, demorgen.be, 2026-10-07). Cookies are kept per exact host,
+// so none ever travels to another site.
+export async function safeFetchWithCookies(rawUrl: string, maxHops = 8): Promise<Response> {
+  const jar = new Map<string, Map<string, string>>();
+  let currentUrl = rawUrl;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    await assertPublicHttpUrl(currentUrl);
+    const host = new URL(currentUrl).host;
+    const hostCookies = jar.get(host) || new Map<string, string>();
+    const cookie = Array.from(hostCookies, ([name, value]) => `${name}=${value}`).join('; ');
+    const res = await fetchWithHeadersTimeout(
+      currentUrl,
+      { redirect: 'manual', headers: cookie ? { cookie } : {} },
+      RESPONSE_HEADERS_TIMEOUT_MS
+    );
+    for (const setCookie of res.headers.raw()['set-cookie'] || []) {
+      const pair = setCookie.split(';')[0];
+      const eq = pair.indexOf('=');
+      if (eq > 0) hostCookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+    }
+    jar.set(host, hostCookies);
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`Blocked URL: too many redirects (>${maxHops})`);
+}
+
 // Fetch with got-scraping's realistic browser headers, for sites whose bot walls answer the
 // plain fetch with a 403 (openai.com behind Cloudflare, seen live 2026-09-03). Redirects are
 // followed manually so every hop passes the same SSRF check as safeFetch. HTTP error statuses
@@ -224,4 +258,114 @@ export async function readerProxyFetch(rawUrl: string): Promise<string> {
     throw new Error(`reader proxy returned only ${html.length} bytes`);
   }
   return html;
+}
+
+// The same reader proxy asked for Markdown, its default answer. Without an API key the proxy
+// builds its HTML answer from a plain request, which a Cloudflare JavaScript challenge stops,
+// while it renders the Markdown answer in a real browser, which gets through. Tested on
+// axios.com 2026-10-01: three fresh HTML answers were all the "Just a moment..." page, the
+// fresh Markdown answer was the article. The answer opens with "Title:", "URL Source:" and
+// "Published Time:" lines, then "Markdown Content:" and the article body. It names no author.
+export async function readerProxyMarkdown(
+  rawUrl: string
+): Promise<{ title: string | null; publishedTime: string | null; markdown: string }> {
+  await assertPublicHttpUrl(rawUrl);
+  const res = await safeFetch(`https://r.jina.ai/${rawUrl}`, {}, 5, 90_000);
+  if (!res.ok) {
+    throw new Error(`reader proxy Markdown answered HTTP ${res.status}`);
+  }
+  const text = await res.text();
+  const marker = text.indexOf('Markdown Content:');
+  const header = marker >= 0 ? text.slice(0, marker) : '';
+  const markdown = (marker >= 0 ? text.slice(marker + 'Markdown Content:'.length) : text).trim();
+  if (markdown.length < 500) {
+    throw new Error(`reader proxy Markdown returned only ${markdown.length} characters`);
+  }
+  const field = (name: string) => header.match(new RegExp(`^${name}:[ \\t]*(.+)$`, 'm'))?.[1].trim() || null;
+  return { title: field('Title'), publishedTime: field('Published Time'), markdown };
+}
+
+// The newest archive.today copy of a page (archive.ph and its mirror domains). archive.ph keeps
+// the full text of paywalled articles, where the Wayback Machine holds what the site shows
+// anyone, often only the free preview (wsj.com, 2026-10-06).
+//
+// The timemap comes first: a few hundred bytes listing every copy, or 404 when there is none
+// (null here). `/newest/<url>` would download the whole copy just to learn that (1.27 MB for one
+// WSJ copy). Each copy is a line `<http://archive.md/<timestamp>/<url>>; rel="...memento";
+// datetime="..."`, the newest one marked `last memento`. The copy is then fetched from
+// archive.ph itself, with 45 seconds to start answering, since archive.ph is often slow (a NYT
+// copy took over 20 seconds on Railway, 2026-10-07).
+//
+// archive.ph limits automated requests: after about 10 in 10 minutes from one address it answers
+// HTTP 429 with a captcha page, for about half an hour. The answer can also be a server
+// placeholder instead of the snapshot, so the caller checks it (isArchiveSnapshot). Returns the
+// snapshot's address too, because an archive copy is read like a pasted archive link (its own
+// markup, its own base URL).
+const ARCHIVE_PH_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' };
+
+/** The archive.ph address of the newest copy of a page (from its timemap), or null when there is none. */
+export async function archiveTodayNewestCopy(rawUrl: string): Promise<string | null> {
+  await assertPublicHttpUrl(rawUrl);
+  const map = await safeFetch(`https://archive.ph/timemap/${rawUrl}`, { headers: ARCHIVE_PH_HEADERS }, 5, 20_000);
+  if (map.status === 404) return null;
+  if (!map.ok) {
+    throw new Error(`archive.ph timemap answered HTTP ${map.status}`);
+  }
+  return newestArchiveCopy(await map.text());
+}
+
+/** One archive.ph copy (an address from archiveTodayNewestCopy): its HTML and its final address. */
+export async function archiveTodayCopyFetch(copyUrl: string): Promise<{ html: string; url: string }> {
+  const res = await safeFetch(copyUrl, { headers: ARCHIVE_PH_HEADERS }, 5, 45_000);
+  if (!res.ok) {
+    throw new Error(`archive.ph answered HTTP ${res.status}`);
+  }
+  return { html: await res.text(), url: res.url };
+}
+
+/** The archive.ph address of the newest copy in an archive.today timemap, or null when it lists none. */
+export function newestArchiveCopy(timemap: string): string | null {
+  const copies = timemap
+    .split('\n')
+    .filter(line => /rel="[^"]*\bmemento\b/.test(line))
+    .map(line => ({ url: line.match(/<([^>]+)>/)?.[1] || '', last: /rel="[^"]*\blast memento\b/.test(line) }))
+    .filter(copy => /^https?:\/\/archive\.[a-z]+\/\d{14}\//.test(copy.url));
+  const newest = copies.find(copy => copy.last) || copies[copies.length - 1];
+  return newest ? newest.url.replace(/^https?:\/\/archive\.[a-z]+\//, 'https://archive.ph/') : null;
+}
+
+// The newest Internet Archive (Wayback Machine) copy of a page, as the page's own HTML: the
+// `id_` form leaves out the archive's toolbar and keeps every link and image pointing at the
+// original site. For pages whose bot wall stops every live fetch. Returns null when the
+// archive holds no successful copy (brand-new articles often are not archived yet).
+export async function waybackNewestTimestamp(rawUrl: string): Promise<string | null> {
+  await assertPublicHttpUrl(rawUrl);
+  // The CDX search, not archive.org/wayback/available: that lookup answered HTTP 429 to every
+  // news address, even to a first request from a phone, while the CDX search answered normally
+  // (2026-10-07). limit=-1 asks for the newest capture with status 200 only. The answer is
+  // [["timestamp"], ["20260930222423"]], or [] when there is none. It is slow: 7 to 20 seconds
+  // on Railway, once over 30 (2026-10-07), so it gets 45 seconds to start answering.
+  const lookup = await safeFetch(
+    `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(rawUrl)}&output=json&fl=timestamp&filter=statuscode:200&limit=-1`,
+    {},
+    5,
+    45_000
+  );
+  if (!lookup.ok) {
+    throw new Error(`Wayback lookup answered HTTP ${lookup.status}`);
+  }
+  const rows = (await lookup.json()) as unknown;
+  const last = Array.isArray(rows) && rows.length > 1 ? rows[rows.length - 1] : null;
+  const timestamp = String(Array.isArray(last) ? last[0] : '');
+  return /^\d{14}$/.test(timestamp) ? timestamp : null;
+}
+
+/** The Wayback copy of a page at a timestamp from waybackNewestTimestamp, in the `id_` form. */
+export async function waybackCopyFetch(rawUrl: string, timestamp: string): Promise<string> {
+  await assertPublicHttpUrl(rawUrl);
+  const res = await safeFetch(`https://web.archive.org/web/${timestamp}id_/${rawUrl}`, {}, 5, 60_000);
+  if (!res.ok) {
+    throw new Error(`Wayback copy answered HTTP ${res.status}`);
+  }
+  return res.text();
 }

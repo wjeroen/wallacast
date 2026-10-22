@@ -6,8 +6,8 @@ const router = express.Router();
 
 // Get queue (manual items only). Aliases queue_items columns so they don't collide
 // with content_items. Uses the SAME lean column list as GET /api/content (never c.*),
-// so it never ships audio_data (BYTEA), transcript, html_content, comments, or
-// content_alignment. Selecting c.* shipped all of those per queued item (multi-MB each),
+// so it never ships audio_data (BYTEA), transcript, transcript_words (only has_word_timings),
+// html_content, comments, or content_alignment. Selecting c.* shipped all of those per queued item (multi-MB each),
 // the same class of bug as the 80GB data-transfer incident.
 router.get('/', async (req, res) => {
   try {
@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
               c.audio_url, c.duration, c.file_size, c.podcast_id, c.podcast_show_name, c.episode_number,
               c.published_at, c.is_starred, c.is_archived, c.tags, c.playback_position, c.playback_speed,
               c.last_played_at, c.created_at, c.updated_at, c.generation_status, c.generation_progress,
-              c.generation_error, c.current_operation, c.tts_chunks, c.transcript_words, c.karma,
+              c.generation_error, c.current_operation, c.tts_chunks, (c.transcript_words IS NOT NULL) AS has_word_timings, c.karma,
               c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
               c.summary_error, c.summary_audio_url, c.summary_audio_duration, c.summary_audio_status,
               c.summary_audio_generated_at, c.summary_playback_position,

@@ -15,6 +15,7 @@ import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { isEAForumUrl } from './article-fetcher.js';
+import { logMemory } from './memory-log.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
 // turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
@@ -1020,14 +1021,56 @@ export async function generateArticleAudio(
 // Guard against concurrent generation for the same content
 const activeGenerations = new Set<number>();
 
+// At most this many audio generations run at once, each from its start to the end of its
+// read-along transcription. Every one holds its article, images and audio in memory: 18
+// started within minutes on 2026-10-18 and took the backend up by about 950 MB. Later ones
+// wait in line, oldest first, with current_operation 'waiting_for_audio_slot' on their card.
+const AUDIO_JOB_SLOTS = 2;
+let audioJobsRunning = 0;
+const audioJobsWaiting: Array<() => void> = [];
+
+function takeAudioJobSlot(): Promise<void> {
+  if (audioJobsRunning < AUDIO_JOB_SLOTS) {
+    audioJobsRunning++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => audioJobsWaiting.push(() => { audioJobsRunning++; resolve(); }));
+}
+
+function freeAudioJobSlot(contentId: number): void {
+  audioJobsRunning--;
+  audioJobsWaiting.shift()?.();
+  logMemory(`after the audio job for content ${contentId}`);
+}
+
 export async function generateAudioForContent(contentId: number, regenerate: boolean = false, excludeComments: boolean = false): Promise<{ audioUrl: string; warning?: string }> {
   if (activeGenerations.has(contentId)) {
     console.log(`[TTS] Generation already in progress for content ${contentId}, skipping duplicate`);
     return { audioUrl: '', warning: 'Generation already in progress' };
   }
   activeGenerations.add(contentId);
+  let holdsSlot = false;
+  // Set once the read-along transcription runs on after this function returns: it frees the
+  // slot itself when it ends
+  let slotPassedOn = false;
 
   try {
+    if (audioJobsRunning >= AUDIO_JOB_SLOTS) {
+      console.log(`[TTS] ${audioJobsRunning} audio generations running, content ${contentId} waits in line`);
+      await query(
+        "UPDATE content_items SET current_operation = 'waiting_for_audio_slot' WHERE id = $1 AND generation_status <> 'failed'",
+        [contentId]
+      );
+    }
+    await takeAudioJobSlot();
+    holdsSlot = true;
+    // The user can cancel while the job waits (cancel-generation sets 'failed')
+    const waited = await query('SELECT generation_status, current_operation FROM content_items WHERE id = $1', [contentId]);
+    if (waited.rows[0]?.generation_status === 'failed') throw new Error('Generation cancelled by user');
+    if (waited.rows[0]?.current_operation === 'waiting_for_audio_slot') {
+      await query("UPDATE content_items SET current_operation = 'audio' WHERE id = $1", [contentId]);
+    }
+
     // Explicit column list (never SELECT *): this runs at the START of every audio
     // (re)generation. SELECT * pulls audio_data (the old 10-50MB BYTEA blob) plus
     // transcript_words / content_alignment into memory for nothing, on a regenerate
@@ -1269,7 +1312,7 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     const whisperPrompt = '';
     console.log(`[TTS] Whisper prompt: empty (relying on continuity strategy for chunked audio)`);
 
-    transcribeWithTimestamps(audioBuffer, content.user_id, whisperPrompt)
+    const readAlong = transcribeWithTimestamps(audioBuffer, content.user_id, whisperPrompt)
       .then(async (transcriptResult) => {
           // Fix Whisper dropping the title: if the first word starts after 3s,
           // Whisper likely "consumed" the title (because the prompt matches the
@@ -1360,6 +1403,9 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
             [`Audio is ready, but transcription for read-along failed: ${msg}`, contentId]
           );
       });
+    // The slot stays taken until the read-along work ends, whichever way it ends
+    slotPassedOn = true;
+    readAlong.then(() => freeAudioJobSlot(contentId), () => freeAudioJobSlot(contentId));
 
     return { audioUrl, warning };
 
@@ -1368,5 +1414,6 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
     throw error;
   } finally {
     activeGenerations.delete(contentId);
+    if (holdsSlot && !slotPassedOn) freeAudioJobSlot(contentId);
   }
 }

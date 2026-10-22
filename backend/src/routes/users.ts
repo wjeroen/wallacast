@@ -58,6 +58,7 @@ const VALID_SETTING_KEYS = [
   // Blank/whitespace = use the built-in default. Spread so the list stays in sync with the registry.
   ...PROMPT_SETTING_KEYS,
   'library_show_summary',       // Show the article summary (not the description) on library cards
+  'library_summary_paragraphs', // How many summary paragraphs a card shows before "[N more]": '1' (default), '2', '3' or 'all'
   'copy_include_summary',       // "Copy content": put the summary at the top as a fenced code block (default: false)
   'copy_include_comment_summary', // "Copy content": also the comment summary, as a second block (default: true; only matters when copy_include_summary is on)
   'copy_summary_code_label',    // Label after the opening ``` of those blocks, e.g. "ad-summary" for Obsidian Admonition (default: none)

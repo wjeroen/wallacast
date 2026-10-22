@@ -1,0 +1,13 @@
+-- Migration 030: a teaser for Feed tab cards.
+--
+-- The text a Feed tab card shows under an item's title (see buildTeaser() in
+-- services/podcast-service.ts): the feed's description followed by the opening of the post
+-- when the feed carries the full post, plain text, at most 1,200 characters. `description`
+-- stays as it was, because that is what an item added to the library keeps.
+--
+-- Filled by the next feed Refresh, also for items cached before (the refresh's ON CONFLICT
+-- updates it). Until then the card shows the description as before.
+--
+-- Safe to re-run on every boot (db.ts re-runs all migration files): plain IF NOT EXISTS.
+-- feed_items itself is created by migration 013, which runs earlier in the same boot.
+ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS teaser TEXT;

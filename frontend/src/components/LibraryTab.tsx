@@ -8,7 +8,7 @@ import { TagEditor } from './TagEditor';
 import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
 import { loadCopyContentOptions } from '../copy-settings';
-import { isVeryLongArticle } from '../format';
+import { isVeryLongArticle, hasWordTimings } from '../format';
 import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
@@ -24,7 +24,7 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
     dim: 'archive',
     options: [
       { value: 'active', label: 'Active', icon: <Inbox size={16} /> },
-      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: '#60a5fa' }} /> },
+      { value: 'archived', label: 'Archived', icon: <Archive size={16} style={{ color: 'var(--accent-text)' }} /> },
     ],
   },
   {
@@ -131,6 +131,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
   const [showSummaryInLibrary, setShowSummaryInLibrary] = useState(false);
+  // How many summary paragraphs a card shows before "[N more]" (Settings, default 1, 'all' = Infinity)
+  const [summaryParagraphs, setSummaryParagraphs] = useState(1);
   // "Continue listening" strip under the filters (Settings toggle, default on).
   const [showContinueStrip, setShowContinueStrip] = useState(true);
   // Confirm before archiving wipes generated audio (Settings toggle, default on).
@@ -145,6 +147,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   useEffect(() => {
     userSettingsAPI.get('library_show_summary')
       .then(res => setShowSummaryInLibrary(res.data.value === 'true'))
+      .catch(() => {});
+    userSettingsAPI.get('library_summary_paragraphs')
+      .then(res => {
+        const value = res.data.value;
+        const count = Number(value);
+        setSummaryParagraphs(value === 'all' ? Infinity : Number.isInteger(count) && count > 0 ? count : 1);
+      })
       .catch(() => {});
     userSettingsAPI.get('show_continue_listening')
       .then(res => setShowContinueStrip(res.data.value !== 'false'))
@@ -576,8 +585,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     );
     // Podcasts without a transcript need Whisper first, so ask via the modal instead
     // of silently spending transcription credits
-    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !i.transcript_words).map(i => i.id);
-    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !i.transcript_words)).map(i => i.id);
+    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
+    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.
@@ -671,7 +680,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     // Podcasts summarize their TRANSCRIPT (not the episode description). If there's no
     // transcript yet, ask before kicking off Whisper + summary
     const item = allItems.find(c => c.id === id);
-    if (item && item.type === 'podcast_episode' && !item.transcript_words) {
+    if (item && item.type === 'podcast_episode' && !hasWordTimings(item)) {
       setTranscriptWarning({ podcastIds: [id], readyIds: [] });
       return;
     }
@@ -921,7 +930,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                           className={isSelected ? 'selected' : undefined}
                           onClick={() => toggleFacet(row.dim, opt.value)}
                           onDoubleClick={() => soloFacet(row.dim, opt.value)}
-                          style={isSelected ? { color: '#60a5fa' } : undefined}
+                          style={isSelected ? { color: 'var(--accent-text)' } : undefined}
                         >
                           {opt.icon}
                           <span className="facet-label">{opt.label}</span>
@@ -1064,7 +1073,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
             </button>
             {allSelectedArchived ? (
               <button onClick={() => runInstantBulk('unarchive')} title="Unarchive selected">
-                <ArchiveRestore size={16} style={{ color: '#60a5fa' }} />
+                <ArchiveRestore size={16} style={{ color: 'var(--accent-text)' }} />
               </button>
             ) : (
               <button
@@ -1174,6 +1183,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onPlay={handlePlayContent}
               searchQuery={searchQuery}
               showSummary={showSummaryInLibrary}
+              summaryParagraphs={summaryParagraphs}
               justCompleted={recentlyCompleted.has(item.id)}
               dropdownOpen={openDropdown === item.id}
               dropdownRef={openDropdown === item.id ? dropdownRef : null}
