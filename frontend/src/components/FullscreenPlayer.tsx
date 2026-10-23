@@ -2769,17 +2769,36 @@ export function FullscreenPlayer({
           )}
           <div className="controls-align-wrap">
             <div className={`controls-cluster align-${controlsAlign}`}>
+              {/* Grouped like a mini player, play and speed at the thumb's end: previous,
+                  next, back, forward, play, speed. Moved left on a wide touch screen, the row
+                  is mirrored (App.css). On a narrow screen previous goes first, then next. */}
               <div className="focus-row">
+                <button
+                  onClick={() => onSkipPrevTrack?.(isPlaying)}
+                  title="Previous track"
+                  className="track-skip-btn focus-prev"
+                  disabled={!hasPrevTrack}
+                >
+                  <SkipBack size={20} />
+                </button>
+                <button
+                  onClick={() => onSkipNextTrack?.(isPlaying)}
+                  title="Next track"
+                  className="track-skip-btn focus-next"
+                  disabled={!hasNextTrack}
+                >
+                  <SkipForward size={20} />
+                </button>
                 <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
                   <RotateCcw className="seek-icon" />
                   <span className="seek-label">15</span>
                 </button>
-                <button onClick={onPlayPause} className="play-pause-btn compact" title={isPlaying ? 'Pause' : 'Play'}>
-                  {isPlaying ? <Pause size={28} /> : <Play size={28} />}
-                </button>
                 <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
                   <RotateCw className="seek-icon" />
                   <span className="seek-label">15</span>
+                </button>
+                <button onClick={onPlayPause} className="play-pause-btn compact" title={isPlaying ? 'Pause' : 'Play'}>
+                  {isPlaying ? <Pause size={28} /> : <Play size={28} />}
                 </button>
                 <button {...speedButton} className="option-toggle speed-toggle compact" title="Speed (hold for 2x)">
                   <Gauge size={18} />

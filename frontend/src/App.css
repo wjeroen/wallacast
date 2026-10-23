@@ -4890,6 +4890,11 @@ blockquote.twitter-tweet.tweet-quoted {
     .controls-cluster.align-right > * {
       justify-content: flex-end;
     }
+    /* Moved left, the focus row is mirrored so play and speed are at the left thumb */
+    .controls-cluster.align-left .focus-row {
+      flex-direction: row-reverse;
+      justify-content: flex-end;
+    }
   }
 }
 
@@ -4929,6 +4934,25 @@ blockquote.twitter-tweet.tweet-quoted {
   align-items: center;
   justify-content: center;
   gap: 0.75rem;
+}
+
+/* Previous and next only where they fit: next from 362 px of width, previous from 410 px
+   (the six buttons, their gaps and the padding take 412 px, measured on a PC) */
+.focus-row .focus-prev,
+.focus-row .focus-next {
+  display: none;
+}
+
+@container app (min-width: 362px) {
+  .focus-row .focus-next {
+    display: flex;
+  }
+}
+
+@container app (min-width: 410px) {
+  .focus-row .focus-prev {
+    display: flex;
+  }
 }
 
 .play-pause-btn.compact {

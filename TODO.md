@@ -145,6 +145,8 @@
 - [ ] **Startup query-killer scope.** `db.ts` kills any DB session older than 30s touching content_items at boot (added after a real stuck-lock). It is now constrained so it spares VACUUM / ANALYZE / pg_dump. Remaining question: delete it entirely and rely on the 5s lock_timeout + retry loop (reviewer's lean), or keep it as belt-and-suspenders. Current state: constrained version is live.
 
 
+- [ ] **Delete `frontend/nixpacks.toml`?** Railway builds the frontend with Railpack (builder `RAILPACK` in the deploy settings, 2026-10-23), so the file is not used. It still works if someone switches the service back to Nixpacks
+
 ### Security, deferred (lower impact or architectural)
 > The high/critical items from the pre-launch review are fixed (see the Completed entry). These remain, deliberately deferred:
 
@@ -156,6 +158,8 @@
 
 ## Completed Recently ✅
 
+- [x] **Previous and next back in focus and cinema mode** (2026-10-23, user's design): the slim row is previous, next, back 15 s, forward 15 s, play, speed, mirrored when the buttons are moved left. Previous shows from 410 px of width and next from 362 px, so on a narrow screen previous goes first. Measured on a PC at 340 to 458 px, no overflow
+- [x] **Docs: the frontend is built by Railpack and served by Caddy** (2026-10-23, seen in the Railway build log, builder `RAILPACK`): RAILWAY_DEPLOYMENT.md and README said Nixpacks and `npx serve`
 - [x] **Speed button keeps one width, aligned buttons reach the edge** (2026-10-23, user found both on the Fold): the speed button is 100 px (88 px in cinema mode) whatever the number, and buttons moved left or right sit at the controls' padding with their rows pushed to that side, no longer in the middle of a 28rem group
 - [x] **Hold for 2x, focus mode, button alignment** (2026-10-23, user's design): holding the speed button plays at 2x until it is let go (all items). Focus mode (Expand/Shrink, the last button on the timeline, every item) hides the header and leaves the timeline plus one row of buttons (no previous and next), with the video kept above the tabs. Cinema mode (the rectangle before it, videos) does the same and lets the video take the tabs' place too. On wide touch screens arrows move the player's buttons left, middle or right, remembered per device, while the timeline row stays as it is. Tried on a PC (hold, tap, every switch between normal, focus and cinema at 412 px, the arrows at 900 px), not on the phone yet
 - [x] **Full-screen button for videos** (2026-10-22, user chose the timeline): after the total time, it puts the whole video box in full screen and turns a narrow phone sideways. YouTube's own full-screen button is off, because at a Chrome zoom of 90% its phone player left a black band at the right in its own full screen

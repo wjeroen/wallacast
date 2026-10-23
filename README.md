@@ -67,7 +67,7 @@ The full security model (encryption, storage layout, byte-range serving) is docu
 
 ## Deployment (Railway)
 
-The app deploys as 3 separate Railway services from the same repo: a PostgreSQL database, the backend (root `backend/`, uses a Dockerfile for FFmpeg), and the frontend (root `frontend/`, served via `npx serve`).
+The app deploys as 3 separate Railway services from the same repo: a PostgreSQL database, the backend (root `backend/`, uses a Dockerfile for FFmpeg), and the frontend (root `frontend/`, built by Railway's Railpack and served by Caddy).
 
 For the step-by-step beginner walkthrough, see **RAILWAY_DEPLOYMENT.md**. The environment variables are:
 
