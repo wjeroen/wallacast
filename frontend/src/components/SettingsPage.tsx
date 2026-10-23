@@ -123,7 +123,7 @@ const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === prov
 const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-3-flash-preview',
   deepinfra: 'google/gemma-4-26B-A4B-it',
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   openrouter: 'google/gemini-3-flash-preview',
 };
 // Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
@@ -146,7 +146,7 @@ const TOKEN_GENERATION_FLAGS: Array<{ key: 'audio' | 'summary' | 'summary_audio'
   { key: 'audio', label: 'Audio for articles' },
   { key: 'summary', label: 'Summary' },
   { key: 'summary_audio', label: 'Summary audio' },
-  { key: 'transcribe', label: 'Transcript for podcasts' },
+  { key: 'transcribe', label: 'Transcript for podcasts and videos' },
 ];
 const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: string }> = [
   { mode: 'none', label: 'No' },

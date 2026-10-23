@@ -1286,7 +1286,7 @@ router.post('/', async (req, res) => {
     // address, so it only runs with a Gemini key.
     if (type === 'video' && url) {
       const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_videos');
-      const wantsTranscript = tokenGen ? tokenGen.transcribe : autoTranscribe === 'true';
+      const wantsTranscript = tokenGen ? tokenGen.transcribe_video : autoTranscribe === 'true';
       const hasGeminiKey = !!(await getUserSetting(req.user!.userId, 'gemini_api_key'));
       if (wantsTranscript && hasGeminiKey && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for video ${createdItem.id}`);

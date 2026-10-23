@@ -91,6 +91,7 @@ export interface TokenGeneration {
   audio: boolean;
   summary: boolean;
   summary_audio: boolean;
+  /** A transcript for podcast episodes and YouTube videos */
   transcribe: boolean;
 }
 
@@ -118,25 +119,29 @@ export function validateGeneration(raw: unknown, current: TokenGeneration): { ge
   return { generation: out };
 }
 
-export type ResolvedGeneration = Omit<TokenGeneration, 'follow'>;
+/** transcribe is for podcast episodes, transcribe_video for YouTube videos. A token's own
+ *  switches have one transcript switch for both, the app has a setting for each. */
+export type ResolvedGeneration = Omit<TokenGeneration, 'follow'> & { transcribe_video: boolean };
 
-/** What actually runs for an item this token adds. Following the app reads the same four
+/** What actually runs for an item this token adds. Following the app reads the same five
  *  settings, with the same defaults, that POST /content and the summarizer read. */
 export async function resolveGeneration(userId: number, gen: TokenGeneration): Promise<ResolvedGeneration> {
   if (!gen.follow) {
-    return { audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio, transcribe: gen.transcribe };
+    return { audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio, transcribe: gen.transcribe, transcribe_video: gen.transcribe };
   }
-  const [audio, summary, summaryAudio, transcribe] = await Promise.all([
+  const [audio, summary, summaryAudio, transcribe, transcribeVideo] = await Promise.all([
     getUserSetting(userId, 'auto_generate_audio_for_articles'),
     getUserSetting(userId, 'auto_generate_summary'),
     getUserSetting(userId, 'auto_generate_summary_audio'),
     getUserSetting(userId, 'auto_transcribe_podcasts'),
+    getUserSetting(userId, 'auto_transcribe_videos'),
   ]);
   return {
     audio: audio === 'true',
     summary: summary === 'true',
     summary_audio: summaryAudio === 'true',
     transcribe: transcribe === 'true',
+    transcribe_video: transcribeVideo === 'true',
   };
 }
 

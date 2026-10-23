@@ -183,16 +183,16 @@ async function saveSettings(settings) {
 // Every key below is a real entry in VALID_SETTING_KEYS (backend/src/routes/users.ts).
 // Values match the exact shapes the Settings page persists (see frontend SettingsPage.tsx).
 const demoSettings = {
-  // Narration chat job: OpenAI GPT-5 Mini, reasoning effort left at the provider default (blank).
+  // Narration chat job: OpenAI GPT-6 Luna, reasoning effort left at the provider default (blank).
   narration_provider: 'openai',
-  narration_model: 'gpt-5-mini',
+  narration_model: 'gpt-6-luna',
   narration_reasoning_effort: '',
 
-  // Read-along alignment job: OpenAI GPT-5 Mini, reasoning effort high. "Same as narration"
+  // Read-along alignment job: OpenAI GPT-6 Luna, reasoning effort high. "Same as narration"
   // is turned OFF so these explicit values are the ones that apply.
   alignment_same_as_narration: 'false',
   alignment_provider: 'openai',
-  alignment_model: 'gpt-5-mini',
+  alignment_model: 'gpt-6-luna',
   alignment_reasoning_effort: 'high',
 
   // Summary job: Anthropic Claude Sonnet 5, effort at default (blank), same-as-narration OFF.
