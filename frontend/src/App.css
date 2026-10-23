@@ -4813,11 +4813,19 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
-/* Hold the speed button for 2x: no text selection or browser gesture may take the press */
+/* Hold the speed button for 2x: no text selection or browser gesture may take the press.
+   A fixed width with even digits, so "1x" and "1.25x" do not move the buttons around it. */
 .speed-toggle {
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  width: 100px; /* the other option buttons' minimum, "1.25x" fits */
+}
+
+.speed-toggle.compact {
+  width: 5.5rem;
 }
 
 /* The player's button rows as one group that can sit left, in the middle or right. The
@@ -4856,18 +4864,26 @@ blockquote.twitter-tweet.tweet-quoted {
   right: 0;
 }
 
+/* Moved to a side, the group and its rows go right up to that edge (the arrow there is
+   hidden), so the furthest button stays in reach of one thumb */
 @media (pointer: coarse) {
   @container app (min-width: 600px) {
     .align-arrow {
       display: flex;
     }
     .controls-cluster.align-left {
-      margin-left: 2.5rem;
+      margin-left: 0;
       margin-right: auto;
     }
     .controls-cluster.align-right {
       margin-left: auto;
-      margin-right: 2.5rem;
+      margin-right: 0;
+    }
+    .controls-cluster.align-left > * {
+      justify-content: flex-start;
+    }
+    .controls-cluster.align-right > * {
+      justify-content: flex-end;
     }
   }
 }

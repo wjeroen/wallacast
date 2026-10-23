@@ -156,6 +156,7 @@
 
 ## Completed Recently ✅
 
+- [x] **Speed button keeps one width, aligned buttons reach the edge** (2026-10-23, user found both on the Fold): the speed button is 100 px (88 px in cinema mode) whatever the number, and buttons moved left or right sit at the controls' padding with their rows pushed to that side, no longer in the middle of a 28rem group
 - [x] **Hold for 2x, cinema mode, button alignment** (2026-10-22, user's design): holding the speed button plays at 2x until it is let go (all items), cinema mode hides the header and tabs for a video with one slim row of controls (no timeline, no previous and next), and on wide touch screens arrows move the player's buttons left, middle or right, remembered per device. Tried on a PC (hold, tap, cinema layout at 412 px, the arrows at 900 px), not on the phone yet
 - [x] **Full-screen button for videos** (2026-10-22, user chose the timeline): after the total time, it puts the whole video box in full screen and turns a narrow phone sideways. YouTube's own full-screen button is off, because at a Chrome zoom of 90% its phone player left a black band at the right in its own full screen
 - [x] **Desktop mode on phones fits the screen** (2026-10-22, user wants YouTube background play through Chrome's "Desktop site" on a Fold): `desktop-fit.ts` zooms the page back to the screen's width on every fold and unfold, App.css viewport units go through `--vw`/`--vh`/`--dvh`, and its width rules are container queries on `#root`. Imitated on a PC within 1 px of the phone layout, not tried on the phone yet
