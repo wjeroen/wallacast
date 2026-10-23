@@ -1282,11 +1282,11 @@ router.post('/', async (req, res) => {
     }
 
     // Auto-generate a transcript for YouTube videos, like podcast episodes below, with its own
-    // setting (auto_transcribe_videos, off unless ticked). Gemini writes it from the video's
+    // setting (auto_transcribe_videos, on unless unticked). Gemini writes it from the video's
     // address, so it only runs with a Gemini key.
     if (type === 'video' && url) {
       const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_videos');
-      const wantsTranscript = tokenGen ? tokenGen.transcribe_video : autoTranscribe === 'true';
+      const wantsTranscript = tokenGen ? tokenGen.transcribe_video : autoTranscribe === null || autoTranscribe === 'true';
       const hasGeminiKey = !!(await getUserSetting(req.user!.userId, 'gemini_api_key'));
       if (wantsTranscript && hasGeminiKey && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for video ${createdItem.id}`);
@@ -1311,10 +1311,10 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Auto-generate transcript for podcast episodes (auto_transcribe_podcasts, off unless ticked)
+    // Auto-generate transcript for podcast episodes (auto_transcribe_podcasts, on unless unticked)
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
       const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
-      const shouldAutoTranscribe = tokenGen ? tokenGen.transcribe : autoTranscribe === 'true';
+      const shouldAutoTranscribe = tokenGen ? tokenGen.transcribe : autoTranscribe === null || autoTranscribe === 'true';
 
       if (shouldAutoTranscribe && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);

@@ -140,8 +140,8 @@ export async function resolveGeneration(userId: number, gen: TokenGeneration): P
     audio: audio === 'true',
     summary: summary === 'true',
     summary_audio: summaryAudio === 'true',
-    transcribe: transcribe === 'true',
-    transcribe_video: transcribeVideo === 'true',
+    transcribe: transcribe === null || transcribe === 'true',
+    transcribe_video: transcribeVideo === null || transcribeVideo === 'true',
   };
 }
 

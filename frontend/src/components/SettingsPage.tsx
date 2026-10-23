@@ -233,8 +233,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     image_alt_text_provider: 'gemini',
     image_alt_text_model: '',
 
-    auto_transcribe_podcasts: 'false',
-    auto_transcribe_videos: 'false',
+    auto_transcribe_podcasts: 'true',
+    auto_transcribe_videos: 'true',
     auto_generate_audio_for_articles: 'false',
     generate_read_along: 'true',
     // Summaries
@@ -366,8 +366,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
         image_alt_text_model: loaded.image_alt_text_model || '',
 
-        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'false',
-        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'false',
+        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
+        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
