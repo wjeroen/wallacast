@@ -1842,7 +1842,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  /* Comments tab uses full vertical space, no fixed height */
+  /* Comments use the full vertical space, no fixed height */
 }
 
 /* Comments alternate their background shade by nesting depth (LessWrong / EA Forum
@@ -4064,7 +4064,7 @@ blockquote.twitter-tweet.tweet-quoted {
   padding: 0;
 }
 
-/* Comments Tab */
+/* Comments under an article (Content tab), a video's description, and in the read-along */
 
 .tab-comments-display {
   max-width: 800px;
@@ -4754,8 +4754,11 @@ blockquote.twitter-tweet.tweet-quoted {
 }
 
 /* Shuffle and autoplay beside previous and next (the Queue tab has the same toggles), blue
-   while on. Only where the seven buttons fit: they and their gaps take 452 px, the controls'
-   padding 48 more (measured on a PC). */
+   while on. The seven buttons are 308 px wide and the controls' padding 48 px. Where the
+   normal 24 px gaps do not fit, the gaps step down to the player's other gaps, 16 px (the
+   speed row) and then 12 px (the focus row), so the buttons show from 432 px of width (a
+   folded Fold at 90% zoom is about 458 px). Narrower screens keep the five buttons with
+   24 px gaps. Each step leaves 4 px to spare. Measured on a PC. */
 .track-mode-btn {
   display: none;
   background: transparent;
@@ -4775,9 +4778,22 @@ blockquote.twitter-tweet.tweet-quoted {
 .track-mode-btn.active {
   color: var(--accent-text);
 }
-@container app (min-width: 500px) {
+@container app (min-width: 432px) {
   .track-mode-btn {
     display: flex;
+  }
+  .fullscreen-player-controls .fullscreen-playback-controls {
+    gap: 0.75rem;
+  }
+}
+@container app (min-width: 456px) {
+  .fullscreen-player-controls .fullscreen-playback-controls {
+    gap: 1rem;
+  }
+}
+@container app (min-width: 504px) {
+  .fullscreen-player-controls .fullscreen-playback-controls {
+    gap: 1.5rem;
   }
 }
 

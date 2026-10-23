@@ -155,7 +155,7 @@ interface FullscreenPlayerProps {
   initialTab?: string;
 }
 
-type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
+type TabType = 'content' | 'description' | 'read-along' | 'summary' | 'history' | 'queue';
 
 // Tab bar labels and icons. Tab labels stay visible at every width, only the
 // autoscroll toggle's text collapses on narrow screens (its .tab-label span).
@@ -165,7 +165,6 @@ type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary'
 const TAB_LABELS: Record<TabType, string> = {
   'content': 'Content',
   'description': 'Description',
-  'comments': 'Comments',
   'read-along': 'Transcript',
   'summary': 'Summary',
   'history': 'History',
@@ -179,7 +178,6 @@ const SUMMARY_SCROLL_EASING = 0.08;
 const TAB_ICONS: Record<TabType, LucideIcon> = {
   'content': AlignLeft,
   'description': Info,
-  'comments': MessageCircle,
   'read-along': Captions,
   'summary': MessageSquareText,
   'history': History,
@@ -928,7 +926,7 @@ export function FullscreenPlayer({
       const meta = el.commentMeta;
       const metaStr = buildCommentMetadata(meta, isLW, isSub);
       return (
-        // Odd depths get the alternate shade, same rule as the Comments tab.
+        // Odd depths get the alternate shade, same rule as CommentComponent.
         <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
           <div
             id={`ra-el-${globalIndex}`}
@@ -1667,7 +1665,7 @@ export function FullscreenPlayer({
 
   // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
-  // Renders content EXACTLY like content tab + comments tab, with timestamps
+  // Renders content EXACTLY like the Content tab with its comments, with timestamps
   // --------------------------------------------------------------------------
   const renderLLMReadAlong = () => {
     if (!readAlongParts) return null;
@@ -1899,30 +1897,6 @@ export function FullscreenPlayer({
                   ))}
                 </div>
               </div>
-            )}
-          </div>
-        );
-      case 'comments':
-        return (
-          <div className="tab-comments-display">
-            <div className="comments-header">
-              <h3>Comments ({totalCommentCount})</h3>
-              {onRefetch && (
-                <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
-                  <RefreshCw size={16} />
-                  <span className="refetch-text-full">Refetch from web</span>
-                  <span className="refetch-text-short">Refetch</span>
-                </button>
-              )}
-            </div>
-            {parsedComments.length > 0 ? (
-              <div className="comments-list">
-                {parsedComments.map((comment, index) => (
-                  <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
-                ))}
-              </div>
-            ) : (
-              <p className="no-content">No comments available. Click the refresh button to fetch comments.</p>
             )}
           </div>
         );
@@ -2770,7 +2744,6 @@ export function FullscreenPlayer({
               >
                 <Icon size={16} />
                 <span>{TAB_LABELS[tab]}</span>
-                {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
               </button>
             );
           })}
