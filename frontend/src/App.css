@@ -4799,7 +4799,7 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
-/* Full-screen button after the total time, video items only */
+/* Cinema-mode and full-screen buttons after the total time, video items only */
 .fullscreen-progress-bar .video-fullscreen-btn {
   display: flex;
   align-items: center;
@@ -4811,6 +4811,123 @@ blockquote.twitter-tweet.tweet-quoted {
   border: none;
   color: var(--t3);
   cursor: pointer;
+}
+
+/* Hold the speed button for 2x: no text selection or browser gesture may take the press */
+.speed-toggle {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+/* The player's button rows as one group that can sit left, in the middle or right. The
+   arrows beside it and the moving only exist on a wide touch screen (an unfolded phone,
+   a tablet), elsewhere the group stays in the middle as before. */
+.controls-align-wrap {
+  position: relative;
+}
+
+.controls-cluster {
+  max-width: 28rem;
+  margin: 0 auto;
+}
+
+.align-arrow {
+  display: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+}
+
+.align-arrow-left {
+  left: 0;
+}
+
+.align-arrow-right {
+  right: 0;
+}
+
+@media (pointer: coarse) {
+  @container app (min-width: 600px) {
+    .align-arrow {
+      display: flex;
+    }
+    .controls-cluster.align-left {
+      margin-left: 2.5rem;
+      margin-right: auto;
+    }
+    .controls-cluster.align-right {
+      margin-left: auto;
+      margin-right: 2.5rem;
+    }
+  }
+}
+
+/* Cinema mode: the header and the tabs give way, the video box takes the free space (YouTube
+   letterboxes the picture in it) and the controls are one slim row */
+.fullscreen-player.cinema .fullscreen-header,
+.fullscreen-player.cinema .fullscreen-tabs,
+.fullscreen-player.cinema .fullscreen-tab-content {
+  display: none;
+}
+
+.fullscreen-player.cinema .fullscreen-video-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fullscreen-player.cinema .fullscreen-video {
+  flex: 1;
+  max-width: none;
+  max-height: none;
+  aspect-ratio: auto;
+}
+
+.fullscreen-player-controls.cinema-controls {
+  padding: 0.5rem 1rem;
+}
+
+.cinema-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.play-pause-btn.compact {
+  width: 52px;
+  height: 52px;
+}
+
+.option-toggle.compact {
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+}
+
+.cinema-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+}
+
+.cinema-btn.active {
+  color: var(--accent-text);
 }
 
 .fullscreen-progress-bar button.audio-source-btn:focus:not(:focus-visible) {

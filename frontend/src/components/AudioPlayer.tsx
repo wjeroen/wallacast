@@ -1114,6 +1114,32 @@ export function AudioPlayer({
     } catch { /* player gone */ }
   };
 
+  // Hold the speed button: 2x while it is held, then the chosen speed again, like YouTube's
+  // press and hold. Nothing is saved, and a speed of 2x or more stays as it is.
+  const [heldSpeed, setHeldSpeed] = useState<number | null>(null);
+  const heldSpeedRef = useRef(false);
+  const handleHoldSpeedStart = () => {
+    const current = playsVideo ? videoRate : playbackSpeed;
+    if (current >= 2) return;
+    heldSpeedRef.current = true;
+    setHeldSpeed(2);
+    if (playsVideo) {
+      try { ytPlayerRef.current?.setPlaybackRate(2); } catch { /* player gone */ }
+    } else if (audioRef.current) {
+      audioRef.current.playbackRate = 2;
+    }
+  };
+  const handleHoldSpeedEnd = () => {
+    if (!heldSpeedRef.current) return;
+    heldSpeedRef.current = false;
+    setHeldSpeed(null);
+    if (playsVideo) {
+      if (ytPlayerRef.current) applyVideoSpeed(ytPlayerRef.current, getStoredSpeed());
+    } else if (audioRef.current) {
+      audioRef.current.playbackRate = playbackSpeed;
+    }
+  };
+
   const handleVideoReady = (player: YouTubePlayer) => {
     ytPlayerRef.current = player;
     applyVideoSpeed(player, getStoredSpeed());
@@ -1272,7 +1298,7 @@ export function AudioPlayer({
           isPlaying={isPlaying}
           currentTime={currentTime}
           duration={duration}
-          playbackSpeed={videoId ? videoRate : playbackSpeed}
+          playbackSpeed={heldSpeed ?? (videoId ? videoRate : playbackSpeed)}
           resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
           sleepTimerEndAt={sleepTimerEndAt}
@@ -1284,6 +1310,8 @@ export function AudioPlayer({
           onSkipForward={handleSkipForward}
           onSpeedChange={handleSpeedChange}
           onToggleSpeed={toggleSpeed}
+          onHoldSpeedStart={handleHoldSpeedStart}
+          onHoldSpeedEnd={handleHoldSpeedEnd}
           onSetSleepTimer={setSleepTimerTo}
           playingVariant={effectiveVariant}
           preferSummaryAudio={preferSummaryAudio}

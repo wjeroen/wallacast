@@ -47,6 +47,9 @@ import {
   PanelTopClose,
   PanelTopOpen,
   Maximize,
+  RectangleHorizontal,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { pageZoom } from '../desktop-fit';
@@ -113,6 +116,9 @@ interface FullscreenPlayerProps {
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
   onToggleSpeed: () => void;
+  // Holding the speed button plays at 2x until it is let go (AudioPlayer)
+  onHoldSpeedStart?: () => void;
+  onHoldSpeedEnd?: () => void;
   onSetSleepTimer: (minutes: number | null) => void;
   // Which audio the player is effectively playing ('summary' disables all
   // read-along highlighting/seeking, whose timestamps belong to the original).
@@ -200,6 +206,71 @@ const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
 // Sleep-timer durations for the playback-options panel (Off is its own chip)
 const SLEEP_TIMER_OPTIONS = [5, 10, 15, 30, 45, 60];
+
+// A button that does one thing when tapped and another while it is held: after HOLD_MS
+// the hold starts, letting go ends it, and the click that follows a hold is swallowed.
+// Chrome's long-press menu (in desktop mode) and text selection are blocked on it, which
+// Wallacast can do on its own buttons but not inside YouTube's player.
+const HOLD_MS = 350;
+function useHoldButton(onTap: () => void, onHoldStart?: () => void, onHoldEnd?: () => void) {
+  const timer = useRef<number | null>(null);
+  const holding = useRef(false);
+  const swallowClick = useRef(false);
+  const holdEndRef = useRef(onHoldEnd);
+  useEffect(() => {
+    holdEndRef.current = onHoldEnd;
+  });
+  const end = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (holding.current) {
+      holding.current = false;
+      swallowClick.current = true;
+      holdEndRef.current?.();
+    }
+  };
+  // A hold still running when the button goes away (the player closes) ends with it
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    if (holding.current) holdEndRef.current?.();
+  }, []);
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      swallowClick.current = false;
+      if (!onHoldStart || e.button !== 0) return;
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        holding.current = true;
+        onHoldStart();
+      }, HOLD_MS);
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+    onPointerLeave: end,
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onClick: () => {
+      if (swallowClick.current) {
+        swallowClick.current = false;
+        return;
+      }
+      onTap();
+    },
+  };
+}
+
+// Where the player's buttons sit on a wide touch screen (an unfolded phone, a tablet):
+// moved with the arrows beside them, like a foldable's PIN pad, and remembered per device.
+type ControlsAlign = 'left' | 'center' | 'right';
+const CONTROLS_ALIGN_ORDER: ControlsAlign[] = ['left', 'center', 'right'];
+function getStoredControlsAlign(): ControlsAlign {
+  try {
+    const stored = localStorage.getItem('wallacast-controls-align');
+    if (stored === 'left' || stored === 'right') return stored;
+  } catch { /* private mode */ }
+  return 'center';
+}
 
 function getStoredFontScale(): number {
   const stored = localStorage.getItem('readerFontScale');
@@ -417,6 +488,8 @@ export function FullscreenPlayer({
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
+  onHoldSpeedStart,
+  onHoldSpeedEnd,
   onSetSleepTimer,
   playingVariant = null,
   preferSummaryAudio = false,
@@ -488,6 +561,38 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
+  const speedButton = useHoldButton(onToggleSpeed, onHoldSpeedStart, onHoldSpeedEnd);
+  // Cinema mode (video items): the header and the tabs give way to the video, and the
+  // controls shrink to one row without a timeline (YouTube's player has its own). It ends
+  // when another item opens, and it only exists while the video is shown.
+  const [cinema, setCinema] = useState(false);
+  const [cinemaItem, setCinemaItem] = useState(content.id);
+  if (cinemaItem !== content.id) {
+    setCinemaItem(content.id);
+    setCinema(false);
+  }
+  const cinemaOn = cinema && !!video;
+  const [controlsAlign, setControlsAlign] = useState<ControlsAlign>(getStoredControlsAlign);
+  const moveControls = (step: -1 | 1) => {
+    const next = CONTROLS_ALIGN_ORDER[Math.max(0, Math.min(2, CONTROLS_ALIGN_ORDER.indexOf(controlsAlign) + step))];
+    setControlsAlign(next);
+    try { localStorage.setItem('wallacast-controls-align', next); } catch { /* private mode */ }
+  };
+  // The arrows show only where CSS allows (a wide touch screen, see .align-arrow in App.css)
+  const alignArrows = (
+    <>
+      {controlsAlign !== 'left' && (
+        <button type="button" className="align-arrow align-arrow-left" onClick={() => moveControls(-1)} title="Move the buttons left" aria-label="Move the buttons left">
+          <ChevronLeft size={20} />
+        </button>
+      )}
+      {controlsAlign !== 'right' && (
+        <button type="button" className="align-arrow align-arrow-right" onClick={() => moveControls(1)} title="Move the buttons right" aria-label="Move the buttons right">
+          <ChevronRight size={20} />
+        </button>
+      )}
+    </>
+  );
   // Content store for star/archive/delete/tag actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
   // Tag editor popup + the library-wide tag list it offers
@@ -2193,7 +2298,7 @@ export function FullscreenPlayer({
   };
 
   return (
-    <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
+    <div className={`fullscreen-player${cinemaOn ? ' cinema' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {/* Leading column: the artwork top-aligned with the title, with the
@@ -2547,6 +2652,40 @@ export function FullscreenPlayer({
 
       {/* Player Controls. Without audio there is no timeline, no play/seek, and no
           speed/sleep: the row reduces to previous track, display settings, next track. */}
+      {cinemaOn ? (
+        <div className="fullscreen-player-controls cinema-controls">
+          <div className="controls-align-wrap">
+            <div className={`controls-cluster align-${controlsAlign}`}>
+              <div className="cinema-row">
+                <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+                  <RotateCcw className="seek-icon" />
+                  <span className="seek-label">15</span>
+                </button>
+                <button onClick={onPlayPause} className="play-pause-btn compact" title={isPlaying ? 'Pause' : 'Play'}>
+                  {isPlaying ? <Pause size={28} /> : <Play size={28} />}
+                </button>
+                <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
+                  <RotateCw className="seek-icon" />
+                  <span className="seek-label">15</span>
+                </button>
+                <button {...speedButton} className="option-toggle speed-toggle compact" title="Speed (hold for 2x)">
+                  <Gauge size={18} />
+                  <span>{playbackSpeed}x</span>
+                </button>
+                <button type="button" className="cinema-btn active" onClick={() => setCinema(false)} title="Leave cinema mode" aria-label="Leave cinema mode">
+                  <RectangleHorizontal size={20} />
+                </button>
+                {onVideoFullscreen && (
+                  <button type="button" className="cinema-btn" onClick={onVideoFullscreen} title="Full screen" aria-label="Full screen">
+                    <Maximize size={20} />
+                  </button>
+                )}
+              </div>
+            </div>
+            {alignArrows}
+          </div>
+        </div>
+      ) : (
       <div className="fullscreen-player-controls">
         {playingVariant !== null && (
         <div className="fullscreen-progress-bar">
@@ -2607,6 +2746,17 @@ export function FullscreenPlayer({
             <button
               type="button"
               className="video-fullscreen-btn"
+              onClick={() => setCinema(true)}
+              title="Cinema mode"
+              aria-label="Cinema mode"
+            >
+              <RectangleHorizontal size={16} />
+            </button>
+          )}
+          {onVideoFullscreen && (
+            <button
+              type="button"
+              className="video-fullscreen-btn"
               onClick={onVideoFullscreen}
               title="Full screen"
               aria-label="Full screen"
@@ -2617,6 +2767,8 @@ export function FullscreenPlayer({
         </div>
         )}
 
+        <div className="controls-align-wrap">
+        <div className={`controls-cluster align-${controlsAlign}`}>
         {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
           <button
@@ -2661,7 +2813,7 @@ export function FullscreenPlayer({
 
         <div className="fullscreen-player-options">
           {playingVariant !== null ? (
-            <button onClick={onToggleSpeed} className="option-toggle">
+            <button {...speedButton} className="option-toggle speed-toggle" title="Speed (hold for 2x)">
               <Gauge size={20} />
               <span>{playbackSpeed}x</span>
             </button>
@@ -2783,7 +2935,11 @@ export function FullscreenPlayer({
             </button>
           )}
         </div>
+        </div>
+        {alignArrows}
+        </div>
       </div>
+      )}
     </div>
   );
 }
