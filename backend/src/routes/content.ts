@@ -23,7 +23,7 @@ import { findItem } from '../services/url-match.js';
 import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
 import { fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
 import { transcribeYouTubeVideo } from '../services/video-transcript.js';
-import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
+import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal, existingItemIdForUrl } from '../services/token-actions.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
@@ -880,6 +880,17 @@ router.post('/', async (req, res) => {
     // since both add paths go through this endpoint. Non-EA-Forum links are left untouched.
     // A video is stored under its plain watch address, whichever form was added.
     const url = youtubeId ? youtubeWatchUrl(youtubeId) : normalizeEAForumUrl(rawUrl);
+
+    // A link shared to Wallacast from another app (the Android share menu) is never added a
+    // second time: Android can hand the same share over again, for example when the app is
+    // reopened from the recent apps or the back button leads to it, which added copies of a
+    // video (2026-10-23). The Add tab says it is already there. Typed links still add freely.
+    if (!token && req.body?.unless_in_library === true && typeof rawUrl === 'string' && rawUrl) {
+      const existing = await existingItemIdForUrl(req.user!.userId, rawUrl);
+      if (existing) {
+        return res.status(409).json({ error: 'This is already in your library', id: existing });
+      }
+    }
 
     let processedContent = content;
     let htmlContent = null;

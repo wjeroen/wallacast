@@ -237,6 +237,12 @@ function mockYoutubeId(url) {
 app.post('/api/content', async (req, res) => {
   const now = new Date().toISOString();
   const videoId = (req.body.type || 'article') === 'article' && !req.body.content ? mockYoutubeId(req.body.url) : null;
+  // Same rule as the real backend: a shared link already in the library is not added again
+  if (req.body.unless_in_library === true && req.body.url) {
+    const address = videoId ? `https://www.youtube.com/watch?v=${videoId}` : req.body.url;
+    const existing = db.content.find(c => c.url === address);
+    if (existing) return res.status(409).json({ error: 'This is already in your library', id: existing.id });
+  }
   let video = null;
   if (videoId) {
     try {

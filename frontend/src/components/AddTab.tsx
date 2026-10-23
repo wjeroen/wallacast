@@ -3,6 +3,7 @@ import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import { markdownToHtml, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } from '../markdown';
 import { parseTagInput } from '../tags';
+import { rememberShare } from '../share';
 import type { ContentItem } from '../types';
 
 type ContentType = 'article' | 'text' | 'upload' | 'podcast_episode';
@@ -57,6 +58,8 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
   const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  // A shared link that is already in the library is good news, not an error
+  const [messageIsGood, setMessageIsGood] = useState(false);
   // archive.ph address that makes a copy of an article the server could not fetch (see
   // ArticleUnavailableError in article-fetcher.ts). Adding the article again finds that copy.
   const [archiveLink, setArchiveLink] = useState<string | null>(null);
@@ -190,7 +193,7 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
       setContentType('article');
       setUrl(shared.url);
       setTitle('');
-      void save('article', shared.url, '');
+      void save('article', shared.url, '', true);
     } else if (shared.text) {
       setContentType('text');
       setTextFormat('markdown');
@@ -199,9 +202,13 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
     }
   }, [shared]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = async (type: ContentType, link: string, itemTitle: string) => {
+  // fromShare: a link from the share menu, which the server adds only when it is not in the
+  // library yet, and which is remembered so Android handing it over again is ignored
+  // (rememberShare / takeSharedContent in App.tsx)
+  const save = async (type: ContentType, link: string, itemTitle: string, fromShare = false) => {
     setLoading(true);
     setMessage('');
+    setMessageIsGood(false);
     setArchiveLink(null);
     let progressPoll: number | undefined;
 
@@ -222,6 +229,7 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
           return;
         }
         data.url = link;
+        if (fromShare) data.unless_in_library = true;
         // The server reports each slow step under this id, asked for every 1.5 seconds.
         // randomUUID needs HTTPS, so a dev server over plain http gets a time-based id.
         const progressId = typeof crypto.randomUUID === 'function'
@@ -266,6 +274,7 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
 
       const response = await contentAPI.create(data as Partial<ContentItem>);
       setMessage('Content saved successfully!');
+      if (fromShare) rememberShare(link);
 
       // Add the new item to the store
       onContentAdded(response.data);
@@ -280,6 +289,13 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
       setUploadedFileName('');
       setImportMeta(null);
     } catch (error: any) {
+      if (fromShare && error?.response?.status === 409) {
+        rememberShare(link);
+        setMessage('Already in your library.');
+        setMessageIsGood(true);
+        setUrl('');
+        return;
+      }
       console.error('Failed to save content:', error);
       const errorMsg = error?.response?.data?.error || 'Failed to save content. Please try again.';
       setMessage(errorMsg);
@@ -526,7 +542,7 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
         )}
 
         {message && (
-          <div className={`message ${message.includes('success') ? 'success' : 'error'}`}>
+          <div className={`message ${messageIsGood || message.includes('success') ? 'success' : 'error'}`}>
             {message}
             {archiveLink && (
               <>

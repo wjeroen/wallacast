@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
 import { AddTab, type SharedContent } from './components/AddTab';
+import { isRepeatedShare, rememberShare } from './share';
 import { LibraryTab } from './components/LibraryTab';
 import { AudioPlayer } from './components/AudioPlayer';
 import { HomePage } from './components/HomePage';
@@ -34,6 +35,8 @@ function takeSharedContent(): SharedContent | null {
     // Punctuation that ends the sentence around a link is not part of it
     link = link.replace(/[.,;:!?'"]+$/, '');
     if (link.endsWith(')') && !link.includes('(')) link = link.slice(0, -1);
+    // The same share handed over again by Android: the app just opens
+    if (isRepeatedShare(link)) return null;
     return { key: Date.now(), url: link };
   }
   return text ? { key: Date.now(), text, title } : null;
@@ -191,12 +194,46 @@ function App() {
     checkAuth();
   }, [checkAuth]);
 
-  // A share opens the Add tab, which saves it
+  // A shared link is saved in the background while the app stays where it opens, with a
+  // short notice at the bottom. Only when saving fails does the Add tab open, where the save
+  // runs again with its progress line and the reason (an archive.ph link for a paywall, for
+  // example). Shared text without a link opens the Add tab's Text form.
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [shareForAddTab, setShareForAddTab] = useState<SharedContent | null>(null);
   useEffect(() => {
     if (!isAuthenticated || !shared) return;
+    const share = shared;
+    setShared(null);
     setCurrentPage('main');
-    setActiveTab('add');
-  }, [isAuthenticated, shared]);
+    if (!share.url) {
+      setShareForAddTab(share);
+      setActiveTab('add');
+      return;
+    }
+    const link = share.url;
+    setShareNotice('Adding…');
+    contentAPI.create({ type: 'article', url: link, unless_in_library: true } as Partial<ContentItem>)
+      .then((res) => {
+        addItem(res.data);
+        rememberShare(link);
+        setShareNotice('Added');
+      })
+      .catch((err) => {
+        if (err?.response?.status === 409) {
+          rememberShare(link);
+          setShareNotice('Already in your library');
+          return;
+        }
+        setShareNotice(null);
+        setShareForAddTab(share);
+        setActiveTab('add');
+      });
+  }, [isAuthenticated, shared, addItem]);
+  useEffect(() => {
+    if (!shareNotice || shareNotice === 'Adding…') return;
+    const timer = window.setTimeout(() => setShareNotice(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [shareNotice]);
 
   // Hydrate queue + autoplay preference once authenticated
   useEffect(() => {
@@ -1063,6 +1100,7 @@ function App() {
         </div>
       )}
       {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}
+      {shareNotice && <div className="demo-toast" role="status">{shareNotice}</div>}
       <header className="app-header">
         <div className="app-logo-container">
           <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="app-logo" />
@@ -1139,7 +1177,7 @@ function App() {
 
       <main className="app-main">
         {activeTab === 'feed' && <FeedTab onRefreshComplete={() => setFeedDaysStale(0)} />}
-        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} shared={shared} onSharedHandled={() => setShared(null)} />}
+        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} shared={shareForAddTab} onSharedHandled={() => setShareForAddTab(null)} />}
         {activeTab === 'library' && (
           <LibraryTab onPlayContent={handlePlayContent} />
         )}
