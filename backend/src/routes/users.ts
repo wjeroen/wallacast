@@ -20,6 +20,7 @@ const VALID_SETTING_KEYS = [
   'tts_voices',            // JSON array of { model, voice }, rotate randomly between these
   'anthropic_api_key',
   'gemini_api_key',        // NEW: For image alt-text generation
+  'youtube_api_key',       // YouTube Data API key: a video's description, date and length (services/youtube.ts)
   // Wallabag settings
   'wallabag_url',
   'wallabag_client_id',
@@ -85,6 +86,7 @@ const SECRET_KEYS = [
   'openrouter_api_key',    // NEW: Mask OpenRouter key
   'anthropic_api_key',
   'gemini_api_key',        // NEW: Mask Gemini key
+  'youtube_api_key',
   'wallabag_client_secret',
   'wallabag_password',
   'wallabag_access_token',

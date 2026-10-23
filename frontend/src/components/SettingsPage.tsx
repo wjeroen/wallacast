@@ -225,6 +225,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     // Image alt-text: provider gemini | deepinfra | openai | openrouter
     gemini_api_key: '',
+    // YouTube Data API: a video's description, date and length (backend services/youtube.ts)
+    youtube_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
     image_alt_text_model: '',
@@ -355,6 +357,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
+        youtube_api_key: loaded.youtube_api_key === '••••••••' ? '' : (loaded.youtube_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
         image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
         image_alt_text_model: loaded.image_alt_text_model || '',
@@ -1728,6 +1731,34 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               )}
             </div>
             <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> YouTube API Key
+              {isSecretSet('youtube_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['youtube_api_key'] ? 'text' : 'password'}
+                  value={formData.youtube_api_key}
+                  onChange={(e) => handleChange('youtube_api_key', e.target.value)}
+                  placeholder={isSecretSet('youtube_api_key') ? '••••••••' : 'YouTube Data API v3 key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('youtube_api_key')} className="toggle-visibility">
+                  {showSecrets['youtube_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('youtube_api_key') && (
+                <button type="button" onClick={() => removeApiKey('youtube_api_key', 'YouTube API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Video descriptions, dates and lengths.</small>
           </div>
         </section>
 

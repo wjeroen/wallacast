@@ -2426,7 +2426,7 @@ export function FullscreenPlayer({
                     {content.transcript ? 'Regenerate' : 'Generate'} transcript
                   </button>
                 )}
-                {content.type === 'article' && content.url && (
+                {(content.type === 'article' || content.type === 'video') && content.url && (
                   <button onClick={() => { setShowDropdown(false); if (onRefetch) onRefetch(); }}>
                     <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web

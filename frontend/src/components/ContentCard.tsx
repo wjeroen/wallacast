@@ -348,7 +348,7 @@ export function ContentCard({
                     Regenerate transcript
                   </button>
                 )}
-                {item.type === 'article' && item.url && (
+                {(item.type === 'article' || item.type === 'video') && item.url && (
                   <button onClick={() => onRefetch(item.id)}>
                     <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web

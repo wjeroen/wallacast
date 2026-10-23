@@ -2,7 +2,7 @@ import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
 import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
 import { snapshotContentVersion } from './content-versions.js';
-import { fetchYouTubeMetadata } from './youtube.js';
+import { fetchYouTubeMetadata, youtubeApiKey } from './youtube.js';
 import { youtubeVideoId } from '../shared/format.js';
 import {
   TYPE_TAGS,
@@ -522,7 +522,8 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
             const videoId = type === 'video' ? youtubeVideoId(entry.url) : null;
             if (videoId && insertResult.rows[0]?.id) {
               const newId = insertResult.rows[0].id;
-              fetchYouTubeMetadata(videoId)
+              youtubeApiKey(userId)
+                .then((key) => fetchYouTubeMetadata(videoId, key))
                 .then((video) => query(
                   `UPDATE content_items SET
                     duration = COALESCE(duration, $1),

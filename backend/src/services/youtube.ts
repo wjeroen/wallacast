@@ -1,12 +1,15 @@
 import { safeFetch } from './url-guard.js';
+import { getUserSetting } from './ai-providers.js';
 import { youtubeWatchUrl } from '../shared/format.js';
 
-// What an added YouTube video is stored with. Two public sources, read once when the video
-// is added, never for playback (the app plays the video in YouTube's embedded player):
-// - oEmbed, YouTube's public lookup that needs no key: title, channel, thumbnail.
-// - The watch page, the same page the article fetcher used to read for these addresses:
-//   length, publish date and the description. Best effort: a consent page or a bot check
-//   leaves these empty, and the player then fills the length on first play.
+// What an added YouTube video is stored with, read when the video is added or refetched,
+// never for playback (the app plays the video in YouTube's embedded player):
+// - The YouTube Data API (videos.list), with the user's key: title, channel, description,
+//   publish date and length. The official route, and the one that works from Railway.
+// - Without a working key, two public sources: oEmbed, YouTube's lookup that needs no key
+//   (title, channel), and the watch page (length, publish date, description). The watch
+//   page is best effort: YouTube often answers a datacenter address with HTTP 429 (seen on
+//   Railway 2026-10-22), and then the player fills the length on first play.
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const HEADERS_TIMEOUT_MS = 10_000;
@@ -26,6 +29,49 @@ export class YouTubeUnavailableError extends Error {}
 interface OEmbed {
   title?: string;
   author_name?: string;
+}
+
+// The user's key for the Data API (Settings, `youtube_api_key`), or null. The Data API
+// costs nothing, only daily quota (10,000 units, one per video). A Gemini key from AI
+// Studio does not work here even with the API turned on in its project: Google answers
+// "Requests to this API ... are blocked", because AI Studio restricts the key to Gemini
+// (checked 2026-10-22). So it takes its own key.
+export async function youtubeApiKey(userId: number): Promise<string | null> {
+  return (await getUserSetting(userId, 'youtube_api_key'))?.trim() || null;
+}
+
+// ISO 8601 length (PT1H2M3S, P1DT2H for very long streams) in seconds, or null
+function isoDurationSeconds(value: string | undefined): number | null {
+  const m = (value || '').match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
+  if (!m) return null;
+  const seconds = (Number(m[1] || 0) * 86400) + (Number(m[2] || 0) * 3600) + (Number(m[3] || 0) * 60) + Number(m[4] || 0);
+  return seconds > 0 ? seconds : null;
+}
+
+// One videos.list call (1 quota unit). The key goes in a header, never in the address, so
+// it can never end up in an error message or a log line.
+async function fetchDataApiDetails(videoId: string, key: string): Promise<PageDetails> {
+  const res = await safeFetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(videoId)}`,
+    { headers: { 'X-Goog-Api-Key': key } }, 5, HEADERS_TIMEOUT_MS
+  );
+  const body = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) {
+    const reason = body?.error?.details?.find((d: any) => d?.reason)?.reason || body?.error?.errors?.[0]?.reason || body?.error?.status || '';
+    throw new Error(`Data API answered HTTP ${res.status} ${reason}`.trim());
+  }
+  const video = body?.items?.[0];
+  if (!video) {
+    throw new YouTubeUnavailableError('YouTube has no public or unlisted video with this address. It may be private or removed.');
+  }
+  const published = video.snippet?.publishedAt;
+  return {
+    title: video.snippet?.title || null,
+    author: video.snippet?.channelTitle || null,
+    description: video.snippet?.description || null,
+    published_at: published && !isNaN(new Date(published).getTime()) ? new Date(published).toISOString() : null,
+    duration: isoDurationSeconds(video.contentDetails?.duration),
+  };
 }
 
 async function fetchOEmbed(videoId: string): Promise<OEmbed> {
@@ -97,7 +143,27 @@ function descriptionToHtml(text: string): string {
     .join('');
 }
 
-export async function fetchYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
+// 16:9 without the black bars hqdefault.jpg adds
+const thumbnailFor = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+export async function fetchYouTubeMetadata(videoId: string, apiKey: string | null = null): Promise<YouTubeMetadata> {
+  if (apiKey) {
+    try {
+      const api = await fetchDataApiDetails(videoId, apiKey);
+      console.log(`[YouTube] ${videoId}: data api=ok duration=${api.duration ?? 'unknown'}`);
+      return {
+        title: api.title,
+        author: api.author,
+        description: api.description?.trim() ? descriptionToHtml(api.description.trim()) : null,
+        preview_picture: thumbnailFor(videoId),
+        published_at: api.published_at,
+        duration: api.duration,
+      };
+    } catch (err) {
+      if (err instanceof YouTubeUnavailableError) throw err;
+      console.warn(`[YouTube] ${videoId}: data api failed, using the public sources: ${(err as Error).message}`);
+    }
+  }
   const [oembed, page] = await Promise.all([
     fetchOEmbed(videoId).catch((err: Error) => {
       console.warn(`[YouTube] ${videoId}: ${err.message}`);
@@ -116,8 +182,7 @@ export async function fetchYouTubeMetadata(videoId: string): Promise<YouTubeMeta
     title: oembed?.title || page?.title || null,
     author: oembed?.author_name || page?.author || null,
     description: page?.description?.trim() ? descriptionToHtml(page.description.trim()) : null,
-    // 16:9 without the black bars hqdefault.jpg adds
-    preview_picture: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+    preview_picture: thumbnailFor(videoId),
     published_at: page?.published_at ?? null,
     duration: page?.duration ?? null,
   };

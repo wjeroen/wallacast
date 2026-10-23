@@ -624,12 +624,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleBulkRefetch = async () => {
     setBulkMenuOpen(false);
     if (selectedItems.size === 0) return;
-    const eligible = selectedContentItems().filter(item => item.type === 'article' && item.url);
+    // Videos refetch their YouTube details
+    const eligible = selectedContentItems().filter(item => (item.type === 'article' || item.type === 'video') && item.url);
     if (eligible.length === 0) {
-      alert('No selected items are eligible (needs to be an article with a URL).');
+      alert('No selected items are eligible (needs to be an article or video with a URL).');
       return;
     }
-    if (!confirm(`Refetch ${eligible.length} article(s) from the web?`)) return;
+    if (!confirm(`Refetch ${eligible.length} item(s) from the web?`)) return;
     await runSequentialBulk('Refetching', eligible.map(i => i.id), id => contentAPI.refetch(id));
     // Refetch is fire-and-forget on the backend, so refresh after delays to pick
     // up updated data (bulk analogue of the 3s/8s per-item refreshes)

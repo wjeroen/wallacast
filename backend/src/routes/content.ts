@@ -21,7 +21,7 @@ import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
 import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
-import { fetchYouTubeMetadata, YouTubeUnavailableError } from '../services/youtube.js';
+import { fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
@@ -1089,7 +1089,7 @@ router.post('/', async (req, res) => {
     if (youtubeId) {
       let video;
       try {
-        video = await fetchYouTubeMetadata(youtubeId);
+        video = await fetchYouTubeMetadata(youtubeId, await youtubeApiKey(req.user!.userId));
       } catch (videoError) {
         if (videoError instanceof YouTubeUnavailableError) {
           return res.status(502).json({ error: `Could not add this video. ${videoError.message}` });
@@ -1885,8 +1885,49 @@ router.post('/:id/refetch', async (req, res) => {
 
     const { type, url } = contentResult.rows[0];
 
+    // A video refetches its YouTube details (title, channel, description, date, length),
+    // for example after a YouTube key was added in Settings. A value YouTube does not give
+    // keeps the stored one. There is no body, so there is no version snapshot.
+    const videoId = type === 'video' ? youtubeVideoId(url) : null;
+    if (videoId) {
+      (async () => {
+        try {
+          await query(
+            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+            ['fetching', 10, 'fetching_article', id]
+          );
+          const video = await fetchYouTubeMetadata(videoId, await youtubeApiKey(req.user!.userId));
+          await query(
+            `UPDATE content_items SET
+              title = COALESCE($1, title),
+              author = COALESCE($2, author),
+              description = COALESCE($3, description),
+              published_at = COALESCE($4, published_at),
+              duration = COALESCE($5, duration),
+              preview_picture = COALESCE($6, preview_picture),
+              wallabag_needs_push = TRUE,
+              generation_status = 'completed',
+              generation_progress = 100,
+              current_operation = NULL,
+              updated_at = NOW(),
+              content_fetched_at = NOW()
+            WHERE id = $7`,
+            [video.title, video.author, video.description, video.published_at, video.duration, video.preview_picture, id]
+          );
+          console.log(`Refetch completed for video ${id}`);
+        } catch (error) {
+          console.error(`Refetch error for video ${id}:`, error);
+          await query(
+            "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
+            ['failed', (error as Error).message || 'Failed to refetch the video details', 0, id]
+          ).catch(() => { /* swallow */ });
+        }
+      })();
+      return res.json({ message: 'Refetch started' });
+    }
+
     if (type !== 'article' || !url) {
-      return res.status(400).json({ error: 'Refetch only available for articles with URLs' });
+      return res.status(400).json({ error: 'Refetch only available for articles and videos with URLs' });
     }
 
     (async () => {
