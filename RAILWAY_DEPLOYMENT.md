@@ -39,7 +39,7 @@ You will set these up one at a time.
 
 1. Add another service from the same GitHub repo.
 2. In its settings, set the **Root Directory** to `frontend`.
-   - Railway builds the `frontend/` folder with its default builder, Railpack, which recognizes a Vite app, runs `npm run build` and serves the finished `dist` folder with Caddy. Every address the app does not have as a file (such as `/share`, used by the Android share menu) gets `index.html`, so the app handles it. `frontend/nixpacks.toml` is left over from the Nixpacks builder and is not used.
+   - Railway builds the `frontend/` folder with its default builder, Railpack, which recognizes a Vite app, runs `npm run build` and serves the finished `dist` folder with Caddy. Every address the app does not have as a file (such as `/share`, used by the Android share menu) gets `index.html`, so the app handles it.
 3. Add the frontend environment variable from Step 5 below.
 4. Let it build and deploy, then generate a public domain for it the same way you did for the backend.
 5. This frontend URL is the one you open on your phone or browser. It is also your `FRONTEND_URL` for the backend.

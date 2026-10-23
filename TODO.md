@@ -128,7 +128,7 @@
 - [ ] **[P5]** Unique constraint on content_items (wallabag_id, user_id) so one Wallabag entry can never map to multiple local rows (the nosync-removal path had to be widened to clean up exactly such duplicates).
 - [ ] **[P5]** Parallelize the two remaining serial `deleteAudioFile` loops (bulk archive and bulk remove_audio in content.ts), same `Promise.allSettled` shape bulk delete already uses.
 - [ ] **[P5]** Drop the `node-fetch` dependency: Node 22 has native fetch, the openai SDK already migrated off it, wallabag-service.ts already uses native fetch. 5 backend files still import it (grep first). Check for non-standard options at each call site.
-- [ ] **[P5]** Align Node versions: `frontend/nixpacks.toml` pins `nodejs_20` while the backend Dockerfile uses `node:22-slim`. Low risk to bump the frontend to 22.
+- [ ] **[P5]** Align Node versions: the frontend gets Railpack's default Node (`frontend/package.json` has no `engines` field), while the backend Dockerfile uses `node:22-slim`. Setting `"engines": { "node": "22" }` would pin it.
 - [ ] **[P5]** `types.ts` cleanup: `transcript_words`/`tts_chunks`/`content_alignment` are typed `string` but sometimes arrive pre-parsed. Type them `string | T[]` and remove the defensive double-parsing.
 
 ### Documentation
@@ -145,7 +145,6 @@
 - [ ] **Startup query-killer scope.** `db.ts` kills any DB session older than 30s touching content_items at boot (added after a real stuck-lock). It is now constrained so it spares VACUUM / ANALYZE / pg_dump. Remaining question: delete it entirely and rely on the 5s lock_timeout + retry loop (reviewer's lean), or keep it as belt-and-suspenders. Current state: constrained version is live.
 
 
-- [ ] **Delete `frontend/nixpacks.toml`?** Railway builds the frontend with Railpack (builder `RAILPACK` in the deploy settings, 2026-10-23), so the file is not used. It still works if someone switches the service back to Nixpacks
 
 ### Security, deferred (lower impact or architectural)
 > The high/critical items from the pre-launch review are fixed (see the Completed entry). These remain, deliberately deferred:
@@ -158,6 +157,7 @@
 
 ## Completed Recently ✅
 
+- [x] **Deleted `frontend/nixpacks.toml`** (2026-10-23, user agreed): Railway builds the frontend with Railpack (builder `RAILPACK`, no Nixpacks config path in the deploy settings), which does not read it
 - [x] **Previous and next back in focus and cinema mode** (2026-10-23, user's design): the slim row is previous, next, back 15 s, forward 15 s, play, speed, mirrored when the buttons are moved left. Previous shows from 410 px of width and next from 362 px, so on a narrow screen previous goes first. Measured on a PC at 340 to 458 px, no overflow
 - [x] **Docs: the frontend is built by Railpack and served by Caddy** (2026-10-23, seen in the Railway build log, builder `RAILPACK`): RAILWAY_DEPLOYMENT.md and README said Nixpacks and `npx serve`
 - [x] **Speed button keeps one width, aligned buttons reach the edge** (2026-10-23, user found both on the Fold): the speed button is 100 px (88 px in cinema mode) whatever the number, and buttons moved left or right sit at the controls' padding with their rows pushed to that side, no longer in the middle of a 28rem group
