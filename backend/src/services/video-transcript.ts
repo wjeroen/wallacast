@@ -16,10 +16,12 @@ import { youtubeVideoId } from '../shared/format.js';
 
 export const VIDEO_TRANSCRIPT_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
-// Long videos go in 30-minute pieces, so one answer never nears the model's output limit
-// (a 30-minute talk is roughly 5,000 words). Up to 40 minutes go in one piece.
-const PIECE_SECONDS = 30 * 60;
-const SPLIT_ABOVE_SECONDS = 40 * 60;
+// Longer videos go in 10-minute pieces. In one answer Gemini stopped early (a 33-minute
+// video's transcript ended at 21 minutes, finish=STOP, 2026-10-23) and its times drifted
+// further from the video the longer the video was. Each piece starts its times afresh at the
+// piece's start, so the drift stays small. Up to 12 minutes go in one piece.
+const PIECE_SECONDS = 10 * 60;
+const SPLIT_ABOVE_SECONDS = 12 * 60;
 const PIECE_OVERLAP_SECONDS = 20;
 
 // One video frame per 50 seconds instead of Gemini's default of one per second. The
@@ -56,6 +58,15 @@ function clockToSeconds(value: unknown): number | null {
   return parts.reduce((total, p) => total * 60 + Number(p), 0);
 }
 
+// The same three numbers read as minutes, seconds and hundredths ("8:30:16" for 8 min 30.16 s),
+// which Gemini sometimes writes although H:MM:SS was asked for (see readStarts). Null when it
+// is not three numbers.
+function minutesSecondsHundredths(value: unknown): number | null {
+  const parts = String(value ?? '').trim().split(':');
+  if (parts.length !== 3 || parts.some((p) => !/^\d+$/.test(p))) return null;
+  return Number(parts[0]) * 60 + Number(parts[1]) + Number(parts[2]) / 100;
+}
+
 function clock(seconds: number): string {
   const s = Math.floor(seconds);
   const h = Math.floor(s / 3600);
@@ -86,7 +97,9 @@ async function transcribePiece(
   model: string,
   videoUrl: string,
   piece: Piece | null,
-  label: string
+  label: string,
+  // Where the part Gemini gets ends (the video's length for a whole video), null when unknown
+  spanEnd: number | null
 ): Promise<Sentence[]> {
   const scope = piece
     ? ` You are given only the part of the video from ${clock(piece.from)} to ${clock(piece.to)}.`
@@ -99,6 +112,7 @@ async function transcribePiece(
   const prompt = 'Transcribe all speech in this video word for word, in the language that is spoken. '
     + 'Do not summarize, translate, skip or reword anything. Leave out music and sound effects. '
     + 'Split the transcript into sentences. For each sentence give the time it starts as H:MM:SS, '
+    + 'hours, minutes and whole seconds (0:01:05 is one minute and five seconds), '
     + `counted from the start of the video.${scope} `
     + 'Answer only with a JSON array of objects with "start" and "text".';
   const body = {
@@ -152,13 +166,7 @@ async function transcribePiece(
       if (candidate?.finishReason === 'MAX_TOKENS') {
         console.warn(`[VideoTranscript] ${label} TRUNCATED at the output limit, the sentences that arrived in full are kept`);
       }
-      const sentences: Sentence[] = [];
-      for (const row of rows) {
-        const start = clockToSeconds(row?.start);
-        const sentenceText = typeof row?.text === 'string' ? row.text.trim() : '';
-        if (start !== null && sentenceText) sentences.push({ start, text: sentenceText });
-      }
-      return sentences;
+      return readStarts(rows, spanEnd, label);
     } catch (err: any) {
       lastError = err;
       const status: number | undefined = err?.status;
@@ -170,6 +178,41 @@ async function transcribePiece(
     }
   }
   throw lastError ?? new Error('Gemini gave no transcript');
+}
+
+// Gemini writes most starts as the H:MM:SS that was asked for, but sometimes as minutes,
+// seconds and hundredths ("8:30:16" for 8 min 30.16 s): for a whole answer (two videos of 8
+// and 14 minutes got times of up to 14 hours read as H:MM:SS, 2026-10-23) or for a few
+// sentences of it (a later test). So every start is read both ways. Read as hundredths, a
+// start almost always fits, so that reading only counts for the whole answer when most
+// starts read as H:MM:SS run past the part Gemini was given (spanEnd plus a minute). A start
+// that only fits the other way is read that way, and a sentence whose start fits neither
+// keeps its text and takes the start before it.
+function readStarts(rows: Array<{ start?: unknown; text?: unknown }>, spanEnd: number | null, label: string): Sentence[] {
+  const fits = (t: number | null): t is number => t !== null && (spanEnd === null || t <= spanEnd + 60);
+  const read = rows
+    .map((row) => ({
+      hms: clockToSeconds(row?.start),
+      hundredths: minutesSecondsHundredths(row?.start),
+      text: typeof row?.text === 'string' ? row.text.trim() : '',
+    }))
+    .filter((r) => r.text);
+  const preferHundredths = read.filter((r) => fits(r.hms)).length < read.length / 2;
+  if (preferHundredths) console.warn(`[VideoTranscript] ${label}: the times were written as M:SS:hundredths, read that way`);
+  const sentences: Sentence[] = [];
+  let switched = 0;
+  let unread = 0;
+  for (const r of read) {
+    const [first, second] = preferHundredths ? [r.hundredths, r.hms] : [r.hms, r.hundredths];
+    let start: number | null = null;
+    if (fits(first)) start = first;
+    else if (fits(second)) { start = second; switched++; }
+    else unread++;
+    sentences.push({ start: start ?? sentences[sentences.length - 1]?.start ?? 0, text: r.text });
+  }
+  if (switched) console.warn(`[VideoTranscript] ${label}: ${switched} start(s) only fit when read the other way`);
+  if (unread) console.warn(`[VideoTranscript] ${label}: ${unread} start(s) fit neither way, those sentences take the start before them`);
+  return sentences;
 }
 
 // Gemini is asked for times from the start of the full video. If a piece's times plainly
@@ -232,7 +275,8 @@ export async function transcribeYouTubeVideoWith(
   for (let i = 0; i < pieces.length; i++) {
     const label = `${id} piece ${i + 1}/${pieces.length}`;
     const piece = pieces[i];
-    const got = toVideoTime(await transcribePiece(apiKey, model, videoUrl, piece, label), piece, label);
+    const spanEnd = piece ? piece.to : (durationSeconds || null);
+    const got = toVideoTime(await transcribePiece(apiKey, model, videoUrl, piece, label, spanEnd), piece, label);
     for (const [k, s] of got.entries()) {
       if (piece && (s.start < piece.from - 1 || s.start >= piece.ownTo)) continue;
       // Gemini sometimes still writes the end of the sentence a piece begins in, although

@@ -48,8 +48,8 @@ import {
   PanelTopOpen,
   Maximize,
   RectangleHorizontal,
-  Expand,
-  Shrink,
+  UnfoldVertical,
+  FoldVertical,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -2394,12 +2394,12 @@ export function FullscreenPlayer({
           )}
           <button
             type="button"
-            className="timeline-btn"
+            className={`timeline-btn${focusOn ? ' active' : ''}`}
             onClick={() => setViewMode(focusOn ? 'normal' : 'focus')}
             title={focusOn ? 'Back to the normal view' : 'Focus mode'}
             aria-label={focusOn ? 'Back to the normal view' : 'Focus mode'}
           >
-            {focusOn ? <Shrink size={16} /> : <Expand size={16} />}
+            {focusOn ? <FoldVertical size={16} /> : <UnfoldVertical size={16} />}
           </button>
         </div>
   );

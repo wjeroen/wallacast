@@ -4813,7 +4813,7 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
-/* Cinema mode is on: its icon does not change, so it turns blue */
+/* Cinema or focus mode is on (focus also while cinema is on) */
 .fullscreen-progress-bar .timeline-btn.active {
   color: var(--accent-text);
 }
