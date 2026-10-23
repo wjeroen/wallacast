@@ -20,12 +20,12 @@ type Page = 'main' | 'settings';
 
 // A link or text shared to Wallacast from another app through the Android share menu. The
 // share_target in public/manifest.json opens /share?title=&text=&url=, and apps put the link
-// in any of the three (YouTube in text). Read once when the app loads, then the address goes
-// back to / so a reload does not add it again.
-function takeSharedContent(): SharedContent | null {
-  if (window.location.pathname !== '/share') return null;
-  const params = new URLSearchParams(window.location.search);
-  window.history.replaceState(null, '', '/');
+// in any of the three (YouTube in text). Null for any other address.
+function readShare(address: string): SharedContent | null {
+  let parsed: URL;
+  try { parsed = new URL(address, window.location.origin); } catch { return null; }
+  if (parsed.pathname !== '/share') return null;
+  const params = parsed.searchParams;
   const title = (params.get('title') || '').trim();
   const text = (params.get('text') || '').trim();
   let link = [params.get('url') || '', text, title]
@@ -41,7 +41,28 @@ function takeSharedContent(): SharedContent | null {
   }
   return text ? { key: Date.now(), text, title } : null;
 }
+
+// What a share holds, without its key: the same share handed over twice compares equal
+const shareSignature = (share: SharedContent) => JSON.stringify([share.url, share.text, share.title]);
+const handledShares = new Set<string>();
+
+// A share that opened the app (or, without launch_handler support, reloaded it) is read once
+// when the app loads, then the address goes back to / so a reload does not add it again.
+function takeSharedContent(): SharedContent | null {
+  const share = readShare(window.location.href);
+  if (window.location.pathname === '/share') window.history.replaceState(null, '', '/');
+  if (share) handledShares.add(shareSignature(share));
+  return share;
+}
 const sharedAtStartup = takeSharedContent();
+
+// The manifest's launch_handler asks Chrome to hand a share to the app that is already open
+// ("focus-existing") instead of reloading it. Where Chrome does that, the share's address
+// arrives through window.launchQueue and the app stays as it was (an item stays open, audio
+// keeps playing). The launch that opened the app also comes through here, already handled.
+interface LaunchQueue {
+  setConsumer(consumer: (params: { targetURL?: string }) => void): void;
+}
 
 // generation_status values that mean "still working". Anything else
 // ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
@@ -193,6 +214,17 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  useEffect(() => {
+    const launchQueue = (window as Window & { launchQueue?: LaunchQueue }).launchQueue;
+    launchQueue?.setConsumer((params) => {
+      const share = params.targetURL ? readShare(params.targetURL) : null;
+      if (!share || handledShares.has(shareSignature(share))) return;
+      handledShares.add(shareSignature(share));
+      console.log('[Share] Received from Chrome without a reload');
+      setShared(share);
+    });
+  }, []);
 
   // A shared link is saved in the background while the app stays where it opens, with a
   // short notice at the bottom. Only when saving fails does the Add tab open, where the save
