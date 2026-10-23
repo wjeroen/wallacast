@@ -12,6 +12,7 @@ import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/po
 import { createReadStream } from 'fs';
 import type { Readable } from 'stream';
 import { startHourlyMemoryLog } from './services/memory-log.js';
+import { startYouTubeRefresh } from './services/youtube-refresh.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -569,6 +570,10 @@ async function start() {
           console.error('🎵 [AudioMigration] Stopped:', err?.message || err);
         }
       })();
+
+      // Reads stored YouTube details again before YouTube's 30-day limit (hourly, first run
+      // after 5 minutes)
+      startYouTubeRefresh();
       break;
     } catch (error) {
       retries--;

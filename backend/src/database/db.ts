@@ -286,6 +286,11 @@ export async function initializeDatabase() {
     const tokenPermissionsMigration = await fs.readFile(tokenPermissionsMigrationPath, 'utf-8');
     await client.query(tokenPermissionsMigration);
 
+    // Run migration adding YouTube's view count and embed status for video items
+    const youtubeDetailsMigrationPath = path.join(__dirname, 'migrations', '032_youtube_details.sql');
+    const youtubeDetailsMigration = await fs.readFile(youtubeDetailsMigrationPath, 'utf-8');
+    await client.query(youtubeDetailsMigration);
+
     // Reset any stuck generation statuses (server restart during generation)
     // Use current_operation to give a specific error message about what was interrupted
     const resetResult = await client.query(`

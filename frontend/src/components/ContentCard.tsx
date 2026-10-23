@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, Eye, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings, compactCount } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -92,6 +92,9 @@ export function ContentCard({
             {item.karma !== undefined && item.karma !== null && (
               <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {item.karma}</>
             )}
+            {item.view_count !== undefined && item.view_count !== null && (
+              <> &bull; <Eye size={12} style={{ verticalAlign: '-1px' }} /> {compactCount(item.view_count)}</>
+            )}
             {item.comment_count !== undefined && item.comment_count > 0 && (
               <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {item.comment_count}</>
             )}
@@ -163,6 +166,14 @@ export function ContentCard({
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
+          {item.type === 'video' && item.embed_blocked && (
+            <span
+              className="badge"
+              title={item.embed_blocked === 'age_restricted' ? 'Age restricted, so it plays only on YouTube' : 'Its owner allows it to play only on YouTube'}
+            >
+              YouTube only
+            </span>
+          )}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
             <span className="badge summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
               <MessageSquareText size={12} /> Summary

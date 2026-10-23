@@ -230,7 +230,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
     // Image alt-text: provider gemini | deepinfra | openai | openrouter
     gemini_api_key: '',
-    // YouTube Data API: a video's description, date and length (backend services/youtube.ts)
+    // YouTube Data API: a video's description, date, length, counts and comments (backend services/youtube.ts)
     youtube_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
@@ -1798,7 +1798,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Video descriptions, dates and lengths.</small>
+            <small className="settings-hint">Video descriptions, dates, lengths, views, comment counts and comments.</small>
           </div>
         </section>
 

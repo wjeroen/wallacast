@@ -1075,7 +1075,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
       return [prefixed, ...replies].join('\n\n');
     };
-    lines.push('', `# Comments (${item.comment_count || comments.length})`, '');
+    // A video lists only YouTube's most relevant comments, while its comment_count is
+    // YouTube's total, so its heading counts the listed ones
+    const listed = (list: Comment[]): number => list.reduce((n, c) => n + 1 + listed(c.replies || []), 0);
+    lines.push('', `# Comments (${item.type === 'video' ? listed(comments) : (item.comment_count || comments.length)})`, '');
     lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
   }
 

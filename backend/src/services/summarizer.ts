@@ -365,11 +365,12 @@ export async function generateSummaryForContent(contentId: number, options: { ge
     const summary = (articleResponse.choices[0]?.message?.content || '').trim();
     logTweetLengths('article', summary, maxWords);
 
-    // 5. Comment summary (optional), only if enabled AND the item has comments
+    // 5. Comment summary (optional), only if enabled AND the item has comments. A video's
+    // YouTube comments are not summarized (yet, see TODO.md).
     let commentSummary: string | null = null;
     const summarizeComments = (await getUserSetting(userId, 'summarize_comments')) !== 'false'; // default ON
     let comments: CommentLike[] = [];
-    if (item.comments) {
+    if (item.comments && item.type !== 'video') {
       try {
         comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
       } catch (e) {

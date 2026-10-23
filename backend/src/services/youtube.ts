@@ -1,18 +1,25 @@
 import { safeFetch } from './url-guard.js';
 import { getUserSetting } from './ai-providers.js';
 import { youtubeWatchUrl } from '../shared/format.js';
+import type { Comment } from '../shared/types.js';
 
-// What an added YouTube video is stored with, read when the video is added or refetched,
-// never for playback (the app plays the video in YouTube's embedded player):
-// - The YouTube Data API (videos.list), with the user's key: title, channel, description,
-//   publish date and length. The official route, and the one that works from Railway.
-// - Without a working key, two public sources: oEmbed, YouTube's lookup that needs no key
-//   (title, channel), and the watch page (length, publish date, description). The watch
-//   page is best effort: YouTube often answers a datacenter address with HTTP 429 (seen on
-//   Railway 2026-10-22), and then the player fills the length on first play.
+// What an added YouTube video is stored with, read when the video is added or refetched and
+// by the refresh job (youtube-refresh.ts), never for playback (the app plays the video in
+// YouTube's embedded player):
+// - The YouTube Data API, with the user's key: title, channel, description, publish date,
+//   length, view and comment counts and whether the embedded player may play it
+//   (videos.list), and the most relevant comments (commentThreads.list). One quota unit per
+//   call, whatever parts are asked for.
+// - Without a working key, oEmbed, YouTube's lookup that needs no key: title and channel.
+//   The player fills the length on first play. YouTube's developer policies forbid scraping
+//   YouTube (III.E.6), so the watch page is never read.
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const HEADERS_TIMEOUT_MS = 10_000;
+const COMMENT_THREADS = 100; // the most commentThreads.list gives in one call
+
+// Why YouTube's embedded player cannot play a video, so it plays only on YouTube
+export type EmbedBlocked = 'not_embeddable' | 'age_restricted';
 
 export interface YouTubeMetadata {
   title: string | null;
@@ -22,6 +29,11 @@ export interface YouTubeMetadata {
   preview_picture: string;
   published_at: string | null;
   duration: number | null;
+  // Only from the Data API, null from oEmbed
+  view_count: number | null;
+  comment_count: number | null;
+  embed_blocked: EmbedBlocked | null;
+  source: 'data_api' | 'oembed';
 }
 
 export class YouTubeUnavailableError extends Error {}
@@ -32,10 +44,10 @@ interface OEmbed {
 }
 
 // The user's key for the Data API (Settings, `youtube_api_key`), or null. The Data API
-// costs nothing, only daily quota (10,000 units, one per video). A Gemini key from AI
-// Studio does not work here even with the API turned on in its project: Google answers
-// "Requests to this API ... are blocked", because AI Studio restricts the key to Gemini
-// (checked 2026-10-22). So it takes its own key.
+// costs nothing, only daily quota (10,000 units). A Gemini key from AI Studio does not work
+// here even with the API turned on in its project: Google answers "Requests to this API ...
+// are blocked", because AI Studio restricts the key to Gemini (checked 2026-10-22). So it
+// takes its own key.
 export async function youtubeApiKey(userId: number): Promise<string | null> {
   return (await getUserSetting(userId, 'youtube_api_key'))?.trim() || null;
 }
@@ -48,30 +60,71 @@ function isoDurationSeconds(value: string | undefined): number | null {
   return seconds > 0 ? seconds : null;
 }
 
-// One videos.list call (1 quota unit). The key goes in a header, never in the address, so
-// it can never end up in an error message or a log line.
-async function fetchDataApiDetails(videoId: string, key: string): Promise<PageDetails> {
+// A count YouTube sends as a string ("12345"), or null when it sends none
+function countOrNull(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function isoDateOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+// One Data API call. The key goes in a header, never in the address, so it can never end up
+// in an error message or a log line. A failed call throws with YouTube's reason
+// (quotaExceeded, commentsDisabled, ...) in the message, also kept on `reason`.
+class DataApiError extends Error {
+  constructor(message: string, readonly status: number, readonly reason: string) {
+    super(message);
+  }
+}
+
+async function dataApi(path: string, key: string): Promise<any> {
   const res = await safeFetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(videoId)}`,
+    `https://www.googleapis.com/youtube/v3/${path}`,
     { headers: { 'X-Goog-Api-Key': key } }, 5, HEADERS_TIMEOUT_MS
   );
   const body = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) {
-    const reason = body?.error?.details?.find((d: any) => d?.reason)?.reason || body?.error?.errors?.[0]?.reason || body?.error?.status || '';
-    throw new Error(`Data API answered HTTP ${res.status} ${reason}`.trim());
+    const reason = body?.error?.errors?.[0]?.reason || body?.error?.details?.find((d: any) => d?.reason)?.reason || body?.error?.status || '';
+    throw new DataApiError(`Data API answered HTTP ${res.status} ${reason}`.trim(), res.status, reason);
   }
-  const video = body?.items?.[0];
-  if (!video) {
-    throw new YouTubeUnavailableError('YouTube has no public or unlisted video with this address. It may be private or removed.');
-  }
-  const published = video.snippet?.publishedAt;
+  return body;
+}
+
+type DataApiDetails = Omit<YouTubeMetadata, 'preview_picture' | 'source'>;
+
+// One video resource of a videos.list answer, as the app stores it (description still plain
+// text). Exported for scripts/test-youtube.mts.
+export function videoDetailsFromApi(video: any): DataApiDetails {
+  // contentRating.ytRating is YouTube's own age restriction. Such a video asks the viewer
+  // to sign in on YouTube, so the embedded player cannot play it either.
+  const embedBlocked: EmbedBlocked | null = video.status?.embeddable === false ? 'not_embeddable'
+    : video.contentDetails?.contentRating?.ytRating === 'ytAgeRestricted' ? 'age_restricted'
+    : null;
   return {
     title: video.snippet?.title || null,
     author: video.snippet?.channelTitle || null,
     description: video.snippet?.description || null,
-    published_at: published && !isNaN(new Date(published).getTime()) ? new Date(published).toISOString() : null,
+    published_at: isoDateOrNull(video.snippet?.publishedAt),
     duration: isoDurationSeconds(video.contentDetails?.duration),
+    view_count: countOrNull(video.statistics?.viewCount),
+    // YouTube leaves commentCount out when the video's comments are turned off
+    comment_count: countOrNull(video.statistics?.commentCount) ?? 0,
+    embed_blocked: embedBlocked,
   };
+}
+
+async function fetchDataApiDetails(videoId: string, key: string): Promise<DataApiDetails> {
+  const body = await dataApi(`videos?part=snippet,contentDetails,status,statistics&id=${encodeURIComponent(videoId)}`, key);
+  const video = body?.items?.[0];
+  if (!video) {
+    throw new YouTubeUnavailableError('YouTube has no public or unlisted video with this address. It may be private or removed.');
+  }
+  return videoDetailsFromApi(video);
 }
 
 async function fetchOEmbed(videoId: string): Promise<OEmbed> {
@@ -79,52 +132,6 @@ async function fetchOEmbed(videoId: string): Promise<OEmbed> {
   const res = await safeFetch(url, { headers: { 'User-Agent': BROWSER_UA } }, 5, HEADERS_TIMEOUT_MS);
   if (!res.ok) throw new Error(`oEmbed answered HTTP ${res.status}`);
   return (await res.json()) as OEmbed;
-}
-
-interface PageDetails {
-  title: string | null;
-  author: string | null;
-  description: string | null;
-  published_at: string | null;
-  duration: number | null;
-}
-
-// A JSON string value in the page's player data, decoded. The value is read with a plain
-// pattern, not by parsing the whole page (1.4 MB of HTML and script).
-function jsonStringField(html: string, name: string): string | null {
-  const m = html.match(new RegExp(`"${name}":"((?:[^"\\\\]|\\\\.)*)"`));
-  if (!m) return null;
-  try {
-    return JSON.parse(`"${m[1]}"`);
-  } catch {
-    return null;
-  }
-}
-
-async function fetchWatchPageDetails(videoId: string): Promise<PageDetails> {
-  const res = await safeFetch(youtubeWatchUrl(videoId), {
-    headers: {
-      'User-Agent': BROWSER_UA,
-      'Accept-Language': 'en',
-      // Skips the EU cookie consent page, which carries none of the video's details
-      Cookie: 'SOCS=CAI',
-    },
-  }, 5, HEADERS_TIMEOUT_MS);
-  if (!res.ok) throw new Error(`watch page answered HTTP ${res.status}`);
-  const html = await res.text();
-  const start = html.indexOf('"videoDetails"');
-  if (start < 0) throw new Error('watch page has no video details (consent page or bot check)');
-  // The player data's own block, so a "title" elsewhere on the page is never taken
-  const details = html.slice(start, start + 60_000);
-  const length = Number(jsonStringField(details, 'lengthSeconds'));
-  const published = jsonStringField(html, 'publishDate') || jsonStringField(html, 'uploadDate');
-  return {
-    title: jsonStringField(details, 'title'),
-    author: jsonStringField(details, 'author') || jsonStringField(html, 'ownerChannelName'),
-    description: jsonStringField(details, 'shortDescription'),
-    published_at: published && !isNaN(new Date(published).getTime()) ? new Date(published).toISOString() : null,
-    duration: Number.isFinite(length) && length > 0 ? length : null,
-  };
 }
 
 function escapeHtml(text: string): string {
@@ -146,44 +153,99 @@ function descriptionToHtml(text: string): string {
 // 16:9 without the black bars hqdefault.jpg adds
 const thumbnailFor = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 
-export async function fetchYouTubeMetadata(videoId: string, apiKey: string | null = null): Promise<YouTubeMetadata> {
+// The video's details. With a key they come from the Data API. When that fails (a wrong key,
+// the day's quota used up), `fallbackToOEmbed` decides: adding a video still works with
+// oEmbed's title and channel, while a refresh throws, so it never stores less than it had.
+export async function fetchYouTubeMetadata(videoId: string, apiKey: string | null = null, fallbackToOEmbed = true): Promise<YouTubeMetadata> {
   if (apiKey) {
     try {
       const api = await fetchDataApiDetails(videoId, apiKey);
-      console.log(`[YouTube] ${videoId}: data api=ok duration=${api.duration ?? 'unknown'}`);
+      console.log(`[YouTube] ${videoId}: data api=ok duration=${api.duration ?? 'unknown'} embed=${api.embed_blocked ?? 'ok'}`);
       return {
-        title: api.title,
-        author: api.author,
+        ...api,
         description: api.description?.trim() ? descriptionToHtml(api.description.trim()) : null,
         preview_picture: thumbnailFor(videoId),
-        published_at: api.published_at,
-        duration: api.duration,
+        source: 'data_api',
       };
     } catch (err) {
-      if (err instanceof YouTubeUnavailableError) throw err;
-      console.warn(`[YouTube] ${videoId}: data api failed, using the public sources: ${(err as Error).message}`);
+      if (err instanceof YouTubeUnavailableError || !fallbackToOEmbed) throw err;
+      console.warn(`[YouTube] ${videoId}: data api failed, using oEmbed: ${(err as Error).message}`);
     }
   }
-  const [oembed, page] = await Promise.all([
-    fetchOEmbed(videoId).catch((err: Error) => {
-      console.warn(`[YouTube] ${videoId}: ${err.message}`);
-      return null;
-    }),
-    fetchWatchPageDetails(videoId).catch((err: Error) => {
-      console.warn(`[YouTube] ${videoId}: ${err.message}`);
-      return null;
-    }),
-  ]);
-  if (!oembed && !page) {
+  let oembed: OEmbed;
+  try {
+    oembed = await fetchOEmbed(videoId);
+  } catch (err) {
+    console.warn(`[YouTube] ${videoId}: ${(err as Error).message}`);
     throw new YouTubeUnavailableError('YouTube gave no details for this video. It may be private, removed, or not a video address.');
   }
-  console.log(`[YouTube] ${videoId}: oembed=${oembed ? 'ok' : 'failed'} page=${page ? 'ok' : 'failed'} duration=${page?.duration ?? 'unknown'}`);
+  console.log(`[YouTube] ${videoId}: oembed=ok`);
   return {
-    title: oembed?.title || page?.title || null,
-    author: oembed?.author_name || page?.author || null,
-    description: page?.description?.trim() ? descriptionToHtml(page.description.trim()) : null,
+    title: oembed.title || null,
+    author: oembed.author_name || null,
+    description: null,
     preview_picture: thumbnailFor(videoId),
-    published_at: page?.published_at ?? null,
-    duration: page?.duration ?? null,
+    published_at: null,
+    duration: null,
+    view_count: null,
+    comment_count: null,
+    embed_blocked: null,
+    source: 'oembed',
   };
+}
+
+// A comment as the app stores it (the shape of EA Forum and Substack comments), with
+// YouTube's likes as its score. textDisplay is YouTube's HTML (links and line breaks), and
+// its links open outside the app.
+function toComment(raw: any): Comment | null {
+  const s = raw?.snippet;
+  const html = typeof s?.textDisplay === 'string' ? s.textDisplay.trim() : '';
+  if (!html) return null;
+  const comment: Comment = {
+    username: s.authorDisplayName || 'Unknown',
+    content: html.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" '),
+  };
+  const date = isoDateOrNull(s.publishedAt);
+  if (date) comment.date = date;
+  // Like YouTube, a comment without likes shows no count
+  const likes = countOrNull(s.likeCount);
+  if (likes) comment.karma = likes;
+  return comment;
+}
+
+// The comments of a commentThreads.list answer, each thread's replies oldest first.
+// Exported for scripts/test-youtube.mts.
+export function commentsFromThreads(body: any): Comment[] {
+  const comments: Comment[] = [];
+  for (const thread of body?.items || []) {
+    const top = toComment(thread?.snippet?.topLevelComment);
+    if (!top) continue;
+    const replies = ((thread?.replies?.comments || []) as any[])
+      .map(toComment)
+      .filter((c): c is Comment => c !== null)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    if (replies.length > 0) top.replies = replies;
+    comments.push(top);
+  }
+  return comments;
+}
+
+// The video's most relevant comment threads (commentThreads.list, one quota unit), up to
+// 100, each with the few replies YouTube includes in a thread. YouTube's replies list "is
+// only a subset" when a thread has more, and all of them would cost a call per thread. []
+// when the video's comments are turned off.
+export async function fetchYouTubeComments(videoId: string, key: string): Promise<Comment[]> {
+  let body: any;
+  try {
+    body = await dataApi(
+      `commentThreads?part=snippet,replies&videoId=${encodeURIComponent(videoId)}&maxResults=${COMMENT_THREADS}&order=relevance&textFormat=html`,
+      key
+    );
+  } catch (err) {
+    if (err instanceof DataApiError && err.reason === 'commentsDisabled') return [];
+    throw err;
+  }
+  const comments = commentsFromThreads(body);
+  console.log(`[YouTube] ${videoId}: ${comments.length} comment threads`);
+  return comments;
 }

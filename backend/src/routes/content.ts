@@ -21,7 +21,8 @@ import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
 import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
-import { fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
+import { fetchYouTubeComments, fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
+import { refreshVideoDetails } from '../services/youtube-refresh.js';
 import { transcribeYouTubeVideo } from '../services/video-transcript.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal, existingItemIdForUrl } from '../services/token-actions.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
@@ -56,7 +57,7 @@ router.get('/', async (req, res) => {
     // several times that as objects) was read and serialized on every library load, twice per
     // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -797,7 +798,7 @@ router.get('/fetch-progress/:id', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -1098,10 +1099,17 @@ router.post('/', async (req, res) => {
       commentCountTotal = articleData.comment_count_total || 0;
     }
 
+    // YouTube's view count and embed status, and when the details were read: now, unless a
+    // key exists but the Data API failed (oEmbed's title only), then the refresh job reads
+    // them within the hour.
+    let viewCount: number | null = null;
+    let embedBlocked: string | null = null;
+    let videoFetchedAt: Date | null = null;
     if (youtubeId) {
+      const key = await youtubeApiKey(req.user!.userId);
       let video;
       try {
-        video = await fetchYouTubeMetadata(youtubeId, await youtubeApiKey(req.user!.userId));
+        video = await fetchYouTubeMetadata(youtubeId, key);
       } catch (videoError) {
         if (videoError instanceof YouTubeUnavailableError) {
           return res.status(502).json({ error: `Could not add this video. ${videoError.message}` });
@@ -1114,6 +1122,21 @@ router.post('/', async (req, res) => {
       if (!finalPreviewPicture) finalPreviewPicture = video.preview_picture;
       if (!finalPublishedAt && video.published_at) finalPublishedAt = video.published_at;
       if (!finalDuration && video.duration) finalDuration = video.duration;
+      if (video.source === 'data_api') {
+        viewCount = video.view_count;
+        embedBlocked = video.embed_blocked;
+        // YouTube's total, while comments holds its most relevant threads
+        commentCountTotal = video.comment_count ?? 0;
+        const youtubeComments = await fetchYouTubeComments(youtubeId, key!).catch((err: Error) => {
+          console.warn(`[YouTube] ${youtubeId}: comments failed: ${err.message}`);
+          return [];
+        });
+        if (youtubeComments.length > 0) {
+          extractedComments = JSON.stringify(youtubeComments);
+          commentSource = 'youtube';
+        }
+      }
+      if (video.source === 'data_api' || !key) videoFetchedAt = new Date();
     }
 
     if (!finalTitle || finalTitle === 'Untitled') {
@@ -1165,14 +1188,15 @@ router.post('/', async (req, res) => {
     const dbType = type;
 
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
-    // Set content_fetched_at for articles fetched from a URL
-    const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
+    // Set content_fetched_at for articles fetched from a URL, and for videos when their
+    // YouTube details were read (the refresh job reads them again after 7 days)
+    const contentFetchedAt = (type === 'article' && url) ? new Date() : videoFetchedAt;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at, view_count, embed_blocked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, finalDuration, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, finalDuration, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null, viewCount, embedBlocked]
     );
 
     const createdItem = result.rows[0];
@@ -1834,7 +1858,7 @@ router.patch('/:id', async (req, res) => {
     // For content updates, return the same columns as the list endpoint (has_word_timings, not
     // the word timings themselves).
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, view_count, embed_blocked'
       : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
@@ -1906,7 +1930,7 @@ router.get('/:id/export', async (req, res) => {
               generation_status, generation_progress, generation_error, current_operation,
               tts_chunks, transcript_words, content_alignment,
               karma, agree_votes, disagree_votes, comments, comment_source,
-              COALESCE(comment_count_total, 0) AS comment_count,
+              COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked,
               content_source, content_fetched_at, audio_generated_at,
               images_processed, image_alt_text_data,
               summary, comment_summary, summary_status, summary_generated_at, summary_error,
@@ -1988,9 +2012,10 @@ router.post('/:id/refetch', async (req, res) => {
 
     const { type, url } = contentResult.rows[0];
 
-    // A video refetches its YouTube details (title, channel, description, date, length),
-    // for example after a YouTube key was added in Settings. A value YouTube does not give
-    // keeps the stored one. There is no body, so there is no version snapshot.
+    // A video refetches its YouTube details (title, channel, description, date, length,
+    // counts, embed status and comments), for example after a YouTube key was added in
+    // Settings, the same way the refresh job does (refreshVideoDetails). A value YouTube does
+    // not give keeps the stored one. There is no body, so there is no version snapshot.
     const videoId = type === 'video' ? youtubeVideoId(url) : null;
     if (videoId) {
       (async () => {
@@ -1999,23 +2024,11 @@ router.post('/:id/refetch', async (req, res) => {
             'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
             ['fetching', 10, 'fetching_article', id]
           );
-          const video = await fetchYouTubeMetadata(videoId, await youtubeApiKey(req.user!.userId));
+          await refreshVideoDetails(Number(id), videoId, await youtubeApiKey(req.user!.userId));
           await query(
-            `UPDATE content_items SET
-              title = COALESCE($1, title),
-              author = COALESCE($2, author),
-              description = COALESCE($3, description),
-              published_at = COALESCE($4, published_at),
-              duration = COALESCE($5, duration),
-              preview_picture = COALESCE($6, preview_picture),
-              wallabag_needs_push = TRUE,
-              generation_status = 'completed',
-              generation_progress = 100,
-              current_operation = NULL,
-              updated_at = NOW(),
-              content_fetched_at = NOW()
-            WHERE id = $7`,
-            [video.title, video.author, video.description, video.published_at, video.duration, video.preview_picture, id]
+            `UPDATE content_items SET generation_status = 'completed', generation_progress = 100, current_operation = NULL
+             WHERE id = $1`,
+            [id]
           );
           console.log(`Refetch completed for video ${id}`);
         } catch (error) {

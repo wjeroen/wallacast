@@ -11,7 +11,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasPlayableMedia, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
+import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -408,7 +408,7 @@ function App() {
   // never both, because card progress is original-audio-only by design.
   const resetIfNearlyFinished = (item: ContentItem): ContentItem => {
     // A video counts as the full audio: its position and length are the original's
-    const variant = getEffectiveAudio(item.type === 'video' ? { ...item, audio_url: item.url } : item, preferSummaryAudio);
+    const variant = getEffectiveAudio(videoPlaysHere(item) ? { ...item, audio_url: item.url } : item, preferSummaryAudio);
     if (!variant) return item;
     const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
     const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;

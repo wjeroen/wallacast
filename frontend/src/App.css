@@ -4753,6 +4753,34 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: not-allowed;
 }
 
+/* Shuffle and autoplay beside previous and next (the Queue tab has the same toggles), blue
+   while on. Only where the seven buttons fit: they and their gaps take 452 px, the controls'
+   padding 48 more (measured on a PC). */
+.track-mode-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--t2);
+  cursor: pointer;
+  padding: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+.track-mode-btn:hover {
+  background: var(--bg-raised);
+  color: var(--t0);
+}
+.track-mode-btn.active {
+  color: var(--accent-text);
+}
+@container app (min-width: 500px) {
+  .track-mode-btn {
+    display: flex;
+  }
+}
+
 /* Autoplay "On/Off" option toggle gets a blue tint when active */
 .fullscreen-player-options .option-toggle.active {
   color: var(--accent-text);
@@ -4840,8 +4868,9 @@ blockquote.twitter-tweet.tweet-quoted {
   position: relative;
 }
 
+/* 29rem holds the seven buttons of the playback row (452 px with shuffle and autoplay) */
 .controls-cluster {
-  max-width: 28rem;
+  max-width: 29rem;
   margin: 0 auto;
 }
 

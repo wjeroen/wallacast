@@ -195,12 +195,24 @@ export function hasAnyAudio(item: { audio_url?: string | null; summary_audio_url
   return !!item.audio_url || !!item.summary_audio_url;
 }
 
-// Whether the player has something to play: any audio, or a YouTube video (played in
+// A YouTube video that YouTube's embedded player may play. One the owner keeps off other
+// sites, or an age-restricted one (embed_blocked, known with a YouTube key), plays only on
+// YouTube, so the app treats it like an item without audio.
+export function videoPlaysHere(item: { type?: string; embed_blocked?: string | null }): boolean {
+  return item.type === 'video' && !item.embed_blocked;
+}
+
+// Whether the player has something to play: any audio, or a YouTube video it may play (in
 // YouTube's embedded player). Decides the play flows and the mini player. The queue's
 // "Up next" stream and autoplay continuation stay audio-only (hasAnyAudio), because a
 // video may only play while it is visible on screen.
-export function hasPlayableMedia(item: { type?: string; audio_url?: string | null; summary_audio_url?: string | null }): boolean {
-  return hasAnyAudio(item) || item.type === 'video';
+export function hasPlayableMedia(item: { type?: string; audio_url?: string | null; summary_audio_url?: string | null; embed_blocked?: string | null }): boolean {
+  return hasAnyAudio(item) || videoPlaysHere(item);
+}
+
+// A large count the short way YouTube writes it: 950, 12K, 1.2M
+export function compactCount(n: number): string {
+  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 
 // ---- YouTube videos -------------------------------------------------------------

@@ -58,8 +58,8 @@ import { pageZoom } from '../desktop-fit';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
-import { linkDescriptionTimestamps } from '../timestamps';
-import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasPlayableMedia } from '../format';
+import { linkDescriptionTimestamps, youtubeLinkSeconds } from '../timestamps';
+import { cleanHtml, compactCount, displayUrl, formatTime, getDomainFromUrl, hasPlayableMedia } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
@@ -432,7 +432,7 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.type === 'podcast_episode' && item.podcast_show_name
               ? item.podcast_show_name
               : (item.author || '')}
-            {!item.audio_url && <span className="queue-row-noaudio"> • no audio</span>}
+            {!hasPlayableMedia(item) && <span className="queue-row-noaudio"> • no audio</span>}
           </div>
         </div>
       </div>
@@ -731,6 +731,10 @@ export function FullscreenPlayer({
 
   // Total comment count including all nested replies
   const totalCommentCount = useMemo(() => countAllComments(parsedComments), [parsedComments]);
+  // A video stores only YouTube's most relevant comment threads, so its header shows YouTube's
+  // own total (comment_count)
+  const videoCommentTotal = content.type === 'video' ? (content.comment_count ?? 0) : 0;
+  const headerCommentCount = content.type === 'video' ? videoCommentTotal : totalCommentCount;
 
   // Parse content alignment data if available
   const parsedAlignment = useMemo(() => {
@@ -1867,6 +1871,35 @@ export function FullscreenPlayer({
             ) : (
               <p className="no-content">No description available</p>
             )}
+            {/* A video's most relevant YouTube comments, under its description as on YouTube.
+                Their likes are labeled like Substack's. A time in a comment moves the video
+                there (youtubeLinkSeconds) instead of opening YouTube. */}
+            {content.type === 'video' && parsedComments.length > 0 && (
+              <div
+                className="tab-comments-display"
+                style={{ marginTop: '2rem' }}
+                onClick={(e) => {
+                  const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+                  const seconds = link ? youtubeLinkSeconds(link.href, content.url) : null;
+                  if (seconds === null) return;
+                  e.preventDefault();
+                  onSeekRef.current(seconds);
+                }}
+              >
+                <div className="read-along-comments-divider" />
+                <div className="comments-header">
+                  <h3>
+                    YouTube comments ({totalCommentCount}
+                    {videoCommentTotal > totalCommentCount && ` of ${videoCommentTotal.toLocaleString('en-US')}`})
+                  </h3>
+                </div>
+                <div className="comments-list">
+                  {parsedComments.map((comment, index) => (
+                    <CommentComponent key={index} comment={comment} depth={0} isLessWrong={false} isSubstack />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       case 'comments':
@@ -2479,8 +2512,11 @@ export function FullscreenPlayer({
                       {(content.karma !== undefined && content.karma !== null) && (
                         <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
                       )}
-                      {totalCommentCount > 0 && (
-                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
+                      {content.view_count !== undefined && content.view_count !== null && (
+                        <> &bull; <Eye size={12} style={{ verticalAlign: '-1px' }} /> {compactCount(content.view_count)}</>
+                      )}
+                      {headerCommentCount > 0 && (
+                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {headerCommentCount}</>
                       )}
                     </span>
                     {inlineChip}
@@ -2689,6 +2725,20 @@ export function FullscreenPlayer({
         </div>
       </div>
 
+      {/* A video that plays only on YouTube (embed_blocked) gets no player, only this note */}
+      {!video && content.type === 'video' && content.embed_blocked && (
+        <div className="fullscreen-video-area">
+          <p className="video-error">
+            {content.embed_blocked === 'age_restricted'
+              ? 'This video is age restricted, so it plays only on YouTube.'
+              : 'The owner does not allow this video to play outside YouTube.'}{' '}
+            {content.url && (
+              <a href={content.url} target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* A video item's YouTube player. It stays put while the tabs below scroll, and
           nothing may cover it (YouTube's embed rules), so a playback error shows under it. */}
       {video && (
@@ -2817,6 +2867,17 @@ export function FullscreenPlayer({
         <div className={`controls-cluster align-${controlsAlign}`}>
         {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
+          {/* Shuffle and autoplay, the same toggles as in the Queue tab, only where the seven
+              buttons fit (App.css) */}
+          <button
+            onClick={() => setShuffleNonManual(!shuffleNonManual, content.id)}
+            title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
+            aria-pressed={shuffleNonManual}
+            className={`track-mode-btn${shuffleNonManual ? ' active' : ''}`}
+          >
+            <Shuffle size={20} />
+          </button>
+
           <button
             onClick={() => onSkipPrevTrack?.(isPlaying)}
             title="Previous track"
@@ -2847,6 +2908,15 @@ export function FullscreenPlayer({
             disabled={!hasNextTrack}
           >
             <SkipForward size={22} />
+          </button>
+
+          <button
+            onClick={() => setAutoplay(!autoplay)}
+            title={autoplay ? 'Autoplay on. Will continue into library items after queue ends' : 'Autoplay off. Stops after queue ends'}
+            aria-pressed={autoplay}
+            className={`track-mode-btn${autoplay ? ' active' : ''}`}
+          >
+            <Repeat size={20} />
           </button>
         </div>
         )}

@@ -4,7 +4,7 @@ import { contentAPI, userSettingsAPI } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
 import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
-import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, youtubeVideoId, type AudioVariant } from '../format';
+import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, videoPlaysHere, youtubeVideoId, type AudioVariant } from '../format';
 
 function getStoredSpeed(): number {
   try {
@@ -83,7 +83,8 @@ export function AudioPlayer({
   const requestedOverride = overrideForId && content && overrideForId.id === content.id ? overrideForId.variant : null;
   // A video is its own original media: it gets the full controls, and its position saves
   // to playback_position like an original audio.
-  const isVideoItem = content?.type === 'video';
+  // A video that plays only on YouTube (embed_blocked) is treated like an item without audio.
+  const isVideoItem = !!content && videoPlaysHere(content);
   const effectiveVariant: AudioVariant | null =
     requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
     : requestedOverride === 'original' && (content?.audio_url || isVideoItem) ? 'original'
@@ -152,7 +153,7 @@ export function AudioPlayer({
   // A video plays in YouTube's embedded player (YouTubeVideo), which only exists while the
   // fullscreen view shows it. Minimizing destroys it, and expanding builds a new one that
   // starts at videoTimeRef, so the position lives here and not in the player.
-  const videoId = content?.type === 'video' ? youtubeVideoId(content.url) : null;
+  const videoId = isVideoItem ? youtubeVideoId(content?.url) : null;
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const videoTimeRef = useRef(0);
   // Play as soon as the player is ready (autoplay, or Play pressed while it was loading)
@@ -241,7 +242,7 @@ export function AudioPlayer({
     const ms = navigator.mediaSession;
     // A video plays inside YouTube's frame, which owns its own media session, and the
     // handlers below drive the <audio> element. So none are set, and no stale title stays.
-    if (content.type === 'video') {
+    if (isVideoItem) {
       ms.metadata = null;
       return;
     }
@@ -407,7 +408,7 @@ export function AudioPlayer({
     // A newly opened video: its own position, whichever audio plays first. (Its YouTube
     // player is built by YouTubeVideo, which reports itself through handleVideoReady and
     // handleVideoGone, so ytPlayerRef is never reset here.)
-    if (content.type === 'video' && content.id !== lastVideoItemRef.current) {
+    if (isVideoItem && content.id !== lastVideoItemRef.current) {
       lastVideoItemRef.current = content.id;
       videoPlayPendingRef.current = false;
       stopVideoClock();
@@ -416,7 +417,7 @@ export function AudioPlayer({
       videoHiddenRef.current = false;
       setVideoHidden(false);
       setIsPlaying(false);
-    } else if (content.type !== 'video' && lastVideoItemRef.current !== null) {
+    } else if (!isVideoItem && lastVideoItemRef.current !== null) {
       // Leaving a video: its player went away with its YouTubeVideo, and no pause event came
       lastVideoItemRef.current = null;
       videoPlayPendingRef.current = false;
@@ -426,7 +427,7 @@ export function AudioPlayer({
 
     // A video plays in YouTube's player (see YouTubeVideo), never in the <audio> element,
     // except for its summary audio.
-    if (content.type === 'video' && !playingSummary) {
+    if (isVideoItem && !playingSummary) {
       if (lastAudioSrcRef.current) {
         // Back from the summary audio: loading no source pauses it without a pause event
         lastAudioSrcRef.current = '';
@@ -467,7 +468,7 @@ export function AudioPlayer({
       return;
     }
     videoVariantForRef.current = null;
-    if (content.type === 'video') {
+    if (isVideoItem) {
       // The video's summary audio plays in the <audio> element below. The video pauses
       // and stays where it is on screen.
       try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
@@ -753,7 +754,7 @@ export function AudioPlayer({
       // A video's position is videoTimeRef (its player may already be gone). Within 10
       // seconds of the end it counts as finished, as below. Its summary audio saves like
       // any audio, further down.
-      if (content?.type === 'video' && positionFieldRef.current === 'playback_position') {
+      if (isVideoItem && positionFieldRef.current === 'playback_position') {
         const dur = content.duration || durationRef.current;
         const nearEnd = dur > 0 && dur - videoTimeRef.current < 10;
         contentAPI.update(content.id, {
