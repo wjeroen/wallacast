@@ -136,7 +136,7 @@ export async function resolveGeneration(userId: number, gen: TokenGeneration): P
     audio: audio === 'true',
     summary: summary === 'true',
     summary_audio: summaryAudio === 'true',
-    transcribe: transcribe === null || transcribe === 'true',
+    transcribe: transcribe === 'true',
   };
 }
 

@@ -100,9 +100,9 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 // Hints show the app's default model per provider. A blank model field uses that default
 // (CHAT_DEFAULT_MODELS in backend ai-providers.ts, keep the two lists in sync).
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-5-mini' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-6-luna' },
   { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/gpt-oss-120b' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-5-mini' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-6-luna' },
   { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'default = claude-haiku-4-5' },
   { id: 'gemini', label: 'Google Gemini', hint: 'default = gemini-3-flash-preview' },
 ];
@@ -128,9 +128,9 @@ const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
 };
 // Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
 const CHAT_MODEL_DEFAULTS: Record<string, string> = {
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   deepinfra: 'openai/gpt-oss-120b',
-  openrouter: 'openai/gpt-5-mini',
+  openrouter: 'openai/gpt-6-luna',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
 };
@@ -233,8 +233,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     image_alt_text_provider: 'gemini',
     image_alt_text_model: '',
 
-    auto_transcribe_podcasts: 'true',
-    auto_transcribe_videos: 'true',
+    auto_transcribe_podcasts: 'false',
+    auto_transcribe_videos: 'false',
     auto_generate_audio_for_articles: 'false',
     generate_read_along: 'true',
     // Summaries
@@ -306,7 +306,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const deriveLegacy = (llm: string) => {
         if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_MODEL_DEFAULTS.openai };
         if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-        // 'auto': first provider with a configured key, in recommendation order (GPT-5 Mini first).
+        // 'auto': first provider with a configured key, in recommendation order (GPT-6 Luna first).
         const keyByProvider: Array<[string, unknown]> = [
           ['openai', loaded.openai_api_key], ['deepinfra', loaded.deepinfra_api_key],
           ['anthropic', loaded.anthropic_api_key], ['gemini', loaded.gemini_api_key],
@@ -366,8 +366,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
         image_alt_text_model: loaded.image_alt_text_model || '',
 
-        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
-        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'true',
+        auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'false',
+        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'false',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
@@ -1067,6 +1067,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     { name: 'Narration scripts, read-along alignment and summaries', ok: hasOpenAIKey || hasDeepInfraKey || hasOpenRouterKey || hasAnthropicKey || hasGeminiKey, needs: 'any API key' },
     { name: 'Audio narration (TTS voices)', ok: hasOpenAIKey || canUseKokoroVoices, needs: 'an OpenAI, DeepInfra, or OpenRouter key' },
     { name: 'Podcast transcription', ok: hasDeepInfraKey || hasOpenAIKey, needs: 'a DeepInfra or OpenAI key' },
+    { name: 'Video transcription', ok: hasGeminiKey, needs: 'a Gemini key' },
     { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey || hasOpenAIKey, needs: 'a DeepInfra, OpenAI, Gemini, or OpenRouter key' },
   ];
   const allFeaturesAvailable = featureAccess.every(f => f.ok);
@@ -1604,7 +1605,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <p className="section-description">
             Add a key for each service you want to use. Each one lists the features it can power.
             <br />
-            Recommended: GPT-5 Mini (OpenAI) for narration and read-along, DeepInfra for transcription and TTS.
+            Recommended: GPT-6 Luna (OpenAI) for narration and read-along, DeepInfra for podcast transcripts and TTS.
             <br />
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
@@ -1634,7 +1635,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, podcast transcripts, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -1662,7 +1663,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, podcast transcripts, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -1746,7 +1747,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, video transcripts, image descriptions.</small>
           </div>
 
           <div className="form-group">

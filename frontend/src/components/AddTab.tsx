@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
 import { contentAPI } from '../api';
 import { markdownToHtml, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } from '../markdown';
@@ -8,8 +8,20 @@ import type { ContentItem } from '../types';
 type ContentType = 'article' | 'text' | 'upload' | 'podcast_episode';
 type TextFormat = 'markdown' | 'html';
 
+// Something shared to Wallacast from another app through the Android share menu (see
+// takeSharedContent() in App.tsx). A link is saved at once as an article (a YouTube link
+// becomes a video on the server), plain text fills in the Text form.
+export interface SharedContent {
+  key: number;
+  url?: string;
+  text?: string;
+  title?: string;
+}
+
 interface AddTabProps {
   onContentAdded: (item: ContentItem) => void;
+  shared?: SharedContent | null;
+  onSharedHandled?: () => void;
 }
 
 // What a leading Obsidian-properties block (YAML frontmatter) contributed: shown as a
@@ -34,7 +46,7 @@ function metaString(v: string | string[] | undefined): string {
   return (v || '').trim();
 }
 
-export function AddTab({ onContentAdded }: AddTabProps) {
+export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps) {
   const [contentType, setContentType] = useState<ContentType>('article');
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -162,8 +174,32 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    void save(contentType, url, title);
+  };
+
+  // A shared link saves at once, shared text waits in the Text form for a title.
+  // handledShareRef keeps a share from being saved twice (React runs effects twice in dev).
+  const handledShareRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!shared || handledShareRef.current === shared.key) return;
+    handledShareRef.current = shared.key;
+    onSharedHandled?.();
+    if (shared.url) {
+      setContentType('article');
+      setUrl(shared.url);
+      setTitle('');
+      void save('article', shared.url, '');
+    } else if (shared.text) {
+      setContentType('text');
+      setTextFormat('markdown');
+      setText(shared.text);
+      setTitle(shared.title || '');
+    }
+  }, [shared]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async (type: ContentType, link: string, itemTitle: string) => {
     setLoading(true);
     setMessage('');
     setArchiveLink(null);
@@ -171,21 +207,21 @@ export function AddTab({ onContentAdded }: AddTabProps) {
 
     try {
       const data: Record<string, unknown> = {
-        type: contentType,
+        type,
       };
 
       // Only send title if user provided one (allow backend to auto-detect)
-      if (title) {
-        data.title = title;
+      if (itemTitle) {
+        data.title = itemTitle;
       }
 
-      if (contentType === 'article') {
-        if (!url) {
+      if (type === 'article') {
+        if (!link) {
           setMessage('URL is required for articles');
           setLoading(false);
           return;
         }
-        data.url = url;
+        data.url = link;
         // The server reports each slow step under this id, asked for every 1.5 seconds.
         // randomUUID needs HTTPS, so a dev server over plain http gets a time-based id.
         const progressId = typeof crypto.randomUUID === 'function'
@@ -197,7 +233,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
             .then(res => { if (res.data.text) setProgressText(res.data.text); })
             .catch(() => { /* the next ask tries again */ });
         }, 1500);
-      } else if (contentType === 'text') {
+      } else if (type === 'text') {
         // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
         if (textFormat === 'markdown') applyMarkdownImport(data, text);
@@ -205,27 +241,27 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         if (author) data.author = author;
         if (publishedDate) data.published_at = publishedDate;
         data.tags = parseTagInput(tagsInput);
-      } else if (contentType === 'upload') {
-        if (!uploadedContent || !title) {
+      } else if (type === 'upload') {
+        if (!uploadedContent || !itemTitle) {
           setMessage('Please select a file and enter a title');
           setLoading(false);
           return;
         }
         data.type = 'text';
-        data.title = title;
+        data.title = itemTitle;
         if (isMarkdownUpload) applyMarkdownImport(data, uploadedContent);
         else data.content = uploadedContent;
         if (author) data.author = author;
         if (publishedDate) data.published_at = publishedDate;
         data.tags = parseTagInput(tagsInput);
-      } else if (contentType === 'podcast_episode') {
-        if (!url) {
+      } else if (type === 'podcast_episode') {
+        if (!link) {
           setMessage('Audio URL is required for podcasts');
           setLoading(false);
           return;
         }
         // Backend stores the episode's source media under audio_url (see content.ts POST handler).
-        data.audio_url = url;
+        data.audio_url = link;
       }
 
       const response = await contentAPI.create(data as Partial<ContentItem>);

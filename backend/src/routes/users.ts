@@ -49,7 +49,7 @@ const VALID_SETTING_KEYS = [
   'image_alt_text_provider', // image descriptions via 'gemini' (default), 'deepinfra', 'openai', or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_transcribe_podcasts',
-  'auto_transcribe_videos',    // Transcribe a YouTube video with Gemini when it is added (default: true, needs a Gemini key)
+  'auto_transcribe_videos',    // Transcribe a YouTube video with Gemini when it is added (default: false, needs a Gemini key)
   'auto_generate_audio_for_articles',
   'auto_generate_summary',      // Auto-generate a summary when an article/text is added
   'auto_generate_summary_audio', // Chain TTS audio of the summary after every summary generation (default: false)

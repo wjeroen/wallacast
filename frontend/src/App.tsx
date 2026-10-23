@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
-import { AddTab } from './components/AddTab';
+import { AddTab, type SharedContent } from './components/AddTab';
 import { LibraryTab } from './components/LibraryTab';
 import { AudioPlayer } from './components/AudioPlayer';
 import { HomePage } from './components/HomePage';
@@ -16,6 +16,29 @@ import './App.css';
 
 type Tab = 'feed' | 'add' | 'library';
 type Page = 'main' | 'settings';
+
+// A link or text shared to Wallacast from another app through the Android share menu. The
+// share_target in public/manifest.json opens /share?title=&text=&url=, and apps put the link
+// in any of the three (YouTube in text). Read once when the app loads, then the address goes
+// back to / so a reload does not add it again.
+function takeSharedContent(): SharedContent | null {
+  if (window.location.pathname !== '/share') return null;
+  const params = new URLSearchParams(window.location.search);
+  window.history.replaceState(null, '', '/');
+  const title = (params.get('title') || '').trim();
+  const text = (params.get('text') || '').trim();
+  let link = [params.get('url') || '', text, title]
+    .map(v => v.match(/https?:\/\/[^\s<>"]+/i)?.[0])
+    .find(Boolean);
+  if (link) {
+    // Punctuation that ends the sentence around a link is not part of it
+    link = link.replace(/[.,;:!?'"]+$/, '');
+    if (link.endsWith(')') && !link.includes('(')) link = link.slice(0, -1);
+    return { key: Date.now(), url: link };
+  }
+  return text ? { key: Date.now(), text, title } : null;
+}
+const sharedAtStartup = takeSharedContent();
 
 // generation_status values that mean "still working". Anything else
 // ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
@@ -39,6 +62,8 @@ function isItemBusy(s: JobStatus): boolean {
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
+  // What another app shared, until the Add tab takes it (after login when signed out)
+  const [shared, setShared] = useState<SharedContent | null>(sharedAtStartup);
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
   // Which fullscreen-player tab to open on next play (e.g. "Read more" → Summary tab)
   const [initialPlayerTab, setInitialPlayerTab] = useState<'summary' | undefined>(undefined);
@@ -165,6 +190,13 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // A share opens the Add tab, which saves it
+  useEffect(() => {
+    if (!isAuthenticated || !shared) return;
+    setCurrentPage('main');
+    setActiveTab('add');
+  }, [isAuthenticated, shared]);
 
   // Hydrate queue + autoplay preference once authenticated
   useEffect(() => {
@@ -1107,7 +1139,7 @@ function App() {
 
       <main className="app-main">
         {activeTab === 'feed' && <FeedTab onRefreshComplete={() => setFeedDaysStale(0)} />}
-        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} />}
+        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} shared={shared} onSharedHandled={() => setShared(null)} />}
         {activeTab === 'library' && (
           <LibraryTab onPlayContent={handlePlayContent} />
         )}

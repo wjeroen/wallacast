@@ -309,7 +309,7 @@ export interface ChatClientConfig {
 
 // Legacy `narration_llm` routing → concrete {provider, model}. Doubles as the key-aware
 // default for unconfigured accounts: 'auto' picks the first provider with a configured key
-// in recommendation order, with GPT-5 Mini (OpenAI) first.
+// in recommendation order, with GPT-6 Luna (OpenAI) first.
 const CHAT_PROVIDER_PRIORITY = ['openai', 'deepinfra', 'anthropic', 'gemini', 'openrouter'];
 async function legacyNarrationConfig(userId: number): Promise<{ provider: string; model: string }> {
   const llm = (await getUserSetting(userId, 'narration_llm')) || 'auto';
@@ -328,11 +328,11 @@ async function legacyNarrationConfig(userId: number): Promise<{ provider: string
 // is left blank. The Settings hints advertise these as "default = ..." (keep in sync with
 // CHAT_PROVIDERS in SettingsPage.tsx).
 export const CHAT_DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   // gpt-oss-120b over DeepSeek V3.2: DeepInfra serves DeepSeek at ~20 tok/s (measured
   // 2026-07-02), while gpt-oss runs ~46 tok/s, costs less, and supports reasoning effort.
   deepinfra: 'openai/gpt-oss-120b',
-  openrouter: 'openai/gpt-5-mini',
+  openrouter: 'openai/gpt-6-luna',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
 };
