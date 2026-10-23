@@ -14,20 +14,23 @@ import { youtubeVideoId } from '../shared/format.js';
 // result has the shape of a Whisper transcript ({ word, start, end }), so the Transcript
 // tab, the summaries and Copy content treat it like a podcast transcript.
 
-export const VIDEO_TRANSCRIPT_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+// Gemini 3.8 Flash, not Flash-Lite. Flash-Lite sometimes ends a piece's answer early, with
+// finish=STOP as if it were done, and leaves minutes of speech out. Tests on 2026-10-23 (four
+// 10-minute parts of long videos, 4 runs each, scored against YouTube's own captions):
+// Flash-Lite stopped where the talk sounds finished, at a goodbye followed by a new segment
+// (3 of 4 runs) or at "I need to do a bathroom break" and a cut (2 of 4), and once wrote times
+// that squeezed the piece's last minutes together. A stricter prompt, a prompt saying goodbyes
+// are not the end, an answer per minute and one frame per second did not stop it, while
+// Gemini 3.8 Flash left nothing out in 12 of 12 runs (3.5 and 3.6 Flash neither, 28 runs),
+// with sentence times as close (a median of 0.2 to 0.5 s). Asked why it stopped, Gemini
+// blamed an output limit it had not reached. 3.8 Flash costs about $0.18 per hour of video
+// (Flash-Lite about $0.10, Google's prices of 2026-10-23) and takes about 35 s per piece.
+export const VIDEO_TRANSCRIPT_DEFAULT_MODEL = 'gemini-3.8-flash';
 
-// Gemini sometimes ends a piece's answer early, with finish=STOP as if it were done, and
-// leaves minutes of speech out. Tests on 2026-10-23 (four 10-minute parts of long videos, 4
-// runs each, scored against YouTube's own captions): Flash-Lite stopped where the talk
-// sounds finished, at a goodbye followed by a new segment (3 of 4 runs) or at "I need to do
-// a bathroom break" and a cut (2 of 4), and once wrote times that squeezed the piece's last
-// minutes together. A stricter prompt, a prompt saying goodbyes are not the end, an answer
-// per minute and one frame per second did not stop it, while Gemini 3.8 Flash left nothing
-// out in 12 of 12 runs (3.5 and 3.6 Flash neither, 28 runs). Asked why it stopped, Gemini
-// blamed an output limit it had not reached. So a piece with a stretch of more than
-// HOLE_SECONDS in which no sentence starts is transcribed once more by RETRY_MODEL, the
-// answer that leaves less uncovered is kept, and a stretch still uncovered gets a visible
-// line in the transcript instead of disappearing silently.
+// A safety net for any model: a piece with a stretch of more than HOLE_SECONDS in which no
+// sentence starts is transcribed once more by RETRY_MODEL (the same model when that is the
+// one chosen), the answer that leaves less uncovered is kept, and a stretch still uncovered
+// gets a visible line in the transcript instead of disappearing silently.
 const RETRY_MODEL = 'gemini-3.8-flash';
 const HOLE_SECONDS = 60;
 

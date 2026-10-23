@@ -1857,7 +1857,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   type="text"
                   value={formData.video_transcript_model}
                   onChange={(e) => handleChange('video_transcript_model', e.target.value)}
-                  placeholder="default = gemini-3.5-flash-lite"
+                  placeholder="default = gemini-3.8-flash"
                 />
               </div>
             </div>

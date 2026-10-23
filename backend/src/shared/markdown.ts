@@ -216,6 +216,13 @@ const RAW_FIGURE_MAX_CHARS = 1500;
 //   (inline sizing styles dropped), and its caption; when nothing displayable survives, a
 //   short note marks the omission.
 function preprocessForExport(doc: Document): string[] {
+  // What the Content tab never shows: scripts and stylesheets (their code would come out as
+  // text), the text a page has for browsers without scripts ("This website requires
+  // javascript"), and inert <template> content. The sanitizer drops the first three and a
+  // browser never renders the last, so Copy content and the editor leave them out too and
+  // every view holds the same text (backend/scripts/test-views-match.mts).
+  doc.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+
   const mathTexts: string[] = [];
   doc.querySelectorAll('math').forEach((math) => {
     const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
