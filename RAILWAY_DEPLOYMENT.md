@@ -121,7 +121,7 @@ The Postgres public address (the TCP proxy) has been off on purpose since 2026-1
 1. Register an SSH key with Railway: `railway ssh keys add`. Railway's host key must be in your `known_hosts`. Remove the key again after the backup.
 2. Make the dump inside the container (single quotes, so the container fills in its own `$PGUSER` and `$PGDATABASE`):
    `railway ssh -p <project id> -e production -s Postgres -- sh -c 'pg_dump -h localhost -U "$PGUSER" -d "$PGDATABASE" -Fc -f /tmp/x.dump'`
-3. Copy it down: print the file as base64 between two marker lines, for example `railway ssh ... -- sh -c 'echo BEGIN; base64 /tmp/x.dump; echo END'`, keep the lines between the markers, and decode them locally (`base64 -d`).
+3. Copy it down: print the file as base64 between two marker lines, for example `railway ssh ... -- sh -c 'echo BEGIN; base64 /tmp/x.dump; echo END'`. Locally, strip carriage returns first (`tr -d '\r'`), since the output can pass through a terminal that adds them and `base64 -d` refuses them. Then keep the lines between the markers (for example with `sed`) and decode them (`base64 -d`).
 4. Compare `sha256sum /tmp/x.dump` in the container with the SHA-256 of your local file.
 5. Delete the copy in the container: `rm /tmp/x.dump`.
 
