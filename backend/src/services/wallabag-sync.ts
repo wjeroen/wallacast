@@ -811,14 +811,15 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
 
         // Determine content to send
         // Podcasts: send transcript
-        // Videos: send the YouTube description. With none, nothing is sent: Wallabag then
-        //   reads the video page itself on create, and an update leaves its copy alone.
+        // Videos: like podcasts, the transcript once there is one, else the YouTube
+        //   description. With neither, nothing is sent: Wallabag then reads the video page
+        //   itself on create, and an update leaves its copy alone.
         // Articles/texts: send html_content or content
         let contentToSync: string;
         if (item.type === 'podcast_episode') {
           contentToSync = item.transcript || item.content || '';
         } else if (item.type === 'video') {
-          contentToSync = item.html_content || item.description || '';
+          contentToSync = item.transcript || item.html_content || item.description || '';
         } else {
           contentToSync = item.html_content || item.content || '';
         }

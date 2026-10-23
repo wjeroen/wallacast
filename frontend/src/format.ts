@@ -226,6 +226,15 @@ export function youtubeVideoId(url: string | null | undefined): string | null {
   return m ? valid(m[1]) : null;
 }
 
+// "2 podcast episodes", "1 video", "2 podcast episodes and 1 video": the items a bulk
+// summary has to transcribe first, in the summary dialogs
+export function transcriptItemsLabel(episodes: number, videos: number): string {
+  const part = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  if (videos === 0) return part(episodes, 'podcast episode', 'podcast episodes');
+  if (episodes === 0) return part(videos, 'video', 'videos');
+  return `${part(episodes, 'podcast episode', 'podcast episodes')} and ${part(videos, 'video', 'videos')}`;
+}
+
 export function youtubeWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }

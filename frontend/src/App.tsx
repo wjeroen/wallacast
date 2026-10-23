@@ -10,7 +10,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasPlayableMedia, getEffectiveAudio, hasWordTimings } from './format';
+import { isVeryLongArticle, hasPlayableMedia, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -50,7 +50,9 @@ function App() {
   // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts.
   // askAudio: the auto_generate_summary_audio setting is on, so the dialog also asks whether
   // summary audio should be generated (with an opt-in for items that already have summaries).
-  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio: boolean; existingSummaryIds: number[] } | null>(null);
+  // podcastIds: items that need a transcript first, podcast episodes and YouTube videos
+  // (videoCount of them are videos, for the dialog's wording)
+  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio: boolean; existingSummaryIds: number[]; videoCount: number } | null>(null);
   const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
   const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
 
@@ -932,12 +934,15 @@ function App() {
     // filter quietly feeding this flow only the 55 items that matched it.
     const libraryItems = useContentStore.getState().allItems;
     const eligibleItems = libraryItems.filter(
-      item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
+      item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && !item.is_archived &&
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
 
-    const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
-    const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
+    // Podcasts and videos summarize their transcript, so the ones without one get it first
+    const needsTranscript = (i: ContentItem) => (i.type === 'podcast_episode' || i.type === 'video') && !hasWordTimings(i);
+    const podcastIds = eligibleItems.filter(needsTranscript).map(i => i.id);
+    const readyIds = eligibleItems.filter(i => !needsTranscript(i)).map(i => i.id);
+    const videoCount = eligibleItems.filter(i => needsTranscript(i) && i.type === 'video').length;
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.
@@ -948,7 +953,7 @@ function App() {
     } catch { /* keep false */ }
     const existingSummaryIds = askAudio
       ? libraryItems.filter(item =>
-          (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
+          (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && !item.is_archived &&
           !!item.summary_generated_at && !item.summary_audio_url && item.summary_audio_status !== 'generating'
         ).map(i => i.id)
       : [];
@@ -964,7 +969,7 @@ function App() {
     if (podcastIds.length > 0 || askAudio) {
       setBulkAudioChecked(true);
       setBulkAudioExistingChecked(true);
-      setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
+      setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds, videoCount });
       return;
     }
 
@@ -1220,7 +1225,7 @@ function App() {
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
             {w.podcastIds.length > 0 ? (
               <p>
-                <strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.
+                <strong>{transcriptItemsLabel(w.podcastIds.length - w.videoCount, w.videoCount)}</strong> {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. {w.videoCount === 0 ? 'Podcast summaries' : w.videoCount === w.podcastIds.length ? 'Video summaries' : 'Podcast and video summaries'} are made from the transcript, so those need to be generated first ({w.videoCount === 0 ? 'this uses your transcription API credits' : w.videoCount === w.podcastIds.length ? 'Gemini writes them, with your Gemini API key' : 'this uses your transcription API credits, and your Gemini API key for the videos'}). Summaries follow automatically.
                 {w.readyIds.length > 0 && (
                   <> The other {w.readyIds.length} item{w.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
                 )}
@@ -1270,7 +1275,7 @@ function App() {
                         startBulkSummaries(w.readyIds, [], audioOpts);
                       }}
                     >
-                      Skip episodes without transcript
+                      Skip {w.videoCount > 0 ? 'items' : 'episodes'} without transcript
                     </button>
                   )}
                 </>

@@ -1297,7 +1297,7 @@ router.post('/', async (req, res) => {
         transcribeYouTubeVideo(req.user!.userId, url, createdItem.duration ? Number(createdItem.duration) : null)
           .then(async (result) => {
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
             );
           })
@@ -1546,7 +1546,7 @@ router.patch('/:id', async (req, res) => {
             );
             const result = await transcribeYouTubeVideo(req.user!.userId, url, duration ? Number(duration) : null);
             await query(
-              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, generation_error = NULL, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, generation_error = NULL, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, id]
             );
             console.log(`Video transcript ready for ${id}: ${result.words.length} words`);
