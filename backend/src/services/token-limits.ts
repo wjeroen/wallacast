@@ -119,22 +119,28 @@ export function validateGeneration(raw: unknown, current: TokenGeneration): { ge
   return { generation: out };
 }
 
-/** transcribe is for podcast episodes, transcribe_video for YouTube videos. A token's own
- *  switches have one transcript switch for both, the app has a setting for each. */
-export type ResolvedGeneration = Omit<TokenGeneration, 'follow'> & { transcribe_video: boolean };
+/** transcribe is for podcast episodes, transcribe_video for YouTube videos, summary for
+ *  articles and texts, summary_on_transcript for an episode or video once its transcript is
+ *  made. A token's own switches have one transcript switch and one summary switch for all
+ *  types, the app has a setting for each. */
+export type ResolvedGeneration = Omit<TokenGeneration, 'follow'> & { transcribe_video: boolean; summary_on_transcript: boolean };
 
-/** What actually runs for an item this token adds. Following the app reads the same five
+/** What actually runs for an item this token adds. Following the app reads the same six
  *  settings, with the same defaults, that POST /content and the summarizer read. */
 export async function resolveGeneration(userId: number, gen: TokenGeneration): Promise<ResolvedGeneration> {
   if (!gen.follow) {
-    return { audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio, transcribe: gen.transcribe, transcribe_video: gen.transcribe };
+    return {
+      audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio,
+      transcribe: gen.transcribe, transcribe_video: gen.transcribe, summary_on_transcript: gen.summary,
+    };
   }
-  const [audio, summary, summaryAudio, transcribe, transcribeVideo] = await Promise.all([
+  const [audio, summary, summaryAudio, transcribe, transcribeVideo, summaryOnTranscript] = await Promise.all([
     getUserSetting(userId, 'auto_generate_audio_for_articles'),
     getUserSetting(userId, 'auto_generate_summary'),
     getUserSetting(userId, 'auto_generate_summary_audio'),
     getUserSetting(userId, 'auto_transcribe_podcasts'),
     getUserSetting(userId, 'auto_transcribe_videos'),
+    getUserSetting(userId, 'auto_generate_summary_on_transcript'),
   ]);
   return {
     audio: audio === 'true',
@@ -142,6 +148,7 @@ export async function resolveGeneration(userId: number, gen: TokenGeneration): P
     summary_audio: summaryAudio === 'true',
     transcribe: transcribe === null || transcribe === 'true',
     transcribe_video: transcribeVideo === null || transcribeVideo === 'true',
+    summary_on_transcript: summaryOnTranscript === null || summaryOnTranscript === 'true',
   };
 }
 
@@ -154,6 +161,11 @@ export function textMinutes(chars: number): number {
 /** The minutes a summary of a text counts: SUMMARY_SHARE of its narration, at least 1. */
 export function summaryMinutes(chars: number): number {
   return Math.max(1, Math.ceil((Math.max(0, chars) / CHARS_PER_MINUTE) * SUMMARY_SHARE));
+}
+
+/** The minutes the summary of a podcast episode or video counts: SUMMARY_SHARE of its length. */
+export function episodeSummaryMinutes(durationSeconds: unknown): number {
+  return Math.max(1, Math.ceil(episodeMinutes(durationSeconds) * SUMMARY_SHARE));
 }
 
 /** The plain-text length of a comment tree (the stored JSON, or the array). Comment bodies

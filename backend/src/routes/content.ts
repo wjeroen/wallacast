@@ -7,7 +7,7 @@ import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalize
 import { isProgressId, setFetchProgress, getFetchProgress, clearFetchProgress } from '../services/fetch-progress.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
-import { generateSummaryForContent } from '../services/summarizer.js';
+import { generateSummaryForContent, summarizeAfterTranscript } from '../services/summarizer.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
@@ -24,7 +24,7 @@ import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js
 import { fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
 import { transcribeYouTubeVideo } from '../services/video-transcript.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
-import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
+import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -1193,6 +1193,32 @@ router.post('/', async (req, res) => {
     const itemChars = token ? String(processedContent || htmlContent || '').length + commentChars(extractedComments) : 0;
     const itemMinutes = token ? textMinutes(itemChars) : 0;
 
+    // A token's summary of a podcast episode or video starts once its transcript is made
+    // (summarizeAfterTranscript), but its minutes count now, and a skip is marked on the item
+    // like an article's. Without a token the user's setting decides when the transcript is done.
+    const tokenSummaryAfterTranscript = async (durationSeconds: unknown): Promise<{ summary: boolean; generateAudio?: boolean } | undefined> => {
+      if (!tokenGen) return undefined;
+      if (!tokenGen.summary_on_transcript) return { summary: false };
+      if (!(await fitsTokenBudget('summary', episodeSummaryMinutes(durationSeconds)))) {
+        if (tokenGen.summary_audio) {
+          tokenReport.skipped.push({ what: 'summary_audio', reason: 'Skipped because the summary was skipped' });
+        }
+        await query(
+          `UPDATE content_items SET summary_status = 'skipped', summary_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary ?? 'Skipped']
+        );
+        return { summary: false };
+      }
+      const generateAudio = tokenGen.summary_audio && (await fitsTokenBudget('summary_audio', SUMMARY_AUDIO_MINUTES));
+      if (skipReasons.summary_audio) {
+        await query(
+          `UPDATE content_items SET summary_audio_status = 'skipped', summary_audio_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary_audio]
+        );
+      }
+      return { summary: true, generateAudio };
+    };
+
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
       const shouldAutoGenerate = tokenGen
@@ -1290,6 +1316,7 @@ router.post('/', async (req, res) => {
       const hasGeminiKey = !!(await getUserSetting(req.user!.userId, 'gemini_api_key'));
       if (wantsTranscript && hasGeminiKey && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for video ${createdItem.id}`);
+        const summaryDecision = await tokenSummaryAfterTranscript(createdItem.duration);
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
           ['generating_transcript', 0, 'transcript', createdItem.id]
@@ -1300,6 +1327,7 @@ router.post('/', async (req, res) => {
               'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
             );
+            void summarizeAfterTranscript(createdItem.id, req.user!.userId, summaryDecision);
           })
           .catch(async (error) => {
             console.error('Auto video transcript error:', error);
@@ -1318,6 +1346,7 @@ router.post('/', async (req, res) => {
 
       if (shouldAutoTranscribe && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
+        const summaryDecision = await tokenSummaryAfterTranscript(createdItem.duration);
 
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
@@ -1341,6 +1370,7 @@ router.post('/', async (req, res) => {
               'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
             );
+            void summarizeAfterTranscript(createdItem.id, req.user!.userId, summaryDecision);
           })
           .catch(async (error) => {
             console.error('Auto transcription error:', error);
@@ -1550,6 +1580,7 @@ router.patch('/:id', async (req, res) => {
               [result.text, JSON.stringify(result.words), 'completed', 100, id]
             );
             console.log(`Video transcript ready for ${id}: ${result.words.length} words`);
+            void summarizeAfterTranscript(Number(id), req.user!.userId);
           } catch (error) {
             console.error('Video transcript error:', error);
             await query(
@@ -1651,6 +1682,7 @@ router.patch('/:id', async (req, res) => {
               }
 
               console.log(`Transcript regenerated successfully for ${type} ${id}`);
+              if (type === 'podcast_episode') void summarizeAfterTranscript(Number(id), req.user!.userId);
             } catch (error) {
               console.error('Transcript regeneration error:', error);
               await query(

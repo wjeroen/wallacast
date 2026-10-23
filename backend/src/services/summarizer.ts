@@ -446,3 +446,37 @@ export async function generateSummaryForContent(contentId: number, options: { ge
     ).catch(() => { /* swallow */ });
   }
 }
+
+/**
+ * A podcast episode or YouTube video just got its transcript (when it was added, or through
+ * Generate or Regenerate transcript): start its summary when the
+ * auto_generate_summary_on_transcript setting is on (default on), or when the API token that
+ * added it says so (`decision`). Only for an item without a summary, so a new transcript never
+ * replaces one (Regenerate summary does that). The claim is one UPDATE, so a summary that is
+ * already being made is left alone: Generate summary transcribes first and then summarizes
+ * by itself. Safe to fire-and-forget.
+ */
+export async function summarizeAfterTranscript(
+  contentId: number,
+  userId: number,
+  decision?: { summary: boolean; generateAudio?: boolean },
+): Promise<void> {
+  try {
+    const wanted = decision
+      ? decision.summary
+      : ((await getUserSetting(userId, 'auto_generate_summary_on_transcript')) ?? 'true') === 'true';
+    if (!wanted) return;
+    const claimed = await query(
+      `UPDATE content_items SET summary_status = 'generating', summary_error = NULL
+       WHERE id = $1 AND user_id = $2 AND type IN ('podcast_episode', 'video')
+         AND COALESCE(summary, '') = '' AND summary_status IS DISTINCT FROM 'generating'
+       RETURNING id`,
+      [contentId, userId]
+    );
+    if (claimed.rows.length === 0) return;
+    console.log(`[Summary] Starting the summary of ${contentId} after its transcript`);
+    await generateSummaryForContent(contentId, decision?.generateAudio === undefined ? {} : { generateAudio: decision.generateAudio });
+  } catch (error: any) {
+    console.error(`[Summary] Summary after the transcript of ${contentId} failed to start:`, error?.message || error);
+  }
+}

@@ -155,6 +155,7 @@
 
 ## Completed Recently ✅
 
+- [x] **Podcasts and videos summarize once transcribed** (2026-10-22, user chose the label and "on" by default): Settings → Summaries has "Auto-generate a summary when an article or text is added" and "Auto-generate a summary when a podcast or video is transcribed". The second starts after any podcast or video transcript (on add, Generate or Regenerate transcript), only when the item has no summary yet. Tokens that follow the app use it, a token's own Summary switch covers every type. Not tried against a real database yet
 - [x] **API tokens that follow the app settings use "Auto-transcribe YouTube videos" for videos** (2026-10-22, missed when videos were added): they read the podcast setting for videos too. A token's own switch "Transcript for podcasts and videos" covers both, and `GET /api/auth/token` lists `transcribe_video`
 - [x] **Demo account on GPT-6 Luna** (2026-10-22, user chose it): `seed-demo.mjs` sets GPT-6 Luna for narration and read-along, and the guide names it. Needs `npm run seed:demo` against the hosted instance
 - [x] **Android share menu** (2026-10-22, user chose the web app's share target over a native app): the installed app shows up in Android's share menu, a shared link opens the Add tab and saves at once (a YouTube link becomes a video), shared text without a link fills the Text form. No reinstall needed, Chrome updates the installed app within about a day

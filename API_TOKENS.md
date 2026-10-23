@@ -21,7 +21,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
   "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600 },
   "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80 },
   "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "changes_hour": 500 },
-  "generation": { "follows_app_settings": true, "audio": false, "summary": true, "summary_audio": false, "transcribe": true, "transcribe_video": true },
+  "generation": { "follows_app_settings": true, "audio": false, "summary": true, "summary_audio": false, "transcribe": true, "transcribe_video": true, "summary_on_transcript": true },
   "refresh_interval_minutes": 15,
   "chars_per_minute": 900
 }
@@ -104,7 +104,7 @@ Each token has four limits, set under the token in Settings. They are rolling wi
 | Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
 
-Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
+Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
 - Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
@@ -114,7 +114,7 @@ Each limit hit shows a notice in the app. The Reset button in Settings counts us
 
 ## What is generated for added items
 
-Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles", the summary settings, "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own four switches: audio for articles, summary, summary audio, transcript for podcasts and videos. Either way every generation must fit the minute limits.
+Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles", the two automatic summary boxes (articles and texts when added, podcasts and videos once transcribed), "Auto-generate audio for summaries", "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own four switches: audio for articles, summary (for every type, a podcast or video only once its transcript is done), summary audio, transcript for podcasts and videos. Either way every generation must fit the minute limits.
 
 ## Errors
 

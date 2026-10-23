@@ -221,6 +221,7 @@ const demoSettings = {
   auto_generate_audio_for_articles: 'false',
   auto_transcribe_podcasts: 'false',
   auto_generate_summary: 'false',
+  auto_generate_summary_on_transcript: 'false',
 
   // API keys from the environment. Referenced by name only, values are never logged.
   openai_api_key: cfg.openaiKey,
