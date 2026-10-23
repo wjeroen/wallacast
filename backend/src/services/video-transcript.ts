@@ -22,6 +22,12 @@ const PIECE_SECONDS = 30 * 60;
 const SPLIT_ABOVE_SECONDS = 40 * 60;
 const PIECE_OVERLAP_SECONDS = 20;
 
+// One video frame per 50 seconds instead of Gemini's default of one per second. The
+// transcript comes from the audio, and at the default the frames were about two thirds
+// of what Google bills (test 2026-10-22 on a 6-minute video: 31,943 input tokens at the
+// default, 9,305 at 0.02, with the same words and sentence times within 0.6 s).
+const VIDEO_FPS = 0.02;
+
 // A part of the video sent on its own: from..to is what Gemini gets, ownTo is where the
 // sentences this piece keeps must have started by (Infinity for the last piece)
 interface Piece {
@@ -100,7 +106,10 @@ async function transcribePiece(
       parts: [
         {
           fileData: { fileUri: videoUrl },
-          ...(piece ? { videoMetadata: { startOffset: `${piece.from}s`, endOffset: `${piece.to}s` } } : {}),
+          videoMetadata: {
+            fps: VIDEO_FPS,
+            ...(piece ? { startOffset: `${piece.from}s`, endOffset: `${piece.to}s` } : {}),
+          },
         },
         { text: prompt },
       ],
