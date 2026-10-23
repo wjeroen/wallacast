@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
-import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission } from '../api';
+import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission, type TokenGeneration } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
@@ -142,11 +142,14 @@ const TOKEN_LIMIT_FIELDS: Array<{ key: keyof TokenLimits; label: string }> = [
   { key: 'minutes_hour', label: 'Generation minutes per hour' },
   { key: 'minutes_2d', label: 'Generation minutes per 2 days' },
 ];
-const TOKEN_GENERATION_FLAGS: Array<{ key: 'audio' | 'summary' | 'summary_audio' | 'transcribe'; label: string }> = [
+// The same six as the app's automatic settings, in the order Settings shows them
+const TOKEN_GENERATION_FLAGS: Array<{ key: Exclude<keyof TokenGeneration, 'follow'>; label: string }> = [
   { key: 'audio', label: 'Audio for articles' },
-  { key: 'summary', label: 'Summary' },
+  { key: 'transcribe', label: 'Transcript for podcasts' },
+  { key: 'transcribe_video', label: 'Transcript for YouTube videos' },
+  { key: 'summary', label: 'Summary for articles and texts' },
+  { key: 'summary_on_transcript', label: 'Summary for podcasts and videos once transcribed' },
   { key: 'summary_audio', label: 'Summary audio' },
-  { key: 'transcribe', label: 'Transcript for podcasts and videos' },
 ];
 const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: string }> = [
   { mode: 'none', label: 'No' },
@@ -1074,6 +1077,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   ];
   const allFeaturesAvailable = featureAccess.every(f => f.ok);
 
+  // "Paragraphs shown" on library cards: 1 up to one less than the longest summary the length
+  // settings allow (that many is what "All" shows), plus a saved number above that, so a
+  // shortened tier list never hides the current choice.
+  const longestSummary = Math.max(...summaryTiers.map(t => t.maxTweets));
+  const paragraphChoices = Array.from({ length: Math.max(0, longestSummary - 1) }, (_, i) => String(i + 1));
+  if (formData.library_summary_paragraphs !== 'all' && !paragraphChoices.includes(formData.library_summary_paragraphs)) {
+    paragraphChoices.push(formData.library_summary_paragraphs);
+  }
+
   return (
     <div className="settings-page">
       <header className="settings-header">
@@ -1396,9 +1408,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   value={formData.library_summary_paragraphs}
                   onChange={(e) => handleChange('library_summary_paragraphs', e.target.value)}
                 >
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
+                  {paragraphChoices.map(n => <option key={n} value={n}>{n}</option>)}
                   <option value="all">All</option>
                 </select>
               </div>

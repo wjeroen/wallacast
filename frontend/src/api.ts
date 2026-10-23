@@ -319,13 +319,15 @@ export interface TokenLimits {
 }
 
 // What is generated for items a token adds. With follow on, the app's auto-generation
-// settings decide and the four flags are ignored.
+// settings decide and the six flags (the same six as those settings) are ignored.
 export interface TokenGeneration {
   follow: boolean;
   audio: boolean;
-  summary: boolean;
-  summary_audio: boolean;
   transcribe: boolean;
+  transcribe_video: boolean;
+  summary: boolean;
+  summary_on_transcript: boolean;
+  summary_audio: boolean;
 }
 
 // Usage inside the limit windows since the last reset. Minutes may have one decimal.
