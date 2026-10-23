@@ -468,7 +468,10 @@ async function logStorageStats() {
 // Warn loudly at startup about missing security-critical env vars. We do NOT crash (the server
 // must stay up for health checks, per the db.ts philosophy), but silence was the real risk:
 // without ENCRYPTION_KEY every user's provider API key is stored as PLAINTEXT, and without
-// JWT_SECRET all sessions drop on each restart. Production only, so local dev stays quiet.
+// JWT_SECRET a new random secret is made on each boot. Logins survive that (the refresh
+// tokens live in user_sessions and do not use the secret, and the app renews its 15-minute
+// access tokens by itself), but every private audio link (?t=, services/audio-token.ts)
+// changes on each restart. Production only, so local dev stays quiet.
 function warnMissingSecurityEnv() {
   if (process.env.NODE_ENV !== 'production') return;
   const key = process.env.ENCRYPTION_KEY;
@@ -476,7 +479,7 @@ function warnMissingSecurityEnv() {
     console.error('🔓 [SECURITY] ENCRYPTION_KEY is missing or not 64 hex chars: user API keys and Wallabag passwords are being stored as PLAINTEXT. Set a 64-hex-char ENCRYPTION_KEY (see RAILWAY_DEPLOYMENT.md).');
   }
   if (!process.env.JWT_SECRET) {
-    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so everyone is logged out on every redeploy. Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
+    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so every private audio link changes on each redeploy (logins survive, the app renews them). Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
   }
 }
 

@@ -53,7 +53,7 @@ Environment variables are just settings you type into each service's **Variables
 - `DATABASE_URL` - the database connection string. The clean way to set this is to reference your PostgreSQL service (Railway lets one service point at another's variables), so it fills in automatically. You do not paste a password by hand.
 - `FRONTEND_URL` - your frontend's public URL (for example `https://your-frontend.up.railway.app`). The backend uses this to allow requests from your web app (this is called CORS).
 - `BACKEND_URL` - the backend's own public URL (for example `https://your-backend.up.railway.app`). It is used to build the links to your generated audio files.
-- `JWT_SECRET` - any long random string. It signs the login tokens. If you leave it blank, everyone gets logged out every time you redeploy, so set it once and keep it.
+- `JWT_SECRET` - any long random string, kept secret. It signs the short-lived (15-minute) login tokens and the private links to generated audio. Changing it logs nobody out: the 30-day sessions live in the database, and the app quietly gets new login tokens. It does change every private audio link, so audio that is open at that moment can stop loading until the item is opened again. If you leave it blank, the server makes a new random value on every start, which changes the audio links on every redeploy, so set it once and keep it.
 - `ENCRYPTION_KEY` - a random key used to encrypt each user's AI provider API keys before they go into the database. It must be exactly 64 hex characters (32 bytes). Without it, stored keys fall back to plaintext, which you do not want in production.
 - `DEMO_USERNAME` (optional) - the username of the shared read-only demo account behind the home page's "Try the demo" button. Defaults to `demo`. IMPORTANT: register that username yourself before promoting the instance (running the seed script does it for you), otherwise a stranger could claim it and control what demo visitors see. Populate the demo library with `cd backend && BASE_URL=https://your-backend-url DEMO_PASSWORD=... OPENAI_API_KEY=... DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo` (the keys are used once for generation and then removed from the demo account).
 - `INVITE_CODE` (optional) - when set, creating an account requires this exact code (the register form automatically shows an extra field on instances that need it). Leave unset to keep registration open.
@@ -110,13 +110,24 @@ That is the whole setup. From then on the login dropdown shows "Forgot password?
 3. Log their old sessions out:
    `UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = (SELECT id FROM users WHERE username = 'their-username');`
 
-## Backups (Hobby plan)
+## Backups
 
-Railway's automatic database backups need the Pro plan. On the Hobby plan, make a manual dump now and then (audio files are regenerable, the database is not). With the Postgres connection string from Railway (the PUBLIC url, Railway shows it on the Postgres service):
+Audio files can be regenerated, the database cannot. So dump the database now and then, and keep the file somewhere off Railway. The dump does not include the audio volume (`/data/audio`, 2.9 GB on 2026-10-22).
 
-`pg_dump "<the postgres public url>" -Fc -f wallacast-backup.dump`
+Railway's own backups (the Backups tab on the Postgres service) are documented without a plan limit, but answers from Railway staff on its forum say they need the Pro plan. Check the tab before you rely on it.
 
-Store the file somewhere off Railway. Restoring later: `pg_restore -d "<url>" --clean wallacast-backup.dump`. Doing this once before promoting the instance also doubles as your backup test.
+The Postgres public address (the TCP proxy) has been off on purpose since 2026-10-21, after Railway's security breach. So the dump runs inside the Postgres container, over `railway ssh`. This was tested on 2026-10-22 (a 58 MB dump, checksums matched):
+
+1. Register an SSH key with Railway: `railway ssh keys add`. Railway's host key must be in your `known_hosts`. Remove the key again after the backup.
+2. Make the dump inside the container (single quotes, so the container fills in its own `$PGUSER` and `$PGDATABASE`):
+   `railway ssh -p <project id> -e production -s Postgres -- sh -c 'pg_dump -h localhost -U "$PGUSER" -d "$PGDATABASE" -Fc -f /tmp/x.dump'`
+3. Copy it down: print the file as base64 between two marker lines, for example `railway ssh ... -- sh -c 'echo BEGIN; base64 /tmp/x.dump; echo END'`, keep the lines between the markers, and decode them locally (`base64 -d`).
+4. Compare `sha256sum /tmp/x.dump` in the container with the SHA-256 of your local file.
+5. Delete the copy in the container: `rm /tmp/x.dump`.
+
+Not tested: `railway connect Postgres --tunnel-only` with a local `pg_dump` of version 17 or newer.
+
+Restoring needs a connection to the database as well (`pg_restore --clean`), inside the container or through a tunnel. That has not been tested yet.
 
 ## HTTPS and installing as an app
 
@@ -125,5 +136,6 @@ Railway serves every public domain over HTTPS automatically, you do not configur
 ## Troubleshooting
 
 - **Backend returns 503 ("service starting up")**: the database is probably still initializing, give it a minute. If it never clears, check that `DATABASE_URL` is set on the backend (usually by referencing the Postgres service).
-- **Everyone gets logged out after a redeploy**: `JWT_SECRET` is not set. Add a long random value and it will stop happening.
+- **Audio stops loading right after a redeploy**: an item that was open still carries the old private audio link. Open the item again. If it happens on every redeploy, `JWT_SECRET` is not set: add a long random value.
+- **Everyone gets logged out**: their sessions are gone from the `user_sessions` table (expired after 30 days, revoked by a password reset, or the database was replaced). A redeploy or a new `JWT_SECRET` logs nobody out.
 - **Audio disappears after a redeploy**: the volume is missing or not mounted at `/data`. Add a volume on the backend service with mount path `/data`.

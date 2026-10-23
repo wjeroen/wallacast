@@ -73,7 +73,7 @@ For the step-by-step beginner walkthrough, see **RAILWAY_DEPLOYMENT.md**. The en
 PORT=3001
 DATABASE_URL=(auto-provided by Railway)
 FRONTEND_URL=https://your-frontend.up.railway.app
-JWT_SECRET=your-secret-key-here  # Optional but recommended for persistent sessions
+JWT_SECRET=your-secret-key-here  # Recommended: a long random value keeps private audio links stable across restarts
 BACKEND_URL=https://your-backend.up.railway.app  # For audio URL generation
 CLEAR_AUDIO_BLOBS=true  # ONE-TIME, optional: after verifying audio plays from the volume,
                         # set this to NULL the old audio_data blobs in Postgres and free

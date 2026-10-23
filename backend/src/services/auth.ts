@@ -12,7 +12,7 @@ function getJwtSecret(): string {
   if (process.env.JWT_SECRET) {
     return process.env.JWT_SECRET;
   }
-  console.warn('WARNING: JWT_SECRET not set, using random secret (sessions will not persist across restarts)');
+  console.warn('WARNING: JWT_SECRET not set, using a random secret (access tokens and audio links change on every restart, the app renews logins by itself)');
   return crypto.randomBytes(32).toString('hex');
 }
 
