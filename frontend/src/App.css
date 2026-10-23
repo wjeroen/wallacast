@@ -4890,11 +4890,6 @@ blockquote.twitter-tweet.tweet-quoted {
     .controls-cluster.align-right > * {
       justify-content: flex-end;
     }
-    /* Moved left, the focus row is mirrored so play and speed are at the left thumb */
-    .controls-cluster.align-left .focus-row {
-      flex-direction: row-reverse;
-      justify-content: flex-end;
-    }
   }
 }
 
