@@ -1025,7 +1025,7 @@ function timestampedTranscript(raw: unknown): string | null {
  * Wallabag sync store an empty value instead), so there a non-empty value is enough.
  */
 export function exportHasTranscript(item: Pick<ContentItem, 'type' | 'transcript'>): boolean {
-  return item.type === 'podcast_episode' && !!item.transcript?.trim();
+  return (item.type === 'podcast_episode' || item.type === 'video') && !!item.transcript?.trim();
 }
 
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {

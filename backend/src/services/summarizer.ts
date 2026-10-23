@@ -134,8 +134,8 @@ function parseMaxWords(raw: string | null): number {
   return Math.min(500, Math.max(5, n));
 }
 
-// Default summary prompts. Each of the three kinds (article/comment/podcast) has a single-paragraph
-// variant (used when the length tier allows only 1 paragraph) and a multi-paragraph variant. All six
+// Default summary prompts. Each of the four kinds (article/comment/podcast/video) has a single-paragraph
+// variant (used when the length tier allows only 1 paragraph) and a multi-paragraph variant. All eight
 // are independently user-editable via Settings (registered in prompt-registry.ts). Placeholders
 // {maxTweets}/{maxWords} are filled at generation time. These are the user's own optimized prompt
 // texts (2026-07-06), keep them verbatim.
@@ -215,13 +215,42 @@ export const PODCAST_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-
 
 Think extremely deeply and thoroughly to make sure your summary meets all criteria, including the maximum of {maxWords} words. Count the words in your thoughts before you share the summary in your output!`;
 
-// Settings keys for the six summary prompts. Re-exported by prompt-registry.ts as well, but the
+// YouTube videos: the podcast prompts with the words changed for a video (title and channel
+// instead of title, show and host, a YouTube description instead of the feed's).
+export const VIDEO_SUMMARY_MULTI_DEFAULT = `You write a concise summary of a YouTube video based on its transcript, as a short thread of tweet-style paragraphs. The video title and channel are given at the top of the input. A VIDEO DESCRIPTION from YouTube may also be included: use it only as context. It usually spells names correctly, but do not summarize it (it can be promotional).
+- The first paragraph states the video's central topic or main takeaway.
+- The remaining paragraph(s) cover the main threads of the video in the order that best conveys the substance, not necessarily chronological order.
+- Name the speakers where it helps, never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names. When the description and transcript disagree on a name, trust the description's spelling.
+- Write at most {maxTweets} paragraphs. Use fewer when the video is simple, do not pad to reach the limit.
+- Each paragraph is at most {maxWords} words and reads on its own, but together they form one coherent overview.
+- Separate paragraphs with a single blank line.
+- Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
+- Make sure the summary is easy to understand, the main point needs to be clear quickly for the reader.
+- Do not use em dashes, hyphens or semicolons to break up sentences. Use commas or write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the text. Focus on the main arguments and key points, not minor details. Ignore ads, sponsor reads, and housekeeping.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.
+
+Think extremely deeply and thoroughly to make sure your summary meets all criteria, including the maximum of {maxWords} words per paragraph. Count the words in your thoughts before you share the summary in your output!`;
+
+export const VIDEO_SUMMARY_SINGLE_DEFAULT = `You write a one-paragraph, tweet-style summary of a YouTube video based on its transcript. The video title and channel are given at the top of the input. A VIDEO DESCRIPTION from YouTube may also be included: use it only as context. It usually spells names correctly, but do not summarize it (it can be promotional).
+- Write a single paragraph, at most {maxWords} words, that captures the video's central topic or main takeaway.
+- Name the speakers where it helps, never guess names that aren't in the input. The transcript is auto-generated and may contain transcription mistakes, especially in names. When the description and transcript disagree on a name, trust the description's spelling.
+- Use plain, direct language. Within a paragraph, prefer several short, simple sentences over one long sentence.
+- Make sure the summary is easy to understand, the main point needs to be clear quickly for the reader.
+- Do not use em dashes, hyphens or semicolons to break up sentences. Use commas or write separate sentences instead.
+- Keep all facts, numbers, and names accurate, and never add anything not in the text. Focus on the main arguments and key points, not minor details. Ignore ads, sponsor reads, and housekeeping.
+- Output only the summary. No introductions, labels, headers, or sign-offs of any kind.
+
+Think extremely deeply and thoroughly to make sure your summary meets all criteria, including the maximum of {maxWords} words. Count the words in your thoughts before you share the summary in your output!`;
+
+// Settings keys for the eight summary prompts. Re-exported by prompt-registry.ts as well, but the
 // summarizer owns the single/multi selection logic, so the key map lives here.
-type SummaryKind = 'article' | 'comment' | 'podcast';
+type SummaryKind = 'article' | 'comment' | 'podcast' | 'video';
 const SUMMARY_PROMPTS: Record<SummaryKind, { single: string; multi: string; settingBase: string }> = {
   article: { single: ARTICLE_SUMMARY_SINGLE_DEFAULT, multi: ARTICLE_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_article' },
   comment: { single: COMMENT_SUMMARY_SINGLE_DEFAULT, multi: COMMENT_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_comment' },
   podcast: { single: PODCAST_SUMMARY_SINGLE_DEFAULT, multi: PODCAST_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_podcast' },
+  video: { single: VIDEO_SUMMARY_SINGLE_DEFAULT, multi: VIDEO_SUMMARY_MULTI_DEFAULT, settingBase: 'prompt_summary_video' },
 };
 
 // Resolve the system prompt for a summary job: picks the single- vs multi-paragraph variant by the
@@ -267,19 +296,25 @@ export async function generateSummaryForContent(contentId: number, options: { ge
     const item = result.rows[0];
     const userId = item.user_id;
     const isPodcast = item.type === 'podcast_episode';
+    const isVideo = item.type === 'video';
+    // Podcasts and videos are both summarized from a transcript of speech
+    const isSpoken = isPodcast || isVideo;
 
     // 1. Source text + char count (counted in code, NOT by the model).
-    // Podcasts summarize their Whisper transcript; articles/texts their body.
-    const articleText = isPodcast
+    // Podcasts summarize their Whisper transcript, videos their Gemini transcript;
+    // articles/texts their body.
+    const articleText = isSpoken
       ? (item.transcript || '').trim()
       : item.html_content ? htmlToPlainText(item.html_content) : (item.content || '').trim();
     if (!articleText) {
-      throw new Error(isPodcast ? 'No transcript available to summarize' : 'No article text available to summarize');
+      throw new Error(isSpoken ? 'No transcript available to summarize' : 'No article text available to summarize');
     }
     const articleChars = articleText.length;
 
     // Title + author header so the model can name the author instead of guessing a gender.
-    const metaHeader = isPodcast
+    const metaHeader = isVideo
+      ? `VIDEO: ${item.title || 'Untitled'}\n${item.author ? `CHANNEL: ${item.author}\n` : ''}\n`
+      : isPodcast
       ? `EPISODE: ${item.title || 'Untitled'}\n${item.podcast_show_name ? `SHOW: ${item.podcast_show_name}\n` : ''}${item.author ? `HOST: ${item.author}\n` : ''}\n`
       : `TITLE: ${item.title || 'Untitled'}\n${item.author ? `AUTHOR: ${item.author}\n` : ''}\n`;
 
@@ -300,17 +335,18 @@ export async function generateSummaryForContent(contentId: number, options: { ge
     // contains the correctly-spelled guest names, while the Whisper transcript
     // routinely mangles them. The description is NOT part of the char count for
     // the tier lookup and is never summarized itself.
-    const descriptionContext = isPodcast && item.description
+    // A video gets its YouTube description the same way.
+    const descriptionContext = isSpoken && item.description
       ? htmlToPlainText(item.description).slice(0, 2000)
       : '';
     const articleInputCap = chatInputCharCap(chat.model);
     if (articleText.length > articleInputCap) {
       console.warn(`[Summary] Input exceeds the model cap, truncating: ${articleText.length} chars -> ${articleInputCap}`);
     }
-    const userContent = isPodcast
+    const userContent = isSpoken
       ? metaHeader +
         (descriptionContext
-          ? `EPISODE DESCRIPTION (context only, do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
+          ? `${isVideo ? 'VIDEO' : 'EPISODE'} DESCRIPTION (context only, do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
           : '') +
         `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${articleText.slice(0, articleInputCap)}`
       : metaHeader + articleText.slice(0, articleInputCap);
@@ -321,7 +357,7 @@ export async function generateSummaryForContent(contentId: number, options: { ge
       messages: [
         {
           role: 'system',
-          content: await buildSummaryPrompt(userId, isPodcast ? 'podcast' : 'article', maxTweetsArticle, maxWords),
+          content: await buildSummaryPrompt(userId, isVideo ? 'video' : isPodcast ? 'podcast' : 'article', maxTweetsArticle, maxWords),
         },
         { role: 'user', content: userContent },
       ],

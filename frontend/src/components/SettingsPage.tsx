@@ -220,6 +220,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
     // Transcription (Whisper): provider deepinfra | openai | openrouter
     transcription_provider: 'deepinfra', transcription_model: '',
+    // Gemini model for YouTube video transcripts (blank = backend default, services/video-transcript.ts)
+    video_transcript_model: '',
     // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
     kokoro_tts_provider: 'deepinfra',
 
@@ -232,6 +234,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     image_alt_text_model: '',
 
     auto_transcribe_podcasts: 'true',
+    auto_transcribe_videos: 'true',
     auto_generate_audio_for_articles: 'false',
     generate_read_along: 'true',
     // Summaries
@@ -354,6 +357,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
         transcription_model: loaded.transcription_model || '',
+        video_transcript_model: loaded.video_transcript_model || '',
         kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
@@ -363,6 +367,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         image_alt_text_model: loaded.image_alt_text_model || '',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
+        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
@@ -542,7 +547,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Per-job config + the "same as narration" toggles must save even when empty/false
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
-        'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
+        'auto_transcribe_podcasts', 'auto_transcribe_videos', 'auto_generate_audio_for_articles', 'auto_generate_summary',
         'auto_generate_summary_audio',
         'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_include_comment_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
@@ -550,7 +555,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-        'transcription_provider', 'transcription_model', 'kokoro_tts_provider',
+        'transcription_provider', 'transcription_model', 'video_transcript_model', 'kokoro_tts_provider',
         'image_alt_text_provider', 'image_alt_text_model',
       ]);
 
@@ -1165,6 +1170,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   onChange={(e) => handleChange('auto_transcribe_podcasts', e.target.checked ? 'true' : 'false')}
                 />
                 Auto-transcribe podcasts
+              </label>
+           </div>
+
+           <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={formData.auto_transcribe_videos === 'true'}
+                  onChange={(e) => handleChange('auto_transcribe_videos', e.target.checked ? 'true' : 'false')}
+                />
+                Auto-transcribe YouTube videos
               </label>
            </div>
 
@@ -1802,6 +1818,22 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   value={formData.transcription_model}
                   onChange={(e) => handleChange('transcription_model', e.target.value)}
                   placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="form-group ai-job">
+            <label>Video transcripts</label>
+            <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>Turns YouTube videos into text (Gemini).</small>
+            <div className="ai-job-fields">
+              <div className="ai-field">
+                <span className="ai-field-label">Model</span>
+                <input
+                  type="text"
+                  value={formData.video_transcript_model}
+                  onChange={(e) => handleChange('video_transcript_model', e.target.value)}
+                  placeholder="default = gemini-3.5-flash-lite"
                 />
               </div>
             </div>

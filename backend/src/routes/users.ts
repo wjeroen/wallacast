@@ -44,10 +44,12 @@ const VALID_SETTING_KEYS = [
   // Transcription (Whisper): provider 'deepinfra' | 'openai'. OpenRouter was removed: its
   // endpoint returns no word timestamps, which read-along requires (verified 2026-07-02).
   'transcription_provider', 'transcription_model',
+  'video_transcript_model',  // Gemini model that writes YouTube video transcripts (blank = services/video-transcript.ts default)
   'kokoro_tts_provider',     // route Kokoro TTS voices via 'deepinfra' (default) or 'openrouter'
   'image_alt_text_provider', // image descriptions via 'gemini' (default), 'deepinfra', 'openai', or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_transcribe_podcasts',
+  'auto_transcribe_videos',    // Transcribe a YouTube video with Gemini when it is added (default: true, needs a Gemini key)
   'auto_generate_audio_for_articles',
   'auto_generate_summary',      // Auto-generate a summary when an article/text is added
   'auto_generate_summary_audio', // Chain TTS audio of the summary after every summary generation (default: false)

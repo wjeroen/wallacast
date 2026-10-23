@@ -304,8 +304,8 @@ function App() {
   // shorter summary audio. Only the effective variant's position is touched,
   // never both, because card progress is original-audio-only by design.
   const resetIfNearlyFinished = (item: ContentItem): ContentItem => {
-    // A video counts like full audio: its position and length are the original's
-    const variant = item.type === 'video' ? 'original' : getEffectiveAudio(item, preferSummaryAudio);
+    // A video counts as the full audio: its position and length are the original's
+    const variant = getEffectiveAudio(item.type === 'video' ? { ...item, audio_url: item.url } : item, preferSummaryAudio);
     if (!variant) return item;
     const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
     const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
@@ -759,9 +759,9 @@ function App() {
 
   const handleGenerateSummary = async (regenerate: boolean) => {
     if (!currentContent) return;
-    // Podcast summaries are made from the TRANSCRIPT. If there is none yet, confirm
-    // before running Whisper + summary back to back
-    if (currentContent.type === 'podcast_episode' && !(currentContent.transcript || '').trim()) {
+    // Podcast and video summaries are made from the TRANSCRIPT. If there is none yet,
+    // confirm before running the transcription (Whisper, or Gemini for a video) + summary
+    if ((currentContent.type === 'podcast_episode' || currentContent.type === 'video') && !(currentContent.transcript || '').trim()) {
       setSummaryTranscriptWarning(true);
       return;
     }
@@ -1301,7 +1301,11 @@ function App() {
       {summaryTranscriptWarning && (
         <div className="comment-warning-overlay" onClick={() => setSummaryTranscriptWarning(false)}>
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
-            <p>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</p>
+            {currentContent?.type === 'video' ? (
+              <p>This video has <strong>no transcript</strong> yet. Video summaries are made from the transcript, so one needs to be generated first (Gemini writes it, with your Gemini API key). The summary follows automatically.</p>
+            ) : (
+              <p>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</p>
+            )}
             <div className="comment-warning-buttons">
               <button
                 className="comment-warning-btn include"

@@ -298,9 +298,9 @@ export function ContentCard({
                     )}
                   </>
                 )}
-                {/* Summaries: articles/texts summarize their body; podcasts their transcript
+                {/* Summaries: articles/texts summarize their body; podcasts and videos their transcript
                     (the parent warns + chains transcription when none exists yet) */}
-                {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && (
+                {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && (
                   <>
                     {item.summary_status === 'generating' ? (
                       <button disabled>
@@ -354,7 +354,7 @@ export function ContentCard({
                     Refetch from web
                   </button>
                 )}
-                {item.type === 'podcast_episode' && (
+                {(item.type === 'podcast_episode' || item.type === 'video') && (
                   <button
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}

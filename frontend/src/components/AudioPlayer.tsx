@@ -83,11 +83,13 @@ export function AudioPlayer({
   const requestedOverride = overrideForId && content && overrideForId.id === content.id ? overrideForId.variant : null;
   // A video is its own original media: it gets the full controls, and its position saves
   // to playback_position like an original audio.
+  const isVideoItem = content?.type === 'video';
   const effectiveVariant: AudioVariant | null =
-    content?.type === 'video' ? 'original'
-    : requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
-    : requestedOverride === 'original' && content?.audio_url ? 'original'
-    : content ? getEffectiveAudio(content, preferSummaryAudio) : null;
+    requestedOverride === 'summary' && content?.summary_audio_url ? 'summary'
+    : requestedOverride === 'original' && (content?.audio_url || isVideoItem) ? 'original'
+    : content ? getEffectiveAudio(isVideoItem ? { ...content, audio_url: content.url } : content, preferSummaryAudio) : null;
+  // A video item plays its video, unless its summary audio is the one playing
+  const playsVideo = isVideoItem && effectiveVariant !== 'summary';
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -157,6 +159,8 @@ export function AudioPlayer({
   const videoPlayPendingRef = useRef(false);
   const videoClockRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastVideoItemRef = useRef<number | null>(null);
+  // The item whose video (not its summary audio) drives the controls right now
+  const videoVariantForRef = useRef<number | null>(null);
   const videoDurationSavedForRef = useRef<number | null>(null);
   const [videoRate, setVideoRate] = useState(1);
   const [videoError, setVideoError] = useState<string | null>(null);
@@ -398,35 +402,54 @@ export function AudioPlayer({
       lastAutoPlayTokenRef.current = autoPlayToken;
     }
 
-    // A video plays in YouTube's player (see YouTubeVideo), never in the <audio> element.
-    if (content.type === 'video') {
+    // A newly opened video: its own position, whichever audio plays first. (Its YouTube
+    // player is built by YouTubeVideo, which reports itself through handleVideoReady and
+    // handleVideoGone, so ytPlayerRef is never reset here.)
+    if (content.type === 'video' && content.id !== lastVideoItemRef.current) {
+      lastVideoItemRef.current = content.id;
+      videoPlayPendingRef.current = false;
+      stopVideoClock();
+      videoTimeRef.current = content.playback_position || 0;
+      setVideoError(null);
+      videoHiddenRef.current = false;
+      setVideoHidden(false);
+      setIsPlaying(false);
+    } else if (content.type !== 'video' && lastVideoItemRef.current !== null) {
+      // Leaving a video: its player went away with its YouTubeVideo, and no pause event came
+      lastVideoItemRef.current = null;
+      videoPlayPendingRef.current = false;
+      stopVideoClock();
+      setIsPlaying(false);
+    }
+
+    // A video plays in YouTube's player (see YouTubeVideo), never in the <audio> element,
+    // except for its summary audio.
+    if (content.type === 'video' && !playingSummary) {
       if (lastAudioSrcRef.current) {
+        // Back from the summary audio: loading no source pauses it without a pause event
         lastAudioSrcRef.current = '';
         audio.removeAttribute('src');
         audio.load();
+        setIsPlaying(false);
       }
-      if (content.id !== lastVideoItemRef.current) {
-        lastVideoItemRef.current = content.id;
-        // The previous video's player was destroyed with its YouTubeVideo, before this ran
-        ytPlayerRef.current = null;
-        videoPlayPendingRef.current = false;
-        stopVideoClock();
-        videoTimeRef.current = startPosition;
+      if (videoVariantForRef.current !== content.id) {
+        // The video starts driving the controls: a new item, or a switch back from the
+        // summary audio
+        videoVariantForRef.current = content.id;
         positionFieldRef.current = 'playback_position';
         lastSavedPositionRef.current = -1;
         pendingResumeSeekRef.current = 0;
         resumeAttemptsRef.current = 0;
         setResumeFailedAt(0);
-        setCurrentTime(startPosition);
+        setCurrentTime(videoTimeRef.current);
         setDuration(content.duration || 0);
-        setVideoError(null);
-        setIsPlaying(false);
-        videoHiddenRef.current = false;
-        setVideoHidden(false);
       }
       // Only a visible video may start by itself (YouTube's embed rules). An item reached
-      // by autoplay while the player is minimized waits for Play.
-      if (shouldAutoPlay && isExpandedRef.current) {
+      // by autoplay while the player is minimized waits for Play. A switch back from the
+      // summary audio that was playing goes on playing.
+      const resumeAfterSwap = resumePlayAfterVariantSwapRef.current;
+      resumePlayAfterVariantSwapRef.current = false;
+      if ((shouldAutoPlay || resumeAfterSwap) && isExpandedRef.current) {
         // An explicit play (a tap in the Queue tab) shows a hidden video again
         if (videoHiddenRef.current) {
           videoHiddenRef.current = false;
@@ -441,13 +464,13 @@ export function AudioPlayer({
       }
       return;
     }
-    if (lastVideoItemRef.current !== null) {
-      // Leaving a video: its player went away with its YouTubeVideo, and no pause event came
-      lastVideoItemRef.current = null;
-      ytPlayerRef.current = null;
+    videoVariantForRef.current = null;
+    if (content.type === 'video') {
+      // The video's summary audio plays in the <audio> element below. The video pauses
+      // and stays where it is on screen.
+      try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
       videoPlayPendingRef.current = false;
       stopVideoClock();
-      setIsPlaying(false);
     }
 
     // Guard against redundant src resets. The parent replaces `content` with
@@ -490,6 +513,9 @@ export function AudioPlayer({
     // another article). The autoplay and variant-swap resumes below play() again, and
     // their 'play' event sets it back to true.
     setIsPlaying(false);
+    // The timeline shows the new source's starting point right away, not the old source's
+    // time (a video's summary audio showed the video's 1:38 against its own 0:12)
+    setCurrentTime(startPosition);
 
     const storedSpeed = getStoredSpeed();
     audio.playbackRate = storedSpeed;
@@ -713,7 +739,7 @@ export function AudioPlayer({
     lastSavedPositionRef.current = -1; // Reset debounce on content change
     const interval = setInterval(() => {
       if (!isPlayingRef.current) return;
-      if (contentRef.current?.type === 'video') savePlaybackPosition(videoTimeRef.current);
+      if (videoVariantForRef.current !== null && videoVariantForRef.current === contentRef.current?.id) savePlaybackPosition(videoTimeRef.current);
       else if (audioRef.current) savePlaybackPosition(audioRef.current.currentTime);
     }, 10000);
     return () => clearInterval(interval);
@@ -723,8 +749,9 @@ export function AudioPlayer({
   useEffect(() => {
     return () => {
       // A video's position is videoTimeRef (its player may already be gone). Within 10
-      // seconds of the end it counts as finished, as below.
-      if (content?.type === 'video') {
+      // seconds of the end it counts as finished, as below. Its summary audio saves like
+      // any audio, further down.
+      if (content?.type === 'video' && positionFieldRef.current === 'playback_position') {
         const dur = content.duration || durationRef.current;
         const nearEnd = dur > 0 && dur - videoTimeRef.current < 10;
         contentAPI.update(content.id, {
@@ -759,7 +786,7 @@ export function AudioPlayer({
   }, [content?.id]);
 
   const togglePlay = () => {
-    if (contentRef.current?.type === 'video') {
+    if (playsVideo) {
       const player = ytPlayerRef.current;
       if (isPlaying) {
         savePlaybackPosition(videoTimeRef.current);
@@ -806,7 +833,7 @@ export function AudioPlayer({
   };
 
   const handleSeek = (time: number) => {
-    if (contentRef.current?.type === 'video') {
+    if (playsVideo) {
       videoTimeRef.current = time;
       setCurrentTime(time);
       savePlaybackPosition(time);
@@ -849,12 +876,9 @@ export function AudioPlayer({
   const handleSkipForward = () => handleSeek(Math.min(duration, currentTime + 15));
 
   const handleSpeedChange = (speed: number) => {
-    if (contentRef.current?.type === 'video') {
-      if (ytPlayerRef.current) applyVideoSpeed(ytPlayerRef.current, speed);
-    } else {
-      if (!audioRef.current) return;
-      audioRef.current.playbackRate = speed;
-    }
+    // Both, since a video item can swap between its video and its summary audio
+    if (ytPlayerRef.current) applyVideoSpeed(ytPlayerRef.current, speed);
+    if (audioRef.current) audioRef.current.playbackRate = speed;
     setPlaybackSpeed(speed);
     // Save globally: localStorage for instant recall, backend for cross-device sync
     localStorage.setItem('playbackSpeed', String(speed));
@@ -898,19 +922,30 @@ export function AudioPlayer({
   // both audios, the swap happens live: save the outgoing variant's position first
   // (the src change would otherwise lose it) and remember to resume playback.
   // Any per-item override is dropped so the toggle always visibly takes effect.
+  // The outgoing side of a swap between a video and its summary audio, or between full and
+  // summary audio: save its position and remember whether it was playing.
+  const saveOutgoingVariant = (): boolean => {
+    if (!content) return false;
+    if (playsVideo) {
+      savePlaybackPosition(videoTimeRef.current);
+      return isPlaying;
+    }
+    const audio = audioRef.current;
+    if (!audio) return false;
+    if (pendingResumeSeekRef.current === 0) {
+      contentAPI.update(content.id, {
+        [positionFieldRef.current]: Math.floor(audio.currentTime),
+        last_played_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    return !audio.paused;
+  };
+
   const handleTogglePreferSummaryAudio = () => {
     if (!onSetPreferSummaryAudio) return;
-    const audio = audioRef.current;
-    const bothAudios = !!(content?.audio_url && content?.summary_audio_url);
-    if (audio && bothAudios) {
-      resumePlayAfterVariantSwapRef.current = !audio.paused;
-      if (content && pendingResumeSeekRef.current === 0) {
-        contentAPI.update(content.id, {
-          [positionFieldRef.current]: Math.floor(audio.currentTime),
-          last_played_at: new Date().toISOString(),
-        }).catch(() => {});
-      }
-    }
+    // A video counts as the full audio here
+    const bothAudios = !!((content?.audio_url || isVideoItem) && content?.summary_audio_url);
+    if (bothAudios) resumePlayAfterVariantSwapRef.current = saveOutgoingVariant();
     setOverrideForId(null);
     onSetPreferSummaryAudio(!preferSummaryAudio);
   };
@@ -920,25 +955,15 @@ export function AudioPlayer({
   // keeps the current playing/paused state. Does NOT touch the global setting.
   const handleSelectAudioVariant = (variant: AudioVariant, autoplay: boolean) => {
     if (!content) return;
-    const audio = audioRef.current;
-    const targetExists = variant === 'summary' ? !!content.summary_audio_url : !!content.audio_url;
+    const targetExists = variant === 'summary' ? !!content.summary_audio_url : !!(content.audio_url || isVideoItem);
     if (!targetExists) return;
     if (variant === effectiveVariant) {
       // Nothing to swap; an explicit Play press just plays.
-      if (autoplay && audio && audio.paused) {
-        userPausedRef.current = false;
-        appPlayRef.current = true;
-        audio.play().catch(() => { appPlayRef.current = false; });
-      }
+      if (autoplay && !isPlaying) togglePlay();
       return;
     }
-    if (audio && pendingResumeSeekRef.current === 0) {
-      contentAPI.update(content.id, {
-        [positionFieldRef.current]: Math.floor(audio.currentTime),
-        last_played_at: new Date().toISOString(),
-      }).catch(() => {});
-    }
-    resumePlayAfterVariantSwapRef.current = autoplay || !!(audio && !audio.paused);
+    const wasPlaying = saveOutgoingVariant();
+    resumePlayAfterVariantSwapRef.current = autoplay || wasPlaying;
     setOverrideForId({ id: content.id, variant });
   };
 
@@ -1140,15 +1165,21 @@ export function AudioPlayer({
   // destroyed with its box.
   const pauseVideoLeavingScreen = () => {
     try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
+    videoPlayPendingRef.current = false;
+    // While the summary audio plays, that goes on (the video was paused already)
+    if (!playsVideo) return;
     stopVideoClock();
     setIsPlaying(false);
     savePlaybackPosition(videoTimeRef.current);
-    ytPlayerRef.current = null;
-    videoPlayPendingRef.current = false;
+  };
+
+  // YouTubeVideo destroyed its player (minimized, hidden, or another item opened)
+  const handleVideoGone = (player: YouTubePlayer) => {
+    if (ytPlayerRef.current === player) ytPlayerRef.current = null;
   };
 
   const handleMinimize = () => {
-    if (contentRef.current?.type === 'video') pauseVideoLeavingScreen();
+    if (isVideoItem) pauseVideoLeavingScreen();
     isExpandedRef.current = false;
     setIsExpanded(false);
   };
@@ -1201,6 +1232,7 @@ export function AudioPlayer({
               onStateChange={handleVideoStateChange}
               onRateChange={setVideoRate}
               onError={handleVideoError}
+              onGone={handleVideoGone}
             />
           ) : null}
           videoError={videoError}

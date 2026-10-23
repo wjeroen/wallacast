@@ -75,14 +75,16 @@ interface YouTubeVideoProps {
   // A YouTube error code (100 not found, 101 and 150 embedding not allowed, ...), or -1
   // when the player script itself did not load
   onError: (code: number) => void;
+  // The player was destroyed (this box unmounted), so it must no longer be called
+  onGone: (player: YouTubePlayer) => void;
 }
 
-export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, onRateChange, onError }: YouTubeVideoProps) {
+export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, onRateChange, onError, onGone }: YouTubeVideoProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   // The latest callbacks, so the player is built once per video and not on every render
-  const callbacks = useRef({ onReady, onStateChange, onRateChange, onError });
+  const callbacks = useRef({ onReady, onStateChange, onRateChange, onError, onGone });
   useEffect(() => {
-    callbacks.current = { onReady, onStateChange, onRateChange, onError };
+    callbacks.current = { onReady, onStateChange, onRateChange, onError, onGone };
   });
   const startRef = useRef(startSeconds);
 
@@ -124,6 +126,7 @@ export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, on
       });
     return () => {
       cancelled = true;
+      if (player) callbacks.current.onGone(player);
       try { player?.destroy(); } catch { /* already gone */ }
       host.replaceChildren();
     };

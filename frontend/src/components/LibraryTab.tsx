@@ -126,7 +126,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // askAudio (bulk select-mode only): the auto_generate_summary_audio setting is on, so the
   // dialog also asks whether summary audio should be generated, plus an opt-in checkbox for
   // selected items that already have summaries. Single-item flows chain audio silently.
-  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio?: boolean; existingSummaryIds?: number[] } | null>(null);
+  // video: the one item without a transcript is a YouTube video (its transcript comes from Gemini)
+  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio?: boolean; existingSummaryIds?: number[]; video?: boolean } | null>(null);
   const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
   const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
@@ -684,8 +685,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     // Podcasts summarize their TRANSCRIPT (not the episode description). If there's no
     // transcript yet, ask before kicking off Whisper + summary
     const item = allItems.find(c => c.id === id);
-    if (item && item.type === 'podcast_episode' && !hasWordTimings(item)) {
-      setTranscriptWarning({ podcastIds: [id], readyIds: [] });
+    if (item && (item.type === 'podcast_episode' || item.type === 'video') && !hasWordTimings(item)) {
+      setTranscriptWarning({ podcastIds: [id], readyIds: [], video: item.type === 'video' });
       return;
     }
     try {
@@ -1259,6 +1260,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 ) : (
                   <>All selected items already have summaries.</>
                 )
+              ) : w.video ? (
+                <>This video has <strong>no transcript</strong> yet. Video summaries are made from the transcript, so one needs to be generated first (Gemini writes it, with your Gemini API key). The summary follows automatically.</>
               ) : w.podcastIds.length === 1 && w.readyIds.length === 0 && !w.askAudio ? (
                 <>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</>
               ) : (

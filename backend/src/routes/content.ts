@@ -22,6 +22,7 @@ import { normalizeTag, normalizeTagList, findReservedTags } from '../services/ta
 import { findItem } from '../services/url-match.js';
 import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
 import { fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
+import { transcribeYouTubeVideo } from '../services/video-transcript.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
@@ -160,7 +161,7 @@ router.get('/index', async (req, res) => {
               is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
               COALESCE(comment_count_total, 0) AS comment_count,
               LEFT(description, 1500) AS description,
-              COALESCE(type = 'podcast_episode'
+              COALESCE(type IN ('podcast_episode', 'video')
                 AND octet_length(transcript) > 0
                 AND (octet_length(transcript) > 1000 OR transcript ~ '[^[:space:]]'), false
               ) AS has_transcript
@@ -1280,6 +1281,36 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Auto-generate a transcript for YouTube videos, like podcast episodes below, with its own
+    // setting (auto_transcribe_videos, default on). Gemini writes it from the video's address,
+    // so it only runs with a Gemini key.
+    if (type === 'video' && url) {
+      const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_videos');
+      const wantsTranscript = tokenGen ? tokenGen.transcribe : autoTranscribe === null || autoTranscribe === 'true';
+      const hasGeminiKey = !!(await getUserSetting(req.user!.userId, 'gemini_api_key'));
+      if (wantsTranscript && hasGeminiKey && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
+        console.log(`Auto-generating transcript for video ${createdItem.id}`);
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+          ['generating_transcript', 0, 'transcript', createdItem.id]
+        );
+        transcribeYouTubeVideo(req.user!.userId, url, createdItem.duration ? Number(createdItem.duration) : null)
+          .then(async (result) => {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
+              [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
+            );
+          })
+          .catch(async (error) => {
+            console.error('Auto video transcript error:', error);
+            await query(
+              "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
+              ['failed', error.message || 'Failed to generate the video transcript', 0, createdItem.id]
+            );
+          });
+      }
+    }
+
     // Auto-generate transcript for podcast episodes
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
       const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
@@ -1494,7 +1525,7 @@ router.patch('/:id', async (req, res) => {
 
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
-        'SELECT type, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT type, url, duration, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
@@ -1502,7 +1533,36 @@ router.patch('/:id', async (req, res) => {
         return res.status(404).json({ error: 'Content not found' });
       }
 
-      {
+      // A video has no audio file: Gemini writes its transcript from the YouTube address
+      // (services/video-transcript.ts). Same statuses as a podcast transcript.
+      if (contentResult.rows[0].type === 'video') {
+        const { url, duration } = contentResult.rows[0];
+        console.log(`Generating transcript for video ${id}`);
+        deferredTranscriptRegen = async () => {
+          try {
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+              ['generating_transcript', 0, 'transcript', id]
+            );
+            const result = await transcribeYouTubeVideo(req.user!.userId, url, duration ? Number(duration) : null);
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, generation_error = NULL, current_operation = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
+              [result.text, JSON.stringify(result.words), 'completed', 100, id]
+            );
+            console.log(`Video transcript ready for ${id}: ${result.words.length} words`);
+          } catch (error) {
+            console.error('Video transcript error:', error);
+            await query(
+              "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
+              ['failed', (error as Error).message || 'Failed to generate the video transcript', 0, id]
+            );
+          }
+        };
+        updates.generation_status = 'generating_transcript';
+        updates.generation_progress = 0;
+        allowedFields.push('generation_status', 'generation_progress');
+        delete updates.regenerate_transcript;
+      } else {
         const { type, audio_url, title, author, published_at, comments } = contentResult.rows[0];
 
         // No audio means nothing to transcribe. Answer with a real reason: this used to
@@ -2193,7 +2253,7 @@ router.post('/:id/generate-summary', async (req, res) => {
     const generateAudio = typeof req.body?.generate_audio === 'boolean' ? req.body.generate_audio : undefined;
 
     const contentResult = await query(
-      'SELECT id, type, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, url, duration, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -2203,7 +2263,7 @@ router.post('/:id/generate-summary', async (req, res) => {
 
     const contentItem = contentResult.rows[0];
 
-    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode') {
+    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode' && contentItem.type !== 'video') {
       return res.status(400).json({ error: 'Summaries are not available for this content type' });
     }
 
@@ -2214,15 +2274,19 @@ router.post('/:id/generate-summary', async (req, res) => {
       });
     }
 
-    const needsTranscript = contentItem.type === 'podcast_episode' && !(contentItem.transcript || '').trim();
+    // Podcasts and videos summarize their transcript
+    const isVideo = contentItem.type === 'video';
+    const needsTranscript = (contentItem.type === 'podcast_episode' || isVideo) && !(contentItem.transcript || '').trim();
 
     if (needsTranscript && !generateTranscript) {
       return res.status(400).json({
-        error: 'This podcast episode has no transcript yet. Generate the transcript first.',
+        error: isVideo
+          ? 'This video has no transcript yet. Generate the transcript first.'
+          : 'This podcast episode has no transcript yet. Generate the transcript first.',
         code: 'no_transcript',
       });
     }
-    if (needsTranscript && !contentItem.audio_url) {
+    if (needsTranscript && !isVideo && !contentItem.audio_url) {
       return res.status(400).json({ error: 'Episode has no audio to transcribe' });
     }
     if (needsTranscript && contentItem.generation_status === 'generating_transcript') {
@@ -2258,8 +2322,11 @@ router.post('/:id/generate-summary', async (req, res) => {
         published_at: contentItem.published_at,
         comments: contentItem.comments,
       });
-      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt,
-        contentItem.type === 'podcast_episode' && shouldCachePodcastHost(contentItem.audio_url) ? Number(id) : undefined)
+      const transcription = isVideo
+        ? transcribeYouTubeVideo(req.user!.userId, contentItem.url, contentItem.duration ? Number(contentItem.duration) : null)
+        : transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt,
+          contentItem.type === 'podcast_episode' && shouldCachePodcastHost(contentItem.audio_url) ? Number(id) : undefined);
+      transcription
         .then(async (result) => {
           console.log(`Transcription complete for ${id} (${result.words.length} words), starting summary`);
           await query(

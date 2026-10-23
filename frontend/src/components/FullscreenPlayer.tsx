@@ -885,7 +885,7 @@ export function FullscreenPlayer({
   onTranscriptWordClickRef.current = playingSummaryAudio ? () => {} : onTranscriptWordClick;
 
   const transcriptDisplayWords = useMemo(() => {
-    if (content.type !== 'podcast_episode') return null;
+    if (content.type !== 'podcast_episode' && content.type !== 'video') return null;
     if (transcriptWords.length > 0) {
       return transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''));
     }
@@ -919,7 +919,7 @@ export function FullscreenPlayer({
   // whole range is then re-applied from scratch.
   const appliedReadUpToRef = useRef(-1);
   useEffect(() => {
-    const isWordView = activeTab === 'read-along' && !isLLMAlignment && content.type === 'podcast_episode';
+    const isWordView = activeTab === 'read-along' && !isLLMAlignment && (content.type === 'podcast_episode' || content.type === 'video');
     if (!isWordView) {
       appliedReadUpToRef.current = -1;
       return;
@@ -959,8 +959,9 @@ export function FullscreenPlayer({
       tabs.push('description');
       tabs.push('read-along');
     } else if (content.type === 'video') {
-      // No transcript for videos yet, so only their YouTube description
+      // The YouTube description, and the transcript Gemini writes (like a podcast's)
       tabs.push('description');
+      tabs.push('read-along');
     } else if (isArticleOrText) {
       if (hasReadAlongData) tabs.push('read-along');
       tabs.push('content');
@@ -1765,7 +1766,8 @@ export function FullscreenPlayer({
           </div>
         );
       case 'read-along': {
-        const isPodcast = content.type === 'podcast_episode';
+        // Podcasts and videos show their transcript word by word
+        const isPodcast = content.type === 'podcast_episode' || content.type === 'video';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
         // What is actually running. The transcript job reports `current_operation` as
         // 'transcript' (set by the PATCH route) or 'transcribing' (set by the service), and
@@ -1801,7 +1803,8 @@ export function FullscreenPlayer({
           }
           // The same actions as the menu's "Generate transcript" and "Generate summary"
           // (which confirms first, then makes the transcript and the summary in one job)
-          const showGenerateButtons = !hasTranscript && !transcriptInProgress && hasAudio;
+          // A video needs no audio file: Gemini transcribes it from its YouTube address
+          const showGenerateButtons = !hasTranscript && !transcriptInProgress && (hasAudio || content.type === 'video');
 
           return (
             <div className="tab-read-along-display">
@@ -2372,7 +2375,7 @@ export function FullscreenPlayer({
                 {/* Summary options (independent of audio, both can be generated at once).
                     Podcasts summarize their transcript; App.tsx confirms + chains Whisper
                     first when no transcript exists yet. */}
-                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
+                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode' || content.type === 'video') && (
                   <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
                       <button disabled>
@@ -2420,7 +2423,7 @@ export function FullscreenPlayer({
                     Regenerate transcript
                   </button>
                 )}
-                {content.type === 'podcast_episode' && onRegenerateTranscript && (
+                {(content.type === 'podcast_episode' || content.type === 'video') && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
                     <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     {content.transcript ? 'Regenerate' : 'Generate'} transcript
@@ -2545,7 +2548,7 @@ export function FullscreenPlayer({
             const isSummary = playingVariant === 'summary';
             const isVideo = content.type === 'video';
             const SourceIcon = isSummary ? TAB_ICONS.summary : isVideo ? TvMinimalPlay : TAB_ICONS.content;
-            const canSwitch = !!(content.audio_url && content.summary_audio_url && onSelectAudioVariant);
+            const canSwitch = !!((content.audio_url || isVideo) && content.summary_audio_url && onSelectAudioVariant);
             const label = isSummary ? 'Summary audio' : isVideo ? 'Video' : 'Full audio';
             return canSwitch ? (
               <button
