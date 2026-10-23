@@ -16,6 +16,21 @@ import { youtubeVideoId } from '../shared/format.js';
 
 export const VIDEO_TRANSCRIPT_DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
+// Gemini sometimes ends a piece's answer early, with finish=STOP as if it were done, and
+// leaves minutes of speech out. Tests on 2026-10-23 (four 10-minute parts of long videos, 4
+// runs each, scored against YouTube's own captions): Flash-Lite stopped where the talk
+// sounds finished, at a goodbye followed by a new segment (3 of 4 runs) or at "I need to do
+// a bathroom break" and a cut (2 of 4), and once wrote times that squeezed the piece's last
+// minutes together. A stricter prompt, a prompt saying goodbyes are not the end, an answer
+// per minute and one frame per second did not stop it, while Gemini 3.8 Flash left nothing
+// out in 12 of 12 runs (3.5 and 3.6 Flash neither, 28 runs). Asked why it stopped, Gemini
+// blamed an output limit it had not reached. So a piece with a stretch of more than
+// HOLE_SECONDS in which no sentence starts is transcribed once more by RETRY_MODEL, the
+// answer that leaves less uncovered is kept, and a stretch still uncovered gets a visible
+// line in the transcript instead of disappearing silently.
+const RETRY_MODEL = 'gemini-3.8-flash';
+const HOLE_SECONDS = 60;
+
 // Longer videos go in 10-minute pieces. In one answer Gemini stopped early (a 33-minute
 // video's transcript ended at 21 minutes, finish=STOP, 2026-10-23) and its times drifted
 // further from the video the longer the video was. Each piece starts its times afresh at the
@@ -215,6 +230,63 @@ function readStarts(rows: Array<{ start?: unknown; text?: unknown }>, spanEnd: n
   return sentences;
 }
 
+// A stretch of a piece's own part in which no sentence starts, longer than HOLE_SECONDS: a
+// conversation leaves no such silence, so speech is probably missing (or it is music). From
+// the piece's start when it is not the video's start, and up to where its own part ends
+// when it is not the last piece, so a silent intro or closing music is never a hole.
+interface Hole {
+  from: number;
+  to: number;
+  // The index of the sentence the hole follows, -1 before the first
+  after: number;
+}
+
+function holesIn(sentences: Sentence[], piece: Piece | null): Hole[] {
+  const holes: Hole[] = [];
+  let prev: number | null = piece && piece.from > 0 ? piece.from : null;
+  sentences.forEach((s, k) => {
+    if (prev !== null && s.start - prev > HOLE_SECONDS) holes.push({ from: prev, to: s.start, after: k - 1 });
+    prev = s.start;
+  });
+  if (piece && Number.isFinite(piece.ownTo)) {
+    const last = sentences.length > 0 ? sentences[sentences.length - 1].start : piece.from;
+    if (piece.ownTo - last > HOLE_SECONDS) holes.push({ from: last, to: piece.ownTo, after: sentences.length - 1 });
+  }
+  return holes;
+}
+
+const uncovered = (holes: Hole[]) => holes.reduce((total, h) => total + h.to - h.from, 0);
+
+// The sentences a piece keeps: those that start in its own part (a sentence belongs to the
+// piece it starts in), without the leftover of the sentence it begins in
+function ownSentences(got: Sentence[], piece: Piece | null): Sentence[] {
+  if (!piece) return got;
+  return got.filter((s, k) => {
+    if (s.start < piece.from - 1 || s.start >= piece.ownTo) return false;
+    // Gemini sometimes still writes the end of the sentence a piece begins in, although
+    // the previous piece finished it ("and hue." in a test). Such a leftover starts
+    // right at the cut with a small letter, where a real sentence starts with a capital.
+    return !(piece.from > 0 && k === 0 && s.start < piece.from + 3 && s.text[0] !== s.text[0].toUpperCase());
+  });
+}
+
+// The piece's sentences with a line in each stretch that stays uncovered, where its speech
+// would be. The line starts when the sentence before it has had about 0.4 s per word, so
+// that sentence keeps its own time.
+function withHoleLines(sentences: Sentence[], holes: Hole[]): Sentence[] {
+  const line = (h: Hole): Sentence => {
+    const before = sentences[h.after];
+    const spoken = before && before.start === h.from ? before.text.split(/\s+/).length * 0.4 : 0;
+    const from = Math.min(h.from + spoken, h.to - 1);
+    return { start: from, text: `[Transcript may be missing from ${clock(from)} to ${clock(h.to)}.]` };
+  };
+  const out = holes.filter((h) => h.after === -1).map(line);
+  sentences.forEach((s, k) => {
+    out.push(s, ...holes.filter((h) => h.after === k).map(line));
+  });
+  return out;
+}
+
 // Gemini is asked for times from the start of the full video. If a piece's times plainly
 // start near 0 instead, they count from the piece's own start and are shifted.
 function toVideoTime(sentences: Sentence[], piece: Piece | null, label: string): Sentence[] {
@@ -272,23 +344,41 @@ export async function transcribeYouTubeVideoWith(
 
   // One piece after the other: each piece counts against Gemini's per-minute limits
   const sentences: Sentence[] = [];
+  let spoken = 0;
   for (let i = 0; i < pieces.length; i++) {
     const label = `${id} piece ${i + 1}/${pieces.length}`;
     const piece = pieces[i];
     const spanEnd = piece ? piece.to : (durationSeconds || null);
-    const got = toVideoTime(await transcribePiece(apiKey, model, videoUrl, piece, label, spanEnd), piece, label);
-    for (const [k, s] of got.entries()) {
-      if (piece && (s.start < piece.from - 1 || s.start >= piece.ownTo)) continue;
-      // Gemini sometimes still writes the end of the sentence a piece begins in, although
-      // the previous piece finished it ("and hue." in a test). Such a leftover starts
-      // right at the cut with a small letter, where a real sentence starts with a capital.
-      if (piece && piece.from > 0 && k === 0 && s.start < piece.from + 3 && s.text[0] !== s.text[0].toUpperCase()) continue;
+    const transcribe = async (withModel: string) => ownSentences(
+      toVideoTime(await transcribePiece(apiKey, withModel, videoUrl, piece, label, spanEnd), piece, label),
+      piece
+    );
+    let own = await transcribe(model);
+    let holes = holesIn(own, piece);
+    if (holes.length > 0) {
+      const where = holes.map((h) => `${clock(h.from)}-${clock(h.to)}`).join(', ');
+      console.warn(`[VideoTranscript] ${label}: no sentence starts in ${where}, asking ${RETRY_MODEL} again`);
+      try {
+        const again = await transcribe(RETRY_MODEL);
+        const againHoles = holesIn(again, piece);
+        if (again.length > 0 && uncovered(againHoles) < uncovered(holes)) {
+          own = again;
+          holes = againHoles;
+        }
+        console.log(`[VideoTranscript] ${label}: kept the ${own === again ? 'second' : 'first'} answer, ${Math.round(uncovered(holes))} s still uncovered`);
+      } catch (err) {
+        console.warn(`[VideoTranscript] ${label}: the second answer failed, keeping the first: ${(err as Error).message}`);
+      }
+    }
+    if (holes.length > 0) console.warn(`[VideoTranscript] ${label}: ${holes.length} stretch(es) marked as possibly missing`);
+    spoken += own.length;
+    for (const s of withHoleLines(own, holes)) {
       // Times never run backwards
       const prev = sentences[sentences.length - 1];
       sentences.push({ start: prev && s.start < prev.start ? prev.start : s.start, text: s.text });
     }
   }
-  if (sentences.length === 0) throw new Error('Gemini found no speech in this video');
+  if (spoken === 0) throw new Error('Gemini found no speech in this video');
 
   const words: VideoTranscript['words'] = [];
   sentences.forEach((s, i) => {
