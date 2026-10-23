@@ -4799,8 +4799,8 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
-/* Cinema-mode and full-screen buttons after the total time, video items only */
-.fullscreen-progress-bar .video-fullscreen-btn {
+/* Focus-mode and full-screen buttons after the total time (full screen: a shown video) */
+.fullscreen-progress-bar .timeline-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4888,33 +4888,38 @@ blockquote.twitter-tweet.tweet-quoted {
   }
 }
 
-/* Cinema mode: the header and the tabs give way, the video box takes the free space (YouTube
-   letterboxes the picture in it) and the controls are one slim row */
-.fullscreen-player.cinema .fullscreen-header,
-.fullscreen-player.cinema .fullscreen-tabs,
-.fullscreen-player.cinema .fullscreen-tab-content {
+/* Focus mode: the header goes and the controls shrink to the timeline and one row. With a
+   video shown (.focus-video) the tabs go too and the video box takes the free space
+   (YouTube letterboxes the picture in it), otherwise the tabs and their content get it. */
+.fullscreen-player.focus .fullscreen-header,
+.fullscreen-player.focus-video .fullscreen-tabs,
+.fullscreen-player.focus-video .fullscreen-tab-content {
   display: none;
 }
 
-.fullscreen-player.cinema .fullscreen-video-area {
+.fullscreen-player.focus-video .fullscreen-video-area {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.fullscreen-player.cinema .fullscreen-video {
+.fullscreen-player.focus-video .fullscreen-video {
   flex: 1;
   max-width: none;
   max-height: none;
   aspect-ratio: auto;
 }
 
-.fullscreen-player-controls.cinema-controls {
+.fullscreen-player-controls.focus-controls {
   padding: 0.5rem 1rem;
 }
 
-.cinema-row {
+.focus-controls .fullscreen-progress-bar {
+  margin-bottom: 0.25rem;
+}
+
+.focus-row {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4929,21 +4934,6 @@ blockquote.twitter-tweet.tweet-quoted {
 .option-toggle.compact {
   min-width: 0;
   padding: 0.4rem 0.6rem;
-}
-
-.cinema-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  background: none;
-  border: none;
-  color: var(--t3);
-  cursor: pointer;
-}
-
-.cinema-btn.active {
-  color: var(--accent-text);
 }
 
 .fullscreen-progress-bar button.audio-source-btn:focus:not(:focus-visible) {

@@ -47,7 +47,8 @@ import {
   PanelTopClose,
   PanelTopOpen,
   Maximize,
-  RectangleHorizontal,
+  Expand,
+  Shrink,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -562,16 +563,13 @@ export function FullscreenPlayer({
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
   const speedButton = useHoldButton(onToggleSpeed, onHoldSpeedStart, onHoldSpeedEnd);
-  // Cinema mode (video items): the header and the tabs give way to the video, and the
-  // controls shrink to one row without a timeline (YouTube's player has its own). It ends
-  // when another item opens, and it only exists while the video is shown.
-  const [cinema, setCinema] = useState(false);
-  const [cinemaItem, setCinemaItem] = useState(content.id);
-  if (cinemaItem !== content.id) {
-    setCinemaItem(content.id);
-    setCinema(false);
-  }
-  const cinemaOn = cinema && !!video;
+  // Focus mode: the header goes and the controls shrink to the timeline and one row of
+  // buttons. With a video shown, the video also takes the tabs' place (cinema). Otherwise
+  // the tabs and their content get the room. It needs a timeline (its button sits there),
+  // stays on when the next item opens, and ends with the player (minimizing or closing).
+  const [focus, setFocus] = useState(false);
+  const focusOn = focus && playingVariant !== null;
+  const focusVideo = focusOn && !!video;
   const [controlsAlign, setControlsAlign] = useState<ControlsAlign>(getStoredControlsAlign);
   const moveControls = (step: -1 | 1) => {
     const next = CONTROLS_ALIGN_ORDER[Math.max(0, Math.min(2, CONTROLS_ALIGN_ORDER.indexOf(controlsAlign) + step))];
@@ -2297,8 +2295,88 @@ export function FullscreenPlayer({
     }
   };
 
+  // The timeline row (source switch, times, slider, focus and full-screen buttons), the
+  // same in the normal controls and in focus mode
+  const timelineRow = playingVariant !== null && (
+        <div className="fullscreen-progress-bar">
+          {(() => {
+            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
+            // for the full audio. With both audios it switches between them for this item
+            // only and keeps playing or paused, like the Summary tab banner's switch.
+            const isSummary = playingVariant === 'summary';
+            const isVideo = content.type === 'video';
+            const SourceIcon = isSummary ? TAB_ICONS.summary : isVideo ? TvMinimalPlay : TAB_ICONS.content;
+            const canSwitch = !!((content.audio_url || isVideo) && content.summary_audio_url && onSelectAudioVariant);
+            const label = isSummary ? 'Summary audio' : isVideo ? 'Video' : 'Full audio';
+            return canSwitch ? (
+              <button
+                className="audio-source-btn"
+                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
+                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+              >
+                <SourceIcon size={16} />
+              </button>
+            ) : (
+              <span className="audio-source-btn" title={label} aria-label={label} role="img">
+                <SourceIcon size={16} />
+              </span>
+            );
+          })()}
+          <span className="time">{formatTime(currentTime)}</span>
+          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 0}
+              value={currentTime}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="progress-slider"
+            />
+            {commentsMarkerPosition !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${commentsMarkerPosition}%`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '3px',
+                  height: '14px',
+                  backgroundColor: '#f97316',
+                  borderRadius: '1px',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title="Comments section starts here"
+              />
+            )}
+          </div>
+          <span className="time">{formatTime(duration)}</span>
+          <button
+            type="button"
+            className="timeline-btn"
+            onClick={() => setFocus(f => !f)}
+            title={focusOn ? 'Leave focus mode' : 'Focus mode'}
+            aria-label={focusOn ? 'Leave focus mode' : 'Focus mode'}
+          >
+            {focusOn ? <Shrink size={16} /> : <Expand size={16} />}
+          </button>
+          {onVideoFullscreen && (
+            <button
+              type="button"
+              className="timeline-btn"
+              onClick={onVideoFullscreen}
+              title="Full screen"
+              aria-label="Full screen"
+            >
+              <Maximize size={16} />
+            </button>
+          )}
+        </div>
+  );
+
   return (
-    <div className={`fullscreen-player${cinemaOn ? ' cinema' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
+    <div className={`fullscreen-player${focusOn ? ' focus' : ''}${focusVideo ? ' focus-video' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {/* Leading column: the artwork top-aligned with the title, with the
@@ -2652,11 +2730,17 @@ export function FullscreenPlayer({
 
       {/* Player Controls. Without audio there is no timeline, no play/seek, and no
           speed/sleep: the row reduces to previous track, display settings, next track. */}
-      {cinemaOn ? (
-        <div className="fullscreen-player-controls cinema-controls">
+      {focusOn ? (
+        <div className="fullscreen-player-controls focus-controls">
+          {timelineRow}
+          {resumeTargetTime > 0 && (
+            <button className="resume-chip" onClick={() => onSeek(resumeTargetTime)}>
+              Resume at {formatTime(resumeTargetTime)}
+            </button>
+          )}
           <div className="controls-align-wrap">
             <div className={`controls-cluster align-${controlsAlign}`}>
-              <div className="cinema-row">
+              <div className="focus-row">
                 <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
                   <RotateCcw className="seek-icon" />
                   <span className="seek-label">15</span>
@@ -2672,14 +2756,6 @@ export function FullscreenPlayer({
                   <Gauge size={18} />
                   <span>{playbackSpeed}x</span>
                 </button>
-                <button type="button" className="cinema-btn active" onClick={() => setCinema(false)} title="Leave cinema mode" aria-label="Leave cinema mode">
-                  <RectangleHorizontal size={20} />
-                </button>
-                {onVideoFullscreen && (
-                  <button type="button" className="cinema-btn" onClick={onVideoFullscreen} title="Full screen" aria-label="Full screen">
-                    <Maximize size={20} />
-                  </button>
-                )}
               </div>
             </div>
             {alignArrows}
@@ -2687,85 +2763,7 @@ export function FullscreenPlayer({
         </div>
       ) : (
       <div className="fullscreen-player-controls">
-        {playingVariant !== null && (
-        <div className="fullscreen-progress-bar">
-          {(() => {
-            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
-            // for the full audio. With both audios it switches between them for this item
-            // only and keeps playing or paused, like the Summary tab banner's switch.
-            const isSummary = playingVariant === 'summary';
-            const isVideo = content.type === 'video';
-            const SourceIcon = isSummary ? TAB_ICONS.summary : isVideo ? TvMinimalPlay : TAB_ICONS.content;
-            const canSwitch = !!((content.audio_url || isVideo) && content.summary_audio_url && onSelectAudioVariant);
-            const label = isSummary ? 'Summary audio' : isVideo ? 'Video' : 'Full audio';
-            return canSwitch ? (
-              <button
-                className="audio-source-btn"
-                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
-                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
-                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
-              >
-                <SourceIcon size={16} />
-              </button>
-            ) : (
-              <span className="audio-source-btn" title={label} aria-label={label} role="img">
-                <SourceIcon size={16} />
-              </span>
-            );
-          })()}
-          <span className="time">{formatTime(currentTime)}</span>
-          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
-            <input
-              type="range"
-              min="0"
-              max={duration || 0}
-              value={currentTime}
-              onChange={(e) => onSeek(parseFloat(e.target.value))}
-              className="progress-slider"
-            />
-            {commentsMarkerPosition !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${commentsMarkerPosition}%`,
-                  top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: '3px',
-                  height: '14px',
-                  backgroundColor: '#f97316',
-                  borderRadius: '1px',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-                title="Comments section starts here"
-              />
-            )}
-          </div>
-          <span className="time">{formatTime(duration)}</span>
-          {onVideoFullscreen && (
-            <button
-              type="button"
-              className="video-fullscreen-btn"
-              onClick={() => setCinema(true)}
-              title="Cinema mode"
-              aria-label="Cinema mode"
-            >
-              <RectangleHorizontal size={16} />
-            </button>
-          )}
-          {onVideoFullscreen && (
-            <button
-              type="button"
-              className="video-fullscreen-btn"
-              onClick={onVideoFullscreen}
-              title="Full screen"
-              aria-label="Full screen"
-            >
-              <Maximize size={16} />
-            </button>
-          )}
-        </div>
-        )}
+        {timelineRow}
 
         <div className="controls-align-wrap">
         <div className={`controls-cluster align-${controlsAlign}`}>
