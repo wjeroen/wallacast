@@ -3,6 +3,13 @@
    Dark mode is default. Light mode overrides.
    ============================================= */
 :root {
+  /* Viewport units for every vw, vh and dvh length in the app, so the desktop-mode fit
+     (src/desktop-fit.ts) can correct them: it zooms the whole page, and a zoomed 100vh
+     would grow past the screen. They equal 1vw, 1vh and 1dvh unless that fit is on. */
+  --vw: 1vw;
+  --vh: 1vh;
+  --dvh: 1vh;
+
   /* Backgrounds: darkest → lightest in dark mode */
   --bg-app:     #0f172a;
   --bg-surface: #1e293b;
@@ -47,6 +54,19 @@
   color-scheme: dark;
   background-color: var(--bg-app);
   color: var(--t1);
+}
+
+@supports (height: 1dvh) {
+  :root {
+    --dvh: 1dvh;
+  }
+}
+
+/* The app's width rules are container queries on #root, not media queries: in desktop
+   mode on a phone the page is zoomed to the screen (src/desktop-fit.ts), and a media query
+   would still see Chrome's 980 px desktop width while #root is as wide as the screen. */
+#root {
+  container: app / inline-size;
 }
 
 [data-theme="light"] {
@@ -113,7 +133,7 @@ button {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100 * var(--vh));
   width: 100%;
   background: var(--bg-app);
   color: var(--t1);
@@ -212,7 +232,7 @@ button {
   }
 }
 
-@media (max-width: 640px) {
+@container app (max-width: 640px) {
   .sync-text {
     display: none;
   }
@@ -227,7 +247,7 @@ button {
    and small counts, so the cut-off sits at 950px to leave room for a four-digit item
    count on the active chip. They used to appear at 740px, far too early, which forced the
    chip strip into a sideways scroll on every mid-sized window. */
-@media (max-width: 950px) {
+@container app (max-width: 950px) {
   .filter-label {
     display: none;
   }
@@ -238,7 +258,7 @@ button {
   }
 }
 
-@media (max-width: 740px) {
+@container app (max-width: 740px) {
 
   /* Type pill collapses to icon-only on narrow screens (same as .filter-label) */
   .type-label {
@@ -878,7 +898,7 @@ button {
 
 .library-search.toolbar-inline-search.open {
   display: flex;
-  width: min(24rem, 34vw);
+  width: min(24rem, calc(34 * var(--vw)));
   flex-shrink: 0;
 }
 
@@ -910,7 +930,7 @@ button {
    one-row rest state needs ~615px of viewport with typical state and ~715px
    in the worst case (five facet icons on the funnel plus a four-digit count
    on the search button), so 740 covers the worst case with margin. */
-@media (max-width: 740px) {
+@container app (max-width: 740px) {
   .filter-buttons {
     flex-wrap: wrap;
   }
@@ -940,7 +960,7 @@ button {
 /* Desktop divider between the row-1 controls (search, select, sort) and the
    filters (funnel, tags, chips), mirroring the mobile two-row split. On
    phones the line break is the separator, so this only exists above 740px. */
-@media (min-width: 741px) {
+@container app (min-width: 741px) {
   .toolbar-filter-row > .dropdown-container:first-child {
     border-left: 1px solid var(--bg-raised);
     padding-left: 0.625rem;
@@ -1248,7 +1268,7 @@ button {
 }
 
 /* Library tab thumbnails shrink on mobile (keeps 100x100 resolution, displays smaller) */
-@media (max-width: 640px) {
+@container app (max-width: 640px) {
   .library-tab .content-card .thumbnail {
     width: 80px;
     height: 80px;
@@ -1967,7 +1987,7 @@ button {
   border: 1px solid var(--bg-raised);
   width: 90%;
   max-width: 600px;
-  max-height: 80vh;
+  max-height: calc(80 * var(--vh));
   overflow-y: auto;
 }
 
@@ -2070,7 +2090,7 @@ button {
 }
 
 /* Responsive Design */
-@media (max-width: 768px) {
+@container app (max-width: 768px) {
   .feed-tab,
   .add-tab,
   .library-tab {
@@ -2166,7 +2186,7 @@ button {
 .home-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: calc(100 * var(--vh));
   background: var(--bg-app);
   color: var(--t1);
 }
@@ -2222,7 +2242,7 @@ button {
   right: 0;
   margin-top: 0.5rem;
   width: 300px;
-  max-width: calc(100vw - 2rem);
+  max-width: calc(calc(100 * var(--vw)) - 2rem);
   background: var(--bg-surface);
   border: 1px solid var(--bg-raised);
   border-radius: 0.5rem;
@@ -2340,10 +2360,10 @@ button {
   width: 100%;
   max-width: 1000px;
   margin: 0 auto;
-  padding: clamp(2rem, 5vw, 3.5rem) 1rem 0;
+  padding: clamp(2rem, calc(5 * var(--vw)), 3.5rem) 1rem 0;
   display: flex;
   flex-direction: column;
-  gap: clamp(2.5rem, 6vw, 4rem);
+  gap: clamp(2.5rem, calc(6 * var(--vw)), 4rem);
 }
 
 .home-hero {
@@ -2357,7 +2377,7 @@ button {
 }
 
 .home-hero-title {
-  font-size: clamp(1.8rem, 1.2rem + 2.6vw, 2.6rem);
+  font-size: clamp(1.8rem, 1.2rem + calc(2.6 * var(--vw)), 2.6rem);
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -2365,7 +2385,7 @@ button {
 }
 
 .home-hero-sub {
-  font-size: clamp(0.95rem, 0.85rem + 0.5vw, 1.1rem);
+  font-size: clamp(0.95rem, 0.85rem + calc(0.5 * var(--vw)), 1.1rem);
   line-height: 1.55;
   color: var(--t3);
   max-width: 440px;
@@ -2594,7 +2614,7 @@ button {
 
 .home-footer {
   border-top: 1px solid var(--bg-raised);
-  margin-top: clamp(2.5rem, 6vw, 4rem);
+  margin-top: clamp(2.5rem, calc(6 * var(--vw)), 4rem);
   padding: 1.5rem 1rem 2rem;
   display: flex;
   flex-direction: column;
@@ -2823,11 +2843,11 @@ button {
   flex-direction: column;
   position: fixed;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 100vh;
-  min-height: 100dvh;
+  width: calc(100 * var(--vw));
+  height: calc(100 * var(--vh));
+  height: calc(100 * var(--dvh));
+  min-height: calc(100 * var(--vh));
+  min-height: calc(100 * var(--dvh));
   background: var(--bg-app);
   color: var(--t1);
   z-index: 150;
@@ -3586,7 +3606,7 @@ button {
   max-width: 960px;
   margin: 0 auto;
   aspect-ratio: 16 / 9;
-  max-height: 40vh;
+  max-height: calc(40 * var(--vh));
   min-height: 200px;
 }
 
@@ -3595,6 +3615,12 @@ button {
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+/* The timeline's full-screen button: the browser stretches the box to the screen, and
+   YouTube letterboxes the picture inside on black */
+.fullscreen-video:fullscreen {
+  background: #000;
 }
 
 .video-error {
@@ -3658,7 +3684,7 @@ button {
 
 /* Narrow screens: tab labels always stay visible, only the autoscroll
    toggle's text collapses to its icon. Tab padding tightens a little. */
-@media (max-width: 740px) {
+@container app (max-width: 740px) {
   .autoscroll-toggle .tab-label {
     display: none;
   }
@@ -4083,7 +4109,7 @@ blockquote.twitter-tweet.tweet-quoted {
   display: none;
 }
 
-@media (max-width: 640px) {
+@container app (max-width: 640px) {
   .refetch-text-full {
     display: none;
   }
@@ -4197,7 +4223,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 .markdown-editor-textarea {
   width: 100%;
-  min-height: 50vh;
+  min-height: calc(50 * var(--vh));
   resize: vertical;
   background: var(--bg-surface);
   color: var(--t1);
@@ -4773,6 +4799,20 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
+/* Full-screen button after the total time, video items only */
+.fullscreen-progress-bar .video-fullscreen-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 6px;
+  margin-left: -0.5rem;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+}
+
 .fullscreen-progress-bar button.audio-source-btn:focus:not(:focus-visible) {
   outline: none;
 }
@@ -4854,7 +4894,7 @@ blockquote.twitter-tweet.tweet-quoted {
 
 /* Responsive adjustments */
 
-@media (max-width: 640px) {
+@container app (max-width: 640px) {
   .fullscreen-header {
     padding: 0.75rem;
   }
@@ -5427,7 +5467,7 @@ blockquote.twitter-tweet.tweet-quoted {
   position: relative;
   flex: 0 0 350px;
   width: 350px;
-  max-width: 85vw; /* keep the card (and a peek of the next) on narrow phones */
+  max-width: calc(85 * var(--vw)); /* keep the card (and a peek of the next) on narrow phones */
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -5558,7 +5598,7 @@ blockquote.twitter-tweet.tweet-quoted {
 /* Library tag filter menu (multi-select, "any of") */
 .dropdown-menu.tag-menu {
   min-width: 240px;
-  max-width: min(320px, 90vw);
+  max-width: min(320px, calc(90 * var(--vw)));
 }
 .tag-menu-search {
   padding: 0.5rem;
@@ -5578,7 +5618,7 @@ blockquote.twitter-tweet.tweet-quoted {
   border-color: #3b82f6;
 }
 .tag-menu-list {
-  max-height: 50vh;
+  max-height: calc(50 * var(--vh));
   overflow-y: auto;
 }
 .tag-menu .tag-menu-list button {
@@ -5652,7 +5692,7 @@ blockquote.twitter-tweet.tweet-quoted {
   border-color: #3b82f6;
 }
 .tag-editor-list {
-  max-height: 45vh;
+  max-height: calc(45 * var(--vh));
   overflow-y: auto;
   margin: 0.5rem 0 0.75rem;
   border: 1px solid var(--bg-raised);

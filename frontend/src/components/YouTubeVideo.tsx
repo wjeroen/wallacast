@@ -77,10 +77,16 @@ interface YouTubeVideoProps {
   onError: (code: number) => void;
   // The player was destroyed (this box unmounted), so it must no longer be called
   onGone: (player: YouTubePlayer) => void;
+  // The box, for AudioPlayer's full-screen button
+  boxRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, onRateChange, onError, onGone }: YouTubeVideoProps) {
-  const hostRef = useRef<HTMLDivElement>(null);
+export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, onRateChange, onError, onGone, boxRef }: YouTubeVideoProps) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const setHost = (el: HTMLDivElement | null) => {
+    hostRef.current = el;
+    if (boxRef) boxRef.current = el;
+  };
   // The latest callbacks, so the player is built once per video and not on every render
   const callbacks = useRef({ onReady, onStateChange, onRateChange, onError, onGone });
   useEffect(() => {
@@ -109,6 +115,12 @@ export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, on
           playerVars: {
             playsinline: 1,
             rel: 0,
+            // No full-screen button of YouTube's own: with a Chrome zoom other than 100%,
+            // YouTube's phone player draws the picture too small in its own full screen
+            // (a black band at the right, seen at 90%). Wallacast's button on the
+            // timeline puts this whole box in full screen, which YouTube treats as a
+            // bigger player.
+            fs: 0,
             start: Math.floor(startRef.current) || undefined,
             origin: window.location.origin,
           },
@@ -132,5 +144,5 @@ export function YouTubeVideo({ videoId, startSeconds, onReady, onStateChange, on
     };
   }, [videoId]);
 
-  return <div className="fullscreen-video" ref={hostRef} />;
+  return <div className="fullscreen-video" ref={setHost} />;
 }

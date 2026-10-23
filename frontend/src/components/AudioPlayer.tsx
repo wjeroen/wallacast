@@ -168,6 +168,8 @@ export function AudioPlayer({
   // it again. The ref mirrors the state for handlers that run before a re-render.
   const [videoHidden, setVideoHidden] = useState(false);
   const videoHiddenRef = useRef(false);
+  // The video box, which the timeline's full-screen button puts in full screen
+  const videoBoxRef = useRef<HTMLDivElement | null>(null);
   // Mirrors isExpanded synchronously: the autoplay check in the setup effect runs in the
   // same commit as the openToken effect that expands the player.
   const isExpandedRef = useRef(true);
@@ -1184,6 +1186,35 @@ export function AudioPlayer({
     setIsExpanded(false);
   };
 
+  // The whole video box goes full screen, not YouTube's own full-screen mode (its button is
+  // off, see YouTubeVideo). YouTube's player just sees a bigger box. A narrow upright
+  // screen (a phone, or a folded Fold) turns sideways, as in YouTube's own full screen,
+  // where the browser allows it. The phone's back gesture leaves full screen.
+  const handleVideoFullscreen = async () => {
+    const box = videoBoxRef.current;
+    if (!box || document.fullscreenElement) return;
+    try {
+      await box.requestFullscreen({ navigationUI: 'hide' });
+    } catch (err) {
+      console.warn('[AudioPlayer] Full screen refused:', err);
+      return;
+    }
+    if (window.innerWidth / window.innerHeight < 0.75) {
+      // lock() is missing from TypeScript's DOM types, and some browsers refuse it
+      const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      orientation.lock?.('landscape').catch(() => { /* the user turns the phone */ });
+    }
+  };
+  useEffect(() => {
+    const onChange = () => {
+      if (!document.fullscreenElement) {
+        try { screen.orientation?.unlock(); } catch { /* nothing was locked */ }
+      }
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
   // Hide or show the video box. Showing never starts playback, Play does.
   const handleToggleVideo = () => {
     if (videoHiddenRef.current) {
@@ -1221,6 +1252,7 @@ export function AudioPlayer({
           content={content}
           videoHidden={videoHidden}
           onToggleVideo={videoId ? handleToggleVideo : undefined}
+          onVideoFullscreen={videoId && !videoHidden && playsVideo ? handleVideoFullscreen : undefined}
           video={videoId && !videoHidden ? (
             <YouTubeVideo
               key={videoId}
@@ -1233,6 +1265,7 @@ export function AudioPlayer({
               onRateChange={setVideoRate}
               onError={handleVideoError}
               onGone={handleVideoGone}
+              boxRef={videoBoxRef}
             />
           ) : null}
           videoError={videoError}

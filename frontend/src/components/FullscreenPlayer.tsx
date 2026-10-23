@@ -46,8 +46,10 @@ import {
   TvMinimalPlay,
   PanelTopClose,
   PanelTopOpen,
+  Maximize,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { pageZoom } from '../desktop-fit';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
@@ -90,6 +92,9 @@ interface FullscreenPlayerProps {
   // Video items: whether the video box is hidden, and the toggle (hiding pauses the video)
   videoHidden?: boolean;
   onToggleVideo?: () => void;
+  // Video items while the video plays and is shown: the full-screen button at the end of
+  // the timeline (AudioPlayer puts the video box itself in full screen)
+  onVideoFullscreen?: () => void;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -397,6 +402,7 @@ export function FullscreenPlayer({
   videoError,
   videoHidden = false,
   onToggleVideo,
+  onVideoFullscreen,
   isPlaying,
   currentTime,
   duration,
@@ -1063,10 +1069,13 @@ export function FullscreenPlayer({
     const container = element.closest('.fullscreen-tab-content') as HTMLElement | null;
     if (!container) return;
 
+    // getBoundingClientRect() is in window px, which the desktop-mode fit zooms
+    // (desktop-fit.ts), while clientHeight and scrollTop are not. pageZoom() is 1 otherwise.
+    const zoom = pageZoom();
     const elementRect = element.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
     const viewportHeight = container.clientHeight;
-    const elementHeight = elementRect.height;
+    const elementHeight = elementRect.height / zoom;
 
     // For short elements (< 60% of viewport), use simple center scroll
     if (elementHeight < viewportHeight * 0.6) {
@@ -1094,7 +1103,7 @@ export function FullscreenPlayer({
     // At progress=1: bottom of element ~15% from bottom of viewport
     const padding = viewportHeight * 0.15;
     const scrollOffset = progress * Math.max(0, elementHeight - viewportHeight + 2 * padding);
-    const targetScroll = container.scrollTop + (elementRect.top - containerRect.top) - padding + scrollOffset;
+    const targetScroll = container.scrollTop + (elementRect.top - containerRect.top) / zoom - padding + scrollOffset;
 
     container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
   }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime, duration, parsedAlignment]);
@@ -2594,6 +2603,17 @@ export function FullscreenPlayer({
             )}
           </div>
           <span className="time">{formatTime(duration)}</span>
+          {onVideoFullscreen && (
+            <button
+              type="button"
+              className="video-fullscreen-btn"
+              onClick={onVideoFullscreen}
+              title="Full screen"
+              aria-label="Full screen"
+            >
+              <Maximize size={16} />
+            </button>
+          )}
         </div>
         )}
 
