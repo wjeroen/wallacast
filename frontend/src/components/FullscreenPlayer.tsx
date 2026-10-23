@@ -47,6 +47,7 @@ import {
   PanelTopClose,
   PanelTopOpen,
   Maximize,
+  RectangleHorizontal,
   Expand,
   Shrink,
   ChevronLeft,
@@ -563,13 +564,28 @@ export function FullscreenPlayer({
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
   const speedButton = useHoldButton(onToggleSpeed, onHoldSpeedStart, onHoldSpeedEnd);
-  // Focus mode: the header goes and the controls shrink to the timeline and one row of
-  // buttons. With a video shown, the video also takes the tabs' place (cinema). Otherwise
-  // the tabs and their content get the room. It needs a timeline (its button sits there),
-  // stays on when the next item opens, and ends with the player (minimizing or closing).
-  const [focus, setFocus] = useState(false);
-  const focusOn = focus && playingVariant !== null;
-  const focusVideo = focusOn && !!video;
+  // Two views that give the content more room, with the same slim controls (the timeline
+  // and one row of buttons) and no header:
+  // - focus: the video (if shown) keeps its box, the tabs and their text get the rest, so a
+  //   transcript or description is easy to follow
+  // - cinema: a shown video also takes the tabs' place. Without a shown video it looks
+  //   like focus.
+  // Their buttons sit at the end of the timeline, so they need one. The view stays when the
+  // next item plays and ends with the player (minimizing or closing).
+  type ViewMode = 'normal' | 'focus' | 'cinema';
+  const [viewMode, setViewMode] = useState<ViewMode>('normal');
+  // Leaving cinema goes back to the view it was entered from
+  const [viewBeforeCinema, setViewBeforeCinema] = useState<Exclude<ViewMode, 'cinema'>>('normal');
+  const focusOn = viewMode !== 'normal' && playingVariant !== null;
+  const cinemaOn = focusOn && viewMode === 'cinema' && !!video;
+  const toggleCinema = () => {
+    if (viewMode === 'cinema') {
+      setViewMode(viewBeforeCinema);
+    } else {
+      setViewBeforeCinema(viewMode);
+      setViewMode('cinema');
+    }
+  };
   const [controlsAlign, setControlsAlign] = useState<ControlsAlign>(getStoredControlsAlign);
   const moveControls = (step: -1 | 1) => {
     const next = CONTROLS_ALIGN_ORDER[Math.max(0, Math.min(2, CONTROLS_ALIGN_ORDER.indexOf(controlsAlign) + step))];
@@ -2352,15 +2368,8 @@ export function FullscreenPlayer({
             )}
           </div>
           <span className="time">{formatTime(duration)}</span>
-          <button
-            type="button"
-            className="timeline-btn"
-            onClick={() => setFocus(f => !f)}
-            title={focusOn ? 'Leave focus mode' : 'Focus mode'}
-            aria-label={focusOn ? 'Leave focus mode' : 'Focus mode'}
-          >
-            {focusOn ? <Shrink size={16} /> : <Expand size={16} />}
-          </button>
+          {/* Most room first: full screen, cinema, focus. Focus is always last, so its button
+              is in the same place for every item. */}
           {onVideoFullscreen && (
             <button
               type="button"
@@ -2372,11 +2381,31 @@ export function FullscreenPlayer({
               <Maximize size={16} />
             </button>
           )}
+          {video && (
+            <button
+              type="button"
+              className={`timeline-btn${cinemaOn ? ' active' : ''}`}
+              onClick={toggleCinema}
+              title={cinemaOn ? 'Leave cinema mode' : 'Cinema mode'}
+              aria-label={cinemaOn ? 'Leave cinema mode' : 'Cinema mode'}
+            >
+              <RectangleHorizontal size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="timeline-btn"
+            onClick={() => setViewMode(focusOn ? 'normal' : 'focus')}
+            title={focusOn ? 'Back to the normal view' : 'Focus mode'}
+            aria-label={focusOn ? 'Back to the normal view' : 'Focus mode'}
+          >
+            {focusOn ? <Shrink size={16} /> : <Expand size={16} />}
+          </button>
         </div>
   );
 
   return (
-    <div className={`fullscreen-player${focusOn ? ' focus' : ''}${focusVideo ? ' focus-video' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
+    <div className={`fullscreen-player${focusOn ? ' focus' : ''}${cinemaOn ? ' cinema' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {/* Leading column: the artwork top-aligned with the title, with the

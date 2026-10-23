@@ -4799,7 +4799,7 @@ blockquote.twitter-tweet.tweet-quoted {
   cursor: pointer;
 }
 
-/* Focus-mode and full-screen buttons after the total time (full screen: a shown video) */
+/* Full-screen, cinema and focus buttons after the total time (the first two: a shown video) */
 .fullscreen-progress-bar .timeline-btn {
   display: flex;
   align-items: center;
@@ -4811,6 +4811,11 @@ blockquote.twitter-tweet.tweet-quoted {
   border: none;
   color: var(--t3);
   cursor: pointer;
+}
+
+/* Cinema mode is on: its icon does not change, so it turns blue */
+.fullscreen-progress-bar .timeline-btn.active {
+  color: var(--accent-text);
 }
 
 /* Hold the speed button for 2x: no text selection or browser gesture may take the press.
@@ -4888,23 +4893,23 @@ blockquote.twitter-tweet.tweet-quoted {
   }
 }
 
-/* Focus mode: the header goes and the controls shrink to the timeline and one row. With a
-   video shown (.focus-video) the tabs go too and the video box takes the free space
-   (YouTube letterboxes the picture in it), otherwise the tabs and their content get it. */
+/* Focus and cinema mode (.focus): the header goes and the controls shrink to the timeline
+   and one row. Cinema mode (.cinema) also hides the tabs, and the video box takes the free
+   space (YouTube letterboxes the picture in it). */
 .fullscreen-player.focus .fullscreen-header,
-.fullscreen-player.focus-video .fullscreen-tabs,
-.fullscreen-player.focus-video .fullscreen-tab-content {
+.fullscreen-player.cinema .fullscreen-tabs,
+.fullscreen-player.cinema .fullscreen-tab-content {
   display: none;
 }
 
-.fullscreen-player.focus-video .fullscreen-video-area {
+.fullscreen-player.cinema .fullscreen-video-area {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.fullscreen-player.focus-video .fullscreen-video {
+.fullscreen-player.cinema .fullscreen-video {
   flex: 1;
   max-width: none;
   max-height: none;
