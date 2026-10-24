@@ -424,6 +424,28 @@ router.post('/audio-error-log', (req, res) => {
   res.json({ ok: true });
 });
 
+// Debug endpoint: the steps of moving on to the next item (frontend playback-log.ts), one
+// [Playback] line each in the Railway logs, so a stop shows where the chain ended.
+// Only short plain values are printed, and none of them come from the item's text.
+// IMPORTANT: must be defined before '/:id', like audio-error-log.
+router.post('/playback-log', (req, res) => {
+  const { event, fields } = req.body || {};
+  if (typeof event !== 'string' || !/^[a-z-]{1,24}$/.test(event)) {
+    return res.status(400).json({ error: 'Unknown event' });
+  }
+  const parts: string[] = [];
+  if (fields && typeof fields === 'object') {
+    for (const [key, value] of Object.entries(fields).slice(0, 20)) {
+      if (!/^[a-zA-Z]{1,12}$/.test(key) || value === null || value === undefined) continue;
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') continue;
+      const text = String(value).replace(/[\r\n"]/g, ' ').slice(0, 80);
+      parts.push(`${key}=${/\s/.test(text) ? `"${text}"` : text}`);
+    }
+  }
+  console.log(`[Playback] user=${req.user!.userId} ${event} ${parts.join(' ')}`);
+  res.json({ ok: true });
+});
+
 // Bulk actions on many items at once (used by the library's Select mode).
 // IMPORTANT: defined before '/:id'-shaped routes so Express matches the literal path first.
 // No transaction on purpose: query() has a connection-retry wrapper (see the wipe-all comment

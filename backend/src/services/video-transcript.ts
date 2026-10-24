@@ -37,7 +37,11 @@ const HOLE_SECONDS = 60;
 // Longer videos go in 10-minute pieces. In one answer Gemini stopped early (a 33-minute
 // video's transcript ended at 21 minutes, finish=STOP, 2026-10-23) and its times drifted
 // further from the video the longer the video was. Each piece starts its times afresh at the
-// piece's start, so the drift stays small. Up to 12 minutes go in one piece.
+// piece's start, so the drift stays small. Up to 12 minutes go in one piece, and so does the
+// end of a video: the last piece takes what is left when that is 12 minutes or less, so it is
+// never shorter than 2 minutes. Gemini refused a 9-second last piece with HTTP 400 "Request
+// contains an invalid argument" (a 20:09 video, 2026-10-23, and the same 9 seconds in a test),
+// and a 69-second one worked.
 const PIECE_SECONDS = 10 * 60;
 const SPLIT_ABOVE_SECONDS = 12 * 60;
 const PIECE_OVERLAP_SECONDS = 20;
@@ -330,15 +334,17 @@ export async function transcribeYouTubeVideoWith(
   // progress there and to skip the unfinished one a piece begins with. A sentence belongs
   // to the piece it starts in.
   const pieces: Array<Piece | null> = [];
-  if (durationSeconds && durationSeconds > Math.max(SPLIT_ABOVE_SECONDS * pieceSeconds / PIECE_SECONDS, pieceSeconds)) {
+  const longestPiece = Math.max(SPLIT_ABOVE_SECONDS * pieceSeconds / PIECE_SECONDS, pieceSeconds);
+  if (durationSeconds && durationSeconds > longestPiece) {
     const end = Math.ceil(durationSeconds);
     for (let from = 0; from < end; from += pieceSeconds) {
-      const last = from + pieceSeconds >= end;
+      const last = end - from <= longestPiece;
       pieces.push({
         from,
         to: last ? end : Math.min(from + pieceSeconds + PIECE_OVERLAP_SECONDS, end),
         ownTo: last ? Infinity : from + pieceSeconds,
       });
+      if (last) break;
     }
   } else {
     pieces.push(null);

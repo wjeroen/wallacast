@@ -103,4 +103,13 @@ r = await quiet(() => transcribeYouTubeVideoWith('fake', 'lite', url, 400));
 assert.equal(calls.length, 2);
 assert.ok(r.text.includes('[Transcript may be missing from 0:01:21 to 0:05:00.]'));
 
+// 9) A short end goes in the last piece: a 20:09 video is 2 pieces, never a 9-second third
+// one, which Gemini refuses
+calls = [];
+answer = (_m, from) => speech(from, from === 600 ? 1209 : from + 600);
+r = await quiet(() => transcribeYouTubeVideoWith('fake', 'lite', url, 1209));
+assert.deepEqual(calls.map((c) => c.from), [0, 600]);
+assert.ok(r.text.includes('Said at 1200.'));
+assert.ok(!r.text.includes('may be missing'));
+
 console.log('VIDEO TRANSCRIPT CHECKS PASSED');

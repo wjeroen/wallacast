@@ -12,6 +12,7 @@ import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
 import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
+import { logPlayback, playbackChainOpen } from './playback-log';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -427,6 +428,8 @@ function App() {
   // track without playing it, and the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const { typeFilter, facets, tagFilter, searchQuery } = useContentStore.getState();
+    // Opening another item ends a chain that stopped (see playback-log.ts)
+    if (playbackChainOpen()) logPlayback('library-open', { to: content.id }, true);
     useQueueStore.getState().setLibraryContext({ typeFilter, facets, tags: tagFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setOpenToken(t => t + 1);
@@ -440,6 +443,7 @@ function App() {
   // without audio trigger the generate-or-skip prompt (only manuals can be
   // in this state, non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
+    logPlayback('pick', { id: currentContent?.id, to: item.id });
     if (hasPlayableMedia(item)) {
       try {
         const res = await contentAPI.getById(item.id);
@@ -453,9 +457,11 @@ function App() {
     const qs = useQueueStore.getState();
     const queueRow = qs.manualItems.find(m => m.id === item.id);
     if (!queueRow) return; // defensive, should not happen
+    const askedAt = Date.now();
     const proceed = confirm(
       `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${(item.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
+    logPlayback('asked', { to: item.id, generate: proceed, open: Date.now() - askedAt }, !proceed);
     if (!proceed) return;
     qs.markPendingRequeue(item.id);
     await qs.removeFromQueue(queueRow.queue_id);
@@ -497,15 +503,22 @@ function App() {
         ? qs.peekNextItem(currentId)
         : qs.getNextItem(currentId);
       if (!nextItem) {
+        logPlayback('stop', { id: currentId, mode, reason: noNextReason(mode), queue: qs.manualItems.length }, true);
         return;
       }
+      const from = qs.manualItems.some(m => m.id === nextItem.id) ? 'queue' : 'up-next';
       if (hasPlayableMedia(nextItem)) {
+        // How long loading the next item took, or 'failed' (the list's copy opens then)
+        const loadStartedAt = Date.now();
+        let load: number | string = 'failed';
         try {
           const res = await contentAPI.getById(nextItem.id);
+          load = Date.now() - loadStartedAt;
           setCurrentContent(resetIfNearlyFinished(res.data));
         } catch {
           setCurrentContent(resetIfNearlyFinished(nextItem));
         }
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load, play }, !play);
         if (play) setAutoPlayToken(t => t + 1);
         return;
       }
@@ -522,11 +535,14 @@ function App() {
         } catch {
           setCurrentContent(nextItem);
         }
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, play: false, reason: 'no audio' }, true);
         return;
       }
+      const askedAt = Date.now();
       const shouldGenerate = confirm(
         `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${(nextItem.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
       );
+      logPlayback('asked', { to: nextItem.id, generate: shouldGenerate, open: Date.now() - askedAt });
       if (shouldGenerate) {
         qs.markPendingRequeue(nextItem.id);
         qs.removeFromQueue(queueRow.queue_id);
@@ -543,6 +559,14 @@ function App() {
     }
   };
 
+  // Why advanceToNextTrack found nothing, for the [Playback] log
+  const noNextReason = (mode: 'ended' | 'skip'): string => {
+    const qs = useQueueStore.getState();
+    if (mode === 'ended' && !qs.autoplay) return 'autoplay off';
+    if (!qs.libraryContext) return 'no library list';
+    return 'end of the list';
+  };
+
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');
   };
@@ -550,12 +574,17 @@ function App() {
   // `wasPlaying`: whether the audio was playing when the button was pressed (see
   // advanceToNextTrack). Previous follows the same rule.
   const handleSkipNext = (wasPlaying: boolean) => {
+    logPlayback('skip', { id: currentContent?.id, playing: wasPlaying });
     advanceToNextTrack('skip', wasPlaying);
   };
 
   const handleSkipPrev = async (wasPlaying: boolean) => {
+    logPlayback('prev', { id: currentContent?.id, playing: wasPlaying });
     const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
-    if (!prev) return;
+    if (!prev) {
+      logPlayback('stop', { id: currentContent?.id, reason: 'nothing before' }, true);
+      return;
+    }
     let item: ContentItem;
     try {
       const res = await contentAPI.getById(prev.id);
@@ -567,7 +596,9 @@ function App() {
     setCurrentContent(item);
     // Only play when the audio was playing and there is something to play (prev can now
     // land on an audio-less item, which just opens for reading).
-    if (wasPlaying && hasPlayableMedia(item)) setAutoPlayToken(t => t + 1);
+    const play = wasPlaying && hasPlayableMedia(item);
+    logPlayback('next', { id: currentContent?.id, to: item.id, from: 'prev', type: item.type, play }, !play);
+    if (play) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?

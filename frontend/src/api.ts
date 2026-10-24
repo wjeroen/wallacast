@@ -179,6 +179,9 @@ export const contentAPI = {
     readyState?: number;
     showName?: string | null;
   }) => api.post('/content/audio-error-log', data),
+
+  logPlayback: (event: string, fields: Record<string, string | number | boolean | null | undefined>) =>
+    api.post('/content/playback-log', { event, fields }),
 };
 
 // Status of the latest feed refresh (backend: startFeedRefresh in podcast-service.ts)

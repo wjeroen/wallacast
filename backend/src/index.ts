@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { safeFetch, AUDIO_REDIRECT_HOPS } from './services/url-guard.js';
 import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
+import { ensureStorageDirectories, isPersistentVolume, reportVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/podcast-cache.js';
 import { createReadStream } from 'fs';
@@ -542,6 +542,7 @@ async function start() {
 
       // Log storage breakdown to Railway logs (fire-and-forget, never blocks startup)
       logStorageStats().catch(() => {});
+      reportVolume();
 
       // Migrate audio blobs out of Postgres onto the volume (fire-and-forget, never blocks
       // startup). COPY is non-destructive and idempotent, safe to run every boot. The

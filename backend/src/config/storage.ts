@@ -67,6 +67,72 @@ export function getTempDir(): string {
   return path.join(getStorageDir(), 'temp');
 }
 
+/** Free space on the storage volume in bytes, or null when it cannot be read. */
+export async function freeVolumeBytes(): Promise<number | null> {
+  try {
+    const st = await fs.statfs(getStorageDir());
+    return st.bavail * st.bsize;
+  } catch {
+    return null;
+  }
+}
+
+async function folderBytes(dir: string): Promise<{ bytes: number; files: number }> {
+  let bytes = 0;
+  let files = 0;
+  try {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      try {
+        bytes += (await fs.stat(path.join(dir, entry.name))).size;
+        files++;
+      } catch { /* raced */ }
+    }
+  } catch { /* the folder does not exist yet */ }
+  return { bytes, files };
+}
+
+// No job runs this long, so an older temp file was left by a job that crashed or ran out of
+// disk halfway
+const STALE_TEMP_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Startup report of what fills the volume, one `💽 [Volume]` line: generated audio, the
+ * podcast cache, temp files and the free space. Stale temp files are deleted first. Never
+ * throws.
+ */
+export async function reportVolume(): Promise<void> {
+  try {
+    let staleFiles = 0;
+    let staleBytes = 0;
+    try {
+      for (const name of await fs.readdir(getTempDir())) {
+        const p = path.join(getTempDir(), name);
+        try {
+          const stat = await fs.stat(p);
+          if (!stat.isFile() || Date.now() - stat.mtimeMs < STALE_TEMP_MS) continue;
+          await fs.unlink(p);
+          staleFiles++;
+          staleBytes += stat.size;
+        } catch { /* raced */ }
+      }
+    } catch { /* no temp folder yet */ }
+    const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+    const audio = await folderBytes(getAudioDir());
+    const cache = await folderBytes(path.join(getAudioDir(), 'podcast-cache'));
+    const temp = await folderBytes(getTempDir());
+    const st = await fs.statfs(getStorageDir()).catch(() => null);
+    const space = st ? `, free ${gb(st.bavail * st.bsize)} of ${gb(st.blocks * st.bsize)}` : '';
+    console.log(
+      `💽 [Volume] audio ${gb(audio.bytes)} (${audio.files} files), podcast cache ${gb(cache.bytes)} (${cache.files}), ` +
+      `temp ${gb(temp.bytes)} (${temp.files})${space}` +
+      (staleFiles > 0 ? `. Deleted ${staleFiles} stale temp file(s), ${gb(staleBytes)}` : '')
+    );
+  } catch (e) {
+    console.error('💽 [Volume] Report failed:', e);
+  }
+}
+
 /**
  * Ensure storage directories exist
  */

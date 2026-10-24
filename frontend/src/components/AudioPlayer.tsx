@@ -5,6 +5,7 @@ import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
 import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, videoPlaysHere, youtubeVideoId, type AudioVariant } from '../format';
+import { logPlayback, playbackChainOpen } from '../playback-log';
 
 function getStoredSpeed(): number {
   try {
@@ -127,6 +128,13 @@ export function AudioPlayer({
   // registered once with empty deps. Kept in a ref so prop changes are picked up.
   const onTrackEndedRef = useRef(onTrackEnded);
   const lastAutoPlayTokenRef = useRef(0);
+  // An autoplay waiting for the new audio's metadata. A ref, not the effect's own variable,
+  // because the item's details can be replaced before the audio loads (a running job's
+  // status refresh every 2 s), which re-runs the setup effect, and the autoplay must survive.
+  const autoPlayWaitingRef = useRef(false);
+  // The autoplay called play() (or the video's playVideo), so the next 'play' is its own.
+  // Only feeds the [Playback] log (playback-log.ts).
+  const autoPlayStartingRef = useRef(false);
   // Tracks the last audio URL we actually set on the <audio> element. Content
   // objects get replaced (new reference, same item) every time the parent
   // refreshes metadata, expands comments, regenerates audio, etc. Without this
@@ -359,6 +367,18 @@ export function AudioPlayer({
     }
   }, [content?.tts_chunks]);
 
+  // [Playback] log lines (playback-log.ts). Something started while a chain is open: by the
+  // autoplay, or by the user pressing Play on an item that did not start by itself.
+  const logChainPlaying = (variant: 'audio' | 'video') => {
+    const by = autoPlayStartingRef.current ? 'autoplay' : 'user';
+    autoPlayStartingRef.current = false;
+    if (playbackChainOpen()) logPlayback('playing', { id: contentRef.current?.id, variant, by }, true);
+  };
+  const refusedAutoplay = (id: number | undefined, err: unknown) => {
+    autoPlayStartingRef.current = false;
+    logPlayback('play-refused', { id, error: err instanceof Error ? err.name : String(err) }, true);
+  };
+
   // ---------------------------------------------------------------------------
   // AUDIO SETUP
   // ---------------------------------------------------------------------------
@@ -428,6 +448,7 @@ export function AudioPlayer({
     // A video plays in YouTube's player (see YouTubeVideo), never in the <audio> element,
     // except for its summary audio.
     if (isVideoItem && !playingSummary) {
+      autoPlayWaitingRef.current = false;
       if (lastAudioSrcRef.current) {
         // Back from the summary audio: loading no source pauses it without a pause event
         lastAudioSrcRef.current = '';
@@ -458,12 +479,15 @@ export function AudioPlayer({
           videoHiddenRef.current = false;
           setVideoHidden(false);
         }
+        if (shouldAutoPlay) autoPlayStartingRef.current = true;
         const player = ytPlayerRef.current;
         if (player) {
           try { player.playVideo(); } catch { /* player gone */ }
         } else {
           videoPlayPendingRef.current = true;
         }
+      } else if (shouldAutoPlay) {
+        logPlayback('video-waits', { id: content.id, view: 'mini' }, true);
       }
       return;
     }
@@ -476,6 +500,48 @@ export function AudioPlayer({
       stopVideoClock();
     }
 
+    // Runs once the new audio's metadata is in: the resume seek, the duration check, and the
+    // autoplay or variant-swap resume.
+    const handleLoadedMetadata = () => {
+      if (startPosition > 0) {
+        audio.currentTime = startPosition;
+        setCurrentTime(startPosition);
+        // Success is confirmed ONLY in the 'seeked' event handler: assigning
+        // currentTime echoes the target synchronously even when the browser later
+        // aborts the seek and snaps back to ~0, so reading it back here proves
+        // nothing (that false success re-enabled saves and wiped real positions).
+      }
+      // The write-back below describes the ORIGINAL audio; a loaded summary audio is
+      // always shorter and would clobber the item's real duration.
+      if (!playingSummary && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        const realDuration = Math.floor(audio.duration);
+        // Only auto-correct upwards if the DB has no duration. Don't override
+        // an existing duration based on the browser reading, the backend now
+        // trims trailing silence post-Whisper, and the browser would happily
+        // report the bogus pre-trim value, undoing that fix.
+        if (!content.duration || content.duration === 0) {
+          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
+        } else if (realDuration < content.duration - 2) {
+          // Browser says the file is SHORTER than DB, trust the browser
+          // (file probably truncated). Update DB so the timeline isn't too long.
+          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
+        }
+      }
+      if (autoPlayWaitingRef.current || resumePlayAfterVariantSwapRef.current) {
+        const autoplay = autoPlayWaitingRef.current;
+        autoPlayWaitingRef.current = false;
+        resumePlayAfterVariantSwapRef.current = false;
+        userPausedRef.current = false;
+        appPlayRef.current = true;
+        if (autoplay) autoPlayStartingRef.current = true;
+        audio.play().catch((err) => {
+          appPlayRef.current = false;
+          if (autoplay) refusedAutoplay(content.id, err);
+        });
+      }
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+
     // Guard against redundant src resets. The parent replaces `content` with
     // a new object reference on many non-audio events (comment fetches,
     // metadata refreshes, star/archive toggles, etc.). Without this, every
@@ -485,13 +551,32 @@ export function AudioPlayer({
       // tab bumps autoPlayToken but leaves the src unchanged, so honor the explicit
       // autoplay request here before bailing, otherwise the tap does nothing.
       if (shouldAutoPlay) {
+        autoPlayWaitingRef.current = false;
         userPausedRef.current = false;
         appPlayRef.current = true;
-        audio.play().catch(() => { appPlayRef.current = false; });
+        autoPlayStartingRef.current = true;
+        audio.play().catch((err) => {
+          appPlayRef.current = false;
+          refusedAutoplay(content.id, err);
+        });
+        return;
+      }
+      // The item's details were replaced before its audio loaded, and the cleanup of the
+      // effect's previous run removed the listener that was to start it, so it listens
+      // again here. Before 2026-10-23 that autoplay was lost: after a track ended, an item
+      // with a running job (its status refreshes every 2 s) opened and did not start.
+      if (autoPlayWaitingRef.current) {
+        if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          handleLoadedMetadata();
+          return;
+        }
+        audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+        return () => audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       }
       return;
     }
     lastAudioSrcRef.current = audioSrc;
+    autoPlayWaitingRef.current = shouldAutoPlay && !!audioSrc;
     // Route position saves to the loaded variant's column from here on, and reset
     // the save debounce so the new variant's first save is never suppressed.
     positionFieldRef.current = playingSummary ? 'summary_playback_position' : 'playback_position';
@@ -523,40 +608,6 @@ export function AudioPlayer({
     const storedSpeed = getStoredSpeed();
     audio.playbackRate = storedSpeed;
     setPlaybackSpeed(storedSpeed);
-
-    const handleLoadedMetadata = () => {
-      if (startPosition > 0) {
-        audio.currentTime = startPosition;
-        setCurrentTime(startPosition);
-        // Success is confirmed ONLY in the 'seeked' event handler: assigning
-        // currentTime echoes the target synchronously even when the browser later
-        // aborts the seek and snaps back to ~0, so reading it back here proves
-        // nothing (that false success re-enabled saves and wiped real positions).
-      }
-      // The write-back below describes the ORIGINAL audio; a loaded summary audio is
-      // always shorter and would clobber the item's real duration.
-      if (!playingSummary && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
-        const realDuration = Math.floor(audio.duration);
-        // Only auto-correct upwards if the DB has no duration. Don't override
-        // an existing duration based on the browser reading, the backend now
-        // trims trailing silence post-Whisper, and the browser would happily
-        // report the bogus pre-trim value, undoing that fix.
-        if (!content.duration || content.duration === 0) {
-          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
-        } else if (realDuration < content.duration - 2) {
-          // Browser says the file is SHORTER than DB, trust the browser
-          // (file probably truncated). Update DB so the timeline isn't too long.
-          contentAPI.update(content.id, { duration: realDuration }).catch(() => {});
-        }
-      }
-      if (shouldAutoPlay || resumePlayAfterVariantSwapRef.current) {
-        resumePlayAfterVariantSwapRef.current = false;
-        userPausedRef.current = false;
-        appPlayRef.current = true;
-        audio.play().catch(() => { appPlayRef.current = false; });
-      }
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-    };
 
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     return () => {
@@ -624,6 +675,13 @@ export function AudioPlayer({
       const nearEnd = isFinite(dur) && dur > 0 &&
         (dur - audio.currentTime <= 30 || audio.currentTime / dur >= 0.99);
       if (nearEnd) savePlaybackPosition(0);
+      logPlayback('ended', {
+        id: contentRef.current?.id,
+        variant: positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio',
+        t: Math.round(audio.currentTime),
+        dur: Math.round(dur),
+        view: isExpandedRef.current ? 'full' : 'mini',
+      });
       // Defer the queue check so the state update lands before parent reloads content
       setTimeout(() => onTrackEndedRef.current?.(), 0);
     };
@@ -640,6 +698,7 @@ export function AudioPlayer({
       if (appPlayRef.current) {
         appPlayRef.current = false;
         setIsPlaying(true);
+        logChainPlaying('audio');
         return;
       }
       // Explicit user pause via app UI, block OS-initiated resumes
@@ -655,6 +714,7 @@ export function AudioPlayer({
         return;
       }
       setIsPlaying(true);
+      logChainPlaying('audio');
     };
     const handlePause = () => {
       lastPauseTimeRef.current = Date.now();
@@ -681,9 +741,24 @@ export function AudioPlayer({
       }).catch(() => {});
     };
 
+    // Audio that stops for lack of data near its end may never fire 'ended', so that is
+    // logged, once per source (playback-log.ts)
+    let stalledLoggedFor = '';
+    const handleStalled = (e: Event) => {
+      const dur = audio.duration;
+      if (!isFinite(dur) || dur - audio.currentTime > 60 || stalledLoggedFor === audio.src) return;
+      stalledLoggedFor = audio.src;
+      logPlayback('stalled', {
+        id: contentRef.current?.id, how: e.type, t: Math.round(audio.currentTime), dur: Math.round(dur),
+        net: audio.networkState, ready: audio.readyState,
+      });
+    };
+
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('waiting', handleStalled);
+    audio.addEventListener('stalled', handleStalled);
     audio.addEventListener('play', handlePlay);
     audio.addEventListener('pause', handlePause);
     audio.addEventListener('error', handleError);
@@ -696,6 +771,8 @@ export function AudioPlayer({
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('waiting', handleStalled);
+      audio.removeEventListener('stalled', handleStalled);
       audio.removeEventListener('play', handlePlay);
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('error', handleError);
@@ -815,6 +892,8 @@ export function AudioPlayer({
       return;
     }
     if (!audioRef.current) return;
+    // The user decides now, so an autoplay still waiting for the audio to load is off
+    autoPlayWaitingRef.current = false;
     if (isPlaying) {
       userPausedRef.current = true; // explicit user pause, block OS-initiated resumes
       savePlaybackPosition(audioRef.current.currentTime);
@@ -1156,6 +1235,7 @@ export function AudioPlayer({
   const handleVideoStateChange = (state: number) => {
     if (state === VIDEO_STATE.PLAYING) {
       setIsPlaying(true);
+      logChainPlaying('video');
       readVideoTime();
       if (!videoClockRef.current) videoClockRef.current = setInterval(readVideoTime, 250);
     } else if (state === VIDEO_STATE.PAUSED) {
@@ -1166,6 +1246,10 @@ export function AudioPlayer({
     } else if (state === VIDEO_STATE.ENDED) {
       stopVideoClock();
       setIsPlaying(false);
+      logPlayback('ended', {
+        id: contentRef.current?.id, variant: 'video', t: Math.round(videoTimeRef.current),
+        dur: Math.round(durationRef.current), view: isExpandedRef.current ? 'full' : 'mini',
+      });
       videoTimeRef.current = 0;
       savePlaybackPosition(0);
       setTimeout(() => onTrackEndedRef.current?.(), 0);
@@ -1177,6 +1261,7 @@ export function AudioPlayer({
     setIsPlaying(false);
     videoPlayPendingRef.current = false;
     console.warn(`[AudioPlayer] YouTube player error ${code} for item ${contentRef.current?.id}`);
+    if (playbackChainOpen()) refusedAutoplay(contentRef.current?.id, `youtube ${code}`);
     setVideoError(
       code === -1 ? 'The YouTube player did not load. Check the connection, or an ad or tracker blocker.'
       : code === 100 ? 'YouTube says this video is private or was removed.'
