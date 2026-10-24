@@ -1073,7 +1073,9 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
       if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
-      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
+      // In UTC, like the published date above (isoDate), so the browser's Copy content and the
+      // server's (the Obsidian import) give the same day wherever they run
+      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB', { timeZone: 'UTC' }));
       const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
       // Replies become nested Markdown quotes
       const prefixed = depth > 0
