@@ -5,7 +5,7 @@ import { hasWordTimings } from '../format';
 
 // Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
-export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts';
+export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts' | 'videos';
 
 // One facet per row of the library filter grid. Each row is either one of its
 // two mutually exclusive options or null (no preference). Rows combine with AND.
@@ -41,6 +41,7 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   articles: 'article',
   texts: 'text',
   podcasts: 'podcast_episode',
+  videos: 'video',
 };
 
 // Persist the chosen filters (type + facets + sort direction, NOT the transient
@@ -75,7 +76,7 @@ function loadStoredFilters(): StoredFilters {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts'].includes(parsed?.typeFilter)
+    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts', 'videos'].includes(parsed?.typeFilter)
       ? parsed.typeFilter
       : 'all';
     const facets: FacetFilter = { ...DEFAULT_FACETS };
