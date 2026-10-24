@@ -48,8 +48,8 @@ export function GenerationStatus({
 
     if (item.generation_status === 'failed') {
       // Retry the step that actually failed. The backend tags refetch/transcript failures
-      // via current_operation ('failed_refetch' / 'failed_transcript'); podcasts only ever
-      // fail on transcription, videos on a refetch or a transcript; everything else is
+      // via current_operation ('failed_refetch' / 'failed_transcript'). Podcasts only ever
+      // fail on transcription, videos on a refetch or a transcript. Everything else is
       // audio generation.
       const retryGeneration = () => {
         if (item.type === 'podcast_episode') return onRegenerateTranscript();

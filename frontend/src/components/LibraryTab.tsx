@@ -781,9 +781,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
       setTimeout(() => refreshItem(id), 3000);
       setTimeout(() => refreshItem(id), 8000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to refetch content:', error);
-      alert('Failed to refetch content');
+      alert(error?.response?.data?.error || 'Failed to refetch content');
     }
   };
 

@@ -166,21 +166,27 @@ async function cachedFilesOldestFirst(): Promise<Array<{ p: string; size: number
 /**
  * Deletes the oldest cached episodes while the volume has less than `minFreeBytes` free, so
  * the cache makes way for the files a transcription is about to write. On a full volume
- * ffmpeg fails ("exited with code 228", out of space). Never throws.
+ * ffmpeg fails ("exited with code 228", out of space). When deleting the whole cache would
+ * still not reach `minFreeBytes` (other files fill the volume), nothing is deleted: wiping
+ * the cache would not save the job, and it would break the cached episodes' read-along.
+ * Never throws.
  */
 export async function makeRoomOnVolume(minFreeBytes: number): Promise<void> {
   let free = await freeVolumeBytes();
   if (free === null || free >= minFreeBytes) return;
-  for (const f of await cachedFilesOldestFirst()) {
+  const files = await cachedFilesOldestFirst();
+  const cacheBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (free + cacheBytes < minFreeBytes) {
+    console.warn(`[PodcastCache] Only ${(free / 1024 / 1024).toFixed(0)} MB free on the volume, and the cache (${(cacheBytes / 1024 / 1024).toFixed(0)} MB) cannot make enough room, so it stays`);
+    return;
+  }
+  for (const f of files) {
     if (free >= minFreeBytes) break;
     try {
       await fs.unlink(f.p);
       free += f.size;
       console.log(`[PodcastCache] Evicted ${path.basename(f.p)} (${(f.size / 1024 / 1024).toFixed(1)} MB) to free space on the volume`);
     } catch { /* raced */ }
-  }
-  if (free < minFreeBytes) {
-    console.warn(`[PodcastCache] Only ${(free / 1024 / 1024).toFixed(0)} MB free on the volume, and the cache is empty`);
   }
 }
 

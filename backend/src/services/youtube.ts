@@ -76,7 +76,7 @@ function isoDateOrNull(value: unknown): string | null {
 // One Data API call. The key goes in a header, never in the address, so it can never end up
 // in an error message or a log line. A failed call throws with YouTube's reason
 // (quotaExceeded, commentsDisabled, ...) in the message, also kept on `reason`.
-class DataApiError extends Error {
+export class DataApiError extends Error {
   constructor(message: string, readonly status: number, readonly reason: string) {
     super(message);
   }

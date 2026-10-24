@@ -8,6 +8,7 @@ import { contentAPI } from './api';
 //   next          the item picked to open, with where it came from and how long loading it took
 //   stop          nothing opens, with the reason
 //   asked         the generate-it-now question for a queued item without audio, and the answer
+//   passed        a queued video that plays only on YouTube, left out after a track ended
 //   playing       the next item started (by=autoplay) or the user pressed Play (by=user)
 //   play-refused  the browser (or YouTube) refused to start the next item
 //   video-waits   a video reached by autoplay waits for Play (the player is minimized)

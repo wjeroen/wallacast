@@ -6,6 +6,7 @@ import { FullscreenPlayer } from './FullscreenPlayer';
 import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, videoPlaysHere, youtubeVideoId, type AudioVariant } from '../format';
 import { logPlayback, playbackChainOpen } from '../playback-log';
+import { useAuthStore } from '../store/authStore';
 
 function getStoredSpeed(): number {
   try {
@@ -393,6 +394,7 @@ export function AudioPlayer({
     if (content.id !== lastContentIdRef.current) {
       lastContentIdRef.current = content.id;
       resumePlayAfterVariantSwapRef.current = false;
+      autoPlayStartingRef.current = false;
     }
 
     const playingSummary = effectiveVariant === 'summary';
@@ -512,8 +514,9 @@ export function AudioPlayer({
         // nothing (that false success re-enabled saves and wiped real positions).
       }
       // The write-back below describes the ORIGINAL audio; a loaded summary audio is
-      // always shorter and would clobber the item's real duration.
-      if (!playingSummary && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+      // always shorter and would clobber the item's real duration. The read-only demo may
+      // not save it (the server refuses that with a message on screen).
+      if (!playingSummary && !useAuthStore.getState().user?.demo && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         const realDuration = Math.floor(audio.duration);
         // Only auto-correct upwards if the DB has no duration. Don't override
         // an existing duration based on the browser reading, the backend now
@@ -866,6 +869,8 @@ export function AudioPlayer({
   }, [content?.id]);
 
   const togglePlay = () => {
+    // A press of Play or Pause is the user's, even when an autoplay never started
+    autoPlayStartingRef.current = false;
     if (playsVideo) {
       const player = ytPlayerRef.current;
       if (isPlaying) {
@@ -1175,7 +1180,7 @@ export function AudioPlayer({
         if (c && videoDurationSavedForRef.current !== c.id) {
           videoDurationSavedForRef.current = c.id;
           const real = Math.floor(d);
-          if (!c.duration || real < c.duration - 2) {
+          if ((!c.duration || real < c.duration - 2) && !useAuthStore.getState().user?.demo) {
             contentAPI.update(c.id, { duration: real }).catch(() => {});
           }
         }
@@ -1384,7 +1389,7 @@ export function AudioPlayer({
           isPlaying={isPlaying}
           currentTime={currentTime}
           duration={duration}
-          playbackSpeed={heldSpeed ?? (videoId ? videoRate : playbackSpeed)}
+          playbackSpeed={heldSpeed ?? (playsVideo ? videoRate : playbackSpeed)}
           resumeTargetTime={resumeFailedAt}
           sleepTimer={sleepTimer}
           sleepTimerEndAt={sleepTimerEndAt}

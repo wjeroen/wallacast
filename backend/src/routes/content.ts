@@ -57,7 +57,7 @@ router.get('/', async (req, res) => {
     // several times that as objects) was read and serialized on every library load, twice per
     // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -820,7 +820,7 @@ router.get('/fetch-progress/:id', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -1880,7 +1880,7 @@ router.patch('/:id', async (req, res) => {
     // For content updates, return the same columns as the list endpoint (has_word_timings, not
     // the word timings themselves).
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, view_count, embed_blocked'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, view_count::float8 AS view_count, embed_blocked'
       : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
@@ -1952,7 +1952,7 @@ router.get('/:id/export', async (req, res) => {
               generation_status, generation_progress, generation_error, current_operation,
               tts_chunks, transcript_words, content_alignment,
               karma, agree_votes, disagree_votes, comments, comment_source,
-              COALESCE(comment_count_total, 0) AS comment_count, view_count, embed_blocked,
+              COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked,
               content_source, content_fetched_at, audio_generated_at,
               images_processed, image_alt_text_data,
               summary, comment_summary, summary_status, summary_generated_at, summary_error,
@@ -2024,7 +2024,7 @@ router.post('/:id/refetch', async (req, res) => {
     const { id } = req.params;
 
     const contentResult = await query(
-      'SELECT type, url FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT type, url, generation_status, current_operation FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -2032,7 +2032,15 @@ router.post('/:id/refetch', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    const { type, url } = contentResult.rows[0];
+    const { type, url, generation_status: status, current_operation: operation } = contentResult.rows[0];
+
+    // A refetch writes its own status over a running job's, so the job looked finished and
+    // could be started a second time (a second paid video transcript). It waits instead.
+    const jobRunning = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'].includes(status)
+      || (status === 'ready' && !!operation);
+    if (jobRunning) {
+      return res.status(409).json({ error: 'This item is still being processed. Refetch it once that is done.' });
+    }
 
     // A video refetches its YouTube details (title, channel, description, date, length,
     // counts, embed status and comments), for example after a YouTube key was added in

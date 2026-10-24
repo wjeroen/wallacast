@@ -254,8 +254,9 @@ async function transcribeFile(
 // 5 GB volume filled up, and one transcript and two cache copies failed. The others wait
 // their turn, and their items go on showing that the transcript is being made.
 const MAX_PARALLEL_DOWNLOADS = 3;
-// Free space a download should find on the volume. Cached episodes make way for it.
-const FREE_SPACE_FOR_DOWNLOAD = 1024 * 1024 * 1024;
+// Free space a download should find on the volume, twice what a 2-hour episode uses (its
+// download, chunks and cache copy, about 300 MB). Cached episodes make way for it.
+const FREE_SPACE_FOR_DOWNLOAD = 600 * 1024 * 1024;
 let downloadsRunning = 0;
 const downloadsWaiting: Array<() => void> = [];
 

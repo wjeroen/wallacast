@@ -2,7 +2,7 @@ import { query } from '../database/db.js';
 import { youtubeVideoId } from '../shared/format.js';
 import type { Comment } from '../shared/types.js';
 import {
-  fetchYouTubeComments, fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError, type YouTubeMetadata,
+  DataApiError, fetchYouTubeComments, fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError, type YouTubeMetadata,
 } from './youtube.js';
 
 // Keeps a video's stored YouTube details current. YouTube's developer policies (III.E.4)
@@ -128,9 +128,15 @@ async function refreshUserVideos(userId: number): Promise<void> {
   );
   let refreshed = 0;
   let gone = 0;
+  let failed = 0;
   for (const item of items.rows) {
     const videoId = youtubeVideoId(item.url);
-    if (!videoId) continue;
+    if (!videoId) {
+      // No YouTube address, so nothing to read. Marked checked, or it would come first in
+      // every run and take a place from a real video.
+      await query('UPDATE content_items SET content_fetched_at = NOW() WHERE id = $1', [item.id]);
+      continue;
+    }
     try {
       await refreshVideoDetails(item.id, videoId, key);
       refreshed++;
@@ -140,12 +146,19 @@ async function refreshUserVideos(userId: number): Promise<void> {
         gone++;
         continue;
       }
-      // The key or the day's quota: the next run tries again
-      console.warn(`[YouTubeRefresh] user ${userId}: stopped at item ${item.id}: ${(err as Error).message}`);
-      break;
+      // YouTube refused the request (the key, or the day's quota): every other video would
+      // fail the same way, so the run stops and the next run tries again
+      if (err instanceof DataApiError && err.status < 500) {
+        console.warn(`[YouTubeRefresh] user ${userId}: stopped at item ${item.id}: ${err.message}`);
+        break;
+      }
+      // Anything else (the network, a YouTube server error) is this video's: the run goes on,
+      // and the next run tries this one again
+      failed++;
+      console.warn(`[YouTubeRefresh] user ${userId}: item ${item.id} failed: ${(err as Error).message}`);
     }
   }
-  console.log(`[YouTubeRefresh] user ${userId}: ${refreshed} refreshed, ${gone} no longer on YouTube, ${items.rows.length - refreshed - gone} left for the next run`);
+  console.log(`[YouTubeRefresh] user ${userId}: ${refreshed} refreshed, ${gone} no longer on YouTube, ${failed} failed, ${items.rows.length - refreshed - gone - failed} left for the next run`);
 }
 
 let running = false;

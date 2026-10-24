@@ -454,6 +454,18 @@ function App() {
       setAutoPlayToken(t => t + 1);
       return;
     }
+    // A video that plays only on YouTube (embed_blocked) opens, with its "YouTube only" notice.
+    // Audio cannot be made for it, so it gets no generate question.
+    if (item.type === 'video') {
+      try {
+        const res = await contentAPI.getById(item.id);
+        setCurrentContent(res.data);
+      } catch {
+        setCurrentContent(item);
+      }
+      logPlayback('next', { id: currentContent?.id, to: item.id, from: 'queue', type: item.type, play: false, reason: 'youtube only' }, true);
+      return;
+    }
     const qs = useQueueStore.getState();
     const queueRow = qs.manualItems.find(m => m.id === item.id);
     if (!queueRow) return; // defensive, should not happen
@@ -537,6 +549,24 @@ function App() {
         }
         logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, play: false, reason: 'no audio' }, true);
         return;
+      }
+      // A queued video that plays only on YouTube (embed_blocked). Audio cannot be made for it,
+      // so there is no generate question: the next button opens it, and a track that ended
+      // passes it by (it leaves the queue like a played item).
+      if (nextItem.type === 'video') {
+        if (mode === 'skip') {
+          try {
+            const res = await contentAPI.getById(nextItem.id);
+            setCurrentContent(res.data);
+          } catch {
+            setCurrentContent(nextItem);
+          }
+          logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, play: false, reason: 'youtube only' }, true);
+          return;
+        }
+        logPlayback('passed', { to: nextItem.id, reason: 'youtube only' });
+        qs.removeFromQueue(queueRow.queue_id);
+        continue;
       }
       const askedAt = Date.now();
       const shouldGenerate = confirm(
@@ -673,8 +703,9 @@ function App() {
     try {
       await contentAPI.refetch(currentContent.id);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to refetch content:', error);
+      alert(error?.response?.data?.error || 'Failed to refetch content');
     }
   };
 

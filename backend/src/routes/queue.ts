@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
               c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
               c.summary_error, c.summary_audio_url, c.summary_audio_duration, c.summary_audio_status,
               c.summary_audio_generated_at, c.summary_playback_position,
-              COALESCE(c.comment_count_total, 0) AS comment_count, c.view_count, c.embed_blocked
+              COALESCE(c.comment_count_total, 0) AS comment_count, c.view_count::float8 AS view_count, c.embed_blocked
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id AND c.user_id = q.user_id
        WHERE q.user_id = $1

@@ -1871,13 +1871,16 @@ export function FullscreenPlayer({
             )}
             {/* A video's most relevant YouTube comments, under its description as on YouTube.
                 Their likes are labeled like Substack's. A time in a comment moves the video
-                there (youtubeLinkSeconds) instead of opening YouTube. */}
+                there (youtubeLinkSeconds) instead of opening YouTube, while the video itself plays
+                here. For a video that plays only on YouTube, or while its summary audio plays, the
+                link opens YouTube at that time. */}
             {content.type === 'video' && parsedComments.length > 0 && (
               <div
                 className="tab-comments-display"
                 style={{ marginTop: '2rem' }}
                 onClick={(e) => {
                   const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+                  if (content.embed_blocked || playingVariant === 'summary') return;
                   const seconds = link ? youtubeLinkSeconds(link.href, content.url) : null;
                   if (seconds === null) return;
                   e.preventDefault();
