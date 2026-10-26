@@ -281,8 +281,6 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     }
     return counts;
   }, [allItems, facets, tagFilter, searchQuery]);
-  // The Videos chip only appears once the library holds a video
-  const hasVideos = useMemo(() => allItems.some(i => i.type === 'video'), [allItems]);
 
   // The item count lives in the search box placeholder at every width, not on
   // the type chips, so switching types never changes a chip's width. It
@@ -1037,15 +1035,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <Podcast size={16} />
                 <span className="filter-label">Podcasts</span>
               </button>
-              {(hasVideos || typeFilter === 'videos') && (
-                <button
-                  className={typeFilter === 'videos' ? 'active' : ''}
-                  onClick={() => changeTypeFilter('videos')}
-                >
-                  <TvMinimalPlay size={16} />
-                  <span className="filter-label">Videos</span>
-                </button>
-              )}
+              <button
+                className={typeFilter === 'videos' ? 'active' : ''}
+                onClick={() => changeTypeFilter('videos')}
+              >
+                <TvMinimalPlay size={16} />
+                <span className="filter-label">Videos</span>
+              </button>
             </div>
             </div>
           </div>
