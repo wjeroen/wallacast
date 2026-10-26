@@ -2,6 +2,9 @@ import fetch from 'node-fetch';
 import { safeFetch } from './url-guard.js';
 import { query } from '../database/db.js';
 import { renewingHtmlParser } from './html-parser.js';
+import { YouTubeChannelError, isYouTubeFeedUrl, resolveYouTubeChannelId, youtubeApiKey, youtubeChannelFeedUrl, youtubeChannelRef, type YouTubeChannelRef } from './youtube.js';
+
+export type FeedType = 'podcast' | 'newsletter' | 'youtube';
 
 export interface PodcastSearchResult {
   title: string;
@@ -9,7 +12,7 @@ export interface PodcastSearchResult {
   feed_url: string;
   preview_picture?: string;
   description?: string;
-  type?: 'podcast' | 'newsletter';
+  type?: FeedType;
 }
 
 export interface PodcastEpisode {
@@ -51,7 +54,33 @@ export async function searchPodcasts(searchQuery: string): Promise<PodcastSearch
   }
 }
 
-export async function searchRSSByUrl(url: string): Promise<PodcastSearchResult[]> {
+// A YouTube channel address (youtube.com/@name and the like) becomes the channel's feed
+// without Shorts. A channel with nothing but Shorts has no such feed, so it gets its full one.
+async function youtubeChannelResult(channel: YouTubeChannelRef, userId: number): Promise<PodcastSearchResult> {
+  const key = 'channelId' in channel ? null : await youtubeApiKey(userId);
+  const channelId = await resolveYouTubeChannelId(channel, key);
+  let lastError: unknown;
+  for (const feedUrl of [youtubeChannelFeedUrl(channelId), youtubeChannelFeedUrl(channelId, true)]) {
+    try {
+      const details = await fetchPodcastDetails(feedUrl);
+      return {
+        title: details.title,
+        author: details.author,
+        feed_url: feedUrl,
+        preview_picture: details.preview_picture,
+        description: details.description,
+        type: details.type,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new YouTubeChannelError(`Could not read this channel's feed from YouTube (${(lastError as Error)?.message || 'no answer'}).`);
+}
+
+export async function searchRSSByUrl(url: string, userId: number): Promise<PodcastSearchResult[]> {
+  const channel = youtubeChannelRef(url);
+  if (channel) return [await youtubeChannelResult(channel, userId)];
   try {
     // Normalize URL: add /feed if it looks like a Substack domain
     let feedUrl = url.trim();
@@ -206,24 +235,30 @@ export async function fetchPodcastDetails(feedUrl: string) {
       throw new Error('URL is not a valid RSS feed. For Substack newsletters, try adding /feed to the URL');
     }
 
+    // A YouTube feed names its channel only as its author. Its title is the playlist's
+    // ("Videos" for the uploads without Shorts), it has no image of its own (a media:thumbnail
+    // in it is the first video's) and its channel page is the author's uri.
+    const youtube = isYouTubeFeedUrl(response.url || feedUrl);
+    const channelName = youtube ? extractNestedXMLTag(xml, 'author', 'name') : '';
+
     // Parse Feed Metadata
-    const title = extractXMLTag(xml, 'title');
-    const author = extractXMLTag(xml, 'itunes:author') || extractXMLTag(xml, 'author');
-    
+    const title = channelName || extractXMLTag(xml, 'title');
+    const author = extractXMLTag(xml, 'itunes:author') || atomAuthorName(xml) || extractXMLTag(xml, 'author');
+
     // FIX: Support both RSS <description> and Atom <subtitle>
     const description = extractXMLTag(xml, 'description') || extractXMLTag(xml, 'subtitle');
-    
+
     // Try multiple image tag formats
-    const preview_picture = extractXMLAttribute(xml, 'itunes:image', 'href') ||
+    const preview_picture = youtube ? '' : extractXMLAttribute(xml, 'itunes:image', 'href') ||
       extractNestedXMLTag(xml, 'image', 'url') ||
       extractXMLAttribute(xml, 'media:thumbnail', 'url');
-      
-    const website_url = extractXMLTag(xml, 'link');
+
+    const website_url = (youtube && extractNestedXMLTag(xml, 'author', 'uri')) || extractXMLTag(xml, 'link');
     const category = extractXMLTag(xml, 'itunes:category');
     const language = extractXMLTag(xml, 'language');
 
     // Detect feed type: podcast (has audio enclosures) vs newsletter/blog (text only)
-    const type = detectFeedType(xml);
+    const type: FeedType = youtube ? 'youtube' : detectFeedType(xml);
 
     return {
       title: cleanHtmlEntities(title),
@@ -243,7 +278,7 @@ export async function fetchPodcastDetails(feedUrl: string) {
   }
 }
 
-function detectFeedType(xml: string): 'podcast' | 'newsletter' {
+function detectFeedType(xml: string): FeedType {
   // FIX: Check for both <item> (RSS) and <entry> (Atom)
   const itemMatches = xml.match(/<(item|entry)(?:\s+[^>]*)?>([\s\S]*?)<\/(item|entry)>/gi) || [];
 
@@ -373,11 +408,11 @@ function parseOneItem(itemXml: string, withTeaser = true): any | null {
   const title = extractXMLTag(itemXml, 'title');
   if (!title) return null;
 
-  const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const description = itemDescriptionRaw(itemXml);
   const teaser = withTeaser ? buildTeaser(title, description, extractPostContent(itemXml)) : null;
   const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
   const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
-  const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
+  const pubDate = itemDateRaw(itemXml);
   const duration = extractXMLTag(itemXml, 'itunes:duration');
   const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
 
@@ -387,9 +422,7 @@ function parseOneItem(itemXml: string, withTeaser = true): any | null {
     extractNestedXMLTag(itemXml, 'image', 'url') ||
     (enclosureType && enclosureType.startsWith('image/') ? enclosureUrl : null);
 
-  const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
-    extractXMLTag(itemXml, 'itunes:author') ||
-    extractXMLTag(itemXml, 'author');
+  const itemAuthor = itemAuthorRaw(itemXml);
   const cleanAuthor = itemAuthor ? cleanHtmlEntities(itemAuthor) : undefined;
 
   const isAudioEnclosure = enclosureUrl && enclosureType && enclosureType.startsWith('audio/');
@@ -497,6 +530,37 @@ function extractNestedXMLTag(xml: string, parentTag: string, childTag: string): 
 
   const parentContent = parentMatch[1];
   return extractXMLTag(parentContent, childTag);
+}
+
+// An Atom author is <author><name>...</name><uri>...</uri></author>. Read whole, its name
+// and address ran together ("Google for Developershttps://www.youtube.com/channel/...").
+function atomAuthorName(xml: string): string {
+  return extractNestedXMLTag(xml, 'author', 'name');
+}
+
+// An item's author: dc:creator (EA Forum, LessWrong), itunes:author, an Atom author's name,
+// or an RSS author
+function itemAuthorRaw(itemXml: string): string {
+  return extractXMLTag(itemXml, 'dc:creator') ||
+    extractXMLTag(itemXml, 'itunes:author') ||
+    atomAuthorName(itemXml) ||
+    extractXMLTag(itemXml, 'author');
+}
+
+// An item's date: RSS pubDate, else Atom's published, else Atom's updated, which YouTube
+// changes long after a video came out
+function itemDateRaw(itemXml: string): string {
+  return extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'published') || extractXMLTag(itemXml, 'updated');
+}
+
+// An item's description: RSS description, Atom summary, or YouTube's media:description.
+// That one is plain text, so its line breaks become an escaped <br>, the way feeds with
+// escaped markup write it: cleanDescription and the teaser decode it into a real line break,
+// while a raw <br> would vanish in cleanHtmlEntities and glue the lines together.
+function itemDescriptionRaw(itemXml: string): string {
+  const html = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  if (html) return html;
+  return extractXMLTag(itemXml, 'media:description').replace(/\r?\n/g, '&lt;br&gt;');
 }
 
 function parseDuration(duration: string): number | null {
@@ -706,7 +770,7 @@ function feedItemGuid(itemXml: string): string {
 
 // An item's description as the cache stores it, cleaned and cut (FEED_DESCRIPTION_MAX_CHARS)
 function feedItemDescription(itemXml: string): string | null {
-  const description = extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary');
+  const description = itemDescriptionRaw(itemXml);
   return description
     ? cleanDescription(description.substring(0, FEED_DESCRIPTION_MAX_CHARS * 2)).slice(0, FEED_DESCRIPTION_MAX_CHARS) || null
     : null;
@@ -743,6 +807,9 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
     });
+    // A refused feed (YouTube's 429 to servers, a 404) lists no items, so without this line
+    // its refresh looked like one with nothing new
+    if (!response.ok) console.warn(`Feed ${feedId} answered HTTP ${response.status}: ${feedUrl}`);
     const xml = await response.text();
 
     const itemMatches = xml.match(FEED_ITEM_PATTERN) || [];
@@ -772,14 +839,11 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
 
       const enclosureUrl = extractXMLAttribute(itemXml, 'enclosure', 'url');
       const enclosureType = extractXMLAttribute(itemXml, 'enclosure', 'type');
-      const pubDate = extractXMLTag(itemXml, 'pubDate') || extractXMLTag(itemXml, 'updated');
+      const pubDate = itemDateRaw(itemXml);
       const duration = extractXMLTag(itemXml, 'itunes:duration');
       const link = extractXMLTag(itemXml, 'link') || extractXMLAttribute(itemXml, 'link', 'href');
 
-      // Extract per-item author (dc:creator for EA Forum/LessWrong, author/itunes:author as fallbacks)
-      const itemAuthor = extractXMLTag(itemXml, 'dc:creator') ||
-        extractXMLTag(itemXml, 'itunes:author') ||
-        extractXMLTag(itemXml, 'author');
+      const itemAuthor = itemAuthorRaw(itemXml);
 
       // Extract thumbnail
       const preview_picture = extractXMLAttribute(itemXml, 'itunes:image', 'href') ||
@@ -795,7 +859,7 @@ export async function refreshFeedFromNetwork(feedId: number, feedUrl: string): P
 
       const cleanedDescription = feedItemDescription(itemXml);
       const teaser = itemIndex < TEASER_REFRESH_ITEMS
-        ? buildTeaser(title, extractXMLTag(itemXml, 'description') || extractXMLTag(itemXml, 'summary'), extractPostContent(itemXml))
+        ? buildTeaser(title, itemDescriptionRaw(itemXml), extractPostContent(itemXml))
         : null;
 
       // Insert into feed_items. ON CONFLICT only happens when the feed lists one guid twice: it

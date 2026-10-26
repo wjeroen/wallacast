@@ -22,7 +22,7 @@ export const ONBOARDING_HTML = `
 
 <h2>Getting started with your own account</h2>
 <p>Create an account, open Settings, and paste an API key. Then add your first article on the Add tab, press generate audio, and give it a minute. That is the whole setup.</p>
-<p>A YouTube link can be added the same way. It plays in YouTube's own player at the top of the player view, with Wallacast's play, skip, speed and resume buttons, but only while it is on screen. A free YouTube API key in Settings adds the video's description, date, view and comment counts and its most relevant comments, and with a Gemini key the video gets a transcript and a summary, like a podcast episode.</p>
+<p>A YouTube link can be added the same way. It plays in YouTube's own player at the top of the player view, with Wallacast's play, skip, speed and resume buttons, but only while it is on screen. A free YouTube API key in Settings adds the video's description, date, view and comment counts and its most relevant comments, and with a Gemini key the video gets a transcript and a summary, like a podcast episode. The same key lets the Feed tab follow a YouTube channel: paste its address (youtube.com/@name) into the search box, and its new videos, without Shorts, show up next to your podcasts.</p>
 
 <p>Enjoy, and happy listening.</p>
 `.trim();

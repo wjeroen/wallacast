@@ -249,3 +249,83 @@ export async function fetchYouTubeComments(videoId: string, key: string): Promis
   console.log(`[YouTube] ${videoId}: ${comments.length} comment threads`);
   return comments;
 }
+
+// --- Channels ---
+// The Feed tab follows a channel through the public feed YouTube offers for feed readers
+// (feeds/videos.xml), the one of the channel's uploads without Shorts: playlist UULF plus
+// the channel id after its "UC". A channel address names the channel by @handle, by id
+// (/channel/UC...), by old user name (/user/) or by custom name (/c/). Only an id needs no
+// lookup. The others take one Data API call with the user's key, and only the id, which
+// the feed address holds, is kept.
+
+export type YouTubeChannelRef = { channelId: string } | { handle: string } | { username: string };
+
+const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+
+export class YouTubeChannelError extends Error {}
+
+// The channel a youtube.com channel address names, or null for any other address
+export function youtubeChannelRef(address: string): YouTubeChannelRef | null {
+  const text = address.trim();
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+  } catch {
+    return null;
+  }
+  if (u.hostname.toLowerCase().replace(/^(www|m)\./, '') !== 'youtube.com') return null;
+  let parts: string[];
+  try {
+    parts = u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  const [first, second] = parts;
+  if (!first) return null;
+  if (first.startsWith('@') && first.length > 1) return { handle: first };
+  if (first === 'channel' && second && CHANNEL_ID.test(second)) return { channelId: second };
+  if (first === 'user' && second) return { username: second };
+  // Most custom names are also the channel's handle
+  if (first === 'c' && second) return { handle: second };
+  return null;
+}
+
+// The channel's feed: its uploads without Shorts, or all of them
+export function youtubeChannelFeedUrl(channelId: string, withShorts = false): string {
+  return withShorts
+    ? `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`
+    : `https://www.youtube.com/feeds/videos.xml?playlist_id=UULF${channelId.slice(2)}`;
+}
+
+// Whether an address is one of YouTube's feeds
+export function isYouTubeFeedUrl(url: string | null | undefined): boolean {
+  try {
+    const u = new URL(url || '');
+    return u.hostname.toLowerCase().replace(/^(www|m)\./, '') === 'youtube.com' && u.pathname === '/feeds/videos.xml';
+  } catch {
+    return false;
+  }
+}
+
+// The channel id behind a channel address. A YouTubeChannelError carries a message for the
+// Feed tab: a key is missing, or YouTube knows no such channel.
+export async function resolveYouTubeChannelId(ref: YouTubeChannelRef, key: string | null): Promise<string> {
+  if ('channelId' in ref) return ref.channelId;
+  const name = 'handle' in ref ? ref.handle : ref.username;
+  if (!key) {
+    throw new YouTubeChannelError('Following a channel by this address needs a YouTube API key (Settings, API keys).');
+  }
+  let body: any;
+  try {
+    body = await dataApi(`channels?part=id&${'handle' in ref ? 'forHandle' : 'forUsername'}=${encodeURIComponent(name)}`, key);
+  } catch (err) {
+    console.warn(`[YouTube] channel ${name}: ${(err as Error).message}`);
+    throw new YouTubeChannelError(`YouTube refused the channel lookup: ${(err as Error).message}`);
+  }
+  const id = body?.items?.[0]?.id;
+  if (typeof id !== 'string' || !CHANNEL_ID.test(id)) {
+    throw new YouTubeChannelError(`YouTube has no channel at this address (${name}).`);
+  }
+  console.log(`[YouTube] channel ${name}: ${id}`);
+  return id;
+}

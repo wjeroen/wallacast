@@ -1,10 +1,11 @@
-// Scratch test for reading YouTube Data API answers (services/youtube.ts) and for the time
-// links in YouTube comments (frontend/src/timestamps.ts). The answers below follow the
-// videos and commentThreads resources in Google's documentation; no request is made.
+// Scratch test for reading YouTube Data API answers and channel addresses
+// (services/youtube.ts) and for the time links in YouTube comments
+// (frontend/src/timestamps.ts). The answers below follow the videos and commentThreads
+// resources in Google's documentation; no request is made.
 // Run from backend/: npx tsx scripts/test-youtube.mts
 // Not wired into any build.
 import assert from 'node:assert/strict';
-import { commentsFromThreads, videoDetailsFromApi } from '../src/services/youtube.ts';
+import { commentsFromThreads, isYouTubeFeedUrl, resolveYouTubeChannelId, videoDetailsFromApi, YouTubeChannelError, youtubeChannelFeedUrl, youtubeChannelRef } from '../src/services/youtube.ts';
 import { youtubeLinkSeconds } from '../../frontend/src/timestamps.ts';
 
 // videos.list: counts arrive as strings, the length as ISO 8601
@@ -67,5 +68,34 @@ assert.equal(youtubeLinkSeconds('https://www.youtube.com/watch?v=aircAruvnKk&t=1
 assert.equal(youtubeLinkSeconds('https://www.youtube.com/watch?v=aircAruvnKk', url), null, 'no time');
 assert.equal(youtubeLinkSeconds('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60', url), null, 'another video');
 assert.equal(youtubeLinkSeconds('https://example.com/?t=60', url), null);
+
+// Channel addresses the Feed tab accepts, with or without https:// and www.
+const id = 'UC_x5XG1OV2P6uZZ5FSM9Ttw';
+assert.deepEqual(youtubeChannelRef('https://www.youtube.com/@GoogleDevelopers'), { handle: '@GoogleDevelopers' });
+assert.deepEqual(youtubeChannelRef('youtube.com/@GoogleDevelopers/videos'), { handle: '@GoogleDevelopers' });
+assert.deepEqual(youtubeChannelRef('https://m.youtube.com/@GoogleDevelopers?si=abc'), { handle: '@GoogleDevelopers' });
+assert.deepEqual(youtubeChannelRef('https://www.youtube.com/@%E3%81%82'), { handle: '@あ' }, 'a handle in another script');
+assert.deepEqual(youtubeChannelRef(`https://www.youtube.com/channel/${id}`), { channelId: id });
+assert.deepEqual(youtubeChannelRef('https://www.youtube.com/user/GoogleDevelopers'), { username: 'GoogleDevelopers' });
+assert.deepEqual(youtubeChannelRef('https://www.youtube.com/c/GoogleDevelopers'), { handle: 'GoogleDevelopers' });
+assert.equal(youtubeChannelRef('https://www.youtube.com/channel/UCtooShort'), null, 'not a channel id');
+assert.equal(youtubeChannelRef('https://www.youtube.com/watch?v=aircAruvnKk'), null, 'a video');
+assert.equal(youtubeChannelRef(`https://www.youtube.com/feeds/videos.xml?channel_id=${id}`), null, 'already a feed');
+assert.equal(youtubeChannelRef('https://example.com/@someone'), null);
+assert.equal(youtubeChannelRef('https://www.youtube.com/@'), null);
+assert.equal(youtubeChannelRef('https://www.youtube.com/@%E3%81'), null, 'broken percent code');
+
+// The feed without Shorts, the full feed, and which addresses are YouTube feeds
+assert.equal(youtubeChannelFeedUrl(id), 'https://www.youtube.com/feeds/videos.xml?playlist_id=UULF_x5XG1OV2P6uZZ5FSM9Ttw');
+assert.equal(youtubeChannelFeedUrl(id, true), `https://www.youtube.com/feeds/videos.xml?channel_id=${id}`);
+assert.equal(isYouTubeFeedUrl(youtubeChannelFeedUrl(id)), true);
+assert.equal(isYouTubeFeedUrl('http://youtube.com/feeds/videos.xml?channel_id=x'), true);
+assert.equal(isYouTubeFeedUrl('https://www.youtube.com/@GoogleDevelopers'), false);
+assert.equal(isYouTubeFeedUrl('https://example.com/feeds/videos.xml'), false);
+assert.equal(isYouTubeFeedUrl(null), false);
+
+// An id needs no key and no call. A handle without a key asks for one.
+assert.equal(await resolveYouTubeChannelId({ channelId: id }, null), id);
+await assert.rejects(resolveYouTubeChannelId({ handle: '@GoogleDevelopers' }, null), YouTubeChannelError);
 
 console.log('YOUTUBE CHECKS PASSED');

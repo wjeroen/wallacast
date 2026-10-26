@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Podcast, Newspaper, SquareArrowOutUpRight } from 'lucide-react';
+import { Podcast, Newspaper, SquareArrowOutUpRight, TvMinimalPlay } from 'lucide-react';
 import { cleanHtml, formatDuration, getDomainFromUrl, truncate } from '../format';
 import type { Podcast as PodcastType } from '../types';
 
@@ -34,6 +34,7 @@ function FeedTypeIcon({ type }: { type?: string }) {
     <span className="type">
       {type === 'podcast' && <Podcast size={16} className="icon-podcast" />}
       {type === 'newsletter' && <Newspaper size={16} className="icon-article" />}
+      {type === 'youtube' && <TvMinimalPlay size={16} className="icon-video" />}
     </span>
   );
 }

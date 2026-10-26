@@ -109,10 +109,10 @@ export interface Podcast {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   category?: string;
   language?: string;
-  // RSS feed type. The DB column still permits 'blog', but nothing writes it
-  // (detectFeedType only ever returns 'podcast' or 'newsletter'), so it is left
-  // out of this union.
-  type?: 'podcast' | 'newsletter';
+  // Feed type: 'podcast' (audio enclosures), 'newsletter' (text) or 'youtube' (a
+  // YouTube channel feed, fetchPodcastDetails). The DB column still permits 'blog',
+  // but nothing writes it, so it is left out of this union.
+  type?: 'podcast' | 'newsletter' | 'youtube';
   is_subscribed: boolean;
   last_fetched_at?: string;
   created_at: string;
