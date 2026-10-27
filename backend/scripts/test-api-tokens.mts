@@ -112,11 +112,14 @@ for (const bad of [{ items_hour: 501 }, { items_hour: -1 }, { items_hour: 1.5 },
 }
 assert.deepEqual(MAX_LIMITS, { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000 });
 
-assert.deepEqual(parseGeneration(undefined), { follow: true, audio: false, summary: false, summary_audio: false, transcribe: false });
+assert.deepEqual(parseGeneration(undefined), { follow: true, audio: false, transcribe: false, transcribe_video: false, summary: false, summary_on_transcript: false, summary_audio: false });
+// A token saved before videos had their own switch keeps one transcript switch for both
+assert.equal(parseGeneration({ follow: false, transcribe: true }).transcribe_video, true);
+assert.equal(parseGeneration({ follow: false, transcribe: true, transcribe_video: false }).transcribe_video, false);
 assert.equal(parseGeneration({ follow: false }).follow, false);
 assert.deepEqual(
   validateGeneration({ follow: false, summary: true }, parseGeneration({})),
-  { generation: { follow: false, audio: false, summary: true, summary_audio: false, transcribe: false } }
+  { generation: { follow: false, audio: false, transcribe: false, transcribe_video: false, summary: true, summary_on_transcript: false, summary_audio: false } }
 );
 assert.ok('error' in validateGeneration({ audio: 'yes' }, parseGeneration({})));
 assert.ok('error' in validateGeneration({ video: true }, parseGeneration({})));

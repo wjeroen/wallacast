@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, FileText, ArrowUp, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, Eye, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings, compactCount } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -92,6 +92,9 @@ export function ContentCard({
             {item.karma !== undefined && item.karma !== null && (
               <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {item.karma}</>
             )}
+            {item.view_count !== undefined && item.view_count !== null && (
+              <> &bull; <Eye size={12} style={{ verticalAlign: '-1px' }} /> {compactCount(item.view_count)}</>
+            )}
             {item.comment_count !== undefined && item.comment_count > 0 && (
               <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {item.comment_count}</>
             )}
@@ -105,8 +108,8 @@ export function ContentCard({
             )}
           </p>
         )}
-        {/* Only show domain URL for articles (not podcasts/texts) */}
-        {item.url && item.type === 'article' && (
+        {/* Only show domain URL for articles and videos (not podcasts/texts) */}
+        {item.url && (item.type === 'article' || item.type === 'video') && (
           <p className="content-source-link">
             <a href={displayUrl(item.url)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
               {getDomainFromUrl(displayUrl(item.url))}
@@ -159,9 +162,18 @@ export function ContentCard({
             {item.type === 'article' && <><Newspaper size={14} /> <span className="type-label">Article</span></>}
             {item.type === 'text' && <><NotebookPen size={14} /> <span className="type-label">Text</span></>}
             {item.type === 'podcast_episode' && <><Podcast size={14} /> <span className="type-label">Podcast</span></>}
+            {item.type === 'video' && <><TvMinimalPlay size={14} /> <span className="type-label">Video</span></>}
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
           {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
+          {item.type === 'video' && item.embed_blocked && (
+            <span
+              className="badge"
+              title={item.embed_blocked === 'age_restricted' ? 'Age restricted, so it plays only on YouTube' : 'Its owner allows it to play only on YouTube'}
+            >
+              YouTube only
+            </span>
+          )}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
             <span className="badge summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
               <MessageSquareText size={12} /> Summary
@@ -297,9 +309,9 @@ export function ContentCard({
                     )}
                   </>
                 )}
-                {/* Summaries: articles/texts summarize their body; podcasts their transcript
+                {/* Summaries: articles/texts summarize their body; podcasts and videos their transcript
                     (the parent warns + chains transcription when none exists yet) */}
-                {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && (
+                {(item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && (
                   <>
                     {item.summary_status === 'generating' ? (
                       <button disabled>
@@ -347,13 +359,13 @@ export function ContentCard({
                     Regenerate transcript
                   </button>
                 )}
-                {item.type === 'article' && item.url && (
+                {(item.type === 'article' || item.type === 'video') && item.url && (
                   <button onClick={() => onRefetch(item.id)}>
                     <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web
                   </button>
                 )}
-                {item.type === 'podcast_episode' && (
+                {(item.type === 'podcast_episode' || item.type === 'video') && (
                   <button
                     onClick={() => onRegenerateTranscript(item.id)}
                     disabled={item.generation_status === 'generating_transcript'}

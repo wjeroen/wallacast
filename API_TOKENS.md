@@ -21,7 +21,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
   "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600 },
   "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80 },
   "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "changes_hour": 500 },
-  "generation": { "follows_app_settings": true, "audio": false, "summary": true, "summary_audio": false, "transcribe": true },
+  "generation": { "follows_app_settings": true, "audio": false, "transcribe": true, "transcribe_video": true, "summary": true, "summary_on_transcript": true, "summary_audio": false },
   "refresh_interval_minutes": 15,
   "chars_per_minute": 900
 }
@@ -42,7 +42,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 ### Reading the library
 
-- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more).
+- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more). `type` is `article`, `text`, `podcast_episode` or `video` (a YouTube video, its `url` is the `youtube.com/watch?v=` address).
 - `GET /api/content/:id/markdown` and `GET /api/content/markdown?url=<address>`: the item exactly as the app's Copy content button gives it, in `markdown`. 404 when no item has that address.
 - `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary_error", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none. `summary_status` is `generating` while one is being made, `failed` when making it failed, and `skipped` when a token's minute limit left it out, with the reason in `summary_error`. The index's `summary_status` tells which ids are worth asking for (`completed`).
 - `GET /api/content/tags/all`: `{ "tags": [{ "tag": "ai-safety", "count": 12 }, ...] }`.
@@ -104,7 +104,7 @@ Each token has four limits, set under the token in Settings. They are rolling wi
 | Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
 
-Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
+Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
 - Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
@@ -114,7 +114,7 @@ Each limit hit shows a notice in the app. The Reset button in Settings counts us
 
 ## What is generated for added items
 
-Under each token, Settings has "Same as my auto-generation settings" (on for a new token). Off, the token gets its own four switches: audio for articles, summary, summary audio, transcript for podcasts. Either way every generation must fit the minute limits.
+Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles", the two automatic summary boxes (articles and texts when added, podcasts and videos once transcribed), "Auto-generate audio for summaries", "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own six switches, the same as those settings: audio for articles, transcript for podcasts, transcript for YouTube videos, summary for articles and texts, summary for podcasts and videos once transcribed, summary audio. Either way every generation must fit the minute limits.
 
 ## Errors
 

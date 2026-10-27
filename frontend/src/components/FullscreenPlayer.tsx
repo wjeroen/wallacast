@@ -43,13 +43,23 @@ import {
   FolderDown,
   History,
   ListMusic,
+  TvMinimalPlay,
+  PanelTopClose,
+  PanelTopOpen,
+  Maximize,
+  RectangleHorizontal,
+  UnfoldVertical,
+  FoldVertical,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { pageZoom } from '../desktop-fit';
 import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
-import { linkDescriptionTimestamps } from '../timestamps';
-import { cleanHtml, displayUrl, formatTime, getDomainFromUrl, hasAnyAudio } from '../format';
+import { linkDescriptionTimestamps, youtubeLinkSeconds } from '../timestamps';
+import { cleanHtml, compactCount, displayUrl, formatTime, getDomainFromUrl, hasPlayableMedia } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
@@ -80,6 +90,16 @@ interface LLMAlignmentElement {
 
 interface FullscreenPlayerProps {
   content: ContentItem;
+  // A video item's YouTube player (built by AudioPlayer), shown between the header and the
+  // tabs, and why it cannot play when YouTube refused it
+  video?: React.ReactNode;
+  videoError?: string | null;
+  // Video items: whether the video box is hidden, and the toggle (hiding pauses the video)
+  videoHidden?: boolean;
+  onToggleVideo?: () => void;
+  // Video items while the video plays and is shown: the full-screen button at the end of
+  // the timeline (AudioPlayer puts the video box itself in full screen)
+  onVideoFullscreen?: () => void;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -98,6 +118,9 @@ interface FullscreenPlayerProps {
   onSkipForward: () => void;
   onSpeedChange: (speed: number) => void;
   onToggleSpeed: () => void;
+  // Holding the speed button plays at 2x until it is let go (AudioPlayer)
+  onHoldSpeedStart?: () => void;
+  onHoldSpeedEnd?: () => void;
   onSetSleepTimer: (minutes: number | null) => void;
   // Which audio the player is effectively playing ('summary' disables all
   // read-along highlighting/seeking, whose timestamps belong to the original).
@@ -132,7 +155,7 @@ interface FullscreenPlayerProps {
   initialTab?: string;
 }
 
-type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary' | 'history' | 'queue';
+type TabType = 'content' | 'description' | 'read-along' | 'summary' | 'history' | 'queue';
 
 // Tab bar labels and icons. Tab labels stay visible at every width, only the
 // autoscroll toggle's text collapses on narrow screens (its .tab-label span).
@@ -142,7 +165,6 @@ type TabType = 'content' | 'description' | 'comments' | 'read-along' | 'summary'
 const TAB_LABELS: Record<TabType, string> = {
   'content': 'Content',
   'description': 'Description',
-  'comments': 'Comments',
   'read-along': 'Transcript',
   'summary': 'Summary',
   'history': 'History',
@@ -156,12 +178,17 @@ const SUMMARY_SCROLL_EASING = 0.08;
 const TAB_ICONS: Record<TabType, LucideIcon> = {
   'content': AlignLeft,
   'description': Info,
-  'comments': MessageCircle,
   'read-along': Captions,
   'summary': MessageSquareText,
   'history': History,
   'queue': ListMusic,
 };
+
+// The tab an item opens on: the description for podcasts and videos, the Transcript tab
+// ('read-along') for articles and texts.
+function defaultTabFor(content: ContentItem): TabType {
+  return content.type === 'podcast_episode' || content.type === 'video' ? 'description' : 'read-along';
+}
 
 // Human-readable label for a version snapshot's source (the action that overwrote it).
 function versionSourceLabel(source: ContentVersion['source']): string {
@@ -179,6 +206,71 @@ const FONT_SCALES = [0.75, 0.875, 1, 1.125, 1.25, 1.5, 1.75];
 
 // Sleep-timer durations for the playback-options panel (Off is its own chip)
 const SLEEP_TIMER_OPTIONS = [5, 10, 15, 30, 45, 60];
+
+// A button that does one thing when tapped and another while it is held: after HOLD_MS
+// the hold starts, letting go ends it, and the click that follows a hold is swallowed.
+// Chrome's long-press menu (in desktop mode) and text selection are blocked on it, which
+// Wallacast can do on its own buttons but not inside YouTube's player.
+const HOLD_MS = 350;
+function useHoldButton(onTap: () => void, onHoldStart?: () => void, onHoldEnd?: () => void) {
+  const timer = useRef<number | null>(null);
+  const holding = useRef(false);
+  const swallowClick = useRef(false);
+  const holdEndRef = useRef(onHoldEnd);
+  useEffect(() => {
+    holdEndRef.current = onHoldEnd;
+  });
+  const end = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (holding.current) {
+      holding.current = false;
+      swallowClick.current = true;
+      holdEndRef.current?.();
+    }
+  };
+  // A hold still running when the button goes away (the player closes) ends with it
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    if (holding.current) holdEndRef.current?.();
+  }, []);
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      swallowClick.current = false;
+      if (!onHoldStart || e.button !== 0) return;
+      timer.current = window.setTimeout(() => {
+        timer.current = null;
+        holding.current = true;
+        onHoldStart();
+      }, HOLD_MS);
+    },
+    onPointerUp: end,
+    onPointerCancel: end,
+    onPointerLeave: end,
+    onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    onClick: () => {
+      if (swallowClick.current) {
+        swallowClick.current = false;
+        return;
+      }
+      onTap();
+    },
+  };
+}
+
+// Where the player's buttons sit on a wide touch screen (an unfolded phone, a tablet):
+// moved with the arrows beside them, like a foldable's PIN pad, and remembered per device.
+type ControlsAlign = 'left' | 'center' | 'right';
+const CONTROLS_ALIGN_ORDER: ControlsAlign[] = ['left', 'center', 'right'];
+function getStoredControlsAlign(): ControlsAlign {
+  try {
+    const stored = localStorage.getItem('wallacast-controls-align');
+    if (stored === 'left' || stored === 'right') return stored;
+  } catch { /* private mode */ }
+  return 'center';
+}
 
 function getStoredFontScale(): number {
   const stored = localStorage.getItem('readerFontScale');
@@ -338,7 +430,7 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.type === 'podcast_episode' && item.podcast_show_name
               ? item.podcast_show_name
               : (item.author || '')}
-            {!item.audio_url && <span className="queue-row-noaudio"> • no audio</span>}
+            {!hasPlayableMedia(item) && <span className="queue-row-noaudio"> • no audio</span>}
           </div>
         </div>
       </div>
@@ -377,6 +469,11 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
 
 export function FullscreenPlayer({
   content,
+  video,
+  videoError,
+  videoHidden = false,
+  onToggleVideo,
+  onVideoFullscreen,
   isPlaying,
   currentTime,
   duration,
@@ -391,6 +488,8 @@ export function FullscreenPlayer({
   onSkipBackward,
   onSkipForward,
   onToggleSpeed,
+  onHoldSpeedStart,
+  onHoldSpeedEnd,
   onSetSleepTimer,
   playingVariant = null,
   preferSummaryAudio = false,
@@ -435,10 +534,9 @@ export function FullscreenPlayer({
     () => getNonManualItems(content.id),
     [getNonManualItems, content.id, manualItems, libraryContext, shuffleNonManual]
   );
-  // Default tab: 'description' for podcasts, 'read-along' (now labeled "Content") for everything else
-  const [activeTab, setActiveTab] = useState<TabType>(
-    content.type === 'podcast_episode' ? 'description' : 'read-along'
-  );
+  // Default tab: 'description' for podcasts and videos, 'read-along' (labeled "Transcript")
+  // for everything else
+  const [activeTab, setActiveTab] = useState<TabType>(defaultTabFor(content));
   // Per-tab scroll position memory: save when leaving a tab, restore when entering
   const tabScrollPositions = useRef<Record<string, number>>({});
   const tabContentRef = useRef<HTMLDivElement>(null);
@@ -463,6 +561,50 @@ export function FullscreenPlayer({
   // Playback-options panel (sleep timer presets + the global Prefer-summary-audio toggle)
   const [showPlaybackPanel, setShowPlaybackPanel] = useState(false);
   const playbackPanelRef = useRef<HTMLDivElement>(null);
+  const speedButton = useHoldButton(onToggleSpeed, onHoldSpeedStart, onHoldSpeedEnd);
+  // Two views that give the content more room, with the same slim controls (the timeline
+  // and one row of buttons) and no header:
+  // - focus: the video (if shown) keeps its box, the tabs and their text get the rest, so a
+  //   transcript or description is easy to follow
+  // - cinema: a shown video also takes the tabs' place. Without a shown video it looks
+  //   like focus.
+  // Their buttons sit at the end of the timeline, so they need one. The view stays when the
+  // next item plays and ends with the player (minimizing or closing).
+  type ViewMode = 'normal' | 'focus' | 'cinema';
+  const [viewMode, setViewMode] = useState<ViewMode>('normal');
+  // Leaving cinema goes back to the view it was entered from
+  const [viewBeforeCinema, setViewBeforeCinema] = useState<Exclude<ViewMode, 'cinema'>>('normal');
+  const focusOn = viewMode !== 'normal' && playingVariant !== null;
+  const cinemaOn = focusOn && viewMode === 'cinema' && !!video;
+  const toggleCinema = () => {
+    if (viewMode === 'cinema') {
+      setViewMode(viewBeforeCinema);
+    } else {
+      setViewBeforeCinema(viewMode);
+      setViewMode('cinema');
+    }
+  };
+  const [controlsAlign, setControlsAlign] = useState<ControlsAlign>(getStoredControlsAlign);
+  const moveControls = (step: -1 | 1) => {
+    const next = CONTROLS_ALIGN_ORDER[Math.max(0, Math.min(2, CONTROLS_ALIGN_ORDER.indexOf(controlsAlign) + step))];
+    setControlsAlign(next);
+    try { localStorage.setItem('wallacast-controls-align', next); } catch { /* private mode */ }
+  };
+  // The arrows show only where CSS allows (a wide touch screen, see .align-arrow in App.css)
+  const alignArrows = (
+    <>
+      {controlsAlign !== 'left' && (
+        <button type="button" className="align-arrow align-arrow-left" onClick={() => moveControls(-1)} title="Move the buttons left" aria-label="Move the buttons left">
+          <ChevronLeft size={20} />
+        </button>
+      )}
+      {controlsAlign !== 'right' && (
+        <button type="button" className="align-arrow align-arrow-right" onClick={() => moveControls(1)} title="Move the buttons right" aria-label="Move the buttons right">
+          <ChevronRight size={20} />
+        </button>
+      )}
+    </>
+  );
   // Content store for star/archive/delete/tag actions
   const { toggleStarred, toggleArchived, deleteItem, updateItem, setItemTags } = useContentStore();
   // Tag editor popup + the library-wide tag list it offers
@@ -587,6 +729,10 @@ export function FullscreenPlayer({
 
   // Total comment count including all nested replies
   const totalCommentCount = useMemo(() => countAllComments(parsedComments), [parsedComments]);
+  // A video stores only YouTube's most relevant comment threads, so its header shows YouTube's
+  // own total (comment_count)
+  const videoCommentTotal = content.type === 'video' ? (content.comment_count ?? 0) : 0;
+  const headerCommentCount = content.type === 'video' ? videoCommentTotal : totalCommentCount;
 
   // Parse content alignment data if available
   const parsedAlignment = useMemo(() => {
@@ -780,7 +926,7 @@ export function FullscreenPlayer({
       const meta = el.commentMeta;
       const metaStr = buildCommentMetadata(meta, isLW, isSub);
       return (
-        // Odd depths get the alternate shade, same rule as the Comments tab.
+        // Odd depths get the alternate shade, same rule as CommentComponent.
         <div className={`comment${nodeDepth % 2 === 1 ? ' comment-alt' : ''}`} key={`comment-${globalIndex}`}>
           <div
             id={`ra-el-${globalIndex}`}
@@ -866,7 +1012,7 @@ export function FullscreenPlayer({
   onTranscriptWordClickRef.current = playingSummaryAudio ? () => {} : onTranscriptWordClick;
 
   const transcriptDisplayWords = useMemo(() => {
-    if (content.type !== 'podcast_episode') return null;
+    if (content.type !== 'podcast_episode' && content.type !== 'video') return null;
     if (transcriptWords.length > 0) {
       return transcriptWords.map(w => (w.word || '').replace(/^\s+/, ''));
     }
@@ -900,7 +1046,7 @@ export function FullscreenPlayer({
   // whole range is then re-applied from scratch.
   const appliedReadUpToRef = useRef(-1);
   useEffect(() => {
-    const isWordView = activeTab === 'read-along' && !isLLMAlignment && content.type === 'podcast_episode';
+    const isWordView = activeTab === 'read-along' && !isLLMAlignment && (content.type === 'podcast_episode' || content.type === 'video');
     if (!isWordView) {
       appliedReadUpToRef.current = -1;
       return;
@@ -935,8 +1081,12 @@ export function FullscreenPlayer({
     const isGeneratingNow = !!content.generation_status && !['idle', 'completed', 'failed', 'fetching'].includes(content.generation_status);
     const hasReadAlongData = !!content.audio_url || hasAlignment || isGeneratingNow;
 
-    // Tab order: Description (podcasts) · Read-along · Content · History · Summary · Queue
+    // Tab order: Description (podcasts, videos) · Read-along · Content · History · Summary · Queue
     if (content.type === 'podcast_episode') {
+      tabs.push('description');
+      tabs.push('read-along');
+    } else if (content.type === 'video') {
+      // The YouTube description, and the transcript Gemini writes (like a podcast's)
       tabs.push('description');
       tabs.push('read-along');
     } else if (isArticleOrText) {
@@ -954,8 +1104,9 @@ export function FullscreenPlayer({
     // Queue is a listening feature: audio-less items hide it (the queue only
     // lists audio items and autoplay skips them, while the prev/next buttons
     // walk everything, so showing it there would just contradict the buttons).
-    // Summary audio counts: a summary-audio-only item is a playable audio item.
-    if (hasAnyAudio(content)) tabs.push('queue');
+    // Summary audio counts: a summary-audio-only item is a playable audio item, and a
+    // video plays too.
+    if (hasPlayableMedia(content)) tabs.push('queue');
     return tabs;
   }, [content.type, content.audio_url, content.summary_audio_url, content.generation_status, content.summary, content.summary_status, hasAlignment, versions.length, content.versions_count]);
 
@@ -1016,7 +1167,7 @@ export function FullscreenPlayer({
     }
     if (playingVariant !== 'summary' && summaryFollowedId !== null) {
       setSummaryFollowedId(null);
-      if (leaveSummaryNow) setActiveTab(content.type === 'podcast_episode' ? 'description' : 'read-along');
+      if (leaveSummaryNow) setActiveTab(defaultTabFor(content));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content.id, playingVariant, isPlaying]);
@@ -1039,10 +1190,13 @@ export function FullscreenPlayer({
     const container = element.closest('.fullscreen-tab-content') as HTMLElement | null;
     if (!container) return;
 
+    // getBoundingClientRect() is in window px, which the desktop-mode fit zooms
+    // (desktop-fit.ts), while clientHeight and scrollTop are not. pageZoom() is 1 otherwise.
+    const zoom = pageZoom();
     const elementRect = element.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
     const viewportHeight = container.clientHeight;
-    const elementHeight = elementRect.height;
+    const elementHeight = elementRect.height / zoom;
 
     // For short elements (< 60% of viewport), use simple center scroll
     if (elementHeight < viewportHeight * 0.6) {
@@ -1070,7 +1224,7 @@ export function FullscreenPlayer({
     // At progress=1: bottom of element ~15% from bottom of viewport
     const padding = viewportHeight * 0.15;
     const scrollOffset = progress * Math.max(0, elementHeight - viewportHeight + 2 * padding);
-    const targetScroll = container.scrollTop + (elementRect.top - containerRect.top) - padding + scrollOffset;
+    const targetScroll = container.scrollTop + (elementRect.top - containerRect.top) / zoom - padding + scrollOffset;
 
     container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
   }, [activeWordIndex, activeElementIndex, isLLMAlignment, currentTime, duration, parsedAlignment]);
@@ -1167,7 +1321,7 @@ export function FullscreenPlayer({
     if (followSummaryNow) landingTab = 'summary';
     else if (leaveSummaryNow) {
       // Mirrors the follow-playing-summary effect's return-to-default branch.
-      landingTab = content.type === 'podcast_episode' ? 'description' : 'read-along';
+      landingTab = defaultTabFor(content);
     }
 
     const jumpToHighlight = landingTab === 'read-along' && autoScroll;
@@ -1511,7 +1665,7 @@ export function FullscreenPlayer({
 
   // --------------------------------------------------------------------------
   // LLM Read-Along Renderer
-  // Renders content EXACTLY like content tab + comments tab, with timestamps
+  // Renders content EXACTLY like the Content tab with its comments, with timestamps
   // --------------------------------------------------------------------------
   const renderLLMReadAlong = () => {
     if (!readAlongParts) return null;
@@ -1697,7 +1851,7 @@ export function FullscreenPlayer({
       case 'description':
         return (
           <div className="tab-content-display">
-            <h3>Podcast Description</h3>
+            <h3>{content.type === 'video' ? 'Video Description' : 'Podcast Description'}</h3>
             {content.description ? (
               <div
                 className="article-content"
@@ -1715,34 +1869,43 @@ export function FullscreenPlayer({
             ) : (
               <p className="no-content">No description available</p>
             )}
-          </div>
-        );
-      case 'comments':
-        return (
-          <div className="tab-comments-display">
-            <div className="comments-header">
-              <h3>Comments ({totalCommentCount})</h3>
-              {onRefetch && (
-                <button className="refetch-button" title="Refetch content and comments from web" onClick={onRefetch}>
-                  <RefreshCw size={16} />
-                  <span className="refetch-text-full">Refetch from web</span>
-                  <span className="refetch-text-short">Refetch</span>
-                </button>
-              )}
-            </div>
-            {parsedComments.length > 0 ? (
-              <div className="comments-list">
-                {parsedComments.map((comment, index) => (
-                  <CommentComponent key={index} comment={comment} depth={0} isLessWrong={isLessWrongUrl} isSubstack={isSubstackUrl} />
-                ))}
+            {/* A video's most relevant YouTube comments, under its description as on YouTube.
+                Their likes are labeled like Substack's. A time in a comment moves the video
+                there (youtubeLinkSeconds) instead of opening YouTube, while the video itself plays
+                here. For a video that plays only on YouTube, or while its summary audio plays, the
+                link opens YouTube at that time. */}
+            {content.type === 'video' && parsedComments.length > 0 && (
+              <div
+                className="tab-comments-display"
+                style={{ marginTop: '2rem' }}
+                onClick={(e) => {
+                  const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+                  if (content.embed_blocked || playingVariant === 'summary') return;
+                  const seconds = link ? youtubeLinkSeconds(link.href, content.url) : null;
+                  if (seconds === null) return;
+                  e.preventDefault();
+                  onSeekRef.current(seconds);
+                }}
+              >
+                <div className="read-along-comments-divider" />
+                <div className="comments-header">
+                  <h3>
+                    YouTube comments ({totalCommentCount}
+                    {videoCommentTotal > totalCommentCount && ` of ${videoCommentTotal.toLocaleString('en-US')}`})
+                  </h3>
+                </div>
+                <div className="comments-list">
+                  {parsedComments.map((comment, index) => (
+                    <CommentComponent key={index} comment={comment} depth={0} isLessWrong={false} isSubstack />
+                  ))}
+                </div>
               </div>
-            ) : (
-              <p className="no-content">No comments available. Click the refresh button to fetch comments.</p>
             )}
           </div>
         );
       case 'read-along': {
-        const isPodcast = content.type === 'podcast_episode';
+        // Podcasts and videos show their transcript word by word
+        const isPodcast = content.type === 'podcast_episode' || content.type === 'video';
         const isGenerating = content.generation_status && !['idle', 'completed', 'failed'].includes(content.generation_status);
         // What is actually running. The transcript job reports `current_operation` as
         // 'transcript' (set by the PATCH route) or 'transcribing' (set by the service), and
@@ -1778,7 +1941,8 @@ export function FullscreenPlayer({
           }
           // The same actions as the menu's "Generate transcript" and "Generate summary"
           // (which confirms first, then makes the transcript and the summary in one job)
-          const showGenerateButtons = !hasTranscript && !transcriptInProgress && hasAudio;
+          // A video needs no audio file: Gemini transcribes it from its YouTube address
+          const showGenerateButtons = !hasTranscript && !transcriptInProgress && (hasAudio || content.type === 'video');
 
           return (
             <div className="tab-read-along-display">
@@ -2039,7 +2203,7 @@ export function FullscreenPlayer({
       case 'queue': {
         const nonManualLabel = libraryContext ? (() => {
           const f = libraryContext.filter;
-          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts' }[f.typeFilter];
+          const typeLabel = { all: 'Library', articles: 'Articles', texts: 'Texts', podcasts: 'Podcasts', videos: 'Videos' }[f.typeFilter];
           // Short human tags for the captured facet filter (audio is implied for
           // anything playable, so it is skipped to keep the label compact).
           const facetLabels: string[] = [];
@@ -2157,8 +2321,101 @@ export function FullscreenPlayer({
     }
   };
 
+  // The timeline row (source switch, times, slider, focus and full-screen buttons), the
+  // same in the normal controls and in focus mode
+  const timelineRow = playingVariant !== null && (
+        <div className="fullscreen-progress-bar">
+          {(() => {
+            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
+            // for the full audio. With both audios it switches between them for this item
+            // only and keeps playing or paused, like the Summary tab banner's switch.
+            const isSummary = playingVariant === 'summary';
+            const isVideo = content.type === 'video';
+            const SourceIcon = isSummary ? TAB_ICONS.summary : isVideo ? TvMinimalPlay : TAB_ICONS.content;
+            const canSwitch = !!((content.audio_url || isVideo) && content.summary_audio_url && onSelectAudioVariant);
+            const label = isSummary ? 'Summary audio' : isVideo ? 'Video' : 'Full audio';
+            return canSwitch ? (
+              <button
+                className="audio-source-btn"
+                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
+                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
+              >
+                <SourceIcon size={16} />
+              </button>
+            ) : (
+              <span className="audio-source-btn" title={label} aria-label={label} role="img">
+                <SourceIcon size={16} />
+              </span>
+            );
+          })()}
+          <span className="time">{formatTime(currentTime)}</span>
+          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+            <input
+              type="range"
+              min="0"
+              max={duration || 0}
+              value={currentTime}
+              onChange={(e) => onSeek(parseFloat(e.target.value))}
+              className="progress-slider"
+            />
+            {commentsMarkerPosition !== null && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${commentsMarkerPosition}%`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '3px',
+                  height: '14px',
+                  backgroundColor: '#f97316',
+                  borderRadius: '1px',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                }}
+                title="Comments section starts here"
+              />
+            )}
+          </div>
+          <span className="time">{formatTime(duration)}</span>
+          {/* Most room first: full screen, cinema, focus. Focus is always last, so its button
+              is in the same place for every item. */}
+          {onVideoFullscreen && (
+            <button
+              type="button"
+              className="timeline-btn"
+              onClick={onVideoFullscreen}
+              title="Full screen"
+              aria-label="Full screen"
+            >
+              <Maximize size={16} />
+            </button>
+          )}
+          {video && (
+            <button
+              type="button"
+              className={`timeline-btn${cinemaOn ? ' active' : ''}`}
+              onClick={toggleCinema}
+              title={cinemaOn ? 'Leave cinema mode' : 'Cinema mode'}
+              aria-label={cinemaOn ? 'Leave cinema mode' : 'Cinema mode'}
+            >
+              <RectangleHorizontal size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`timeline-btn${focusOn ? ' active' : ''}`}
+            onClick={() => setViewMode(focusOn ? 'normal' : 'focus')}
+            title={focusOn ? 'Back to the normal view' : 'Focus mode'}
+            aria-label={focusOn ? 'Back to the normal view' : 'Focus mode'}
+          >
+            {focusOn ? <FoldVertical size={16} /> : <UnfoldVertical size={16} />}
+          </button>
+        </div>
+  );
+
   return (
-    <div className="fullscreen-player" style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
+    <div className={`fullscreen-player${focusOn ? ' focus' : ''}${cinemaOn ? ' cinema' : ''}`} style={{ '--reader-font-scale': fontScale } as React.CSSProperties}>
       <div className="fullscreen-header">
         <div className="fullscreen-title-area">
           {/* Leading column: the artwork top-aligned with the title, with the
@@ -2176,9 +2433,9 @@ export function FullscreenPlayer({
               />
             )}
             <button
-              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              onClick={hasPlayableMedia(content) ? onMinimize : onClose}
               className="fullscreen-close-button"
-              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+              title={hasPlayableMedia(content) ? 'Minimize' : 'Close'}
             >
               <ArrowLeft size={18} />
             </button>
@@ -2190,13 +2447,13 @@ export function FullscreenPlayer({
                 without audio there is no mini player so it closes. */}
             <h2
               className="fullscreen-title"
-              onClick={hasAnyAudio(content) ? onMinimize : onClose}
+              onClick={hasPlayableMedia(content) ? onMinimize : onClose}
               style={{ cursor: 'pointer' }}
-              title={hasAnyAudio(content) ? 'Minimize' : 'Close'}
+              title={hasPlayableMedia(content) ? 'Minimize' : 'Close'}
             >
               {content.title}
             </h2>
-            {content.type === 'article' && content.url && (
+            {(content.type === 'article' || content.type === 'video') && content.url && (
               <p className="fullscreen-source-link">
                 <a href={displayUrl(content.url)} target="_blank" rel="noopener noreferrer">
                   {getDomainFromUrl(displayUrl(content.url))}
@@ -2232,8 +2489,11 @@ export function FullscreenPlayer({
                       {(content.karma !== undefined && content.karma !== null) && (
                         <> &bull; <ArrowUp size={12} style={{ verticalAlign: '-1px' }} /> {content.karma}</>
                       )}
-                      {totalCommentCount > 0 && (
-                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {totalCommentCount}</>
+                      {content.view_count !== undefined && content.view_count !== null && (
+                        <> &bull; <Eye size={12} style={{ verticalAlign: '-1px' }} /> {compactCount(content.view_count)}</>
+                      )}
+                      {headerCommentCount > 0 && (
+                        <> &bull; <MessageCircle size={12} style={{ verticalAlign: '-1px' }} /> {headerCommentCount}</>
                       )}
                     </span>
                     {inlineChip}
@@ -2349,7 +2609,7 @@ export function FullscreenPlayer({
                 {/* Summary options (independent of audio, both can be generated at once).
                     Podcasts summarize their transcript; App.tsx confirms + chains Whisper
                     first when no transcript exists yet. */}
-                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode') && (
+                {(content.type === 'article' || content.type === 'text' || content.type === 'podcast_episode' || content.type === 'video') && (
                   <>
                     {onGenerateSummary && content.summary_status === 'generating' && (
                       <button disabled>
@@ -2397,13 +2657,13 @@ export function FullscreenPlayer({
                     Regenerate transcript
                   </button>
                 )}
-                {content.type === 'podcast_episode' && onRegenerateTranscript && (
+                {(content.type === 'podcast_episode' || content.type === 'video') && onRegenerateTranscript && (
                   <button onClick={() => { setShowDropdown(false); onRegenerateTranscript(); }}>
                     <Captions size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     {content.transcript ? 'Regenerate' : 'Generate'} transcript
                   </button>
                 )}
-                {content.type === 'article' && content.url && (
+                {(content.type === 'article' || content.type === 'video') && content.url && (
                   <button onClick={() => { setShowDropdown(false); if (onRefetch) onRefetch(); }}>
                     <RefreshCw size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
                     Refetch from web
@@ -2442,6 +2702,36 @@ export function FullscreenPlayer({
         </div>
       </div>
 
+      {/* A video that plays only on YouTube (embed_blocked) gets no player, only this note */}
+      {!video && content.type === 'video' && content.embed_blocked && (
+        <div className="fullscreen-video-area">
+          <p className="video-error">
+            {content.embed_blocked === 'age_restricted'
+              ? 'This video is age restricted, so it plays only on YouTube.'
+              : 'The owner does not allow this video to play outside YouTube.'}{' '}
+            {content.url && (
+              <a href={content.url} target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* A video item's YouTube player. It stays put while the tabs below scroll, and
+          nothing may cover it (YouTube's embed rules), so a playback error shows under it. */}
+      {video && (
+        <div className="fullscreen-video-area">
+          {video}
+          {videoError && (
+            <p className="video-error">
+              {videoError}{' '}
+              {content.url && (
+                <a href={content.url} target="_blank" rel="noopener noreferrer">Open on YouTube</a>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Tabs with autoscroll toggle. Only the tab list scrolls horizontally on
           narrow screens, the autoscroll toggle stays pinned outside the scroll area. */}
       <div className="fullscreen-tabs">
@@ -2457,7 +2747,6 @@ export function FullscreenPlayer({
               >
                 <Icon size={16} />
                 <span>{TAB_LABELS[tab]}</span>
-                {tab === 'comments' && totalCommentCount > 0 && <span>({totalCommentCount})</span>}
               </button>
             );
           })}
@@ -2474,6 +2763,19 @@ export function FullscreenPlayer({
             <span className="tab-label">Auto-scroll</span>
           </button>
         )}
+        {/* Video items: hide the video box to give the tabs room (pauses it), or show it
+            again. Play also shows it. Kept out of the video box, since nothing may be
+            drawn over YouTube's player. */}
+        {onToggleVideo && (
+          <button
+            className="autoscroll-toggle"
+            onClick={onToggleVideo}
+            title={videoHidden ? 'Show the video' : 'Hide the video (pauses it)'}
+          >
+            {videoHidden ? <PanelTopOpen size={14} /> : <PanelTopClose size={14} />}
+            <span className="tab-label">{videoHidden ? 'Show video' : 'Hide video'}</span>
+          </button>
+        )}
       </div>
 
       {/* Tab Content Area */}
@@ -2483,66 +2785,75 @@ export function FullscreenPlayer({
 
       {/* Player Controls. Without audio there is no timeline, no play/seek, and no
           speed/sleep: the row reduces to previous track, display settings, next track. */}
-      <div className="fullscreen-player-controls">
-        {playingVariant !== null && (
-        <div className="fullscreen-progress-bar">
-          {(() => {
-            // Which audio is loaded, with the tab bar's icon for it: Summary, or Content
-            // for the full audio. With both audios it switches between them for this item
-            // only and keeps playing or paused, like the Summary tab banner's switch.
-            const isSummary = playingVariant === 'summary';
-            const SourceIcon = isSummary ? TAB_ICONS.summary : TAB_ICONS.content;
-            const canSwitch = !!(content.audio_url && content.summary_audio_url && onSelectAudioVariant);
-            const label = isSummary ? 'Summary audio' : 'Full audio';
-            return canSwitch ? (
-              <button
-                className="audio-source-btn"
-                onClick={() => onSelectAudioVariant!(isSummary ? 'original' : 'summary', false)}
-                title={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
-                aria-label={isSummary ? 'Switch to full audio' : 'Switch to summary audio'}
-              >
-                <SourceIcon size={16} />
-              </button>
-            ) : (
-              <span className="audio-source-btn" title={label} aria-label={label} role="img">
-                <SourceIcon size={16} />
-              </span>
-            );
-          })()}
-          <span className="time">{formatTime(currentTime)}</span>
-          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
-            <input
-              type="range"
-              min="0"
-              max={duration || 0}
-              value={currentTime}
-              onChange={(e) => onSeek(parseFloat(e.target.value))}
-              className="progress-slider"
-            />
-            {commentsMarkerPosition !== null && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: `${commentsMarkerPosition}%`,
-                  top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: '3px',
-                  height: '14px',
-                  backgroundColor: '#f97316',
-                  borderRadius: '1px',
-                  pointerEvents: 'none',
-                  zIndex: 10,
-                }}
-                title="Comments section starts here"
-              />
-            )}
+      {focusOn ? (
+        <div className="fullscreen-player-controls focus-controls">
+          {timelineRow}
+          {resumeTargetTime > 0 && (
+            <button className="resume-chip" onClick={() => onSeek(resumeTargetTime)}>
+              Resume at {formatTime(resumeTargetTime)}
+            </button>
+          )}
+          <div className="controls-align-wrap">
+            <div className={`controls-cluster align-${controlsAlign}`}>
+              {/* The normal player's order, then speed: previous, back, play, forward, next,
+                  speed, the same wherever the buttons sit. On a narrow screen previous goes
+                  first, then next (App.css). */}
+              <div className="focus-row">
+                <button
+                  onClick={() => onSkipPrevTrack?.(isPlaying)}
+                  title="Previous track"
+                  className="track-skip-btn focus-prev"
+                  disabled={!hasPrevTrack}
+                >
+                  <SkipBack size={20} />
+                </button>
+                <button onClick={onSkipBackward} title="Seek backward 15 seconds" className="seek-btn">
+                  <RotateCcw className="seek-icon" />
+                  <span className="seek-label">15</span>
+                </button>
+                <button onClick={onPlayPause} className="play-pause-btn compact" title={isPlaying ? 'Pause' : 'Play'}>
+                  {isPlaying ? <Pause size={28} /> : <Play size={28} />}
+                </button>
+                <button onClick={onSkipForward} title="Seek forward 15 seconds" className="seek-btn">
+                  <RotateCw className="seek-icon" />
+                  <span className="seek-label">15</span>
+                </button>
+                <button
+                  onClick={() => onSkipNextTrack?.(isPlaying)}
+                  title="Next track"
+                  className="track-skip-btn focus-next"
+                  disabled={!hasNextTrack}
+                >
+                  <SkipForward size={20} />
+                </button>
+                <button {...speedButton} className="option-toggle speed-toggle compact" title="Speed (hold for 2x)">
+                  <Gauge size={18} />
+                  <span>{playbackSpeed}x</span>
+                </button>
+              </div>
+            </div>
+            {alignArrows}
           </div>
-          <span className="time">{formatTime(duration)}</span>
         </div>
-        )}
+      ) : (
+      <div className="fullscreen-player-controls">
+        {timelineRow}
 
+        <div className="controls-align-wrap">
+        <div className={`controls-cluster align-${controlsAlign}`}>
         {playingVariant !== null && (
         <div className="fullscreen-playback-controls">
+          {/* Shuffle and autoplay, the same toggles as in the Queue tab, only where the seven
+              buttons fit (App.css) */}
+          <button
+            onClick={() => setShuffleNonManual(!shuffleNonManual, content.id)}
+            title={shuffleNonManual ? 'Shuffle on' : 'Shuffle off'}
+            aria-pressed={shuffleNonManual}
+            className={`track-mode-btn${shuffleNonManual ? ' active' : ''}`}
+          >
+            <Shuffle size={20} />
+          </button>
+
           <button
             onClick={() => onSkipPrevTrack?.(isPlaying)}
             title="Previous track"
@@ -2574,6 +2885,15 @@ export function FullscreenPlayer({
           >
             <SkipForward size={22} />
           </button>
+
+          <button
+            onClick={() => setAutoplay(!autoplay)}
+            title={autoplay ? 'Autoplay on. Will continue into library items after queue ends' : 'Autoplay off. Stops after queue ends'}
+            aria-pressed={autoplay}
+            className={`track-mode-btn${autoplay ? ' active' : ''}`}
+          >
+            <Repeat size={20} />
+          </button>
         </div>
         )}
 
@@ -2585,7 +2905,7 @@ export function FullscreenPlayer({
 
         <div className="fullscreen-player-options">
           {playingVariant !== null ? (
-            <button onClick={onToggleSpeed} className="option-toggle">
+            <button {...speedButton} className="option-toggle speed-toggle" title="Speed (hold for 2x)">
               <Gauge size={20} />
               <span>{playbackSpeed}x</span>
             </button>
@@ -2707,7 +3027,11 @@ export function FullscreenPlayer({
             </button>
           )}
         </div>
+        </div>
+        {alignArrows}
+        </div>
       </div>
+      )}
     </div>
   );
 }

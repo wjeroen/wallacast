@@ -44,7 +44,7 @@ router.get('/search', async (req, res) => {
     // Detect if query is a URL or search term
     if (looksLikeUrl(q)) {
       // Treat as URL - fetch RSS feed directly
-      const results = await searchRSSByUrl(q);
+      const results = await searchRSSByUrl(q, req.user!.userId);
       res.json(results);
     } else {
       // Treat as search term - use iTunes API

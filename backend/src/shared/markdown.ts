@@ -216,6 +216,13 @@ const RAW_FIGURE_MAX_CHARS = 1500;
 //   (inline sizing styles dropped), and its caption; when nothing displayable survives, a
 //   short note marks the omission.
 function preprocessForExport(doc: Document): string[] {
+  // What the Content tab never shows: scripts and stylesheets (their code would come out as
+  // text), the text a page has for browsers without scripts ("This website requires
+  // javascript"), and inert <template> content. The sanitizer drops the first three and a
+  // browser never renders the last, so Copy content and the editor leave them out too and
+  // every view holds the same text (backend/scripts/test-views-match.mts).
+  doc.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+
   const mathTexts: string[] = [];
   doc.querySelectorAll('math').forEach((math) => {
     const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
@@ -610,7 +617,7 @@ function isoDate(value?: string | null): string | null {
 /**
  * The Obsidian-properties block for an item. Only keys Obsidian understands natively get
  * special treatment (`tags` is a real tag list, ISO dates become Date properties); the rest
- * are plain text. The first tag is always the item's type tag (article / text / podcast).
+ * are plain text. The first tag is always the item's type tag (article / text / podcast / video).
  * `source` is the human URL (the EA Forum bot mirror is rewritten back), never a synthetic
  * `wallacast://` one. No internal ids: an import creates a NEW item, it never overwrites.
  */
@@ -643,12 +650,13 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   }
   out.push('tags:');
   for (const t of tags) out.push(`  - ${t}`);
-  // A podcast's description IS the body (see contentToMarkdown), so no property for it.
-  if (item.type !== 'podcast_episode' && item.description) {
+  // A podcast's or video's description IS the body (see contentToMarkdown), so no property for it.
+  const descriptionIsBody = item.type === 'podcast_episode' || item.type === 'video';
+  if (!descriptionIsBody && item.description) {
     const d = cleanHtml(item.description).replace(/\s+/g, ' ').trim();
     if (d) out.push(`description: ${yamlStr(d)}`);
   }
-  if (item.type === 'podcast_episode' && item.duration) {
+  if (descriptionIsBody && item.duration) {
     out.push(`duration: ${yamlStr(formatDuration(item.duration))}`);
   }
   if (item.karma !== undefined && item.karma !== null) out.push(`upvotes: ${item.karma}`);
@@ -1024,7 +1032,7 @@ function timestampedTranscript(raw: unknown): string | null {
  * Wallabag sync store an empty value instead), so there a non-empty value is enough.
  */
 export function exportHasTranscript(item: Pick<ContentItem, 'type' | 'transcript'>): boolean {
-  return item.type === 'podcast_episode' && !!item.transcript?.trim();
+  return (item.type === 'podcast_episode' || item.type === 'video') && !!item.transcript?.trim();
 }
 
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
@@ -1037,10 +1045,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
 
   lines.push('', `# ${item.title}`);
 
-  // Podcasts: description first, then the transcript, each only when present
-  // (the `content` field is deliberately not used for podcasts). Articles/texts
-  // keep the html_content body with the plain-content fallback.
-  const body = item.type === 'podcast_episode'
+  // Podcasts and videos: description first, then the transcript, each only when present
+  // (the `content` field is deliberately not used for them). Articles/texts keep the
+  // html_content body with the plain-content fallback.
+  const body = item.type === 'podcast_episode' || item.type === 'video'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
         exportHasTranscript(item)
@@ -1065,7 +1073,9 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
       if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
-      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
+      // In UTC, like the published date above (isoDate), so the browser's Copy content and the
+      // server's (the Obsidian import) give the same day wherever they run
+      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB', { timeZone: 'UTC' }));
       const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
       // Replies become nested Markdown quotes
       const prefixed = depth > 0
@@ -1074,7 +1084,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
       return [prefixed, ...replies].join('\n\n');
     };
-    lines.push('', `# Comments (${item.comment_count || comments.length})`, '');
+    // A video lists only YouTube's most relevant comments, while its comment_count is
+    // YouTube's total, so its heading counts the listed ones
+    const listed = (list: Comment[]): number => list.reduce((n, c) => n + 1 + listed(c.replies || []), 0);
+    lines.push('', `# Comments (${item.type === 'video' ? listed(comments) : (item.comment_count || comments.length)})`, '');
     lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
   }
 

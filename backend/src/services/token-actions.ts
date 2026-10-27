@@ -2,6 +2,7 @@ import { query } from '../database/db.js';
 import { normalizeTagList, findReservedTags } from './tags.js';
 import { findItem } from './url-match.js';
 import { normalizeEAForumUrl } from './article-fetcher.js';
+import { youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
 import {
   reserveItem,
   checkChanges,
@@ -122,6 +123,13 @@ async function existingItemId(userId: number, urls: string[], audioUrls: string[
   return match ? match.item.id : null;
 }
 
+/** The library item that already has this address, if any. A YouTube address in any form
+ *  (youtu.be, Shorts, with ?si=) also matches the plain watch address a video is stored under. */
+export async function existingItemIdForUrl(userId: number, url: string): Promise<number | null> {
+  const videoId = youtubeVideoId(url);
+  return existingItemId(userId, [url, normalizeEAForumUrl(url), ...(videoId ? [youtubeWatchUrl(videoId)] : [])], []);
+}
+
 const TOKEN_ADD_KEYS = ['url', 'feed_item_id', 'tags'];
 
 /**
@@ -164,7 +172,7 @@ export async function shapeTokenAdd(
     }
     const url = parseHttpUrl(body.url);
     if (!url) return refuse(400, 'url must be an http or https address');
-    const existing = await existingItemId(token.userId, [url, normalizeEAForumUrl(url)], []);
+    const existing = await existingItemIdForUrl(token.userId, url);
     if (existing) return refuse(409, 'This article is already in your library', { id: existing });
     shaped = { type: 'article', url };
   } else {
@@ -175,7 +183,7 @@ export async function shapeTokenAdd(
     const podcastId = item.is_subscribed === false ? undefined : item.podcast_id;
     if (item.item_type === 'article') {
       if (!item.url) return refuse(400, 'This feed item has no address to fetch');
-      const existing = await existingItemId(token.userId, [item.url, normalizeEAForumUrl(item.url)], []);
+      const existing = await existingItemIdForUrl(token.userId, item.url);
       if (existing) return refuse(409, 'This article is already in your library', { id: existing });
       shaped = {
         type: 'article',

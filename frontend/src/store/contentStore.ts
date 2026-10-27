@@ -5,7 +5,7 @@ import { hasWordTimings } from '../format';
 
 // Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
-export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts';
+export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts' | 'videos';
 
 // One facet per row of the library filter grid. Each row is either one of its
 // two mutually exclusive options or null (no preference). Rows combine with AND.
@@ -41,6 +41,7 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   articles: 'article',
   texts: 'text',
   podcasts: 'podcast_episode',
+  videos: 'video',
 };
 
 // Persist the chosen filters (type + facets + sort direction, NOT the transient
@@ -75,7 +76,7 @@ function loadStoredFilters(): StoredFilters {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts'].includes(parsed?.typeFilter)
+    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts', 'videos'].includes(parsed?.typeFilter)
       ? parsed.typeFilter
       : 'all';
     const facets: FacetFilter = { ...DEFAULT_FACETS };
@@ -296,8 +297,13 @@ export const useContentStore = create<ContentStore>((set, get) => {
         const activeResponse = await contentAPI.getAll({ archived: false });
         const activeItems = activeResponse.data;
 
-        // Show active items immediately (loading done)
-        commit(activeItems, { loading: false });
+        // Show active items immediately (loading done). On a refresh, the archived items
+        // already loaded stay until step 2 brings their fresh copies, so the Archived
+        // filter and its count do not empty out in between.
+        const activeIds = new Set(activeItems.map(i => i.id));
+        const keptArchived = get().allItems.filter(i => i.is_archived && !activeIds.has(i.id));
+        const keptIds = new Set(keptArchived.map(i => i.id));
+        commit([...activeItems, ...keptArchived], { loading: false });
 
         // Step 2: Fetch archived items in the background (could be hundreds)
         // so the Archived/Favorites filters work instantly when clicked.
@@ -310,10 +316,15 @@ export const useContentStore = create<ContentStore>((set, get) => {
         const current = get().allItems;
         const seen = new Set<number>();
         // Update existing entries with fresh server data, preserving current ordering.
-        const merged = current.map(i => {
+        // A kept archived item that the server no longer sends was deleted elsewhere and
+        // goes, unless it was unarchived here in the meantime.
+        const merged: ContentItem[] = [];
+        for (const i of current) {
+          const fresh = fetchedById.get(i.id);
+          if (!fresh && keptIds.has(i.id) && i.is_archived) continue;
           seen.add(i.id);
-          return fetchedById.get(i.id) ?? i;
-        });
+          merged.push(fresh ?? i);
+        }
         // Append fetched items that aren't already present (e.g. archived items on
         // first load), keeping their fetch order.
         for (const i of fetched) {

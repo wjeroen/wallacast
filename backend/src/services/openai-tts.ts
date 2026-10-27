@@ -315,6 +315,13 @@ export function buildNarrationIntro(content: NarrationIntroSource, mode: 'full' 
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
     .trim();
 
+  // A video's summary names the channel that made it
+  if (mode === 'summary' && content.type === 'video') {
+    let videoIntro = author ? `Summary of ${content.title}, a video by ${author}. ` : `Summary of ${content.title}. `;
+    if (content.published_at) videoIntro += `Published on ${formatDateForNarration(content.published_at)}. `;
+    return videoIntro + '\n\n';
+  }
+
   if (mode === 'summary' && content.type === 'podcast_episode') {
     let podcastIntro = content.podcast_show_name
       ? `Summary of ${content.title}, an episode of ${content.podcast_show_name}. `

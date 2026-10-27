@@ -320,7 +320,8 @@ export function FeedTab({ onRefreshComplete }: { onRefreshComplete?: () => void 
   // unsubscribing only swaps the plus/X button, the episode list stays.
   const renderFeedPage = (feed: PodcastType, from: 'search' | 'subscriptions') => {
     const subscription = findSubscription(podcasts, feed.feed_url);
-    const label = (subscription || feed).type === 'podcast' ? 'Episodes' : 'Articles';
+    const feedType = (subscription || feed).type;
+    const label = feedType === 'podcast' ? 'Episodes' : feedType === 'youtube' ? 'Videos' : 'Articles';
     const show: ShowInfo = { podcastId: subscription?.id ?? null, name: feed.title, author: (subscription || feed).author };
     const query = episodeSearchQuery.trim();
     const visibleEpisodes = episodeSearchResults !== null

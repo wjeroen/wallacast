@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Rss, Plus, Library, Settings, LogOut, ChevronDown, RefreshCw, Volume2, MessageSquareText, Sun, Moon, SunMoon } from 'lucide-react';
 import { FeedTab } from './components/FeedTab';
-import { AddTab } from './components/AddTab';
+import { AddTab, type SharedContent } from './components/AddTab';
+import { isRepeatedShare, rememberShare } from './share';
 import { LibraryTab } from './components/LibraryTab';
 import { AudioPlayer } from './components/AudioPlayer';
 import { HomePage } from './components/HomePage';
@@ -10,12 +11,59 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasAnyAudio, getEffectiveAudio, hasWordTimings } from './format';
+import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
+import { logPlayback, playbackChainOpen } from './playback-log';
 import type { ContentItem } from './types';
 import './App.css';
 
 type Tab = 'feed' | 'add' | 'library';
 type Page = 'main' | 'settings';
+
+// A link or text shared to Wallacast from another app through the Android share menu. The
+// share_target in public/manifest.json opens /share?title=&text=&url=, and apps put the link
+// in any of the three (YouTube in text). Null for any other address.
+function readShare(address: string): SharedContent | null {
+  let parsed: URL;
+  try { parsed = new URL(address, window.location.origin); } catch { return null; }
+  if (parsed.pathname !== '/share') return null;
+  const params = parsed.searchParams;
+  const title = (params.get('title') || '').trim();
+  const text = (params.get('text') || '').trim();
+  let link = [params.get('url') || '', text, title]
+    .map(v => v.match(/https?:\/\/[^\s<>"]+/i)?.[0])
+    .find(Boolean);
+  if (link) {
+    // Punctuation that ends the sentence around a link is not part of it
+    link = link.replace(/[.,;:!?'"]+$/, '');
+    if (link.endsWith(')') && !link.includes('(')) link = link.slice(0, -1);
+    // The same share handed over again by Android: the app just opens
+    if (isRepeatedShare(link)) return null;
+    return { key: Date.now(), url: link };
+  }
+  return text ? { key: Date.now(), text, title } : null;
+}
+
+// What a share holds, without its key: the same share handed over twice compares equal
+const shareSignature = (share: SharedContent) => JSON.stringify([share.url, share.text, share.title]);
+const handledShares = new Set<string>();
+
+// A share that opened the app (or, without launch_handler support, reloaded it) is read once
+// when the app loads, then the address goes back to / so a reload does not add it again.
+function takeSharedContent(): SharedContent | null {
+  const share = readShare(window.location.href);
+  if (window.location.pathname === '/share') window.history.replaceState(null, '', '/');
+  if (share) handledShares.add(shareSignature(share));
+  return share;
+}
+const sharedAtStartup = takeSharedContent();
+
+// The manifest's launch_handler asks Chrome to hand a share to the app that is already open
+// ("focus-existing") instead of reloading it. Where Chrome does that, the share's address
+// arrives through window.launchQueue and the app stays as it was (an item stays open, audio
+// keeps playing). The launch that opened the app also comes through here, already handled.
+interface LaunchQueue {
+  setConsumer(consumer: (params: { targetURL?: string }) => void): void;
+}
 
 // generation_status values that mean "still working". Anything else
 // ('completed' | 'failed' | 'idle' | 'content_ready') is treated as terminal
@@ -39,6 +87,8 @@ function isItemBusy(s: JobStatus): boolean {
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('library');
   const [currentPage, setCurrentPage] = useState<Page>('main');
+  // What another app shared, until the Add tab takes it (after login when signed out)
+  const [shared, setShared] = useState<SharedContent | null>(sharedAtStartup);
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
   // Which fullscreen-player tab to open on next play (e.g. "Read more" → Summary tab)
   const [initialPlayerTab, setInitialPlayerTab] = useState<'summary' | undefined>(undefined);
@@ -50,7 +100,9 @@ function App() {
   // Same warning for "Generate All Summaries" when the batch contains untranscribed podcasts.
   // askAudio: the auto_generate_summary_audio setting is on, so the dialog also asks whether
   // summary audio should be generated (with an opt-in for items that already have summaries).
-  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio: boolean; existingSummaryIds: number[] } | null>(null);
+  // podcastIds: items that need a transcript first, podcast episodes and YouTube videos
+  // (videoCount of them are videos, for the dialog's wording)
+  const [bulkSummaryWarning, setBulkSummaryWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio: boolean; existingSummaryIds: number[]; videoCount: number } | null>(null);
   const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
   const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
 
@@ -163,6 +215,58 @@ function App() {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  useEffect(() => {
+    const launchQueue = (window as Window & { launchQueue?: LaunchQueue }).launchQueue;
+    launchQueue?.setConsumer((params) => {
+      const share = params.targetURL ? readShare(params.targetURL) : null;
+      if (!share || handledShares.has(shareSignature(share))) return;
+      handledShares.add(shareSignature(share));
+      console.log('[Share] Received from Chrome without a reload');
+      setShared(share);
+    });
+  }, []);
+
+  // A shared link is saved in the background while the app stays where it opens, with a
+  // short notice at the bottom. Only when saving fails does the Add tab open, where the save
+  // runs again with its progress line and the reason (an archive.ph link for a paywall, for
+  // example). Shared text without a link opens the Add tab's Text form.
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [shareForAddTab, setShareForAddTab] = useState<SharedContent | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated || !shared) return;
+    const share = shared;
+    setShared(null);
+    setCurrentPage('main');
+    if (!share.url) {
+      setShareForAddTab(share);
+      setActiveTab('add');
+      return;
+    }
+    const link = share.url;
+    setShareNotice('Adding…');
+    contentAPI.create({ type: 'article', url: link, unless_in_library: true } as Partial<ContentItem>)
+      .then((res) => {
+        addItem(res.data);
+        rememberShare(link);
+        setShareNotice('Added');
+      })
+      .catch((err) => {
+        if (err?.response?.status === 409) {
+          rememberShare(link);
+          setShareNotice('Already in your library');
+          return;
+        }
+        setShareNotice(null);
+        setShareForAddTab(share);
+        setActiveTab('add');
+      });
+  }, [isAuthenticated, shared, addItem]);
+  useEffect(() => {
+    if (!shareNotice || shareNotice === 'Adding…') return;
+    const timer = window.setTimeout(() => setShareNotice(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [shareNotice]);
 
   // Hydrate queue + autoplay preference once authenticated
   useEffect(() => {
@@ -304,7 +408,8 @@ function App() {
   // shorter summary audio. Only the effective variant's position is touched,
   // never both, because card progress is original-audio-only by design.
   const resetIfNearlyFinished = (item: ContentItem): ContentItem => {
-    const variant = getEffectiveAudio(item, preferSummaryAudio);
+    // A video counts as the full audio: its position and length are the original's
+    const variant = getEffectiveAudio(videoPlaysHere(item) ? { ...item, audio_url: item.url } : item, preferSummaryAudio);
     if (!variant) return item;
     const pos = (variant === 'summary' ? item.summary_playback_position : item.playback_position) || 0;
     const dur = (variant === 'summary' ? item.summary_audio_duration : item.duration) || 0;
@@ -323,12 +428,14 @@ function App() {
   // track without playing it, and the opt-in autoplay_on_open setting flips that.
   const handlePlayContent = (content: ContentItem, opts?: { tab?: 'summary' }) => {
     const { typeFilter, facets, tagFilter, searchQuery } = useContentStore.getState();
+    // Opening another item ends a chain that stopped (see playback-log.ts)
+    if (playbackChainOpen()) logPlayback('library-open', { to: content.id }, true);
     useQueueStore.getState().setLibraryContext({ typeFilter, facets, tags: tagFilter, searchQuery }, content.id);
     setInitialPlayerTab(opts?.tab);
     setOpenToken(t => t + 1);
     const item = resetIfNearlyFinished(content);
     setCurrentContent(item);
-    if (autoplayOnOpen && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
+    if (autoplayOnOpen && hasPlayableMedia(item)) setAutoPlayToken(t => t + 1);
   };
 
   // Play a queue item explicitly (clicking a row in the Queue tab). Accepts
@@ -336,7 +443,8 @@ function App() {
   // without audio trigger the generate-or-skip prompt (only manuals can be
   // in this state, non-manual stream filters audio-less items out).
   const handlePlayQueueItem = async (item: ContentItem) => {
-    if (hasAnyAudio(item)) {
+    logPlayback('pick', { id: currentContent?.id, to: item.id });
+    if (hasPlayableMedia(item)) {
       try {
         const res = await contentAPI.getById(item.id);
         setCurrentContent(resetIfNearlyFinished(res.data));
@@ -346,12 +454,26 @@ function App() {
       setAutoPlayToken(t => t + 1);
       return;
     }
+    // A video that plays only on YouTube (embed_blocked) opens, with its "YouTube only" notice.
+    // Audio cannot be made for it, so it gets no generate question.
+    if (item.type === 'video') {
+      try {
+        const res = await contentAPI.getById(item.id);
+        setCurrentContent(res.data);
+      } catch {
+        setCurrentContent(item);
+      }
+      logPlayback('next', { id: currentContent?.id, to: item.id, from: 'queue', type: item.type, play: false, reason: 'youtube only' }, true);
+      return;
+    }
     const qs = useQueueStore.getState();
     const queueRow = qs.manualItems.find(m => m.id === item.id);
     if (!queueRow) return; // defensive, should not happen
+    const askedAt = Date.now();
     const proceed = confirm(
       `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${(item.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
+    logPlayback('asked', { to: item.id, generate: proceed, open: Date.now() - askedAt }, !proceed);
     if (!proceed) return;
     qs.markPendingRequeue(item.id);
     await qs.removeFromQueue(queueRow.queue_id);
@@ -393,15 +515,22 @@ function App() {
         ? qs.peekNextItem(currentId)
         : qs.getNextItem(currentId);
       if (!nextItem) {
+        logPlayback('stop', { id: currentId, mode, reason: noNextReason(mode), queue: qs.manualItems.length }, true);
         return;
       }
-      if (hasAnyAudio(nextItem)) {
+      const from = qs.manualItems.some(m => m.id === nextItem.id) ? 'queue' : 'up-next';
+      if (hasPlayableMedia(nextItem)) {
+        // How long loading the next item took, or 'failed' (the list's copy opens then)
+        const loadStartedAt = Date.now();
+        let load: number | string = 'failed';
         try {
           const res = await contentAPI.getById(nextItem.id);
+          load = Date.now() - loadStartedAt;
           setCurrentContent(resetIfNearlyFinished(res.data));
         } catch {
           setCurrentContent(resetIfNearlyFinished(nextItem));
         }
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load, play }, !play);
         if (play) setAutoPlayToken(t => t + 1);
         return;
       }
@@ -418,11 +547,32 @@ function App() {
         } catch {
           setCurrentContent(nextItem);
         }
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, play: false, reason: 'no audio' }, true);
         return;
       }
+      // A queued video that plays only on YouTube (embed_blocked). Audio cannot be made for it,
+      // so there is no generate question: the next button opens it, and a track that ended
+      // passes it by (it leaves the queue like a played item).
+      if (nextItem.type === 'video') {
+        if (mode === 'skip') {
+          try {
+            const res = await contentAPI.getById(nextItem.id);
+            setCurrentContent(res.data);
+          } catch {
+            setCurrentContent(nextItem);
+          }
+          logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, play: false, reason: 'youtube only' }, true);
+          return;
+        }
+        logPlayback('passed', { to: nextItem.id, reason: 'youtube only' });
+        qs.removeFromQueue(queueRow.queue_id);
+        continue;
+      }
+      const askedAt = Date.now();
       const shouldGenerate = confirm(
         `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${(nextItem.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
       );
+      logPlayback('asked', { to: nextItem.id, generate: shouldGenerate, open: Date.now() - askedAt });
       if (shouldGenerate) {
         qs.markPendingRequeue(nextItem.id);
         qs.removeFromQueue(queueRow.queue_id);
@@ -439,6 +589,14 @@ function App() {
     }
   };
 
+  // Why advanceToNextTrack found nothing, for the [Playback] log
+  const noNextReason = (mode: 'ended' | 'skip'): string => {
+    const qs = useQueueStore.getState();
+    if (mode === 'ended' && !qs.autoplay) return 'autoplay off';
+    if (!qs.libraryContext) return 'no library list';
+    return 'end of the list';
+  };
+
   const handleTrackEnded = () => {
     advanceToNextTrack('ended');
   };
@@ -446,12 +604,17 @@ function App() {
   // `wasPlaying`: whether the audio was playing when the button was pressed (see
   // advanceToNextTrack). Previous follows the same rule.
   const handleSkipNext = (wasPlaying: boolean) => {
+    logPlayback('skip', { id: currentContent?.id, playing: wasPlaying });
     advanceToNextTrack('skip', wasPlaying);
   };
 
   const handleSkipPrev = async (wasPlaying: boolean) => {
+    logPlayback('prev', { id: currentContent?.id, playing: wasPlaying });
     const prev = useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
-    if (!prev) return;
+    if (!prev) {
+      logPlayback('stop', { id: currentContent?.id, reason: 'nothing before' }, true);
+      return;
+    }
     let item: ContentItem;
     try {
       const res = await contentAPI.getById(prev.id);
@@ -463,7 +626,9 @@ function App() {
     setCurrentContent(item);
     // Only play when the audio was playing and there is something to play (prev can now
     // land on an audio-less item, which just opens for reading).
-    if (wasPlaying && hasAnyAudio(item)) setAutoPlayToken(t => t + 1);
+    const play = wasPlaying && hasPlayableMedia(item);
+    logPlayback('next', { id: currentContent?.id, to: item.id, from: 'prev', type: item.type, play }, !play);
+    if (play) setAutoPlayToken(t => t + 1);
   };
 
   // Derived: is there a next/prev track from where we are right now?
@@ -538,8 +703,9 @@ function App() {
     try {
       await contentAPI.refetch(currentContent.id);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to refetch content:', error);
+      alert(error?.response?.data?.error || 'Failed to refetch content');
     }
   };
 
@@ -758,9 +924,9 @@ function App() {
 
   const handleGenerateSummary = async (regenerate: boolean) => {
     if (!currentContent) return;
-    // Podcast summaries are made from the TRANSCRIPT. If there is none yet, confirm
-    // before running Whisper + summary back to back
-    if (currentContent.type === 'podcast_episode' && !(currentContent.transcript || '').trim()) {
+    // Podcast and video summaries are made from the TRANSCRIPT. If there is none yet,
+    // confirm before running the transcription (Whisper, or Gemini for a video) + summary
+    if ((currentContent.type === 'podcast_episode' || currentContent.type === 'video') && !(currentContent.transcript || '').trim()) {
       setSummaryTranscriptWarning(true);
       return;
     }
@@ -931,12 +1097,15 @@ function App() {
     // filter quietly feeding this flow only the 55 items that matched it.
     const libraryItems = useContentStore.getState().allItems;
     const eligibleItems = libraryItems.filter(
-      item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
+      item => (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && !item.is_archived &&
               !item.summary_generated_at && item.summary_status !== 'generating'
     );
 
-    const podcastIds = eligibleItems.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
-    const readyIds = eligibleItems.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
+    // Podcasts and videos summarize their transcript, so the ones without one get it first
+    const needsTranscript = (i: ContentItem) => (i.type === 'podcast_episode' || i.type === 'video') && !hasWordTimings(i);
+    const podcastIds = eligibleItems.filter(needsTranscript).map(i => i.id);
+    const readyIds = eligibleItems.filter(i => !needsTranscript(i)).map(i => i.id);
+    const videoCount = eligibleItems.filter(i => needsTranscript(i) && i.type === 'video').length;
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.
@@ -947,7 +1116,7 @@ function App() {
     } catch { /* keep false */ }
     const existingSummaryIds = askAudio
       ? libraryItems.filter(item =>
-          (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') && !item.is_archived &&
+          (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') && !item.is_archived &&
           !!item.summary_generated_at && !item.summary_audio_url && item.summary_audio_status !== 'generating'
         ).map(i => i.id)
       : [];
@@ -963,7 +1132,7 @@ function App() {
     if (podcastIds.length > 0 || askAudio) {
       setBulkAudioChecked(true);
       setBulkAudioExistingChecked(true);
-      setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
+      setBulkSummaryWarning({ podcastIds, readyIds, askAudio, existingSummaryIds, videoCount });
       return;
     }
 
@@ -1025,6 +1194,7 @@ function App() {
         </div>
       )}
       {showDemoToast && <div className="demo-toast">Not available in the read-only demo</div>}
+      {shareNotice && <div className="demo-toast" role="status">{shareNotice}</div>}
       <header className="app-header">
         <div className="app-logo-container">
           <img src="/logo-transparent.png?v=2" alt="wallacast logo" className="app-logo" />
@@ -1101,7 +1271,7 @@ function App() {
 
       <main className="app-main">
         {activeTab === 'feed' && <FeedTab onRefreshComplete={() => setFeedDaysStale(0)} />}
-        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} />}
+        {activeTab === 'add' && <AddTab onContentAdded={handleContentAdded} shared={shareForAddTab} onSharedHandled={() => setShareForAddTab(null)} />}
         {activeTab === 'library' && (
           <LibraryTab onPlayContent={handlePlayContent} />
         )}
@@ -1219,7 +1389,7 @@ function App() {
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
             {w.podcastIds.length > 0 ? (
               <p>
-                <strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.
+                <strong>{transcriptItemsLabel(w.podcastIds.length - w.videoCount, w.videoCount)}</strong> {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. {w.videoCount === 0 ? 'Podcast summaries' : w.videoCount === w.podcastIds.length ? 'Video summaries' : 'Podcast and video summaries'} are made from the transcript, so those need to be generated first ({w.videoCount === 0 ? 'this uses your transcription API credits' : w.videoCount === w.podcastIds.length ? 'Gemini writes them, with your Gemini API key' : 'this uses your transcription API credits, and your Gemini API key for the videos'}). Summaries follow automatically.
                 {w.readyIds.length > 0 && (
                   <> The other {w.readyIds.length} item{w.readyIds.length > 1 ? 's' : ''} can be summarized right away.</>
                 )}
@@ -1269,7 +1439,7 @@ function App() {
                         startBulkSummaries(w.readyIds, [], audioOpts);
                       }}
                     >
-                      Skip episodes without transcript
+                      Skip {w.videoCount > 0 ? 'items' : 'episodes'} without transcript
                     </button>
                   )}
                 </>
@@ -1300,7 +1470,11 @@ function App() {
       {summaryTranscriptWarning && (
         <div className="comment-warning-overlay" onClick={() => setSummaryTranscriptWarning(false)}>
           <div className="comment-warning-modal" onClick={e => e.stopPropagation()}>
-            <p>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</p>
+            {currentContent?.type === 'video' ? (
+              <p>This video has <strong>no transcript</strong> yet. Video summaries are made from the transcript, so one needs to be generated first (Gemini writes it, with your Gemini API key). The summary follows automatically.</p>
+            ) : (
+              <p>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</p>
+            )}
             <div className="comment-warning-buttons">
               <button
                 className="comment-warning-btn include"

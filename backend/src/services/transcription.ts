@@ -9,7 +9,7 @@ import { getAudioDuration } from './audio-utils.js';
 import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTempDir } from '../config/storage.js';
-import { cachePodcastAudio } from './podcast-cache.js';
+import { cachePodcastAudio, makeRoomOnVolume } from './podcast-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +27,9 @@ async function compressAudio(inputPath: string, outputPath: string): Promise<voi
   });
 }
 
-async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: number): Promise<string[]> {
+// Each chunk goes into `tempFiles` before it is written, so a split that fails halfway (a full
+// volume) still has its chunks deleted.
+async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: number, tempFiles: string[]): Promise<string[]> {
   const duration = await getAudioDuration(inputPath);
   const chunkDurationSeconds = chunkDurationMinutes * 60;
   const numChunks = Math.ceil(duration / chunkDurationSeconds);
@@ -36,6 +38,7 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
   for (let i = 0; i < numChunks; i++) {
     const startTime = i * chunkDurationSeconds;
     const chunkPath = inputPath.replace('.mp3', `_chunk_${i}.mp3`);
+    tempFiles.push(chunkPath);
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .setStartTime(startTime)
@@ -245,6 +248,34 @@ async function transcribeFile(
   return { text: transcription.text, words: (transcription as any).words || [] };
 }
 
+// At most this many downloaded episodes are transcribed at once. Each one holds the whole
+// episode on the volume, plus its chunks and its cache copy, about 2.5 times the file (150 to
+// 250 MB for a 1 to 2 hour episode). On 2026-10-23 a bulk Summarize started 13 at once, the
+// 5 GB volume filled up, and one transcript and two cache copies failed. The others wait
+// their turn, and their items go on showing that the transcript is being made.
+const MAX_PARALLEL_DOWNLOADS = 3;
+// Free space a download should find on the volume, twice what a 2-hour episode uses (its
+// download, chunks and cache copy, about 300 MB). Cached episodes make way for it.
+const FREE_SPACE_FOR_DOWNLOAD = 600 * 1024 * 1024;
+let downloadsRunning = 0;
+const downloadsWaiting: Array<() => void> = [];
+
+async function takeDownloadSlot(): Promise<void> {
+  if (downloadsRunning < MAX_PARALLEL_DOWNLOADS) {
+    downloadsRunning++;
+    return;
+  }
+  console.log(`[Transcription] ${downloadsRunning} episodes are being transcribed, this one waits its turn (${downloadsWaiting.length} already waiting)`);
+  await new Promise<void>((resolve) => downloadsWaiting.push(resolve));
+}
+
+function releaseDownloadSlot(): void {
+  const next = downloadsWaiting.shift();
+  // The slot goes straight to the next waiting episode, so the count stays the same
+  if (next) next();
+  else downloadsRunning--;
+}
+
 export async function transcribeWithTimestamps(
   audioSource: string | Buffer,
   userId: number,
@@ -258,6 +289,7 @@ export async function transcribeWithTimestamps(
 }> {
   // Declare outside try so finally can clean up even if transcription fails
   const tempFiles: string[] = [];
+  let holdsDownloadSlot = false;
 
   try {
     const config = await getTranscriptionClientForUser(userId);
@@ -265,11 +297,19 @@ export async function transcribeWithTimestamps(
 
     const model = config.model;
 
+    if (!Buffer.isBuffer(audioSource)) {
+      await takeDownloadSlot();
+      holdsDownloadSlot = true;
+      await makeRoomOnVolume(FREE_SPACE_FOR_DOWNLOAD);
+    }
+
     const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
 
     const audioFilename = `audio_transcribe_${Date.now()}.mp3`;
     const audioPath = path.join(tempDir, audioFilename);
+    // Listed before it is written, so a download that fails halfway is deleted too
+    tempFiles.push(audioPath);
 
     if (Buffer.isBuffer(audioSource)) {
       // Audio buffer passed directly, write to temp file (avoids HTTP round-trip)
@@ -310,7 +350,6 @@ export async function transcribeWithTimestamps(
 
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
-    tempFiles.push(audioPath);
 
     // The episode is fully on disk right now, the only moment we cache it.
     // Awaited (adds ~a minute for long episodes) because the temp file is
@@ -328,8 +367,7 @@ export async function transcribeWithTimestamps(
 
     if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
       console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
-      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
-      tempFiles.push(...chunkFiles);
+      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes, tempFiles);
 
       let timeOffset = 0;
       for (let i = 0; i < chunkFiles.length; i++) {
@@ -383,9 +421,9 @@ export async function transcribeWithTimestamps(
       if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
         console.log('Compressing large file...');
         const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
+        tempFiles.push(compressedPath);
         await compressAudio(audioPath, compressedPath);
         fileToTranscribe = compressedPath;
-        tempFiles.push(compressedPath);
       }
 
       console.log(`Transcribing file using model ${model}...`);
@@ -407,5 +445,6 @@ export async function transcribeWithTimestamps(
   } finally {
     // Cleanup temp files regardless of success or failure
     for (const f of tempFiles) await fs.unlink(f).catch(() => {});
+    if (holdsDownloadSlot) releaseDownloadSlot();
   }
 }

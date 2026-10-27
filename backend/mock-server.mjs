@@ -227,25 +227,68 @@ app.get('/api/content/:id', (req, res) => {
   res.json(item);
 });
 
-app.post('/api/content', (req, res) => {
+// A YouTube address becomes a video item, as in the real backend (routes/content.ts). The
+// title and channel come from YouTube's public oEmbed lookup, the rest is fake: the counts
+// and comments stand in for what a YouTube key gives (services/youtube.ts).
+function mockYoutubeId(url) {
+  const m = String(url || '').match(/(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function mockYoutubeDetails(videoId) {
+  const watch = `https://www.youtube.com/watch?v=${videoId}`;
+  const comment = (username, text, likes, date) => ({ username, content: text, ...(likes ? { karma: likes } : {}), date });
+  return {
+    view_count: 1234567,
+    comment_count: 4321,
+    comment_source: 'youtube',
+    comments: [
+      {
+        ...comment('@FakeViewer', `The part at <a target="_blank" rel="noopener noreferrer" href="${watch}&amp;t=60">1:00</a> made it click for me.<br>Great video.`, 812, '2026-09-20T10:00:00Z'),
+        replies: [comment('@SecondViewer', 'Same here!', 14, '2026-09-21T10:00:00Z'), comment('@ThirdViewer', 'Agreed, very clear.', 3, '2026-09-25T10:00:00Z')],
+      },
+      comment('@AnotherViewer', 'Fake preview comment, not a real YouTube comment. <a target="_blank" rel="noopener noreferrer" href="https://example.com">example.com</a>', 0, '2026-10-10T10:00:00Z'),
+    ],
+  };
+}
+
+app.post('/api/content', async (req, res) => {
   const now = new Date().toISOString();
-  let title = req.body.title;
+  const videoId = (req.body.type || 'article') === 'article' && !req.body.content ? mockYoutubeId(req.body.url) : null;
+  // Same rule as the real backend: a shared link already in the library is not added again
+  if (req.body.unless_in_library === true && req.body.url) {
+    const address = videoId ? `https://www.youtube.com/watch?v=${videoId}` : req.body.url;
+    const existing = db.content.find(c => c.url === address);
+    if (existing) return res.status(409).json({ error: 'This is already in your library', id: existing.id });
+  }
+  let video = null;
+  if (videoId) {
+    try {
+      const r = await fetch(`https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=${videoId}`);
+      video = r.ok ? await r.json() : {};
+    } catch { video = {}; }
+  }
+  let title = video?.title || req.body.title;
   if (!title && req.body.url) {
     try { title = new URL(req.body.url).hostname; } catch { title = 'Untitled'; }
   }
   const item = {
     id: db.nextContentId++,
-    type: req.body.type || 'article',
+    type: videoId ? 'video' : (req.body.type || 'article'),
     title: title || 'Untitled preview item',
-    url: req.body.url,
+    url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : req.body.url,
     content: req.body.content,
-    author: req.body.author || 'Preview Author',
+    author: video?.author_name || req.body.author || 'Preview Author',
+    preview_picture: videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : undefined,
     audio_url: req.body.audio_url,
     duration: req.body.duration,
     podcast_id: req.body.podcast_id || null,
     // Same rule as the real backend: the subscription's title, else the name the Feed tab sent
     podcast_show_name: db.podcasts.find(p => p.id === req.body.podcast_id)?.title || req.body.podcast_show_name || null,
-    description: 'Fake preview content, not a real saved article.',
+    description: videoId
+      ? 'Fake preview description with chapters.\n\n0:00 Start\n1:00 One minute in\n2:30 Two and a half minutes in'
+      : 'Fake preview content, not a real saved article.',
+    ...(videoId ? mockYoutubeDetails(videoId) : {}),
     is_starred: false,
     is_archived: false,
     playback_position: 0,
@@ -445,6 +488,25 @@ app.get('/api/podcasts/refresh-status', (req, res) => res.json(mockRefresh));
 app.get('/api/podcasts/last-refresh', (req, res) => {
   const times = db.podcasts.filter(p => p.is_subscribed !== false && p.last_refreshed_at).map(p => p.last_refreshed_at).sort();
   res.json({ lastRefresh: times.length ? times[times.length - 1] : null });
+});
+
+// The manual queue, as content items with their queue fields (routes/queue.ts)
+db.queue ||= [];
+const queueRows = () => db.queue.map((contentId, i) => {
+  const item = db.content.find(c => c.id === contentId);
+  return item && { ...item, queue_id: i + 1, queue_position: i, queue_added_at: item.created_at };
+}).filter(Boolean);
+app.get('/api/queue', (req, res) => res.json(queueRows()));
+app.post('/api/queue', (req, res) => {
+  db.queue.push(Number(req.body.content_item_id));
+  saveData();
+  const row = queueRows().at(-1);
+  res.json({ id: row.queue_id, position: row.queue_position, added_at: row.queue_added_at });
+});
+app.delete('/api/queue/:id', (req, res) => {
+  db.queue.splice(Number(req.params.id) - 1, 1);
+  saveData();
+  res.json({ success: true });
 });
 
 // Anything else: harmless empty response so the real UI renders with empty states
