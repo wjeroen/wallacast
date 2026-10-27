@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Podcast, Newspaper, SquareArrowOutUpRight, TvMinimalPlay } from 'lucide-react';
-import { cleanHtml, formatDuration, getDomainFromUrl, truncate } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, truncate, youtubeVideoId } from '../format';
 import type { Podcast as PodcastType } from '../types';
 
 // Shape of a feed item (episode or article) as used by the Feed tab. The API
@@ -115,6 +115,8 @@ export function FeedEpisodeCard({ episode, showShowName = false, actionButton }:
 }) {
   const [expanded, setExpanded] = useState(false);
   const fullText = episode.teaser || cleanHtml(episode.description || '');
+  // A feed lists a YouTube video as an article, and adding it makes a video
+  const isVideo = episode.item_type === 'article' && !!youtubeVideoId(episode.url);
   const canExpand = !expanded && fullText.length > COLLAPSED_TEXT_CHARS;
   return (
     <div className="content-card">
@@ -163,7 +165,9 @@ export function FeedEpisodeCard({ episode, showShowName = false, actionButton }:
         <div className="metadata">
           <span className="type">
             {episode.item_type === 'podcast_episode' && <Podcast size={16} className="icon-podcast" />}
-            {episode.item_type === 'article' && <Newspaper size={16} className="icon-article" />}
+            {episode.item_type === 'article' && (isVideo
+              ? <TvMinimalPlay size={16} className="icon-video" />
+              : <Newspaper size={16} className="icon-article" />)}
           </span>
           {episode.duration && <span className="duration">{formatDuration(episode.duration)}</span>}
         </div>
