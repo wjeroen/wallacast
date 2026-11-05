@@ -22,6 +22,15 @@ function getStoredSpeed(): number {
   return 1;
 }
 
+// One piece of an article's generated audio (`tts_chunks`, written by openai-tts.ts): the
+// words it speaks and where it sits in the audio, in seconds
+interface TTSChunk {
+  startWord: number;
+  endWord: number;
+  startTime: number;
+  duration: number;
+}
+
 interface AudioPlayerProps {
   content: ContentItem | null;
   onClose: () => void;
@@ -338,10 +347,10 @@ export function AudioPlayer({
     // disconnect to resume paused audio (the bug we fixed before).
     try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch { /* unsupported */ }
     try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch { /* unsupported */ }
-    try { ms.setActionHandler('seekbackward', (d: any) => seekBy(-(d?.seekOffset || 15))); } catch { /* unsupported */ }
-    try { ms.setActionHandler('seekforward', (d: any) => seekBy(d?.seekOffset || 15)); } catch { /* unsupported */ }
+    try { ms.setActionHandler('seekbackward', (d) => seekBy(-(d?.seekOffset || 15))); } catch { /* unsupported */ }
+    try { ms.setActionHandler('seekforward', (d) => seekBy(d?.seekOffset || 15)); } catch { /* unsupported */ }
     try {
-      ms.setActionHandler('seekto', (d: any) => {
+      ms.setActionHandler('seekto', (d) => {
         if (typeof d?.seekTime !== 'number') return;
         const audio = audioRef.current;
         if (!audio) return;
@@ -410,7 +419,7 @@ export function AudioPlayer({
     return [];
   }, [content?.transcript_words]);
 
-  const parsedTTSChunks = useMemo(() => {
+  const parsedTTSChunks = useMemo<TTSChunk[]>(() => {
     if (!content?.tts_chunks) return [];
     if (Array.isArray(content.tts_chunks)) return content.tts_chunks;
     try {
@@ -680,6 +689,34 @@ export function AudioPlayer({
     };
   }, [content, autoPlayToken, effectiveVariant]);
 
+  // Reads contentRef, not the closed-over content prop: handleEnded (registered
+  // once with [] deps, in the effect below) holds whichever savePlaybackPosition
+  // existed at mount forever, so a plain `content` reference here would make every
+  // later track's "ended near the finish" reset write to whatever item was on
+  // screen when the player first mounted, not the one that actually just ended
+  // (found 2026-08-22). Reading the ref instead makes every caller, old closure
+  // or new, always target the CURRENT item.
+  const savePlaybackPosition = async (position: number) => {
+    const c = contentRef.current;
+    if (!c) return;
+    // Never persist anything while the resume-seek hasn't been applied: the
+    // element is sitting at the wrong spot (usually 0:00) through no fault of
+    // the user, and saving would wipe the real stored position.
+    if (pendingResumeSeekRef.current > 0) return;
+    const floored = Math.floor(position);
+    // Skip save if position hasn't changed by at least 3 seconds (debounce)
+    if (lastSavedPositionRef.current >= 0 && Math.abs(floored - lastSavedPositionRef.current) < 3) {
+      return;
+    }
+    lastSavedPositionRef.current = floored;
+    try {
+      await contentAPI.update(c.id, {
+        [positionFieldRef.current]: floored,
+        last_played_at: new Date().toISOString(),
+      });
+    } catch { /* silent */ }
+  };
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -847,34 +884,6 @@ export function AudioPlayer({
       audio.removeEventListener('seeked', handleResumeSeeked);
     };
   }, []);
-
-  // Reads contentRef, not the closed-over content prop: handleEnded (registered
-  // once with [] deps, see the big effect above) holds whichever savePlaybackPosition
-  // existed at mount forever, so a plain `content` reference here would make every
-  // later track's "ended near the finish" reset write to whatever item was on
-  // screen when the player first mounted, not the one that actually just ended
-  // (found 2026-08-22). Reading the ref instead makes every caller, old closure
-  // or new, always target the CURRENT item.
-  const savePlaybackPosition = async (position: number) => {
-    const c = contentRef.current;
-    if (!c) return;
-    // Never persist anything while the resume-seek hasn't been applied: the
-    // element is sitting at the wrong spot (usually 0:00) through no fault of
-    // the user, and saving would wipe the real stored position.
-    if (pendingResumeSeekRef.current > 0) return;
-    const floored = Math.floor(position);
-    // Skip save if position hasn't changed by at least 3 seconds (debounce)
-    if (lastSavedPositionRef.current >= 0 && Math.abs(floored - lastSavedPositionRef.current) < 3) {
-      return;
-    }
-    lastSavedPositionRef.current = floored;
-    try {
-      await contentAPI.update(c.id, {
-        [positionFieldRef.current]: floored,
-        last_played_at: new Date().toISOString(),
-      });
-    } catch { /* silent */ }
-  };
 
   // Auto-save position every 10s during playback
   // Depends on content?.id (not content) to prevent duplicate save/teardown
@@ -1156,7 +1165,7 @@ export function AudioPlayer({
     // Method 2: TTS Chunks (Fallback)
     if (parsedTTSChunks.length > 0) {
       try {
-        const currentChunk = parsedTTSChunks.find((c: any) => 
+        const currentChunk = parsedTTSChunks.find((c) => 
           currentTime >= c.startTime && currentTime < (c.startTime + c.duration)
         );
         if (currentChunk) {
