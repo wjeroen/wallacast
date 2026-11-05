@@ -171,6 +171,10 @@ export function AudioPlayer({
   const lastVideoItemRef = useRef<number | null>(null);
   // The item whose video (not its summary audio) drives the controls right now
   const videoVariantForRef = useRef<number | null>(null);
+  // When the app last paused the video because the summary audio took over. A play report
+  // that YouTube sent just before that pause landed is not the user's tap on YouTube's
+  // own play button (see handleVideoStateChange).
+  const videoPausedForSummaryAtRef = useRef(0);
   const videoDurationSavedForRef = useRef<number | null>(null);
   const [videoRate, setVideoRate] = useState(1);
   const [videoError, setVideoError] = useState<string | null>(null);
@@ -193,6 +197,56 @@ export function AudioPlayer({
       clearInterval(videoClockRef.current);
       videoClockRef.current = null;
     }
+  };
+  // Whether the video, and not its summary audio, drives the controls right now. YouTube's
+  // player stays on screen while the summary audio plays, and its reports must then leave
+  // the time, the total, Play/Pause and the saved position alone: only the audio that
+  // plays sets them, as for every other item.
+  const videoDrivesControls = () =>
+    videoVariantForRef.current !== null && videoVariantForRef.current === contentRef.current?.id;
+
+  const readVideoDuration = () => {
+    const player = ytPlayerRef.current;
+    if (!player) return;
+    try {
+      const d = player.getDuration();
+      if (Number.isFinite(d) && d > 0) {
+        // While the summary audio plays, the total is the summary audio's own length. The
+        // video's player loads after that audio, so writing here would put the video's
+        // length over it, and the Summary tab's auto-scroll (time ÷ total) would stay at the top.
+        if (videoDrivesControls()) setDuration(d);
+        // The stored length fills the card before the first play. Saved once per item,
+        // when it is missing or longer than the real video.
+        const c = contentRef.current;
+        if (c && videoDurationSavedForRef.current !== c.id) {
+          videoDurationSavedForRef.current = c.id;
+          const real = Math.floor(d);
+          if ((!c.duration || real < c.duration - 2) && !useAuthStore.getState().user?.demo) {
+            contentAPI.update(c.id, { duration: real }).catch(() => {});
+          }
+        }
+      }
+    } catch { /* player gone */ }
+  };
+
+  const readVideoTime = () => {
+    const player = ytPlayerRef.current;
+    if (!player) return;
+    try {
+      const t = player.getCurrentTime();
+      if (Number.isFinite(t)) {
+        videoTimeRef.current = t;
+        if (videoDrivesControls()) setCurrentTime(t);
+      }
+    } catch { /* player gone */ }
+    readVideoDuration();
+  };
+
+  // The video plays and drives the controls: Pause shows, and its clock runs
+  const showVideoPlaying = () => {
+    setIsPlaying(true);
+    readVideoTime();
+    if (!videoClockRef.current) videoClockRef.current = setInterval(readVideoTime, 250);
   };
 
   useEffect(() => {
@@ -469,6 +523,8 @@ export function AudioPlayer({
         setResumeFailedAt(0);
         setCurrentTime(videoTimeRef.current);
         setDuration(content.duration || 0);
+        // Back from the summary audio, the player that is already there knows the real length
+        if (ytPlayerRef.current) readVideoDuration();
       }
       // Only a visible video may start by itself (YouTube's embed rules). An item reached
       // by autoplay while the player is minimized waits for Play. A switch back from the
@@ -484,7 +540,12 @@ export function AudioPlayer({
         if (shouldAutoPlay) autoPlayStartingRef.current = true;
         const player = ytPlayerRef.current;
         if (player) {
-          try { player.playVideo(); } catch { /* player gone */ }
+          try {
+            player.playVideo();
+            // A video that already plays (YouTube's own play button was tapped during the
+            // summary audio) sends no new report, so the controls take it over here
+            if (player.getPlayerState() === VIDEO_STATE.PLAYING) showVideoPlaying();
+          } catch { /* player gone */ }
         } else {
           videoPlayPendingRef.current = true;
         }
@@ -497,6 +558,7 @@ export function AudioPlayer({
     if (isVideoItem) {
       // The video's summary audio plays in the <audio> element below. The video pauses
       // and stays where it is on screen.
+      if (ytPlayerRef.current) videoPausedForSummaryAtRef.current = Date.now();
       try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
       videoPlayPendingRef.current = false;
       stopVideoClock();
@@ -822,7 +884,7 @@ export function AudioPlayer({
     lastSavedPositionRef.current = -1; // Reset debounce on content change
     const interval = setInterval(() => {
       if (!isPlayingRef.current) return;
-      if (videoVariantForRef.current !== null && videoVariantForRef.current === contentRef.current?.id) savePlaybackPosition(videoTimeRef.current);
+      if (videoDrivesControls()) savePlaybackPosition(videoTimeRef.current);
       else if (audioRef.current) savePlaybackPosition(audioRef.current.currentTime);
     }, 10000);
     return () => clearInterval(interval);
@@ -1154,40 +1216,6 @@ export function AudioPlayer({
   // ---------------------------------------------------------------------------
   // YOUTUBE VIDEO PLAYER
   // ---------------------------------------------------------------------------
-  const readVideoTime = () => {
-    const player = ytPlayerRef.current;
-    if (!player) return;
-    try {
-      const t = player.getCurrentTime();
-      if (Number.isFinite(t)) {
-        videoTimeRef.current = t;
-        setCurrentTime(t);
-      }
-    } catch { /* player gone */ }
-    readVideoDuration();
-  };
-
-  const readVideoDuration = () => {
-    const player = ytPlayerRef.current;
-    if (!player) return;
-    try {
-      const d = player.getDuration();
-      if (Number.isFinite(d) && d > 0) {
-        setDuration(d);
-        // The stored length fills the card before the first play. Saved once per item,
-        // when it is missing or longer than the real video.
-        const c = contentRef.current;
-        if (c && videoDurationSavedForRef.current !== c.id) {
-          videoDurationSavedForRef.current = c.id;
-          const real = Math.floor(d);
-          if ((!c.duration || real < c.duration - 2) && !useAuthStore.getState().user?.demo) {
-            contentAPI.update(c.id, { duration: real }).catch(() => {});
-          }
-        }
-      }
-    } catch { /* player gone */ }
-  };
-
   // The fastest speed YouTube offers that is not above the chosen one (YouTube offers
   // 0.25x to 2x), so a 2.5x choice plays videos at 2x. The button shows the real speed.
   const applyVideoSpeed = (player: YouTubePlayer, wanted: number) => {
@@ -1238,11 +1266,22 @@ export function AudioPlayer({
   };
 
   const handleVideoStateChange = (state: number) => {
+    if (!videoDrivesControls()) {
+      // The summary audio drives the controls. A late pause report from the switch to the
+      // summary audio changes nothing. A play report is a tap on YouTube's own play button,
+      // so the video takes over, as with Switch back on the Summary tab, unless it came
+      // right after the app paused the video (a report sent before that pause landed).
+      if (state !== VIDEO_STATE.PLAYING) return;
+      if (Date.now() - videoPausedForSummaryAtRef.current < 1000) {
+        try { ytPlayerRef.current?.pauseVideo(); } catch { /* player gone */ }
+        return;
+      }
+      handleSelectAudioVariant('original', true);
+      return;
+    }
     if (state === VIDEO_STATE.PLAYING) {
-      setIsPlaying(true);
+      showVideoPlaying();
       logChainPlaying('video');
-      readVideoTime();
-      if (!videoClockRef.current) videoClockRef.current = setInterval(readVideoTime, 250);
     } else if (state === VIDEO_STATE.PAUSED) {
       stopVideoClock();
       readVideoTime();
@@ -1263,7 +1302,8 @@ export function AudioPlayer({
 
   const handleVideoError = (code: number) => {
     stopVideoClock();
-    setIsPlaying(false);
+    // A video that fails to load while its summary audio plays leaves that audio playing
+    if (videoDrivesControls()) setIsPlaying(false);
     videoPlayPendingRef.current = false;
     console.warn(`[AudioPlayer] YouTube player error ${code} for item ${contentRef.current?.id}`);
     if (playbackChainOpen()) refusedAutoplay(contentRef.current?.id, `youtube ${code}`);
