@@ -12,7 +12,7 @@ import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
 import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
-import { logPlayback, playbackChainOpen } from './playback-log';
+import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -153,6 +153,12 @@ function App() {
 
   // Auth state
   const { user, isAuthenticated, isLoading, checkAuth, logout } = useAuthStore();
+
+  // One page-start line per app start (diagnostics, see playback-log.ts): it shows a reload,
+  // and whether Chrome had thrown the page away while the screen was off
+  useEffect(() => {
+    if (isAuthenticated) logPageStart();
+  }, [isAuthenticated]);
 
   // Optional "start playing when opening an item" preference (off by default). Refetched
   // when leaving the Settings page so a toggle takes effect without a reload.
@@ -539,8 +545,8 @@ function App() {
       if (!queueRow) {
         // Non-manual item without audio: the skip button navigates the whole
         // filtered stream now, so just OPEN it for reading (no play attempt,
-        // no generate prompt). Autoplay never lands here (getNextItem still
-        // requires audio for non-manual items).
+        // no generate prompt). Autoplay never lands here (getNextItem only
+        // gives non-manual items with something to play).
         try {
           const res = await contentAPI.getById(nextItem.id);
           setCurrentContent(res.data);

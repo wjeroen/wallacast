@@ -203,11 +203,17 @@ export function videoPlaysHere(item: { type?: string; embed_blocked?: string | n
 }
 
 // Whether the player has something to play: any audio, or a YouTube video it may play (in
-// YouTube's embedded player). Decides the play flows and the mini player. The queue's
-// "Up next" stream and autoplay continuation stay audio-only (hasAnyAudio), because a
-// video may only play while it is visible on screen.
+// YouTube's embedded player). Decides the play flows, the mini player, and which items the
+// queue's "Up next" stream and autoplay continuation hold.
 export function hasPlayableMedia(item: { type?: string; audio_url?: string | null; summary_audio_url?: string | null; embed_blocked?: string | null }): boolean {
   return hasAnyAudio(item) || videoPlaysHere(item);
+}
+
+// The library card's "Audio" badge and the library's Audio filter: an audio file (generated
+// narration, or a podcast episode's own file) or a YouTube video that plays in the app. Summary
+// audio alone does not count, it has its own icon on the Summary badge.
+export function hasAudioBadge(item: { type?: string; audio_url?: string | null; embed_blocked?: string | null }): boolean {
+  return !!item.audio_url || videoPlaysHere(item);
 }
 
 // A large count the short way YouTube writes it: 950, 12K, 1.2M

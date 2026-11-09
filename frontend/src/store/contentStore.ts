@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
-import { hasWordTimings } from '../format';
+import { hasAudioBadge, hasWordTimings } from '../format';
 
 // Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
@@ -124,16 +124,18 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   // Tag filter: any selected tag present on the item.
   if (f.tags.length > 0 && !f.tags.some(t => item.tags?.includes(t))) return false;
 
-  // Facets: every non-null row must match. Summary/transcript presence mirrors
-  // the library card badges (summary_generated_at / hasWordTimings, since the
-  // list endpoint never sends the large transcript column).
+  // Facets: every non-null row must match. Each row mirrors a library card badge:
+  // audio = an audio file or a YouTube video that plays in the app (hasAudioBadge),
+  // summary = summary_generated_at, transcript = hasWordTimings (the list endpoint
+  // never sends the large transcript column). Summary audio alone does not count
+  // as audio.
   const { archive, star, audio, summary, transcript } = f.facets;
   if (archive === 'active' && item.is_archived) return false;
   if (archive === 'archived' && !item.is_archived) return false;
   if (star === 'starred' && !item.is_starred) return false;
   if (star === 'unstarred' && item.is_starred) return false;
-  if (audio === 'audio' && !item.audio_url) return false;
-  if (audio === 'no_audio' && item.audio_url) return false;
+  if (audio === 'audio' && !hasAudioBadge(item)) return false;
+  if (audio === 'no_audio' && hasAudioBadge(item)) return false;
   if (summary === 'summary' && !item.summary_generated_at) return false;
   if (summary === 'no_summary' && item.summary_generated_at) return false;
   if (transcript === 'transcript' && !hasWordTimings(item)) return false;

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, Eye, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
-import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings, compactCount } from '../format';
+import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings, compactCount, hasAudioBadge } from '../format';
 import type { ContentItem } from '../types';
 
 // The library content card: thumbnail, title, metadata badges, generation
@@ -165,7 +165,7 @@ export function ContentCard({
             {item.type === 'video' && <><TvMinimalPlay size={14} /> <span className="type-label">Video</span></>}
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
-          {item.audio_url && <span className="badge"><Volume2 size={12} /> Audio</span>}
+          {hasAudioBadge(item) && <span className="badge"><Volume2 size={12} /> Audio</span>}
           {item.type === 'video' && item.embed_blocked && (
             <span
               className="badge"

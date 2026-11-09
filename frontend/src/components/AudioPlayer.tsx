@@ -5,7 +5,7 @@ import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
 import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, videoPlaysHere, youtubeVideoId, type AudioVariant } from '../format';
-import { logPlayback, playbackChainOpen } from '../playback-log';
+import { logPlayback, playbackChainOpen, screenRecentlyOff, setPlayerProbe } from '../playback-log';
 import { useAuthStore } from '../store/authStore';
 
 function getStoredSpeed(): number {
@@ -20,6 +20,12 @@ function getStoredSpeed(): number {
     }
   } catch { /* private-mode Safari throws on localStorage access */ }
   return 1;
+}
+
+// A YouTube player state's name (VIDEO_STATE) for the [Playback] diagnostics lines
+function videoStateName(state: number): string {
+  const entry = Object.entries(VIDEO_STATE).find(([, value]) => value === state);
+  return entry ? entry[0].toLowerCase() : String(state);
 }
 
 // One piece of an article's generated audio (`tts_chunks`, written by openai-tts.ts): the
@@ -899,6 +905,35 @@ export function AudioPlayer({
     return () => clearInterval(interval);
   }, [content?.id]);
 
+  // The player's state for the screen-off diagnostics (page-hidden, page-visible and
+  // page-resumed lines in playback-log.ts). For a video it also asks YouTube's player what it
+  // does, which can differ from what the app shows (`yt` and `ytT` next to `playing` and `t`).
+  // Refs only, so it is registered once.
+  useEffect(() => {
+    setPlayerProbe(() => {
+      const c = contentRef.current;
+      if (!c) return null;
+      const video = videoDrivesControls();
+      const fields: Record<string, string | number | boolean | undefined> = {
+        id: c.id,
+        variant: video ? 'video' : 'audio',
+        playing: isPlayingRef.current,
+        t: Math.round(video ? videoTimeRef.current : audioRef.current?.currentTime ?? 0),
+        view: isExpandedRef.current ? 'full' : 'mini',
+      };
+      const player = ytPlayerRef.current;
+      if (c.type === 'video' && player) {
+        try {
+          fields.yt = videoStateName(player.getPlayerState());
+          fields.ytT = Math.round(player.getCurrentTime());
+        } catch { /* player gone */ }
+        if (videoHiddenRef.current) fields.boxHidden = true;
+      }
+      return fields;
+    });
+    return () => setPlayerProbe(null);
+  }, []);
+
   // Save position on unmount or content change
   useEffect(() => {
     return () => {
@@ -1275,6 +1310,14 @@ export function AudioPlayer({
   };
 
   const handleVideoStateChange = (state: number) => {
+    // A pause or resume with the screen off (or just after it comes back on) may come from the
+    // phone or from YouTube, not the user, so it gets a diagnostics line
+    if (screenRecentlyOff()) {
+      logPlayback('video-state', {
+        id: contentRef.current?.id, state: videoStateName(state), t: Math.round(videoTimeRef.current),
+        app: videoDrivesControls() ? 'video' : 'summary',
+      });
+    }
     if (!videoDrivesControls()) {
       // The summary audio drives the controls. A late pause report from the switch to the
       // summary audio changes nothing. A play report is a tap on YouTube's own play button,

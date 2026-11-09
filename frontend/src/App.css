@@ -2126,6 +2126,28 @@ button {
   text-align: center;
 }
 
+/* The ErrorBoundary screen (an error while the app draws itself) */
+.error-screen {
+  max-width: 32rem;
+  padding: 0 1rem;
+}
+
+.error-screen h2 {
+  color: var(--t0);
+  margin-bottom: 0.75rem;
+}
+
+.error-screen-message {
+  color: var(--t3);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  margin-bottom: 1.25rem;
+}
+
+.error-screen .save-button {
+  margin: 0 auto;
+}
+
 .loading-logo {
   height: 5rem;
   width: auto;
