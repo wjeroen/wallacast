@@ -42,27 +42,37 @@ function freeSummaryAudioSlot(): void {
 // the automatic retry below comes back when the provider has had time to recover.
 const SUMMARY_AUDIO_ATTEMPTS = 2;
 
-// A failure because the provider was too busy gets one automatic retry this much later, if
-// the card still shows the failure. Kept in memory only: a restart drops it.
+// A failure because the provider was too busy gets one automatic retry this much later. Any
+// new run of the item (Retry, a bulk run, a new summary) cancels it, and so does removing the
+// summary audio. Kept in memory only: a restart drops it.
 const BUSY_RETRY_DELAY_MS = 15 * 60 * 1000;
-const pendingBusyRetries = new Set<number>();
+const plannedBusyRetries = new Map<number, ReturnType<typeof setTimeout>>();
+
+function cancelBusyRetry(contentId: number): void {
+  const timer = plannedBusyRetries.get(contentId);
+  if (!timer) return;
+  clearTimeout(timer);
+  plannedBusyRetries.delete(contentId);
+  console.log(`[SummaryAudio] Planned automatic retry for content ${contentId} cancelled`);
+}
 
 function scheduleBusyRetry(contentId: number): void {
-  if (pendingBusyRetries.has(contentId)) return;
-  pendingBusyRetries.add(contentId);
+  cancelBusyRetry(contentId);
   console.log(`[SummaryAudio] Provider busy for content ${contentId}, one automatic retry in ${BUSY_RETRY_DELAY_MS / 60000} minutes`);
-  setTimeout(async () => {
-    pendingBusyRetries.delete(contentId);
+  const timer = setTimeout(async () => {
+    plannedBusyRetries.delete(contentId);
     try {
       const result = await query('SELECT summary_audio_status FROM content_items WHERE id = $1', [contentId]);
-      // Retried by hand, dismissed, or deleted in the meantime
+      // Dismissed or deleted in the meantime
       if (result.rows[0]?.summary_audio_status !== 'failed') return;
       console.log(`[SummaryAudio] Automatic retry for content ${contentId}`);
       await generateSummaryAudioForContent(contentId, true);
     } catch {
       // generateSummaryAudioForContent already logged and stored the failure
     }
-  }, BUSY_RETRY_DELAY_MS).unref();
+  }, BUSY_RETRY_DELAY_MS);
+  timer.unref();
+  plannedBusyRetries.set(contentId, timer);
 }
 
 export function summaryAudioKey(contentId: number | string): string {
@@ -72,6 +82,7 @@ export function summaryAudioKey(contentId: number | string): string {
 // Delete the stored summary-audio file and reset its columns. Called when the summary
 // text is removed or regenerated, since the audio would keep narrating the stale text.
 export async function clearSummaryAudio(contentId: number): Promise<void> {
+  cancelBusyRetry(contentId);
   await deleteAudioFile(summaryAudioKey(contentId));
   await query(
     `UPDATE content_items
@@ -88,6 +99,7 @@ export async function generateSummaryAudioForContent(contentId: number, isAutoRe
     return;
   }
   activeSummaryAudioGenerations.add(contentId);
+  if (!isAutoRetry) cancelBusyRetry(contentId);
   let holdsSlot = false;
   try {
     await query(
