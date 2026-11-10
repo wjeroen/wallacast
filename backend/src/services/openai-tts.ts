@@ -792,6 +792,37 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
   }
 }
 
+// What generateArticleAudio throws: the same message as before, plus the provider that failed
+// and whether it was only too busy, so a caller can explain it and try again later.
+export class TTSError extends Error {
+  provider: string | null;
+  busy: boolean;
+  constructor(message: string, provider: string | null, busy: boolean, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'TTSError';
+    this.provider = provider;
+    this.busy = busy;
+  }
+}
+
+function ttsProviderName(baseURL: string): string {
+  if (baseURL.includes('deepinfra')) return 'DeepInfra';
+  if (baseURL.includes('openrouter')) return 'OpenRouter';
+  return 'OpenAI';
+}
+
+// True when the provider was overloaded, not broken: a 429 (DeepInfra also sends it when one
+// model is very busy), a 503, or no answer in time ("terminated" is a 5-minute body timeout).
+// The original error can sit a few causes deep.
+function isProviderBusy(error: any): boolean {
+  for (let e = error, depth = 0; e && depth < 4; e = e.cause, depth++) {
+    if (e.status === 429 || e.status === 503) return true;
+    if (e.code === 'UND_ERR_BODY_TIMEOUT' || e.code === 'UND_ERR_HEADERS_TIMEOUT') return true;
+    if (e.name === 'APIConnectionTimeoutError') return true;
+  }
+  return false;
+}
+
 export async function generateArticleAudio(
   articleText: string,
   userId: number,
@@ -799,8 +830,11 @@ export async function generateArticleAudio(
     voice?: string;
     instructions?: string;
     contentId?: number;
+    maxAttempts?: number;
   } = {}
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
+  const maxAttempts = options.maxAttempts ?? PROCESSING_CONFIG.retry.maxAttempts;
+  let provider: string | null = null;
   try {
     const userSettings = await getTTSOptionsForUser(userId);
     let targetModel = userSettings.model || 'gpt-4o-mini-tts';
@@ -824,6 +858,7 @@ export async function generateArticleAudio(
       throw new Error('No AI API key set. Please configure OpenAI, DeepInfra, or OpenRouter in Settings.');
     }
     const openai = tts.client;
+    provider = ttsProviderName(openai.baseURL);
     // The router may rewrite the model id (e.g. 'openai/gpt-4o-mini-tts' when routed via
     // OpenRouter). Use it for the API calls below.
     targetModel = tts.model;
@@ -838,7 +873,7 @@ export async function generateArticleAudio(
     // --- CASE A: Single Chunk ---
     if (textChunks.length === 1) {
       console.log(`Single chunk (${textChunks[0].length} chars)`);
-      let retries = PROCESSING_CONFIG.retry.maxAttempts;
+      let retries = maxAttempts;
       let delay = PROCESSING_CONFIG.retry.baseDelayMs;
       let finalBuffer: Buffer | null = null;
       let finalDuration = 0;
@@ -940,7 +975,7 @@ export async function generateArticleAudio(
           );
         }
 
-        let retries = PROCESSING_CONFIG.retry.maxAttempts;
+        let retries = maxAttempts;
         let delay = PROCESSING_CONFIG.retry.baseDelayMs;
         let success = false;
         const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
@@ -987,7 +1022,7 @@ export async function generateArticleAudio(
               delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
             } else {
-              throw new Error(`Failed to generate valid chunk ${i + 1}: ${error.message}`);
+              throw new Error(`Failed to generate valid chunk ${i + 1}: ${error.message}`, { cause: error });
             }
           }
         }
@@ -1021,7 +1056,7 @@ export async function generateArticleAudio(
     if (message.includes('cancelled')) {
       throw error;
     }
-    throw new Error('Failed to generate audio: ' + message);
+    throw new TTSError('Failed to generate audio: ' + message, provider, isProviderBusy(error), { cause: error });
   }
 }
 
