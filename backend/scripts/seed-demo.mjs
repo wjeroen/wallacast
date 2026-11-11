@@ -7,6 +7,7 @@
 // Usage (run from the backend directory):
 //   BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \
 //   DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo
+// Add INVITE_CODE=... only to create the demo account on an invite-only instance.
 //
 // Node 18+ is assumed (native fetch, no external libraries). Plain ESM.
 //
@@ -35,6 +36,7 @@ const cfg = {
   openaiKey: process.env.OPENAI_API_KEY,
   deepinfraKey: process.env.DEEPINFRA_API_KEY,
   anthropicKey: process.env.ANTHROPIC_API_KEY,
+  inviteCode: (process.env.INVITE_CODE || '').trim(),
 };
 
 const missing = [];
@@ -51,7 +53,8 @@ if (missing.length > 0) {
   console.error('  BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \\');
   console.error('  DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo');
   console.error('');
-  console.error('DEMO_USERNAME is optional and defaults to "demo".');
+  console.error('DEMO_USERNAME is optional and defaults to "demo". INVITE_CODE is only needed');
+  console.error('to create the demo account on an invite-only instance.');
   process.exit(1);
 }
 
@@ -141,13 +144,15 @@ async function apiFetch(method, path, { body, auth = true, allow = [] } = {}) {
 // ---------------------------------------------------------------------------
 
 async function register() {
-  const { status } = await apiFetch('POST', '/auth/register', {
-    auth: false,
-    allow: [409],
-    body: { username: cfg.username, password: cfg.password, displayName: 'Demo' },
-  });
+  const body = { username: cfg.username, password: cfg.password, displayName: 'Demo' };
+  if (cfg.inviteCode) body.inviteCode = cfg.inviteCode;
+  const { status } = await apiFetch('POST', '/auth/register', { auth: false, allow: [403, 409], body });
   if (status === 409) {
     console.log(`  Account "${cfg.username}" already exists (409). Will log in instead.`);
+  } else if (status === 403) {
+    // An invite-only instance checks the invite code before the username, so an existing
+    // demo account answers 403 instead of 409. The login below tells whether it exists.
+    console.log(`  Registration needs an invite code here (403). Assuming "${cfg.username}" exists, logging in.`);
   } else {
     console.log(`  Registered new account "${cfg.username}".`);
   }
@@ -163,7 +168,7 @@ async function login() {
   } catch (err) {
     throw new Error(
       `Login failed for "${cfg.username}". If this account already exists, DEMO_PASSWORD is ` +
-      `probably wrong for it.\n${err.message}`
+      `probably wrong for it. If it does not exist yet on an invite-only instance, set INVITE_CODE.\n${err.message}`
     );
   }
   accessToken = res.data && res.data.accessToken;
