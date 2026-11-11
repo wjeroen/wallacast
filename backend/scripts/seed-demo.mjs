@@ -256,6 +256,12 @@ async function getLibrary() {
   return Array.isArray(data) ? data : [];
 }
 
+// Re-runnability: subscribing again answers 409 with the existing subscription, which serves.
+async function subscribe(feedUrl) {
+  const { status, data } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: feedUrl }, allow: [409] });
+  return status === 409 ? data.podcast : data;
+}
+
 // Re-runnability: delete any existing library items matching `predicate` before adding a fresh copy.
 async function deleteMatching(predicate, label) {
   const items = await getLibrary();
@@ -407,7 +413,7 @@ async function findTargetEpisode() {
 async function addPodcastEpisode() {
   const t0 = Date.now();
   console.log('\n[add 1/3] Podcast: subscribing to the 80,000 Hours feed...');
-  const { data: podcast } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: FEED_URL } });
+  const podcast = await subscribe(FEED_URL);
   console.log(`  Subscribed to "${podcast.title}" (podcast id ${podcast.id}).`);
 
   console.log('  Searching the feed for the "235 ... Ajeya" episode...');
@@ -526,7 +532,7 @@ async function main() {
     // shows the read-only toast), so the seeder populates Recent Updates for them here.
     console.log('\n[feeds] Subscribing to the extra demo feeds...');
     for (const url of EXTRA_FEEDS) {
-      const { data: sub } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: url } });
+      const sub = await subscribe(url);
       console.log(`  Subscribed to "${sub.title}" (${sub.type}).`);
     }
     console.log('  Refreshing the feed cache (Recent Updates)...');
