@@ -745,7 +745,7 @@ async function scriptHtmlOnce(
   return scriptBody;
 }
 
-async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
+async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string, extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
