@@ -286,18 +286,35 @@ export async function initializeDatabase() {
     const tokenPermissionsMigration = await fs.readFile(tokenPermissionsMigrationPath, 'utf-8');
     await client.query(tokenPermissionsMigration);
 
-    // Reset any stuck generation statuses (server restart during generation)
-    // Use current_operation to give a specific error message about what was interrupted
+    // Run migration adding YouTube's view count and embed status for video items
+    const youtubeDetailsMigrationPath = path.join(__dirname, 'migrations', '032_youtube_details.sql');
+    const youtubeDetailsMigration = await fs.readFile(youtubeDetailsMigrationPath, 'utf-8');
+    await client.query(youtubeDetailsMigration);
+
+    // Reset any stuck generation statuses (server restart during generation).
+    // generation_status and current_operation say what was interrupted: a refetch
+    // ('fetching'), a transcript ('generating_transcript', or the read-along step after audio)
+    // or audio. The failed_refetch / failed_transcript marker makes the card's Retry run that
+    // same step again, so a cut-off video refetch never retries as a paid Gemini transcript.
     const resetResult = await client.query(`
       UPDATE content_items
       SET generation_status = 'failed',
           generation_error = CASE
+            WHEN generation_status = 'fetching'
+              THEN 'Server restarted during the refetch. Try again.'
+            WHEN generation_status = 'generating_transcript'
+              THEN 'Server restarted during transcript generation. Try again.'
             WHEN current_operation IN ('transcribing', 'aligning_content')
               THEN 'Server restarted during transcript generation. Audio may be intact, try regenerating the transcript.'
             ELSE 'Server restarted during audio generation'
           END,
           generation_progress = 0,
-          current_operation = NULL
+          current_operation = CASE
+            WHEN generation_status = 'fetching' THEN 'failed_refetch'
+            WHEN generation_status = 'generating_transcript'
+              OR current_operation IN ('transcribing', 'aligning_content') THEN 'failed_transcript'
+            ELSE NULL
+          END
       WHERE generation_status NOT IN ('idle', 'completed', 'failed')
     `);
 

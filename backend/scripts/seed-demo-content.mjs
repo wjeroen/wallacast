@@ -15,13 +15,14 @@ export const ONBOARDING_HTML = `
 <p>The demo is read-only. Buttons that would change or generate something will tell you so when you press them. In your own account they all work.</p>
 
 <h2>What was generated, and by what</h2>
-<p>Everything here was produced by the same models a normal account would use. The narration scripts for this guide and the article were prepared by GPT-5 Mini. The voice is Puck, from the Kokoro text-to-speech model, served by DeepInfra. The word timings that drive the highlighting come from Whisper Large v3 Turbo, also on DeepInfra. The read-along alignment was matched by GPT-5 Mini. The summaries were written by Claude Sonnet 5. Images inside articles are described for the narration by a Gemma vision model.</p>
+<p>Everything here was produced by the same models a normal account would use. The narration scripts for this guide and the article were prepared by GPT-6 Luna. The voice is Puck, from the Kokoro text-to-speech model, served by DeepInfra. The word timings that drive the highlighting come from Whisper Large v3 Turbo, also on DeepInfra. The read-along alignment was matched by GPT-6 Luna. The summaries were written by Claude Sonnet 5. Images inside articles are described for the narration by a Gemma vision model.</p>
 
 <h2>What it costs</h2>
 <p>Wallacast itself is free and open source. The AI work runs on your own API keys, so you pay the providers directly, and only for what you generate. A typical article costs a few cents to narrate. One key from OpenAI or DeepInfra unlocks almost everything, and two keys unlock it all. The Settings page shows exactly which features each key enables.</p>
 
 <h2>Getting started with your own account</h2>
 <p>Create an account, open Settings, and paste an API key. Then add your first article on the Add tab, press generate audio, and give it a minute. That is the whole setup.</p>
+<p>A YouTube link can be added the same way. It plays in YouTube's own player at the top of the player view, with Wallacast's play, skip, speed and resume buttons, but only while it is on screen. A free YouTube API key in Settings adds the video's description, date, view and comment counts and its most relevant comments, and with a Gemini key the video gets a transcript and a summary, like a podcast episode. The same key lets the Feed tab follow a YouTube channel: paste its address (youtube.com/@name) into the search box, and its new videos, without Shorts, show up next to your podcasts.</p>
 
 <p>Enjoy, and happy listening.</p>
 `.trim();

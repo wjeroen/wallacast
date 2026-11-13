@@ -2,7 +2,7 @@
  * Tag rules shared by the content routes and the Wallabag sync.
  *
  * Storage model: `content_items.tags` is a Postgres TEXT[] holding ONLY the user's own
- * tags, already normalized. The three type tags (article / text / podcast) are never
+ * tags, already normalized. The four type tags (article / text / podcast / video) are never
  * stored, they are derived from `content_items.type` and added back on push. Labels are
  * normalized exactly the way Wallabag normalizes them (TagsAssigner.php: split on comma,
  * trim, lowercase), so a tag pushed to Wallabag comes back byte-identical on pull and
@@ -10,7 +10,7 @@
  */
 
 /** Wallabag tag that marks the item's Wallacast type. Never user-editable. */
-export const TYPE_TAGS = ['article', 'text', 'podcast'] as const;
+export const TYPE_TAGS = ['article', 'text', 'podcast', 'video'] as const;
 
 /** Reserved names the tag picker refuses. nosync is managed in Wallabag only. */
 export const RESERVED_TAGS = new Set<string>([...TYPE_TAGS, 'nosync', '#nosync']);
@@ -65,6 +65,7 @@ export function typeTagFor(type: string): (typeof TYPE_TAGS)[number] {
   switch (type) {
     case 'podcast_episode': return 'podcast';
     case 'text': return 'text';
+    case 'video': return 'video';
     default: return 'article';
   }
 }

@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { devNull } from 'os';
 import ffmpeg from 'fluent-ffmpeg';
-import { getAudioDir } from '../config/storage.js';
+import { getAudioDir, freeVolumeBytes } from '../config/storage.js';
 
 /**
  * Transient podcast-audio cache. Some hosts (SoundCloud) serve VBR files with
@@ -147,22 +147,55 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
   }
 }
 
-/** Delete oldest-touched files until the cache fits the cap. */
-async function enforceCacheCap(): Promise<void> {
+/** The cached files, oldest-touched first. Empty when the cache dir does not exist yet. */
+async function cachedFilesOldestFirst(): Promise<Array<{ p: string; size: number; mtime: number }>> {
+  const dir = cacheDir();
+  const files: Array<{ p: string; size: number; mtime: number }> = [];
   try {
-    const dir = cacheDir();
-    const names = await fs.readdir(dir);
-    const files: Array<{ p: string; size: number; mtime: number }> = [];
-    for (const name of names) {
+    for (const name of await fs.readdir(dir)) {
       if (!name.endsWith('.mp3')) continue;
       try {
         const stat = await fs.stat(path.join(dir, name));
         files.push({ p: path.join(dir, name), size: stat.size, mtime: stat.mtimeMs });
       } catch { /* raced */ }
     }
+  } catch { /* cache dir may not exist yet */ }
+  return files.sort((a, b) => a.mtime - b.mtime);
+}
+
+/**
+ * Deletes the oldest cached episodes while the volume has less than `minFreeBytes` free, so
+ * the cache makes way for the files a transcription is about to write. On a full volume
+ * ffmpeg fails ("exited with code 228", out of space). When deleting the whole cache would
+ * still not reach `minFreeBytes` (other files fill the volume), nothing is deleted: wiping
+ * the cache would not save the job, and it would break the cached episodes' read-along.
+ * Never throws.
+ */
+export async function makeRoomOnVolume(minFreeBytes: number): Promise<void> {
+  let free = await freeVolumeBytes();
+  if (free === null || free >= minFreeBytes) return;
+  const files = await cachedFilesOldestFirst();
+  const cacheBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (free + cacheBytes < minFreeBytes) {
+    console.warn(`[PodcastCache] Only ${(free / 1024 / 1024).toFixed(0)} MB free on the volume, and the cache (${(cacheBytes / 1024 / 1024).toFixed(0)} MB) cannot make enough room, so it stays`);
+    return;
+  }
+  for (const f of files) {
+    if (free >= minFreeBytes) break;
+    try {
+      await fs.unlink(f.p);
+      free += f.size;
+      console.log(`[PodcastCache] Evicted ${path.basename(f.p)} (${(f.size / 1024 / 1024).toFixed(1)} MB) to free space on the volume`);
+    } catch { /* raced */ }
+  }
+}
+
+/** Delete oldest-touched files until the cache fits the cap. */
+async function enforceCacheCap(): Promise<void> {
+  try {
+    const files = await cachedFilesOldestFirst();
     let total = files.reduce((s, f) => s + f.size, 0);
     if (total <= CACHE_MAX_BYTES) return;
-    files.sort((a, b) => a.mtime - b.mtime);
     for (const f of files) {
       if (total <= CACHE_MAX_BYTES) break;
       await fs.unlink(f.p).catch(() => {});

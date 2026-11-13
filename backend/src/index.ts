@@ -6,12 +6,13 @@ import { fileURLToPath } from 'url';
 import { safeFetch, AUDIO_REDIRECT_HOPS } from './services/url-guard.js';
 import { verifyAudioToken } from './services/audio-token.js';
 import { initializeDatabase, closePool } from './database/db.js';
-import { ensureStorageDirectories, isPersistentVolume } from './config/storage.js';
+import { ensureStorageDirectories, isPersistentVolume, reportVolume } from './config/storage.js';
 import { getAudioFileSize, createAudioReadStream, migrateAudioBlobsToDisk, clearMigratedAudioBlobs } from './services/audio-storage.js';
 import { getCachedPodcastAudioSize, cachedPodcastAudioPath } from './services/podcast-cache.js';
 import { createReadStream } from 'fs';
 import type { Readable } from 'stream';
 import { startHourlyMemoryLog } from './services/memory-log.js';
+import { startYouTubeRefresh } from './services/youtube-refresh.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -468,7 +469,10 @@ async function logStorageStats() {
 // Warn loudly at startup about missing security-critical env vars. We do NOT crash (the server
 // must stay up for health checks, per the db.ts philosophy), but silence was the real risk:
 // without ENCRYPTION_KEY every user's provider API key is stored as PLAINTEXT, and without
-// JWT_SECRET all sessions drop on each restart. Production only, so local dev stays quiet.
+// JWT_SECRET a new random secret is made on each boot. Logins survive that (the refresh
+// tokens live in user_sessions and do not use the secret, and the app renews its 15-minute
+// access tokens by itself), but every private audio link (?t=, services/audio-token.ts)
+// changes on each restart. Production only, so local dev stays quiet.
 function warnMissingSecurityEnv() {
   if (process.env.NODE_ENV !== 'production') return;
   const key = process.env.ENCRYPTION_KEY;
@@ -476,7 +480,7 @@ function warnMissingSecurityEnv() {
     console.error('🔓 [SECURITY] ENCRYPTION_KEY is missing or not 64 hex chars: user API keys and Wallabag passwords are being stored as PLAINTEXT. Set a 64-hex-char ENCRYPTION_KEY (see RAILWAY_DEPLOYMENT.md).');
   }
   if (!process.env.JWT_SECRET) {
-    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so everyone is logged out on every redeploy. Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
+    console.error('🔑 [SECURITY] JWT_SECRET is missing: a random secret is generated each boot, so every private audio link changes on each redeploy (logins survive, the app renews them). Set a stable JWT_SECRET (see RAILWAY_DEPLOYMENT.md).');
   }
 }
 
@@ -538,6 +542,7 @@ async function start() {
 
       // Log storage breakdown to Railway logs (fire-and-forget, never blocks startup)
       logStorageStats().catch(() => {});
+      reportVolume();
 
       // Migrate audio blobs out of Postgres onto the volume (fire-and-forget, never blocks
       // startup). COPY is non-destructive and idempotent, safe to run every boot. The
@@ -566,6 +571,10 @@ async function start() {
           console.error('🎵 [AudioMigration] Stopped:', err?.message || err);
         }
       })();
+
+      // Reads stored YouTube details again before YouTube's 30-day limit (hourly, first run
+      // after 5 minutes)
+      startYouTubeRefresh();
       break;
     } catch (error) {
       retries--;

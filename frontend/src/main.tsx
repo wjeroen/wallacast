@@ -4,10 +4,17 @@ import '@fontsource/monomaniac-one/latin-400.css' // wordmark font, see .app-hea
 import '@fontsource/quicksand/700.css' // wordmark fallback
 import './index.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { startDesktopFit } from './desktop-fit'
+
+// Chrome's desktop mode on a phone: zoom the page back to the screen's width
+startDesktopFit()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
 

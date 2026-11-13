@@ -3,6 +3,7 @@ import { query } from '../database/db.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { shouldCachePodcastHost } from '../services/podcast-cache.js';
+import { summarizeAfterTranscript } from '../services/summarizer.js';
 
 const router = express.Router();
 
@@ -79,6 +80,7 @@ router.post('/content/:id', async (req, res) => {
           'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5 AND user_id = $6',
           [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
         );
+        if (content.type === 'podcast_episode') void summarizeAfterTranscript(Number(id), req.user!.userId);
       })
       .catch(async (error) => {
         console.error('Background transcription error:', error);

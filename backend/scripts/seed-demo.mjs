@@ -7,6 +7,7 @@
 // Usage (run from the backend directory):
 //   BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \
 //   DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo
+// Add INVITE_CODE=... only to create the demo account on an invite-only instance.
 //
 // Node 18+ is assumed (native fetch, no external libraries). Plain ESM.
 //
@@ -35,6 +36,7 @@ const cfg = {
   openaiKey: process.env.OPENAI_API_KEY,
   deepinfraKey: process.env.DEEPINFRA_API_KEY,
   anthropicKey: process.env.ANTHROPIC_API_KEY,
+  inviteCode: (process.env.INVITE_CODE || '').trim(),
 };
 
 const missing = [];
@@ -51,7 +53,8 @@ if (missing.length > 0) {
   console.error('  BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \\');
   console.error('  DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo');
   console.error('');
-  console.error('DEMO_USERNAME is optional and defaults to "demo".');
+  console.error('DEMO_USERNAME is optional and defaults to "demo". INVITE_CODE is only needed');
+  console.error('to create the demo account on an invite-only instance.');
   process.exit(1);
 }
 
@@ -141,13 +144,15 @@ async function apiFetch(method, path, { body, auth = true, allow = [] } = {}) {
 // ---------------------------------------------------------------------------
 
 async function register() {
-  const { status } = await apiFetch('POST', '/auth/register', {
-    auth: false,
-    allow: [409],
-    body: { username: cfg.username, password: cfg.password, displayName: 'Demo' },
-  });
+  const body = { username: cfg.username, password: cfg.password, displayName: 'Demo' };
+  if (cfg.inviteCode) body.inviteCode = cfg.inviteCode;
+  const { status } = await apiFetch('POST', '/auth/register', { auth: false, allow: [403, 409], body });
   if (status === 409) {
     console.log(`  Account "${cfg.username}" already exists (409). Will log in instead.`);
+  } else if (status === 403) {
+    // An invite-only instance checks the invite code before the username, so an existing
+    // demo account answers 403 instead of 409. The login below tells whether it exists.
+    console.log(`  Registration needs an invite code here (403). Assuming "${cfg.username}" exists, logging in.`);
   } else {
     console.log(`  Registered new account "${cfg.username}".`);
   }
@@ -163,7 +168,7 @@ async function login() {
   } catch (err) {
     throw new Error(
       `Login failed for "${cfg.username}". If this account already exists, DEMO_PASSWORD is ` +
-      `probably wrong for it.\n${err.message}`
+      `probably wrong for it. If it does not exist yet on an invite-only instance, set INVITE_CODE.\n${err.message}`
     );
   }
   accessToken = res.data && res.data.accessToken;
@@ -183,16 +188,16 @@ async function saveSettings(settings) {
 // Every key below is a real entry in VALID_SETTING_KEYS (backend/src/routes/users.ts).
 // Values match the exact shapes the Settings page persists (see frontend SettingsPage.tsx).
 const demoSettings = {
-  // Narration chat job: OpenAI GPT-5 Mini, reasoning effort left at the provider default (blank).
+  // Narration chat job: OpenAI GPT-6 Luna, reasoning effort left at the provider default (blank).
   narration_provider: 'openai',
-  narration_model: 'gpt-5-mini',
+  narration_model: 'gpt-6-luna',
   narration_reasoning_effort: '',
 
-  // Read-along alignment job: OpenAI GPT-5 Mini, reasoning effort high. "Same as narration"
+  // Read-along alignment job: OpenAI GPT-6 Luna, reasoning effort high. "Same as narration"
   // is turned OFF so these explicit values are the ones that apply.
   alignment_same_as_narration: 'false',
   alignment_provider: 'openai',
-  alignment_model: 'gpt-5-mini',
+  alignment_model: 'gpt-6-luna',
   alignment_reasoning_effort: 'high',
 
   // Summary job: Anthropic Claude Sonnet 5, effort at default (blank), same-as-narration OFF.
@@ -221,6 +226,7 @@ const demoSettings = {
   auto_generate_audio_for_articles: 'false',
   auto_transcribe_podcasts: 'false',
   auto_generate_summary: 'false',
+  auto_generate_summary_on_transcript: 'false',
 
   // API keys from the environment. Referenced by name only, values are never logged.
   openai_api_key: cfg.openaiKey,
@@ -248,6 +254,12 @@ async function removeKeys() {
 async function getLibrary() {
   const { data } = await apiFetch('GET', '/content');
   return Array.isArray(data) ? data : [];
+}
+
+// Re-runnability: subscribing again answers 409 with the existing subscription, which serves.
+async function subscribe(feedUrl) {
+  const { status, data } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: feedUrl }, allow: [409] });
+  return status === 409 ? data.podcast : data;
 }
 
 // Re-runnability: delete any existing library items matching `predicate` before adding a fresh copy.
@@ -401,7 +413,7 @@ async function findTargetEpisode() {
 async function addPodcastEpisode() {
   const t0 = Date.now();
   console.log('\n[add 1/3] Podcast: subscribing to the 80,000 Hours feed...');
-  const { data: podcast } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: FEED_URL } });
+  const podcast = await subscribe(FEED_URL);
   console.log(`  Subscribed to "${podcast.title}" (podcast id ${podcast.id}).`);
 
   console.log('  Searching the feed for the "235 ... Ajeya" episode...');
@@ -520,7 +532,7 @@ async function main() {
     // shows the read-only toast), so the seeder populates Recent Updates for them here.
     console.log('\n[feeds] Subscribing to the extra demo feeds...');
     for (const url of EXTRA_FEEDS) {
-      const { data: sub } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: url } });
+      const sub = await subscribe(url);
       console.log(`  Subscribed to "${sub.title}" (${sub.type}).`);
     }
     console.log('  Refreshing the feed cache (Recent Updates)...');

@@ -12,7 +12,7 @@
  * 5. LLM returns a start time for each element
  * 6. Store as content_alignment JSONB with version: 'llm-v1'
  *
- * The frontend renders these elements using the same CSS as content + comments tabs,
+ * The frontend renders these elements using the same CSS as the Content tab and its comments,
  * with per-element highlighting and autoscroll.
  */
 

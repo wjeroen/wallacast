@@ -20,6 +20,7 @@ const VALID_SETTING_KEYS = [
   'tts_voices',            // JSON array of { model, voice }, rotate randomly between these
   'anthropic_api_key',
   'gemini_api_key',        // NEW: For image alt-text generation
+  'youtube_api_key',       // YouTube Data API key: a video's description, date and length (services/youtube.ts)
   // Wallabag settings
   'wallabag_url',
   'wallabag_client_id',
@@ -43,10 +44,13 @@ const VALID_SETTING_KEYS = [
   // Transcription (Whisper): provider 'deepinfra' | 'openai'. OpenRouter was removed: its
   // endpoint returns no word timestamps, which read-along requires (verified 2026-07-02).
   'transcription_provider', 'transcription_model',
+  'video_transcript_model',  // Gemini model that writes YouTube video transcripts (blank = services/video-transcript.ts default)
   'kokoro_tts_provider',     // route Kokoro TTS voices via 'deepinfra' (default) or 'openrouter'
   'image_alt_text_provider', // image descriptions via 'gemini' (default), 'deepinfra', 'openai', or 'openrouter'
   'image_alt_text_model',    // model for image descriptions (free-text; default gemini-3-flash-preview)
   'auto_transcribe_podcasts',
+  'auto_transcribe_videos',    // Transcribe a YouTube video with Gemini when it is added (default: true, needs a Gemini key)
+  'auto_generate_summary_on_transcript', // Summarize a podcast episode or video once its transcript is made, when it has no summary yet (default: true)
   'auto_generate_audio_for_articles',
   'auto_generate_summary',      // Auto-generate a summary when an article/text is added
   'auto_generate_summary_audio', // Chain TTS audio of the summary after every summary generation (default: false)
@@ -58,7 +62,7 @@ const VALID_SETTING_KEYS = [
   // Blank/whitespace = use the built-in default. Spread so the list stays in sync with the registry.
   ...PROMPT_SETTING_KEYS,
   'library_show_summary',       // Show the article summary (not the description) on library cards
-  'library_summary_paragraphs', // How many summary paragraphs a card shows before "[N more]": '1' (default), '2', '3' or 'all'
+  'library_summary_paragraphs', // How many summary paragraphs a card shows before "[N more]": a whole number ('1' default) or 'all'
   'copy_include_summary',       // "Copy content": put the summary at the top as a fenced code block (default: false)
   'copy_include_comment_summary', // "Copy content": also the comment summary, as a second block (default: true; only matters when copy_include_summary is on)
   'copy_summary_code_label',    // Label after the opening ``` of those blocks, e.g. "ad-summary" for Obsidian Admonition (default: none)
@@ -85,6 +89,7 @@ const SECRET_KEYS = [
   'openrouter_api_key',    // NEW: Mask OpenRouter key
   'anthropic_api_key',
   'gemini_api_key',        // NEW: Mask Gemini key
+  'youtube_api_key',
   'wallabag_client_secret',
   'wallabag_password',
   'wallabag_access_token',

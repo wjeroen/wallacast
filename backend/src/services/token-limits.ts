@@ -85,25 +85,36 @@ export function validateLimits(raw: unknown, current: TokenLimits): { limits: To
 
 // ---- generation for items a token adds -----------------------------------------------
 
+/** The same six switches as the app's automatic settings. */
 export interface TokenGeneration {
-  /** True: the app's own auto-generation settings decide. False: the four flags below. */
+  /** True: the app's own auto-generation settings decide. False: the six flags below. */
   follow: boolean;
+  /** Audio for articles and texts */
   audio: boolean;
-  summary: boolean;
-  summary_audio: boolean;
+  /** A transcript for podcast episodes */
   transcribe: boolean;
+  /** A transcript for YouTube videos */
+  transcribe_video: boolean;
+  /** A summary of articles and texts */
+  summary: boolean;
+  /** A summary of a podcast episode or video once its transcript is made */
+  summary_on_transcript: boolean;
+  summary_audio: boolean;
 }
 
-const GENERATION_FLAGS = ['audio', 'summary', 'summary_audio', 'transcribe'] as const;
+const GENERATION_FLAGS = ['audio', 'transcribe', 'transcribe_video', 'summary', 'summary_on_transcript', 'summary_audio'] as const;
 
 export function parseGeneration(raw: unknown): TokenGeneration {
   const g = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
     follow: g.follow !== false,
     audio: g.audio === true,
-    summary: g.summary === true,
-    summary_audio: g.summary_audio === true,
     transcribe: g.transcribe === true,
+    // Tokens saved before videos had their own switch used the transcript switch for both
+    transcribe_video: typeof g.transcribe_video === 'boolean' ? g.transcribe_video : g.transcribe === true,
+    summary: g.summary === true,
+    summary_on_transcript: g.summary_on_transcript === true,
+    summary_audio: g.summary_audio === true,
   };
 }
 
@@ -120,23 +131,28 @@ export function validateGeneration(raw: unknown, current: TokenGeneration): { ge
 
 export type ResolvedGeneration = Omit<TokenGeneration, 'follow'>;
 
-/** What actually runs for an item this token adds. Following the app reads the same four
+/** What actually runs for an item this token adds. Following the app reads the same six
  *  settings, with the same defaults, that POST /content and the summarizer read. */
 export async function resolveGeneration(userId: number, gen: TokenGeneration): Promise<ResolvedGeneration> {
   if (!gen.follow) {
-    return { audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio, transcribe: gen.transcribe };
+    const { follow: _follow, ...own } = gen;
+    return own;
   }
-  const [audio, summary, summaryAudio, transcribe] = await Promise.all([
+  const [audio, summary, summaryAudio, transcribe, transcribeVideo, summaryOnTranscript] = await Promise.all([
     getUserSetting(userId, 'auto_generate_audio_for_articles'),
     getUserSetting(userId, 'auto_generate_summary'),
     getUserSetting(userId, 'auto_generate_summary_audio'),
     getUserSetting(userId, 'auto_transcribe_podcasts'),
+    getUserSetting(userId, 'auto_transcribe_videos'),
+    getUserSetting(userId, 'auto_generate_summary_on_transcript'),
   ]);
   return {
     audio: audio === 'true',
     summary: summary === 'true',
     summary_audio: summaryAudio === 'true',
     transcribe: transcribe === null || transcribe === 'true',
+    transcribe_video: transcribeVideo === null || transcribeVideo === 'true',
+    summary_on_transcript: summaryOnTranscript === null || summaryOnTranscript === 'true',
   };
 }
 
@@ -149,6 +165,11 @@ export function textMinutes(chars: number): number {
 /** The minutes a summary of a text counts: SUMMARY_SHARE of its narration, at least 1. */
 export function summaryMinutes(chars: number): number {
   return Math.max(1, Math.ceil((Math.max(0, chars) / CHARS_PER_MINUTE) * SUMMARY_SHARE));
+}
+
+/** The minutes the summary of a podcast episode or video counts: SUMMARY_SHARE of its length. */
+export function episodeSummaryMinutes(durationSeconds: unknown): number {
+  return Math.max(1, Math.ceil(episodeMinutes(durationSeconds) * SUMMARY_SHARE));
 }
 
 /** The plain-text length of a comment tree (the stored JSON, or the array). Comment bodies
