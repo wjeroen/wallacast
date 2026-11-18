@@ -21,6 +21,11 @@ import { contentAPI } from './api';
 //   video-state   YouTube's player reported a state while the screen was off, or within
 //                 15 seconds of it coming back on
 //   page-start    the app started, `discarded` = Chrome had thrown the page away before
+//   media-play, media-pause  a play or pause from the system's media controls (headphones, lock
+//                 screen, a watch, Player Link): what the player was doing (`was`), how long
+//                 since the last pause, and for a play whether it played, was blocked or refused
+//   play-blocked  a play that did not come through the media controls or the app, refused after
+//                 an in-app pause or within 800 ms of a pause (headphone wear sensors)
 // A chain starts at ended, skip, prev or pick, and closes when something plays or the chain
 // stops. `ms` is the time since the chain started, so a long gap shows a page the phone kept
 // frozen. `at` is the phone's own clock, since a frozen page sends its lines only when it

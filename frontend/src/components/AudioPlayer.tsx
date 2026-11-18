@@ -359,26 +359,39 @@ export function AudioPlayer({
     // iPhone and iPad: iOS fires a play when it moves audio to the speaker after Bluetooth
     // headphones disconnect, so there the browser's default play stays, which handlePlay
     // refuses after an in-app pause (userPausedRef). The 800 ms block against headphone wear
-    // sensors (pause then play within 0.1 s when taken off) applies here too. No pause handler:
-    // the browser's default pause reaches handlePause.
+    // sensors (pause then play within 0.1 s when taken off) applies here too. The pause handler
+    // does what the browser's default pause does. Both write a media-play or media-pause line
+    // to the [Playback] log (playback-log.ts), to see what headphones actually send.
     if (!isAppleMobile()) {
       try {
         ms.setActionHandler('play', () => {
           const audio = audioRef.current;
           if (!audio) return;
           const sincePause = Date.now() - lastPauseTimeRef.current;
+          const was = audio.paused ? 'paused' : 'playing';
+          const since = lastPauseTimeRef.current > 0 ? sincePause : null;
           if (lastPauseTimeRef.current > 0 && sincePause < 800) {
             console.log(`[AudioPlayer] Blocked rogue media-control play ${sincePause}ms after pause`);
+            logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: 'blocked' });
             return;
           }
           userPausedRef.current = false;
           autoPlayWaitingRef.current = false;
           autoPlayStartingRef.current = false;
           appPlayRef.current = true;
-          audio.play().catch((err) => {
-            console.error('[AudioPlayer] media-control play() rejected:', err);
-            appPlayRef.current = false;
-          });
+          audio.play()
+            .then(() => logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: 'played' }))
+            .catch((err) => {
+              console.error('[AudioPlayer] media-control play() rejected:', err);
+              appPlayRef.current = false;
+              logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: `refused ${(err as Error)?.name || ''}` });
+            });
+        });
+        ms.setActionHandler('pause', () => {
+          const audio = audioRef.current;
+          if (!audio) return;
+          logPlayback('media-pause', { id: contentRef.current?.id, was: audio.paused ? 'paused' : 'playing' });
+          audio.pause();
         });
       } catch { /* unsupported */ }
     }
@@ -398,6 +411,7 @@ export function AudioPlayer({
 
     return () => {
       try { ms.setActionHandler('play', null); } catch { /* unsupported */ }
+      try { ms.setActionHandler('pause', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('previoustrack', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('nexttrack', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('seekbackward', null); } catch { /* unsupported */ }
@@ -845,6 +859,7 @@ export function AudioPlayer({
       }
       // Explicit user pause via app UI, block OS-initiated resumes
       if (userPausedRef.current) {
+        logPlayback('play-blocked', { id: contentRef.current?.id, reason: 'in-app pause' });
         audio.pause();
         return;
       }
@@ -852,6 +867,7 @@ export function AudioPlayer({
       const timeSincePause = Date.now() - lastPauseTimeRef.current;
       if (lastPauseTimeRef.current > 0 && timeSincePause < 800) {
         console.log(`[AudioPlayer] Blocked rogue play ${timeSincePause}ms after pause`);
+        logPlayback('play-blocked', { id: contentRef.current?.id, reason: 'within 800 ms of a pause', since_pause_ms: timeSincePause });
         audio.pause();
         return;
       }
