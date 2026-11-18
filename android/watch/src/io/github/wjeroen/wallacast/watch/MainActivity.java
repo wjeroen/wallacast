@@ -1,8 +1,11 @@
 package io.github.wjeroen.wallacast.watch;
 
 import android.app.Activity;
+import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.pm.PackageInstaller;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,7 +33,10 @@ import java.util.concurrent.Executors;
 
 /**
  * The Wallacast remote for a watch. It shows what the Wallacast app on the phone plays and
- * sends play, pause, next, previous, 15 seconds back and forward, shuffle, speed and archive.
+ * sends play, pause, next, previous, 15 seconds back and forward, shuffle, speed, archive and
+ * star, with the Lucide icons the app uses (res/drawable, made by android/tools/lucide2vector.py).
+ * An Update button shows when the GitHub release android-latest holds a newer version
+ * (android/release.sh puts it there), and installs it after one confirmation on the watch.
  *
  * While Chrome lets the page sleep (paused for minutes with the screen off), the server passes
  * play, pause and the skips to Player Link on the phone instead (mode "link"), and the other
@@ -52,7 +58,13 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
 
     private TextView title, subtitle, status;
-    private RoundButton play, previous, next, back, forward, shuffle, speed, archive;
+    private RoundButton play, previous, next, back, forward, shuffle, speed, archive, star, update;
+
+    private static final String RELEASE = "https://github.com/wjeroen/wallacast/releases/download/android-latest/";
+    private static final String INSTALL_STATUS = "io.github.wjeroen.wallacast.watch.INSTALL_STATUS";
+    private long newerVersion;
+    private long lastUpdateCheck;
+    private boolean installing;
 
     private JSONObject state;
     private boolean online;
@@ -81,6 +93,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (INSTALL_STATUS.equals(intent.getAction())) {
+            onInstallStatus(intent);
+            return;
+        }
         applySetup(intent);
         render();
     }
@@ -91,6 +107,95 @@ public class MainActivity extends Activity {
         polling = true;
         main.removeCallbacks(pollTask);
         poll();
+        if (System.currentTimeMillis() - lastUpdateCheck > 60 * 60 * 1000) checkForUpdate();
+    }
+
+    // ---- updates from the GitHub release ----------------------------------------------------
+
+    private long installedVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
+        } catch (Exception e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** Reads versions.json from the release. Never sends the Wallacast token there. */
+    private void checkForUpdate() {
+        lastUpdateCheck = System.currentTimeMillis();
+        net.execute(() -> {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(RELEASE + "versions.json").openConnection();
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(15000);
+                if (c.getResponseCode() != 200) return;
+                long latest = new JSONObject(read(c.getInputStream())).optLong("watch", 0);
+                c.disconnect();
+                main.post(() -> {
+                    newerVersion = latest > installedVersion() ? latest : 0;
+                    render();
+                });
+            } catch (Exception ignored) {
+                // no connection: the next start checks again
+            }
+        });
+    }
+
+    /** Downloads the new APK into an install session and asks the watch to install it. */
+    private void installUpdate() {
+        if (installing) return;
+        installing = true;
+        flash("Downloading the update…");
+        render();
+        net.execute(() -> {
+            String problem = null;
+            try {
+                PackageInstaller installer = getPackageManager().getPackageInstaller();
+                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+                int id = installer.createSession(params);
+                PackageInstaller.Session session = installer.openSession(id);
+                HttpURLConnection c = (HttpURLConnection) new URL(RELEASE + "wallacast-watch.apk").openConnection();
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(60000);
+                if (c.getResponseCode() != 200) throw new java.io.IOException("download failed (" + c.getResponseCode() + ")");
+                try (InputStream in = c.getInputStream(); OutputStream out = session.openWrite("update.apk", 0, -1)) {
+                    byte[] buf = new byte[65536];
+                    for (int n = in.read(buf); n > 0; n = in.read(buf)) out.write(buf, 0, n);
+                    session.fsync(out);
+                }
+                c.disconnect();
+                Intent back = new Intent(this, MainActivity.class).setAction(INSTALL_STATUS);
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+                session.commit(PendingIntent.getActivity(this, 0, back, flags).getIntentSender());
+                session.close();
+            } catch (Exception e) {
+                problem = e.getMessage() == null ? "Update failed" : e.getMessage();
+            }
+            final String shown = problem;
+            main.post(() -> {
+                if (shown != null) {
+                    installing = false;
+                    flash(shown);
+                    render();
+                }
+            });
+        });
+    }
+
+    @SuppressWarnings("deprecation")
+    private void onInstallStatus(Intent intent) {
+        int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+        }
+        installing = false;
+        if (status != PackageInstaller.STATUS_SUCCESS) {
+            String why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+            flash("Update not installed" + (why != null ? ": " + why : ""));
+        }
+        render();
     }
 
     @Override
@@ -295,35 +400,45 @@ public class MainActivity extends Activity {
 
         LinearLayout transport = row();
         previous = button(42, 42, v -> send("previous", null));
-        previous.setGlyph(RoundButton.PREVIOUS);
+        previous.setIcon(R.drawable.ic_skip_back, 0.48f, null);
         play = button(58, 58, v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null));
         play.setColors(0xFF3B82F6, 0xFFFFFFFF);
         next = button(42, 42, v -> send("next", null));
-        next.setGlyph(RoundButton.NEXT);
+        next.setIcon(R.drawable.ic_skip_forward, 0.48f, null);
         transport.addView(previous);
         transport.addView(play);
         transport.addView(next);
         col.addView(transport);
 
+        // 15 seconds back and forward: the app's circular arrows with the 15 inside
         LinearLayout skips = row();
-        back = button(52, 32, v -> send("back", null));
-        back.setText("-15");
-        forward = button(52, 32, v -> send("forward", null));
-        forward.setText("+15");
+        back = button(52, 52, v -> send("back", null));
+        back.setPlain(true);
+        back.setIcon(R.drawable.ic_rotate_ccw, 0.85f, "15");
+        forward = button(52, 52, v -> send("forward", null));
+        forward.setPlain(true);
+        forward.setIcon(R.drawable.ic_rotate_cw, 0.85f, "15");
         skips.addView(back);
         skips.addView(forward);
         col.addView(skips);
 
         LinearLayout modes = row();
-        shuffle = button(72, 32, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
-        speed = button(52, 32, v -> send("speed", nextSpeed()));
+        shuffle = button(40, 40, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
+        shuffle.setIcon(R.drawable.ic_shuffle, 0.5f, null);
+        speed = button(52, 40, v -> send("speed", nextSpeed()));
+        star = button(40, 40, v -> send(state != null && state.optBoolean("is_starred") ? "unstar" : "star", null));
         modes.addView(shuffle);
         modes.addView(speed);
+        modes.addView(star);
         col.addView(modes);
 
         LinearLayout last = row();
-        archive = button(100, 32, v -> onArchive());
+        archive = button(40, 40, v -> onArchive());
+        update = button(84, 34, v -> installUpdate());
+        update.setText("Update");
+        update.setColors(0xFF3B82F6, 0xFFFFFFFF);
         last.addView(archive);
+        last.addView(update);
         col.addView(last);
 
         ScrollView scroll = new ScrollView(this);
@@ -348,6 +463,8 @@ public class MainActivity extends Activity {
             send("archive", null);
         } else {
             archiveArmedUntil = now + ARCHIVE_CONFIRM_MS;
+            message = "Tap again to archive";
+            messageUntil = archiveArmedUntil;
             main.postDelayed(this::render, ARCHIVE_CONFIRM_MS + 50);
         }
         render();
@@ -383,7 +500,7 @@ public class MainActivity extends Activity {
         if (title == null) return;
         boolean playing = state != null && state.optBoolean("playing");
         boolean hasItem = state != null && !state.isNull("item_id");
-        play.setGlyph(playing ? RoundButton.PAUSE : RoundButton.PLAY);
+        play.setIcon(playing ? R.drawable.ic_pause : R.drawable.ic_play, 0.46f, null);
 
         if (!isSetUp()) {
             title.setText("Not set up");
@@ -420,14 +537,19 @@ public class MainActivity extends Activity {
         previous.setEnabled(full && state.optBoolean("has_previous"));
         next.setEnabled(full && state.optBoolean("has_next"));
         archive.setEnabled(full);
+        star.setEnabled(full);
 
         boolean shuffleOn = state != null && state.optBoolean("shuffle");
-        shuffle.setText("Shuffle");
         shuffle.setColors(shuffleOn ? 0xFF3B82F6 : 0xFF1E293B, 0xFFF1F5F9);
         speed.setText(speedText(state != null ? state.optDouble("speed", 1) : 1));
+        boolean starred = state != null && state.optBoolean("is_starred");
+        star.setIcon(starred ? R.drawable.ic_star_filled : R.drawable.ic_star, 0.5f, null);
+        // Archive asks for a second tap: red while it waits for it
         boolean armed = System.currentTimeMillis() < archiveArmedUntil;
         boolean archived = state != null && state.optBoolean("is_archived");
-        archive.setText(archived ? "Unarchive" : armed ? "Tap again" : "Archive");
+        archive.setIcon(archived ? R.drawable.ic_archive_restore : R.drawable.ic_archive, 0.5f, null);
         archive.setColors(armed ? 0xFFB91C1C : 0xFF1E293B, 0xFFF1F5F9);
+        update.setVisibility(newerVersion > 0 ? View.VISIBLE : View.GONE);
+        update.setEnabled(!installing);
     }
 }

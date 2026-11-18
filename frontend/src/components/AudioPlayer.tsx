@@ -1528,6 +1528,19 @@ export function AudioPlayer({
           } catch { /* the archive itself went through */ }
           break;
         }
+        case 'star':
+        case 'unstar': {
+          const star = command.action === 'star';
+          if (!!content.is_starred === star) break;
+          const store = useContentStore.getState();
+          if (store.allItems.some(i => i.id === content.id)) await store.toggleStarred(content.id);
+          else await contentAPI.update(content.id, { is_starred: star });
+          try {
+            const fresh = await contentAPI.getById(content.id);
+            onContentUpdated?.(fresh.data);
+          } catch { /* the star itself went through */ }
+          break;
+        }
       }
     },
     state: () => content ? {
@@ -1542,6 +1555,7 @@ export function AudioPlayer({
       speeds: speedOptions,
       shuffle: shuffleOn,
       is_archived: !!content.is_archived,
+      is_starred: !!content.is_starred,
       has_next: hasNextTrack,
       has_previous: hasPrevTrack,
     } : null,
@@ -1552,7 +1566,7 @@ export function AudioPlayer({
   }, []);
   useEffect(() => {
     remoteStateChanged();
-  }, [content?.id, content?.is_archived, isPlaying, playbackSpeed, shuffleOn, hasNextTrack, hasPrevTrack, effectiveVariant]);
+  }, [content?.id, content?.is_archived, content?.is_starred, isPlaying, playbackSpeed, shuffleOn, hasNextTrack, hasPrevTrack, effectiveVariant]);
   // The position, while playing
   useEffect(() => {
     if (!isPlaying) return;

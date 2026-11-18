@@ -23,7 +23,7 @@ import { query } from '../database/db.js';
  * Other commands then answer 409 with code 'asleep' until the page runs again.
  */
 
-export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive', 'unarchive'] as const;
+export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive', 'unarchive', 'star', 'unstar'] as const;
 export type RemoteAction = typeof REMOTE_ACTIONS[number];
 /** What Player Link can do on Chrome's player while the page sleeps. */
 export const FALLBACK_ACTIONS: readonly RemoteAction[] = ['play', 'pause', 'toggle', 'forward', 'back'];
@@ -52,6 +52,7 @@ export interface PlayerState {
   speeds: number[];
   shuffle: boolean;
   is_archived: boolean;
+  is_starred: boolean;
   has_next: boolean;
   has_previous: boolean;
   /** The id of the last command this device carried out */
@@ -166,6 +167,7 @@ export function cleanState(raw: unknown): PlayerState {
     speeds,
     shuffle: s.shuffle === true,
     is_archived: s.is_archived === true,
+    is_starred: s.is_starred === true,
     has_next: s.has_next === true,
     has_previous: s.has_previous === true,
     last_command: Number.isInteger(s.last_command) ? (s.last_command as number) : null,

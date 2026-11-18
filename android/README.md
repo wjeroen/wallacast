@@ -4,7 +4,7 @@ Two small optional apps. Wallacast itself stays a web app: both apps work next t
 
 | App | Where it runs | What it does |
 |---|---|---|
-| **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed, and archive or unarchive |
+| **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed, archive or unarchive, and star, in the app's own icons |
 | **Player Link** (`player-link/`) | Your Android phone | Pauses and plays the players you tick together (for example Wallacast and Spotify), whichever one got the press. Also passes the Wallacast watch app's play, pause and skips on while Chrome lets Wallacast sleep |
 
 Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux. Player Link's icon is drawn by `tools/icons.py`.
@@ -56,7 +56,8 @@ If pairing fails with "protocol fault (couldn't read status message)": the watch
   - With Player Link's watch bridge set up (below), play, pause and the skips still work: Player Link presses them on Chrome's player, which wakes the page. The watch shows "Asleep on the phone" and greys out the other buttons until the page runs again.
   - Without it, the watch says "Wallacast sleeps or is closed". Press play in the watch's own media controls, which reach Chrome's player directly.
   - A command nobody takes is dropped after 30 seconds.
-- Archive works like the player's archive button: the item goes on playing. It asks for a second tap within 3 seconds. Once archived, the button says Unarchive (one tap). The audio stays 7 days.
+- Archive works like the player's archive button: the item goes on playing. It asks for a second tap within 3 seconds (the button turns red). Once archived, the button shows the unarchive icon (one tap). The audio stays 7 days. The star button needs **Star and unstar** on the token.
+- **Updates:** an Update button shows when the GitHub release `android-latest` holds a newer version (`android/release.sh` builds both apps and puts them there). Tap it and confirm on the watch. If the watch asks first, allow the Wallacast app to install apps. Only the first install needs adb.
 - The phone's own media controls on the watch keep working as before: play, pause and the two skip buttons (15 seconds back and forward).
 
 ## Player Link
@@ -71,8 +72,9 @@ Android lets several apps play at once, but a headphone press, the lock screen, 
 
 **How it behaves**
 
-- Players join the link when they play at the same moment, or when one starts while a linked one plays. So a player never starts just because another one does, unless they played together. The link ends when fewer than two of them are left, when a copied command does not take effect within 4 seconds, when all stayed paused for 6 hours, or when you turn the switch off.
-- A pause of a Chrome player is copied after 2.5 seconds, since a web app pauses for a moment while it loads its next item. Other pauses after 1 second.
+- Players join the link when they play at the same moment, or when one starts while a linked one plays. So a player never starts just because another one does, unless they played together. From then on, pausing or playing one does the same to the others, until all stayed paused for 6 hours or you turn the switch off. A player that closes stays in the link and follows again when it is back.
+- A pause of a Chrome player is copied after 1.5 seconds, since a web app pauses for a moment while it loads its next item. Other changes after half a second. A copied command that does not take effect within 2 seconds is sent once more: Chrome drops the first command after some pauses, as it drops the first headphone press.
+- The screen lists the last 8 things Player Link did. `adb shell dumpsys activity service io.github.wjeroen.playerlink/.LinkService` prints the same and what it sees right now.
 - A Chrome player's site comes from Chrome's media notification. When it cannot be read, the player shows as "Chrome (site unknown)", and ticking it links every Chrome player.
 
 ### The Wallacast watch bridge

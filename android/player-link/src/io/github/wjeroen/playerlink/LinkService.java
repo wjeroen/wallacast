@@ -53,8 +53,9 @@ import java.util.regex.Pattern;
  * The linked players join once two of them play at the same moment, and a player that starts
  * while one of them plays joins too. From then on a pause or play of one is copied to the others
  * that joined. So a player never starts just because another one does, unless they played
- * together. The link ends when fewer than two of them are left, when a copied command does not
- * take effect, when all stayed paused for UNLINK_AFTER_MS, or when the switch is off.
+ * together. The link ends only when all stayed paused for UNLINK_AFTER_MS or the switch is off:
+ * a player that closes stays linked and follows again when it is back, and a copied command
+ * that does not take effect is sent once more (Chrome drops the first one after some pauses).
  *
  * The Wallacast watch bridge, for the Wallacast watch app: Chrome freezes a Wallacast page that
  * stayed paused for minutes with the screen off, and then the watch app's commands cannot reach
@@ -74,10 +75,11 @@ public class LinkService extends NotificationListenerService {
 
     /** A change must last this long before it is copied: a web player pauses for a moment
      *  while it loads its next item, an app while it skips. */
-    private static final long SETTLE_CHROME_PAUSE_MS = 2500;
-    private static final long SETTLE_MS = 1000;
-    /** A copied command that has not taken effect by then ends the link. */
-    private static final long COMMAND_TIMEOUT_MS = 4000;
+    private static final long SETTLE_CHROME_PAUSE_MS = 1500;
+    private static final long SETTLE_MS = 500;
+    /** A copied command that has not taken effect by then is sent once more: Chrome sometimes
+     *  drops the first command after a pause, as it drops the first headphone press. */
+    private static final long COMMAND_TIMEOUT_MS = 2000;
     private static final long UNLINK_AFTER_MS = 6L * 60 * 60 * 1000;
     private static final Pattern SITE = Pattern.compile("\\b((?:[a-z0-9-]+\\.)+[a-z]{2,})\\b");
 
@@ -114,6 +116,9 @@ public class LinkService extends NotificationListenerService {
     private long allPausedSince;
     private long expectUntil;
     private String lastEvent = "";
+    /** The last events with their time, newest first, for the screen and the dump */
+    private final java.util.LinkedList<String> history = new java.util.LinkedList<>();
+    private boolean retried;
 
     private final Runnable evaluateTask = this::evaluate;
     private final MediaSessionManager.OnActiveSessionsChangedListener sessionsChanged = this::onSessions;
@@ -263,8 +268,8 @@ public class LinkService extends NotificationListenerService {
         }
         players.clear();
         players.putAll(now);
-        joined.retainAll(players.keySet());
-        if (joined.size() < 2) unlink("a player went away");
+        // A player that goes away (Chrome may drop its player while paused) stays in the link:
+        // when it comes back, it follows again.
         updateSeen();
         schedule();
     }
@@ -327,8 +332,14 @@ public class LinkService extends NotificationListenerService {
         main.postDelayed(evaluateTask, chromePaused ? SETTLE_CHROME_PAUSE_MS : SETTLE_MS);
     }
 
+    private void note(String event) {
+        lastEvent = event;
+        history.addFirst(new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new java.util.Date()) + " " + event);
+        while (history.size() > 8) history.removeLast();
+    }
+
     private void unlink(String why) {
-        if (!joined.isEmpty() && joined.size() >= 2) lastEvent = "Unlinked: " + why;
+        if (!joined.isEmpty() && joined.size() >= 2) note("Unlinked: " + why);
         joined.clear();
         allPausedSince = 0;
         for (Player p : players.values()) p.expect = null;
@@ -341,29 +352,50 @@ public class LinkService extends NotificationListenerService {
         List<Player> group = new ArrayList<>();
         for (Player p : players.values()) if (linked.contains(p.key)) group.add(p);
 
-        if (prefs == null || !prefs.getBoolean(PREF_ENABLED, false) || group.size() < 2) {
+        if (prefs == null || !prefs.getBoolean(PREF_ENABLED, false)) {
             for (Player p : players.values()) p.settled = playing(p.controller);
             unlink("switched off");
             return;
         }
+        if (group.size() < 2) {
+            // a ticked player is not open right now: nothing to copy, the link stays
+            for (Player p : players.values()) p.settled = playing(p.controller);
+            return;
+        }
 
-        // Commands this service sent: wait for them, and end the link when one did not work
-        boolean waiting = false, failed = false;
+        // Commands this service sent: wait for them, send a dropped one once more, then give up
+        // on that one command (the link stays)
+        boolean waiting = false;
+        List<Player> failed = new ArrayList<>();
         for (Player p : group) {
             if (p.expect == null) continue;
             if (p.expect == playing(p.controller)) p.expect = null;
             else if (now < expectUntil) waiting = true;
-            else failed = true;
+            else failed.add(p);
         }
         if (waiting) {
             evaluatePending = true;
-            main.postDelayed(evaluateTask, 500);
+            main.postDelayed(evaluateTask, 300);
             return;
         }
-        if (failed) {
-            for (Player p : players.values()) p.settled = playing(p.controller);
-            unlink("a player did not follow");
-            return;
+        if (!failed.isEmpty()) {
+            if (!retried) {
+                retried = true;
+                for (Player p : failed) {
+                    if (p.expect) p.controller.getTransportControls().play();
+                    else p.controller.getTransportControls().pause();
+                }
+                note("Sent again to " + failed.get(0).label);
+                expectUntil = now + COMMAND_TIMEOUT_MS;
+                evaluatePending = true;
+                main.postDelayed(evaluateTask, 300);
+                return;
+            }
+            for (Player p : failed) {
+                note(p.label + " did not follow");
+                p.expect = null;
+                p.settled = playing(p.controller);
+            }
         }
 
         List<Player> changed = new ArrayList<>();
@@ -379,7 +411,7 @@ public class LinkService extends NotificationListenerService {
         if (nowPlaying.size() >= 2 || (joined.size() >= 2 && !nowPlaying.isEmpty() && anyJoinedPlaying(nowPlaying))) {
             boolean wasLinked = joined.size() >= 2;
             for (Player p : nowPlaying) joined.add(p.key);
-            if (!wasLinked && joined.size() >= 2) lastEvent = "Linked";
+            if (!wasLinked && joined.size() >= 2) note("Linked");
         }
         if (joined.size() < 2) return;
 
@@ -411,10 +443,13 @@ public class LinkService extends NotificationListenerService {
         }
         if (names.length() == 0) return;
         expectUntil = now + COMMAND_TIMEOUT_MS;
+        retried = false;
         allPausedSince = wanted ? 0 : now;
-        lastEvent = (wanted ? "Played " : "Paused ") + names;
+        String first = null;
+        for (Player p : changed) if (joined.contains(p.key)) { first = p.label; break; }
+        note((wanted ? "Played " : "Paused ") + names + (first != null ? " (after " + first + ")" : ""));
         evaluatePending = true;
-        main.postDelayed(evaluateTask, 600);
+        main.postDelayed(evaluateTask, 300);
     }
 
     private boolean anyJoinedPlaying(List<Player> nowPlaying) {
@@ -545,7 +580,7 @@ public class LinkService extends NotificationListenerService {
             case "back": t.rewind(); break;
             default: return;
         }
-        lastEvent = "Watch: " + action;
+        note("Watch: " + action);
     }
 
     // ---- diagnostics: adb shell dumpsys activity service io.github.wjeroen.playerlink/.LinkService ----
@@ -567,6 +602,7 @@ public class LinkService extends NotificationListenerService {
                 + " token=" + (token.isEmpty() ? "none" : token.substring(0, Math.min(4, token.length())) + "... (" + token.length() + " chars)")
                 + " lastError=" + bridgeError);
             pw.println("last=" + lastEvent);
+            for (String h : new ArrayList<>(history)) pw.println("  " + h);
         } catch (Exception e) {
             pw.println("dump failed: " + e);
         }
@@ -603,7 +639,7 @@ public class LinkService extends NotificationListenerService {
             b.append("Not linked yet: two ticked players must play at the same moment");
         }
         if (!bridgeStatus.isEmpty()) b.append('\n').append(bridgeStatus);
-        if (!lastEvent.isEmpty()) b.append('\n').append("Last: ").append(lastEvent);
+        for (String h : history) b.append('\n').append(h);
         return b.toString();
     }
 }

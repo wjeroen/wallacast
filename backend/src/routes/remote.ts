@@ -54,6 +54,9 @@ router.post('/command', (req, res) => {
   if ((parsed.action === 'archive' || parsed.action === 'unarchive') && req.apiToken && !req.apiToken.permissions.includes('archive')) {
     return res.status(403).json({ error: 'This token needs the archive permission to archive' });
   }
+  if ((parsed.action === 'star' || parsed.action === 'unstar') && req.apiToken && !req.apiToken.permissions.includes('star')) {
+    return res.status(403).json({ error: 'This token needs the star permission to star' });
+  }
   const sent = sendCommand(req.user!.userId, parsed);
   if (sent === 'asleep') {
     return res.status(409).json({ code: 'asleep', error: 'Wallacast is asleep on the phone. Press play first.' });

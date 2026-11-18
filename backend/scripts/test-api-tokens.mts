@@ -222,6 +222,7 @@ assert.deepEqual((await w2).map((c) => c.action), ['pause'], 'the newest player 
 cancelPoll!();
 assert.deepEqual(await w1, [], 'a cancelled poll ends empty');
 assert.deepEqual(remote.parseCommand({ action: 'unarchive' }), { action: 'unarchive' });
+assert.deepEqual(remote.parseCommand({ action: 'star' }), { action: 'star' });
 
 // The page sleeps: only Player Link listens, and takes play, pause and the skips
 const SLEEPY = 999_002;

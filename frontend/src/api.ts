@@ -390,7 +390,7 @@ export interface TokenAlert {
 // Remote control of this app's player by the watch app (backend services/remote-control.ts)
 export interface RemoteCommand {
   id: number;
-  action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'forward' | 'back' | 'shuffle' | 'speed' | 'archive' | 'unarchive';
+  action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'forward' | 'back' | 'shuffle' | 'speed' | 'archive' | 'unarchive' | 'star' | 'unstar';
   value?: boolean | number;
 }
 
