@@ -107,7 +107,9 @@ public class MainActivity extends Activity {
         polling = true;
         main.removeCallbacks(pollTask);
         poll();
-        if (System.currentTimeMillis() - lastUpdateCheck > 60 * 60 * 1000) checkForUpdate();
+        // every time the app comes to the front (at most once a minute): reopening it from the
+        // watch face reuses the same screen, so a check only at start would miss new versions
+        if (System.currentTimeMillis() - lastUpdateCheck > 60 * 1000) checkForUpdate();
     }
 
     // ---- updates from the GitHub release ----------------------------------------------------
