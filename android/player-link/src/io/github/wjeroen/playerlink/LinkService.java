@@ -309,6 +309,52 @@ public class LinkService extends NotificationListenerService {
         schedule();
     }
 
+    // ---- the switch -----------------------------------------------------------------------------
+
+    /** The switch (in the app or the quick settings tile) was turned on or off. Turned on while a
+     *  ticked player plays, the other ticked players start at once and are tied to it. */
+    void onSwitch(boolean on) {
+        if (!on) {
+            unlink("switched off");
+            note("Switched off");
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        Set<String> linked = linkedKeys();
+        List<Player> group = new ArrayList<>();
+        boolean anyPlaying = false;
+        for (Player p : players.values()) {
+            if (!linked.contains(p.key)) continue;
+            group.add(p);
+            if (playing(p.controller)) anyPlaying = true;
+        }
+        if (!anyPlaying || group.size() < 2) {
+            note("Switched on");
+            schedule();
+            return;
+        }
+        StringBuilder names = new StringBuilder();
+        for (Player p : group) {
+            joined.add(p.key);
+            if (playing(p.controller)) {
+                p.settled = true;
+                continue;
+            }
+            p.controller.getTransportControls().play();
+            p.expect = true;
+            p.settled = true;
+            if (names.length() > 0) names.append(", ");
+            names.append(p.label);
+        }
+        expectUntil = now + COMMAND_TIMEOUT_MS;
+        retried = false;
+        allPausedSince = 0;
+        note("Switched on" + (names.length() > 0 ? ", played " + names : ""));
+        evaluatePending = true;
+        main.removeCallbacks(evaluateTask);
+        main.postDelayed(evaluateTask, 300);
+    }
+
     // ---- copying pause and play ---------------------------------------------------------------
 
     /** Which players play, as of the last schedule(): a player reports often (position, track,

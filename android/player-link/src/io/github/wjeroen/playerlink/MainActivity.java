@@ -65,7 +65,12 @@ public class MainActivity extends Activity {
         enabled.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         enabled.setPadding(0, dp(16), 0, dp(8));
         enabled.setChecked(prefs.getBoolean(LinkService.PREF_ENABLED, false));
-        enabled.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean(LinkService.PREF_ENABLED, on).apply());
+        enabled.setOnCheckedChangeListener((b, on) -> {
+            if (on == prefs.getBoolean(LinkService.PREF_ENABLED, false)) return;
+            prefs.edit().putBoolean(LinkService.PREF_ENABLED, on).apply();
+            LinkService s = LinkService.instance;
+            if (s != null) s.onSwitch(on);
+        });
         col.addView(enabled);
 
         access = text(14);
