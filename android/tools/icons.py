@@ -1,171 +1,107 @@
-"""Draws Player Link's icon variants (needs Pillow): white chain links on amber.
+"""Draws Player Link's icon (needs Pillow): two play triangle outlines, interlocked like the
+links of a chain, white on amber.
 
-  python3 icons.py sheet.png preview      a preview sheet with the variants, big and at launcher size,
-                                          and a centering check of each in the terminal
-  python3 icons.py RES/mipmap-xxxhdpi V   variant V as the app's adaptive icon foreground (432 px)
-                                          and legacy icon, prints the background color for
-                                          res/values/colors.xml
+  python3 icons.py sheet.png preview      a preview, big and at launcher size, plus the checks
+  python3 icons.py RES/mipmap-xxxhdpi     the adaptive icon foreground (432 px) and the legacy
+                                          icon, prints the background color for res/values/colors.xml
 
-Coordinates are on the 432 px foreground canvas of an adaptive icon. A launcher shows at least its
-middle 288 px (72 of 108 dp), and a round mask the middle circle of 264 px, so every glyph stays
-inside a circle of radius 128 around the center.
+Coordinates are on the 432 px foreground canvas of an adaptive icon. A launcher shows its middle
+288 px (72 of 108 dp) and a round mask the middle circle of 264 px. The glyph stays inside a
+circle of radius MARGIN_RADIUS, which leaves room around it inside that mask.
+
+Visual centering: a shape pointing right looks shifted right when its box is centered, and
+shifted left when its weight (center of mass) is centered. The glyph is placed so the point
+halfway between the two sits on the canvas center.
 
 Everything is drawn as grey masks at 4x size and only then made white, so no colored fringes
-appear at the edges. Where two links cross, the one on top cuts a gap into the one below.
+appear. Where the outlines cross, the one on top cuts a gap into the one below.
 """
 import math
 import sys
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 SS = 4
-K = SS                      # 432 canvas units to supersampled pixels
 N = 432 * SS
 BG = (217, 119, 6)
 CENTER = 216
-LIMIT = 128
+MARGIN_RADIUS = 120
+
+SIDE = 136      # side of each triangle
+STROKE = 19
+GAP = 7         # the gap around the outline that lies on top
+DX = 60         # how far the second triangle sits right of the first
 
 
 def blank():
     return Image.new('L', (N, N), 0)
 
 
-def ring(cx, cy, r, width):
-    """A circle outline: center line radius r, stroke width."""
+def tri_outline(left, cy, side, width):
+    """A play triangle outline with round corners and joins: flat side at x=left."""
     m = blank()
     d = ImageDraw.Draw(m)
-    ro, ri = (r + width / 2) * K, (r - width / 2) * K
-    d.ellipse([cx * K - ro, cy * K - ro, cx * K + ro, cy * K + ro], fill=255)
-    d.ellipse([cx * K - ri, cy * K - ri, cx * K + ri, cy * K + ri], fill=0)
+    h, w = side / 2, side * 0.866
+    pts = [(left * SS, (cy - h) * SS), ((left + w) * SS, cy * SS), (left * SS, (cy + h) * SS)]
+    d.line(pts + pts[:2], fill=255, width=int(width * SS), joint='curve')
+    r = width * SS / 2
+    for x, y in pts:
+        d.ellipse([x - r, y - r, x + r, y + r], fill=255)
     return m
 
 
 def disc(cx, cy, r):
     m = blank()
-    ImageDraw.Draw(m).ellipse([(cx - r) * K, (cy - r) * K, (cx + r) * K, (cy + r) * K], fill=255)
+    ImageDraw.Draw(m).ellipse([(cx - r) * SS, (cy - r) * SS, (cx + r) * SS, (cy + r) * SS], fill=255)
     return m
 
 
-def rounded_polygon(pts, radius, steps=12):
-    """The outline of a convex polygon (clockwise or not) with each corner rounded by radius."""
-    out = []
-    n = len(pts)
-    for i in range(n):
-        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
-        v1 = (p0[0] - p1[0], p0[1] - p1[1])
-        v2 = (p2[0] - p1[0], p2[1] - p1[1])
-        l1, l2 = math.hypot(*v1), math.hypot(*v2)
-        v1, v2 = (v1[0] / l1, v1[1] / l1), (v2[0] / l2, v2[1] / l2)
-        half = math.acos(max(-1.0, min(1.0, v1[0] * v2[0] + v1[1] * v2[1]))) / 2
-        dist = radius / math.tan(half)               # from the corner to where the arc starts
-        bis = (v1[0] + v2[0], v1[1] + v2[1])
-        bl = math.hypot(*bis)
-        c = (p1[0] + bis[0] / bl * radius / math.sin(half), p1[1] + bis[1] / bl * radius / math.sin(half))
-        a1 = (p1[0] + v1[0] * dist, p1[1] + v1[1] * dist)
-        a2 = (p1[0] + v2[0] * dist, p1[1] + v2[1] * dist)
-        t1 = math.atan2(a1[1] - c[1], a1[0] - c[0])
-        t2 = math.atan2(a2[1] - c[1], a2[0] - c[0])
-        dt = (t2 - t1 + math.pi) % (2 * math.pi) - math.pi
-        for k in range(steps + 1):
-            t = t1 + dt * k / steps
-            out.append((c[0] + radius * math.cos(t), c[1] + radius * math.sin(t)))
-    return out
+def glyph(shift=0.0):
+    """The two interlocked triangles, the pair moved right by shift."""
+    w = SIDE * 0.866
+    h = SIDE / 2
+    left_a = CENTER - (w + DX) / 2 + shift
+    left_b = left_a + DX
+    a = tri_outline(left_a, CENTER, SIDE, STROKE)
+    a_wide = tri_outline(left_a, CENTER, SIDE, STROKE + 2 * GAP)
+    b = tri_outline(left_b, CENTER, SIDE, STROKE)
+    b_wide = tri_outline(left_b, CENTER, SIDE, STROKE + 2 * GAP)
+    # a's slanted edges cross b's flat side twice: b lies on top at the upper crossing, a at the
+    # lower one, so the outlines go over and under each other like chain links
+    y_low = CENTER + h * (1 - DX / w)
+    a_on_top = disc(left_b, y_low, STROKE * 1.7)
+    a_vis = ImageChops.subtract(a, ImageChops.subtract(b_wide, a_on_top))
+    b_vis = ImageChops.subtract(b, ImageChops.multiply(a_wide, a_on_top))
+    return ImageChops.lighter(a_vis, b_vis)
 
 
-def play(cx, cy, height):
-    """A solid play triangle with softly rounded corners, optically centered on (cx, cy): a
-    triangle looks centered a little left of its box center, near 0.42 of its width."""
-    m = blank()
-    w = height * 0.866
-    left = cx - 0.42 * w
-    pts = [(left, cy - height / 2), (left + w, cy), (left, cy + height / 2)]
-    shape = rounded_polygon(pts, height * 0.1)
-    ImageDraw.Draw(m).polygon([(x * K, y * K) for x, y in shape], fill=255)
-    return m
+def measure(mask):
+    """Box center x, weight center x, the farthest pixel from the canvas center, box center y."""
+    small = mask.resize((216, 216), Image.LANCZOS)
+    px = small.load()
+    box = small.getbbox()
+    total = sx = 0.0
+    far = 0.0
+    for y in range(216):
+        for x in range(216):
+            v = px[x, y]
+            if v:
+                total += v
+                sx += v * x
+                if v > 60:
+                    far = max(far, math.hypot(x * 2 + 1 - CENTER, y * 2 + 1 - CENTER))
+    return (box[0] + box[2]) / 2 * 2, sx / total * 2 + 1, far, (box[1] + box[3]) / 2 * 2
 
 
-def pause(cx, cy, height):
-    m = blank()
-    d = ImageDraw.Draw(m)
-    bar, gap = height * 0.3, height * 0.26
-    for x0 in (cx - gap / 2 - bar, cx + gap / 2):
-        d.rounded_rectangle([x0 * K, (cy - height / 2) * K, (x0 + bar) * K, (cy + height / 2) * K], radius=bar * 0.35 * K, fill=255)
-    return m
-
-
-def union(*ms):
-    out = ms[0]
-    for m in ms[1:]:
-        out = ImageChops.lighter(out, m)
-    return out
-
-
-def minus(a, b):
-    return ImageChops.subtract(a, b)
-
-
-def inter(a, b):
-    return ImageChops.multiply(a, b)
-
-
-def interlock(a, a_wide, b, b_wide, a_on_top):
-    """a and b cross twice. a_on_top is a mask around the crossing where a is on top;
-    b is on top everywhere else."""
-    a_vis = minus(a, minus(b_wide, a_on_top))
-    b_vis = minus(b, inter(a_wide, a_on_top))
-    return union(a_vis, b_vis)
-
-
-GAP = 7  # the gap around a link that lies on top
-
-
-def glyph_rings(left_sign, right_sign, deg=0.0):
-    """Two interlocked rings along a line turned by deg (negative: rising to the right), with
-    an upright sign in what is left free of each hole."""
-    r, width, d = 60, 20, 88
-    t = math.radians(deg)
-    ux, uy = math.cos(t), math.sin(t)          # along the chain
-    def at(along, across=0.0):
-        return CENTER + along * ux - across * uy, CENTER + along * uy + across * ux
-    cl, cr = at(-d / 2), at(d / 2)
-    a, aw = ring(*cl, r, width), ring(*cl, r, width + 2 * GAP)
-    b, bw = ring(*cr, r, width), ring(*cr, r, width + 2 * GAP)
-    yc = math.sqrt(r * r - (d / 2) ** 2)
-    top = disc(*at(0, -yc), width * 1.5)       # the first ring lies on top at this crossing
-    m = interlock(a, aw, b, bw, top)
-    # the free part of each hole runs from its own inner edge to the other ring's outer edge
-    inner_edge = -d / 2 - (r - width / 2)
-    other_edge = d / 2 - (r + width / 2) - GAP
-    free = (inner_edge + other_edge) / 2
-    # a pause sign looks heavier than a play sign of the same height
-    def sized(sign):
-        return 46 if sign is play else 38
-    signs = [left_sign(*at(free), sized(left_sign)), right_sign(*at(-free), sized(right_sign))]
-    return union(m, *signs)
-
-
-VARIANTS = {
-    'A': ('Play and pause links', lambda: glyph_rings(play, pause)),
-    'B': ('Two play links', lambda: glyph_rings(play, play)),
-    'C': ('Rising chain', lambda: glyph_rings(play, pause, -35)),
-}
+def centered():
+    """The glyph moved so the point halfway between its box center and its weight sits on the center."""
+    box_x, mass_x, _, _ = measure(glyph())
+    return glyph(CENTER - (box_x + mass_x) / 2)
 
 
 def foreground(mask, size):
-    """The white glyph from its mask, at size px."""
-    alpha = mask.resize((size, size), Image.LANCZOS)
     img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-    img.putalpha(alpha)
+    img.putalpha(mask.resize((size, size), Image.LANCZOS))
     return img
-
-
-def check(mask):
-    """How far the glyph's box center is from the canvas center, and its farthest pixel."""
-    small = mask.resize((432, 432), Image.LANCZOS)
-    box = small.getbbox()
-    cx, cy = (box[0] + box[2]) / 2 - CENTER, (box[1] + box[3]) / 2 - CENTER
-    px = small.load()
-    far = max(math.hypot(x - CENTER, y - CENTER) for y in range(432) for x in range(432) if px[x, y] > 60)
-    return cx, cy, far
 
 
 def launcher(mask, size):
@@ -180,28 +116,27 @@ def launcher(mask, size):
 
 
 if __name__ == '__main__':
-    out, mode = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else 'preview')
-    if mode == 'preview':
-        sheet = Image.new('RGBA', (1080, 600), (15, 23, 42, 255))
+    out = sys.argv[1]
+    m = centered()
+    box_x, mass_x, far, box_y = measure(m)
+    print(f'box center x {box_x - CENTER:+.1f}, weight x {mass_x - CENTER:+.1f}, their middle {(box_x + mass_x) / 2 - CENTER:+.1f}, '
+          f'box center y {box_y - CENTER:+.1f}, farthest pixel {far:.0f} (limit {MARGIN_RADIUS})')
+    assert far <= MARGIN_RADIUS + 1, 'the glyph comes too close to the edge'
+    if len(sys.argv) > 2 and sys.argv[2] == 'preview':
+        sheet = Image.new('RGBA', (900, 640), (15, 23, 42, 255))
+        sheet.alpha_composite(launcher(m, 420), (40, 40))
+        sheet.alpha_composite(launcher(m, 96), (520, 80))
+        sheet.alpha_composite(launcher(m, 64), (536, 230))
+        sheet.alpha_composite(launcher(m, 48), (544, 340))
         d = ImageDraw.Draw(sheet)
         try:
-            font = ImageFont.truetype('/system/fonts/Roboto-Regular.ttf', 32)
+            font = ImageFont.truetype('/system/fonts/Roboto-Regular.ttf', 30)
         except Exception:
             font = ImageFont.load_default()
-        for i, (key, (name, fn)) in enumerate(VARIANTS.items()):
-            m = fn()
-            cx, cy, far = check(m)
-            print(f'{key}: box center off by ({cx:+.1f}, {cy:+.1f}) px, farthest pixel {far:.0f} of {LIMIT}')
-            x = 60 + i * 340
-            sheet.alpha_composite(launcher(m, 280), (x, 40))
-            sheet.alpha_composite(launcher(m, 64), (x + 108, 350))
-            label = f'{key}: {name}'
-            tw = d.textlength(label, font=font)
-            d.text((x + 140 - tw / 2, 450), label, fill=(241, 245, 249), font=font)
-        d.text((60, 530), 'Big, and below it at about launcher size', fill=(148, 163, 184), font=font)
+        d.text((40, 500), 'Player Link: chained play buttons', fill=(241, 245, 249), font=font)
+        d.text((40, 550), 'Right: at 96, 64 and 48 px', fill=(148, 163, 184), font=font)
         sheet.convert('RGB').save(out)
     else:
-        m = VARIANTS[mode][1]()
         foreground(m, 432).save(out + '/ic_launcher_foreground.png')
         launcher(m, 192).save(out + '/ic_launcher.png')
         print('#%02X%02X%02X' % BG)
