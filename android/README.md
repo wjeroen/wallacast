@@ -7,7 +7,7 @@ Two small optional apps. Wallacast itself stays a web app: both apps work next t
 | **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed, and archive or unarchive |
 | **Player Link** (`player-link/`) | Your Android phone | Pauses and plays the players you tick together (for example Wallacast and Spotify), whichever one got the press. Also passes the Wallacast watch app's play, pause and skips on while Chrome lets Wallacast sleep |
 
-Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux.
+Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux. Player Link's icon is drawn by `tools/icons.py`.
 
 ## Build
 
@@ -60,7 +60,7 @@ The server is the backend address (the app's `VITE_API_URL`, with or without `/a
 
 Android lets several apps play at once, but a headphone press, the lock screen, a watch or a phone shortcut reaches only one of them. Player Link pauses and plays the players you tick together, whichever one got the press. It works for any apps, for example Wallacast and Spotify. A Chrome player is known by its site, so a web app such as Wallacast is its own player in the list.
 
-1. Install: `termux-open android/build/player-link.apk` and allow Termux to install apps when Android asks.
+1. Install it with adb. Google Play Protect blocks any app that asks for notification access when it comes from a browser, a messaging app or a file manager ("App blocked to protect your device", [Google's rule](https://developers.google.com/android/play-protect/warning-dev-guidance)), and adb is not one of those. With the phone on Wi-Fi: Settings → Developer options → turn on **Wireless debugging** → **Pair device with pairing code**. In Termux (split screen helps): `adb pair IP:PAIR_PORT CODE`, then `adb connect IP:PORT` (the port on the Wireless debugging screen itself), then `adb install -r android/build/player-link.apk`.
 2. Open **Player Link** and tap **Open notification access**. Notification access is the Android permission that lets an app see and control other apps' players. Android blocks it for apps from outside the Play Store: when it says "Restricted setting", open the app's App info, tap the three dots at the top right, tap **Allow restricted settings**, and go back to notification access.
 3. Start the players you want to link, so they show under **Players**, and tick them. A ticked player stays in the list when it is not open.
 4. Turn on **Pause and play the ticked players together** (off by default).
@@ -71,7 +71,6 @@ Android lets several apps play at once, but a headphone press, the lock screen, 
 - Players join the link when they play at the same moment, or when one starts while a linked one plays. So a player never starts just because another one does, unless they played together. The link ends when fewer than two of them are left, when a copied command does not take effect within 4 seconds, when all stayed paused for 6 hours, or when you turn the switch off.
 - A pause of a Chrome player is copied after 2.5 seconds, since a web app pauses for a moment while it loads its next item. Other pauses after 1 second.
 - A Chrome player's site comes from Chrome's media notification. When it cannot be read, the player shows as "Chrome (site unknown)", and ticking it links every Chrome player.
-- After you pause Wallacast with its own pause button, Wallacast ignores a play that comes from outside the app (headphones, lock screen, Player Link) until you press play in the app once (`userPausedRef` in `AudioPlayer.tsx`). So a play on another linked player then does not restart Wallacast, Player Link sees that, and ends the link.
 
 ### The Wallacast watch bridge
 

@@ -25,6 +25,12 @@ function getStoredSpeed(): number {
   return 1;
 }
 
+// iPhone or iPad, also an iPad that asks for desktop sites (it reports a Mac with a touch screen)
+function isAppleMobile(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
 // A YouTube player state's name (VIDEO_STATE) for the [Playback] diagnostics lines
 function videoStateName(state: number): string {
   const entry = Object.entries(VIDEO_STATE).find(([, value]) => value === state);
@@ -348,12 +354,34 @@ export function AudioPlayer({
       setCurrentTime(next);
     };
 
-    // Do NOT register custom play/pause handlers. The browser's <audio>
-    // element already handles play/pause from lock screen / headphones
-    // natively via DOM events, which flow through our handlePlay/handlePause
-    // with all the wear-sensor debounce and userPausedRef guards. A custom
-    // MediaSession play handler bypasses those guards and causes headphone
-    // disconnect to resume paused audio (the bug we fixed before).
+    // Play from the system's media controls (lock screen, headphone button, a watch, Player
+    // Link) counts as the user's own play, also after a pause with the app's own button. Not on
+    // iPhone and iPad: iOS fires a play when it moves audio to the speaker after Bluetooth
+    // headphones disconnect, so there the browser's default play stays, which handlePlay
+    // refuses after an in-app pause (userPausedRef). The 800 ms block against headphone wear
+    // sensors (pause then play within 0.1 s when taken off) applies here too. No pause handler:
+    // the browser's default pause reaches handlePause.
+    if (!isAppleMobile()) {
+      try {
+        ms.setActionHandler('play', () => {
+          const audio = audioRef.current;
+          if (!audio) return;
+          const sincePause = Date.now() - lastPauseTimeRef.current;
+          if (lastPauseTimeRef.current > 0 && sincePause < 800) {
+            console.log(`[AudioPlayer] Blocked rogue media-control play ${sincePause}ms after pause`);
+            return;
+          }
+          userPausedRef.current = false;
+          autoPlayWaitingRef.current = false;
+          autoPlayStartingRef.current = false;
+          appPlayRef.current = true;
+          audio.play().catch((err) => {
+            console.error('[AudioPlayer] media-control play() rejected:', err);
+            appPlayRef.current = false;
+          });
+        });
+      } catch { /* unsupported */ }
+    }
     try { ms.setActionHandler('previoustrack', () => seekBy(-15)); } catch { /* unsupported */ }
     try { ms.setActionHandler('nexttrack', () => seekBy(15)); } catch { /* unsupported */ }
     try { ms.setActionHandler('seekbackward', (d) => seekBy(-(d?.seekOffset || 15))); } catch { /* unsupported */ }
@@ -369,6 +397,7 @@ export function AudioPlayer({
     } catch { /* unsupported */ }
 
     return () => {
+      try { ms.setActionHandler('play', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('previoustrack', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('nexttrack', null); } catch { /* unsupported */ }
       try { ms.setActionHandler('seekbackward', null); } catch { /* unsupported */ }
@@ -799,7 +828,9 @@ export function AudioPlayer({
     // Sync React state with actual DOM audio state.
     // Three guards run in order to decide whether to accept an incoming play:
     //  1. appPlayRef, app-initiated plays (togglePlay) always pass immediately.
-    //  2. userPausedRef, explicit UI pause blocks OS-initiated resumes.
+    //  2. userPausedRef, explicit UI pause blocks OS-initiated resumes. Outside iOS, a play
+    //     from the system's media controls arrives through the media session play handler
+    //     (above), which counts as the user's own play, so this only stops plays from nowhere.
     //  3. Debounce, blocks rogue play events that arrive within 800ms of a
     //     pause (Sony headphone wear-sensor flicker on removal: PAUSE→PLAY
     //     in ~100ms). Intentional hardware plays (smartwatch, headphone
