@@ -350,23 +350,29 @@ public class MainActivity extends Activity {
 
     // ---- interface -----------------------------------------------------------------------
 
-    private int dp(float v) {
-        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+    /** Everything is sized for a round screen of 225 dp (a Galaxy Watch) and scaled to this one,
+     *  so all buttons fit on one screen without scrolling. */
+    private float unit = 1f;
+
+    private int s(float dpValue) {
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dpValue * unit, getResources().getDisplayMetrics()));
     }
 
     private TextView label(float sp, int color, boolean bold) {
         TextView t = new TextView(this);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, s(sp));
         t.setTextColor(color);
         t.setGravity(Gravity.CENTER);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
         if (bold) t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
         return t;
     }
 
-    private RoundButton button(int width, int height, View.OnClickListener click) {
+    private RoundButton button(int width, int height, int margin, View.OnClickListener click) {
         RoundButton b = new RoundButton(this);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(width), dp(height));
-        lp.setMargins(dp(3), dp(3), dp(3), dp(3));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(s(width), s(height));
+        lp.setMargins(s(margin), s(2), s(margin), s(2));
         b.setLayoutParams(lp);
         b.setOnClickListener(click);
         return b;
@@ -380,75 +386,74 @@ public class MainActivity extends Activity {
     }
 
     private View buildUi() {
-        int side = getResources().getDisplayMetrics().widthPixels / 9;
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        unit = Math.max(0.75f, Math.min(1.4f, (Math.min(dm.widthPixels, dm.heightPixels) / dm.density) / 225f));
+
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding(side, dp(22), side, dp(36));
+        col.setGravity(Gravity.CENTER);
 
-        title = label(15, 0xFFF1F5F9, true);
-        title.setMaxLines(2);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        subtitle = label(11, 0xFF94A3B8, false);
-        subtitle.setSingleLine(true);
-        subtitle.setEllipsize(TextUtils.TruncateAt.END);
-        status = label(11, 0xFF94A3B8, false);
-        status.setPadding(0, dp(2), 0, dp(4));
+        // Two lines of text where the round screen is still narrow: the title and a status line
+        title = label(13, 0xFFF1F5F9, true);
+        LinearLayout.LayoutParams textWidth = new LinearLayout.LayoutParams(s(150), ViewGroup.LayoutParams.WRAP_CONTENT);
+        textWidth.gravity = Gravity.CENTER_HORIZONTAL;
+        title.setLayoutParams(textWidth);
+        subtitle = label(10, 0xFF94A3B8, false);
+        subtitle.setVisibility(View.GONE);
+        status = label(10, 0xFF94A3B8, false);
+        LinearLayout.LayoutParams statusWidth = new LinearLayout.LayoutParams(s(160), ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusWidth.gravity = Gravity.CENTER_HORIZONTAL;
+        statusWidth.bottomMargin = s(3);
+        status.setLayoutParams(statusWidth);
         col.addView(title);
-        col.addView(subtitle);
         col.addView(status);
 
         LinearLayout transport = row();
-        previous = button(42, 42, v -> send("previous", null));
-        previous.setIcon(R.drawable.ic_skip_back, 0.48f, null);
-        play = button(58, 58, v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null));
+        previous = button(36, 36, 5, v -> send("previous", null));
+        previous.setIcon(R.drawable.ic_skip_back, 0.5f, null);
+        play = button(52, 52, 5, v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null));
         play.setColors(0xFF3B82F6, 0xFFFFFFFF);
-        next = button(42, 42, v -> send("next", null));
-        next.setIcon(R.drawable.ic_skip_forward, 0.48f, null);
+        next = button(36, 36, 5, v -> send("next", null));
+        next.setIcon(R.drawable.ic_skip_forward, 0.5f, null);
         transport.addView(previous);
         transport.addView(play);
         transport.addView(next);
         col.addView(transport);
 
-        // 15 seconds back and forward: the app's circular arrows with the 15 inside
-        LinearLayout skips = row();
-        back = button(52, 52, v -> send("back", null));
+        // 15 seconds back and forward (the app's circular arrows with the 15 inside) around
+        // shuffle and speed
+        LinearLayout middle = row();
+        back = button(40, 40, 2, v -> send("back", null));
         back.setPlain(true);
-        back.setIcon(R.drawable.ic_rotate_ccw, 0.85f, "15");
-        forward = button(52, 52, v -> send("forward", null));
+        back.setIcon(R.drawable.ic_rotate_ccw, 0.9f, "15");
+        shuffle = button(32, 32, 3, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
+        shuffle.setIcon(R.drawable.ic_shuffle, 0.55f, null);
+        speed = button(40, 32, 3, v -> send("speed", nextSpeed()));
+        forward = button(40, 40, 2, v -> send("forward", null));
         forward.setPlain(true);
-        forward.setIcon(R.drawable.ic_rotate_cw, 0.85f, "15");
-        skips.addView(back);
-        skips.addView(forward);
-        col.addView(skips);
-
-        LinearLayout modes = row();
-        shuffle = button(40, 40, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
-        shuffle.setIcon(R.drawable.ic_shuffle, 0.5f, null);
-        speed = button(52, 40, v -> send("speed", nextSpeed()));
-        star = button(40, 40, v -> send(state != null && state.optBoolean("is_starred") ? "unstar" : "star", null));
-        modes.addView(shuffle);
-        modes.addView(speed);
-        modes.addView(star);
-        col.addView(modes);
+        forward.setIcon(R.drawable.ic_rotate_cw, 0.9f, "15");
+        middle.addView(back);
+        middle.addView(shuffle);
+        middle.addView(speed);
+        middle.addView(forward);
+        col.addView(middle);
 
         LinearLayout last = row();
-        archive = button(40, 40, v -> onArchive());
-        update = button(84, 34, v -> installUpdate());
+        archive = button(32, 32, 4, v -> onArchive());
+        star = button(32, 32, 4, v -> send(state != null && state.optBoolean("is_starred") ? "unstar" : "star", null));
+        update = button(62, 26, 4, v -> installUpdate());
         update.setText("Update");
         update.setColors(0xFF3B82F6, 0xFFFFFFFF);
         last.addView(archive);
+        last.addView(star);
         last.addView(update);
         col.addView(last);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(0xFF0F172A);
         scroll.setFillViewport(true);
-        scroll.addView(col, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        // The rotating bezel or crown scrolls the focused view
-        scroll.setFocusable(true);
-        scroll.setFocusableInTouchMode(true);
-        scroll.requestFocus();
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(col, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         return scroll;
     }
 

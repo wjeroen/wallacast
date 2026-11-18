@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
     private TextView access, status;
+    private Switch enabled;
     private Button grant;
     private LinearLayout playerList;
     private final Map<String, CheckBox> boxes = new HashMap<>();
@@ -59,7 +60,7 @@ public class MainActivity extends Activity {
         title.setText(R.string.app_name);
         col.addView(title);
 
-        Switch enabled = new Switch(this);
+        enabled = new Switch(this);
         enabled.setText("Pause and play the ticked players together");
         enabled.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         enabled.setPadding(0, dp(16), 0, dp(8));
@@ -151,6 +152,9 @@ public class MainActivity extends Activity {
     }
 
     private void render() {
+        // the quick settings tile can change the switch too
+        boolean switchOn = prefs.getBoolean(LinkService.PREF_ENABLED, false);
+        if (enabled.isChecked() != switchOn) enabled.setChecked(switchOn);
         boolean ok = hasAccess();
         access.setText(ok ? "Notification access: on" : "Notification access: off. Turn it on for Player Link.");
         grant.setVisibility(ok ? Button.GONE : Button.VISIBLE);
