@@ -15,6 +15,14 @@ import android.os.SystemClock;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -38,12 +46,20 @@ import java.util.Set;
  * is copied to the other. The link ends when one of the players goes away, when a copied
  * command does not take effect, when both stayed paused for UNLINK_AFTER_MS, or when the
  * switch is off. So Spotify never starts just because Wallacast does.
+ *
+ * The watch bridge: Chrome freezes a Wallacast page that stayed paused for minutes with the
+ * screen off, and then the watch app's commands cannot reach it. With a server address and an
+ * API token that has "Control playback", this service waits for those commands itself
+ * (GET /api/remote/fallback, only while Wallacast has a player in Chrome) and presses play,
+ * pause or a 15-second skip on Chrome's player, which works on a frozen page and wakes it.
  */
 public class LinkService extends NotificationListenerService {
     static final String SPOTIFY = "com.spotify.music";
     static final String PREFS = "link";
     static final String PREF_ENABLED = "enabled";
     static final String PREF_ALL_CHROME = "all_chrome";
+    static final String PREF_SERVER = "server";
+    static final String PREF_TOKEN = "token";
 
     /** A change must last this long before it is copied: Wallacast pauses for a moment
      *  while it loads the next item, Spotify while it skips. */
@@ -72,11 +88,19 @@ public class LinkService extends NotificationListenerService {
 
     private final Runnable evaluateTask = this::evaluate;
 
+    // The watch bridge, on its own thread
+    private volatile boolean bridgeRunning;
+    private volatile HttpURLConnection bridgeConnection;
+    /** Wallacast's player as last seen: playing, paused, or null when there is none */
+    private volatile Boolean seenPlaying;
+    private volatile String bridgeStatus = "";
+
     private final MediaSessionManager.OnActiveSessionsChangedListener sessionsChanged = this::onSessions;
 
     private final MediaController.Callback callback = new MediaController.Callback() {
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
+            updateSeen();
             schedule();
         }
 
@@ -105,6 +129,7 @@ public class LinkService extends NotificationListenerService {
         }
         sessions.addOnActiveSessionsChangedListener(sessionsChanged, self, main);
         refreshSessions();
+        startBridge();
     }
 
     @Override
@@ -112,6 +137,7 @@ public class LinkService extends NotificationListenerService {
         if (sessions != null) sessions.removeOnActiveSessionsChangedListener(sessionsChanged);
         attach(null, null);
         main.removeCallbacks(evaluateTask);
+        stopBridge();
         instance = null;
     }
 
@@ -201,6 +227,7 @@ public class LinkService extends NotificationListenerService {
             expectSpotify = null;
         }
         if (wallacast == null || spotify == null) unlink("a player went away");
+        updateSeen();
         if (newW || newS) schedule();
     }
 
@@ -305,6 +332,120 @@ public class LinkService extends NotificationListenerService {
         main.postDelayed(evaluateTask, 600);
     }
 
+    // ---- the watch bridge ------------------------------------------------------------------------
+
+    /** Called on the main thread whenever Wallacast's player may have changed. A changed state
+     *  ends the waiting request, so the server learns it at once from the next one. */
+    private void updateSeen() {
+        Boolean now = wallacast == null ? null : playing(wallacast);
+        Boolean before = seenPlaying;
+        if (now == null ? before == null : now.equals(before)) return;
+        seenPlaying = now;
+        HttpURLConnection c = bridgeConnection;
+        if (c != null) new Thread(c::disconnect).start();
+    }
+
+    private void startBridge() {
+        if (bridgeRunning) return;
+        bridgeRunning = true;
+        Thread t = new Thread(this::bridgeLoop, "wallacast-bridge");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void stopBridge() {
+        bridgeRunning = false;
+        HttpURLConnection c = bridgeConnection;
+        if (c != null) new Thread(c::disconnect).start();
+    }
+
+    private static void rest(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static String read(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int n;
+        while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+        in.close();
+        return buf.toString("UTF-8");
+    }
+
+    private void bridgeLoop() {
+        int failures = 0;
+        while (bridgeRunning) {
+            String server = prefs.getString(PREF_SERVER, "");
+            String token = prefs.getString(PREF_TOKEN, "");
+            Boolean seen = seenPlaying;
+            if (server.isEmpty() || token.isEmpty()) {
+                bridgeStatus = "";
+                rest(5000);
+                continue;
+            }
+            if (seen == null) {
+                bridgeStatus = "Watch bridge: waiting for Wallacast's player";
+                rest(5000);
+                continue;
+            }
+            long started = SystemClock.elapsedRealtime();
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(server + "/api/remote/fallback?playing=" + seen).openConnection();
+                bridgeConnection = c;
+                c.setConnectTimeout(10000);
+                c.setReadTimeout(40000);
+                c.setRequestProperty("Authorization", "Bearer " + token);
+                int code = c.getResponseCode();
+                if (code == 401 || code == 403) {
+                    bridgeStatus = "Watch bridge: the token was refused (" + code + "). It needs \"Control playback\".";
+                    rest(5 * 60 * 1000);
+                    continue;
+                }
+                if (code != 200) throw new IOException("HTTP " + code);
+                JSONArray commands = new JSONObject(read(c.getInputStream())).optJSONArray("commands");
+                failures = 0;
+                bridgeStatus = "Watch bridge: on";
+                if (commands != null) {
+                    for (int i = 0; i < commands.length(); i++) {
+                        String action = commands.getJSONObject(i).optString("action", "");
+                        main.post(() -> runCommand(action));
+                    }
+                }
+                // An empty answer takes about 25 seconds. A quick one means something cut it short.
+                if ((commands == null || commands.length() == 0) && SystemClock.elapsedRealtime() - started < 2000) rest(10000);
+            } catch (Exception e) {
+                if (!bridgeRunning) break;
+                Boolean now = seenPlaying;
+                if (now == null ? seen != null : !now.equals(seen)) continue; // cut on purpose, the player changed
+                failures++;
+                bridgeStatus = "Watch bridge: no connection";
+                rest(Math.min(60000, 5000L * failures));
+            } finally {
+                bridgeConnection = null;
+            }
+        }
+    }
+
+    /** A command from the watch, on Chrome's player. Chrome passes it to the page, waking it. */
+    private void runCommand(String action) {
+        MediaController w = wallacast;
+        if (w == null) return;
+        MediaController.TransportControls t = w.getTransportControls();
+        switch (action) {
+            case "play": t.play(); break;
+            case "pause": t.pause(); break;
+            case "toggle": if (playing(w)) t.pause(); else t.play(); break;
+            case "forward": t.fastForward(); break;
+            case "back": t.rewind(); break;
+            default: return;
+        }
+        lastEvent = "Watch: " + action;
+    }
+
     // ---- for the settings screen ----------------------------------------------------------------
 
     String describe() {
@@ -312,6 +453,7 @@ public class LinkService extends NotificationListenerService {
         b.append("Wallacast: ").append(describe(wallacast)).append('\n');
         b.append("Spotify: ").append(describe(spotify)).append('\n');
         b.append(linked ? "Linked" : "Not linked (both must play at once)");
+        if (!bridgeStatus.isEmpty()) b.append('\n').append(bridgeStatus);
         if (!lastEvent.isEmpty()) b.append('\n').append("Last: ").append(lastEvent);
         return b.toString();
     }

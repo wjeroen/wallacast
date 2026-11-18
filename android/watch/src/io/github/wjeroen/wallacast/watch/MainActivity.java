@@ -32,6 +32,10 @@ import java.util.concurrent.Executors;
  * The Wallacast remote for a watch. It shows what the Wallacast app on the phone plays and
  * sends play, pause, next, previous, 15 seconds back and forward, shuffle, speed and archive.
  *
+ * While Chrome lets the page sleep (paused for minutes with the screen off), the server passes
+ * play, pause and the skips to Wallacast Link on the phone instead (mode "link"), and the other
+ * buttons wait until the page runs again.
+ *
  * The watch never talks to the phone directly. It asks the Wallacast server, which passes
  * commands on to the open app (backend/src/services/remote-control.ts), with an API token that
  * has the "Control playback" permission (and "Archive and unarchive" for the archive button).
@@ -52,6 +56,8 @@ public class MainActivity extends Activity {
 
     private JSONObject state;
     private boolean online;
+    /** "app": the page listens, "link": the page sleeps and Wallacast Link stands in, "none" */
+    private String mode = "none";
     private boolean polling;
     private long archiveArmedUntil;
     private String message;
@@ -196,6 +202,7 @@ public class MainActivity extends Activity {
                 try {
                     JSONObject json = new JSONObject(body);
                     online = json.optBoolean("online", false);
+                    mode = json.optString("mode", online ? "app" : "none");
                     state = json.optJSONObject("state");
                 } catch (Exception e) {
                     flash("Unexpected answer");
@@ -226,7 +233,7 @@ public class MainActivity extends Activity {
                 main.removeCallbacks(pollTask);
                 main.postDelayed(pollTask, 700);
             } else if (code == 409) {
-                flash("Open Wallacast on your phone");
+                flash(errorOf(text, "Open Wallacast on your phone"));
             } else if (code == -1) {
                 flash("No connection");
             } else {
@@ -331,6 +338,10 @@ public class MainActivity extends Activity {
     }
 
     private void onArchive() {
+        if (state != null && state.optBoolean("is_archived")) {
+            send("unarchive", null);
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now < archiveArmedUntil) {
             archiveArmedUntil = 0;
@@ -386,31 +397,37 @@ public class MainActivity extends Activity {
             subtitle.setText("");
         }
 
+        boolean appMode = online && "app".equals(mode);
+        boolean linkMode = online && "link".equals(mode);
         if (isSetUp()) {
             String line;
             if (System.currentTimeMillis() < messageUntil && message != null) line = message;
-            else if (!online) line = "Open Wallacast on your phone";
+            else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
+            else if (linkMode) line = "Asleep on the phone: play, pause and skips only";
             else if (hasItem) line = clock(state.optInt("position")) + " / " + clock(state.optInt("duration"));
             else line = "";
             status.setText(line);
         }
 
-        boolean usable = isSetUp() && online && hasItem;
-        play.setEnabled(usable);
-        back.setEnabled(usable);
-        forward.setEnabled(usable);
-        speed.setEnabled(usable);
-        shuffle.setEnabled(isSetUp() && online);
-        previous.setEnabled(usable && state.optBoolean("has_previous"));
-        next.setEnabled(usable && state.optBoolean("has_next"));
-        archive.setEnabled(usable && !state.optBoolean("is_archived"));
+        // Play, pause and the skips also work through Wallacast Link, the rest needs the page
+        boolean transport = isSetUp() && (appMode && hasItem || linkMode);
+        boolean full = isSetUp() && appMode && hasItem;
+        play.setEnabled(transport);
+        back.setEnabled(transport);
+        forward.setEnabled(transport);
+        speed.setEnabled(full);
+        shuffle.setEnabled(isSetUp() && appMode);
+        previous.setEnabled(full && state.optBoolean("has_previous"));
+        next.setEnabled(full && state.optBoolean("has_next"));
+        archive.setEnabled(full);
 
         boolean shuffleOn = state != null && state.optBoolean("shuffle");
         shuffle.setText("Shuffle");
         shuffle.setColors(shuffleOn ? 0xFF3B82F6 : 0xFF1E293B, 0xFFF1F5F9);
         speed.setText(speedText(state != null ? state.optDouble("speed", 1) : 1));
         boolean armed = System.currentTimeMillis() < archiveArmedUntil;
-        archive.setText(armed ? "Tap again" : "Archive");
+        boolean archived = state != null && state.optBoolean("is_archived");
+        archive.setText(archived ? "Unarchive" : armed ? "Tap again" : "Archive");
         archive.setColors(armed ? 0xFFB91C1C : 0xFF1E293B, 0xFFF1F5F9);
     }
 }

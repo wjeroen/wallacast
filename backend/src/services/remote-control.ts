@@ -16,10 +16,20 @@ import { query } from '../database/db.js';
  *
  * The app only polls while the user has a live token with the `remote` permission
  * (remoteEnabled), so other users cost nothing.
+ *
+ * When Chrome froze the page (paused for minutes with the screen off), the Wallacast Link app on
+ * the phone stands in (android/link): it long-polls GET /api/remote/fallback with a remote token
+ * and presses FALLBACK_ACTIONS on Chrome's own player, which works on a frozen page and wakes it.
+ * Other commands then answer 409 with code 'asleep' until the page runs again.
  */
 
-export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive'] as const;
+export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive', 'unarchive'] as const;
 export type RemoteAction = typeof REMOTE_ACTIONS[number];
+/** What Wallacast Link can do on Chrome's player while the page sleeps. */
+export const FALLBACK_ACTIONS: readonly RemoteAction[] = ['play', 'pause', 'toggle', 'forward', 'back'];
+/** The device id Wallacast Link polls under. It never reports a player state, so it is never
+ *  the app's target, only the fallback. */
+export const FALLBACK_DEVICE = 'link-fallback';
 
 export interface RemoteCommand {
   id: number;
@@ -63,6 +73,8 @@ interface UserRemote {
   devices: Map<string, Device>;
   pending: Array<RemoteCommand & { device: string }>;
   waiters: Waiter[];
+  /** What Wallacast Link last saw of Chrome's Wallacast player: playing, paused, or none */
+  fallbackPlaying: boolean | null;
 }
 
 /** A command not picked up within this time is dropped. */
@@ -80,7 +92,7 @@ let nextCommandId = 1;
 function forUser(userId: number): UserRemote {
   let u = users.get(userId);
   if (!u) {
-    u = { devices: new Map(), pending: [], waiters: [] };
+    u = { devices: new Map(), pending: [], waiters: [], fallbackPlaying: null };
     users.set(userId, u);
   }
   return u;
@@ -172,30 +184,44 @@ function targetDevice(u: UserRemote): string | null {
   const now = Date.now();
   let best: { id: string; at: number } | null = null;
   for (const [id, d] of u.devices) {
-    if (now - d.polledAt > DEVICE_ONLINE_MS || !d.state) continue;
+    if (id === FALLBACK_DEVICE || now - d.polledAt > DEVICE_ONLINE_MS || !d.state) continue;
     if (!best || d.stateAt > best.at) best = { id, at: d.stateAt };
   }
   return best?.id ?? null;
 }
 
-/** What the watch shows: the target device's player, whether it is reachable, and how old
- *  the report is. */
-export function currentState(userId: number): { online: boolean; age_seconds: number | null; state: PlayerState | null } {
+/** Wallacast Link polled recently and sees Wallacast's player in Chrome. */
+function fallbackReady(u: UserRemote): boolean {
+  const d = u.devices.get(FALLBACK_DEVICE);
+  return !!d && Date.now() - d.polledAt <= DEVICE_ONLINE_MS && u.fallbackPlaying !== null;
+}
+
+/** What the watch shows: the target device's player, whether it is reachable, how old the
+ *  report is, and the mode: 'app' (every command), 'link' (the page sleeps, Wallacast Link
+ *  takes FALLBACK_ACTIONS) or 'none'. */
+export function currentState(userId: number): { online: boolean; mode: 'app' | 'link' | 'none'; age_seconds: number | null; state: PlayerState | null } {
   const u = forUser(userId);
   prune(u);
   const target = targetDevice(u);
   if (target) {
     const d = u.devices.get(target)!;
-    return { online: true, age_seconds: Math.round((Date.now() - d.stateAt) / 1000), state: d.state };
+    return { online: true, mode: 'app', age_seconds: Math.round((Date.now() - d.stateAt) / 1000), state: d.state };
   }
   // No app listening: the newest report anywhere, so the watch can still show the title
   let newest: Device | null = null;
-  for (const d of u.devices.values()) if (d.state && (!newest || d.stateAt > newest.stateAt)) newest = d;
-  return {
-    online: false,
-    age_seconds: newest ? Math.round((Date.now() - newest.stateAt) / 1000) : null,
-    state: newest?.state ?? null,
-  };
+  for (const [id, d] of u.devices) if (id !== FALLBACK_DEVICE && d.state && (!newest || d.stateAt > newest.stateAt)) newest = d;
+  const age = newest ? Math.round((Date.now() - newest.stateAt) / 1000) : null;
+  if (fallbackReady(u)) {
+    const base = newest?.state ?? cleanState({});
+    return { online: true, mode: 'link', age_seconds: age, state: { ...base, playing: u.fallbackPlaying === true } };
+  }
+  return { online: false, mode: 'none', age_seconds: age, state: newest?.state ?? null };
+}
+
+/** Wallacast Link's long poll: remember what it sees of Chrome's player, then wait for commands. */
+export function waitAsFallback(userId: number, playing: boolean | null, onClose: (cancel: () => void) => void): Promise<RemoteCommand[]> {
+  forUser(userId).fallbackPlaying = playing;
+  return waitForCommands(userId, FALLBACK_DEVICE, onClose);
 }
 
 export function parseCommand(raw: unknown): { action: RemoteAction; value?: boolean | number } | { error: string } {
@@ -215,11 +241,16 @@ export function parseCommand(raw: unknown): { action: RemoteAction; value?: bool
   return { action: action as RemoteAction };
 }
 
-/** Queue a command for the open app. Returns it, or null when no app is listening. */
-export function sendCommand(userId: number, command: { action: RemoteAction; value?: boolean | number }): RemoteCommand | null {
+/** Queue a command for the open app, or for Wallacast Link while the page sleeps. Returns it,
+ *  'asleep' when only Link listens and it cannot do this command, or null when nothing listens. */
+export function sendCommand(userId: number, command: { action: RemoteAction; value?: boolean | number }): RemoteCommand | 'asleep' | null {
   const u = forUser(userId);
   prune(u);
-  const target = targetDevice(u);
+  let target = targetDevice(u);
+  if (!target && fallbackReady(u)) {
+    if (!FALLBACK_ACTIONS.includes(command.action)) return 'asleep';
+    target = FALLBACK_DEVICE;
+  }
   if (!target) return null;
   const cmd: RemoteCommand = { id: nextCommandId++, ...command, created_at: Date.now() };
   const waiterIndex = u.waiters.findIndex((w) => w.device === target);

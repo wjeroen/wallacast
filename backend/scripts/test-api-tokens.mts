@@ -86,6 +86,7 @@ assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/feed-items'), 'subscribe
 assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/search?q=x'));
 assert.ok(allowed(['remote'], 'GET', '/api/remote/state'));
 assert.ok(allowed(['remote'], 'POST', '/api/remote/command'));
+assert.ok(allowed(['remote'], 'GET', '/api/remote/fallback?playing=false'), 'Wallacast Link polls with a remote token');
 assert.ok(!allowed(['remote'], 'GET', '/api/content/index'), 'remote alone does not read the library');
 for (const [m, p] of [
   ['POST', '/api/content/tags/rename'],
@@ -220,6 +221,31 @@ remote.sendCommand(USER, { action: 'pause' });
 assert.deepEqual((await w2).map((c) => c.action), ['pause'], 'the newest player is the target');
 cancelPoll!();
 assert.deepEqual(await w1, [], 'a cancelled poll ends empty');
-console.log('✅ remote control commands and state');
+assert.deepEqual(remote.parseCommand({ action: 'unarchive' }), { action: 'unarchive' });
+
+// The page sleeps: only Wallacast Link listens, and takes play, pause and the skips
+const SLEEPY = 999_002;
+remote.reportState(SLEEPY, 'phone-9', remote.cleanState({ item_id: 3, title: 'Old', playing: false }));
+let cancelLink: (() => void) | undefined;
+const linkPoll = remote.waitAsFallback(SLEEPY, false, (cancel) => { cancelLink = cancel; });
+const sleepy = remote.currentState(SLEEPY);
+assert.equal(sleepy.mode, 'link', 'Link stands in for the sleeping page');
+assert.equal(sleepy.online, true);
+assert.equal(sleepy.state!.title, 'Old', 'the last known title stays');
+assert.equal(remote.sendCommand(SLEEPY, { action: 'next' }), 'asleep', 'Link cannot go to the next item');
+assert.equal(remote.sendCommand(SLEEPY, { action: 'archive' }), 'asleep');
+const play = remote.sendCommand(SLEEPY, { action: 'play' });
+assert.ok(play && play !== 'asleep');
+assert.deepEqual((await linkPoll).map((c) => c.action), ['play'], 'Link gets the play');
+// Once the page polls again, commands go to the page, not to Link
+const linkPoll2 = remote.waitAsFallback(SLEEPY, true, (cancel) => { cancelLink = cancel; });
+const pagePoll = remote.waitForCommands(SLEEPY, 'phone-9', () => {});
+remote.reportState(SLEEPY, 'phone-9', remote.cleanState({ item_id: 3, playing: true }));
+assert.equal(remote.currentState(SLEEPY).mode, 'app');
+remote.sendCommand(SLEEPY, { action: 'next' });
+assert.deepEqual((await pagePoll).map((c) => c.action), ['next']);
+cancelLink!();
+assert.deepEqual(await linkPoll2, []);
+console.log('✅ remote control commands and state, and Wallacast Link for a sleeping page');
 
 console.log('\nALL API TOKEN CHECKS PASSED');

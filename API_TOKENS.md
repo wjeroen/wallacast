@@ -108,9 +108,11 @@ Both are logged, and Undo in Settings unsubscribes from a feed the token added, 
 
 ### The watch remote
 
-`GET /api/remote/state` answers `{ online, age_seconds, state }`: what the player of the open Wallacast app does (`item_id`, `title`, `subtitle`, `playing`, `position`, `duration`, `speed`, `speeds`, `shuffle`, `has_next`, `has_previous`, `is_archived`). `online` is false when no app has asked for commands in the last 40 seconds.
+`GET /api/remote/state` answers `{ online, mode, age_seconds, state }`: what the player of the open Wallacast app does (`item_id`, `title`, `subtitle`, `playing`, `position`, `duration`, `speed`, `speeds`, `shuffle`, `has_next`, `has_previous`, `is_archived`). `mode` is `app` while a Wallacast page listens, `link` while Chrome lets the page sleep and Wallacast Link stands in (play, pause, `toggle`, `forward` and `back` only), and `none` with `online` false when neither asked for commands in the last 40 seconds.
 
-`POST /api/remote/command` with `{ "action": "play" }`. Actions: `play`, `pause`, `toggle`, `next`, `previous`, `forward` and `back` (15 seconds), `shuffle` (`value` true or false, none flips it), `speed` (`value`, the nearest speed the app offers), `archive` (needs the `archive` permission too: archives what plays and goes on to the next item). Answers `202`, or `409` when no app listens. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
+`POST /api/remote/command` with `{ "action": "play" }`. Actions: `play`, `pause`, `toggle`, `next`, `previous`, `forward` and `back` (15 seconds), `shuffle` (`value` true or false, none flips it), `speed` (`value`, the nearest speed the app offers), `archive` and `unarchive` (need the `archive` permission too, the item goes on playing). Answers `202`, or `409` with `code` `closed` when nothing listens, or `asleep` when only Wallacast Link listens and cannot do this one.
+
+`GET /api/remote/fallback?playing=true|false|none` is Wallacast Link's own long poll (`android/link`): it says what it sees of Wallacast's player in Chrome and waits up to 25 seconds for a command. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
 
 ## Limits
 

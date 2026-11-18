@@ -4,8 +4,8 @@ Two small optional apps. Wallacast itself stays a web app: both apps work next t
 
 | App | Where it runs | What it does |
 |---|---|---|
-| **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed and archive |
-| **Wallacast Link** (`link/`) | Your Android phone | Pauses and plays Spotify together with Wallacast, whichever of the two got the press |
+| **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed, and archive or unarchive |
+| **Wallacast Link** (`link/`) | Your Android phone | Pauses and plays Spotify together with Wallacast, whichever of the two got the press. Also passes the watch app's play, pause and skips on while Chrome lets Wallacast sleep |
 
 Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux.
 
@@ -49,8 +49,11 @@ The server is the backend address (the app's `VITE_API_URL`, with or without `/a
 **How it behaves**
 
 - The watch asks for the player's state every 2 seconds while its screen is on.
-- "Open Wallacast on your phone" means no Wallacast page asked the server for commands in the last 40 seconds. Wallacast must be open on the phone (in the background is fine). While audio plays, Chrome keeps the page running. After a long pause with the screen off, Chrome may freeze the page, and a command then waits until you open Wallacast (it is dropped after 30 seconds).
-- Archive asks for a second tap within 3 seconds. It archives what plays and goes on to the next item. The audio stays 7 days, so Undo in the app (or unarchiving) brings it back.
+- Wallacast must be open on the phone (in the background is fine). While audio plays, Chrome keeps the page running. After about 5 minutes of pause in the background, Chrome freezes the page, and only Chrome's own player still answers. Then:
+  - With the watch bridge of Wallacast Link set up (below), play, pause and the skips still work: Link presses them on Chrome's player, which wakes the page. The watch shows "Asleep on the phone" and greys out the other buttons until the page runs again.
+  - Without it, the watch says "Wallacast sleeps or is closed". Press play in the watch's own media controls, which reach Chrome's player directly.
+  - A command nobody takes is dropped after 30 seconds.
+- Archive works like the player's archive button: the item goes on playing. It asks for a second tap within 3 seconds. Once archived, the button says Unarchive (one tap). The audio stays 7 days.
 - The phone's own media controls on the watch keep working as before: play, pause and the two skip buttons (15 seconds back and forward).
 
 ## Wallacast Link (Spotify)
@@ -61,6 +64,12 @@ Android lets Spotify and Wallacast play at the same time, but a headphone press,
 2. Open **Wallacast Link** and tap **Open notification access**. Notification access is the Android permission that lets an app see and control other apps' players. Android blocks it for apps from outside the Play Store: when it says "Restricted setting", open the app's App info, tap the three dots at the top right, tap **Allow restricted settings**, and go back to notification access.
 3. Turn on **Pause and play Spotify together with Wallacast** (off by default).
 4. Play both at the same time once. The screen then says "Linked". From then on, pausing or playing either one does the same to the other.
+
+### The watch bridge
+
+Optional, for the watch app. Under **Watch bridge**, fill in the server (the same backend address as for the watch) and an API token with **Control playback**, then Save. Link then waits for the watch app's commands while Wallacast has a player in Chrome, and presses play, pause and the 15-second skips on that player when the Wallacast page sleeps. The screen shows "Watch bridge: on" when it works. Set Wallacast Link's battery use to **Unrestricted** (App info, Battery), or Android's battery saving may hold its requests back while the phone lies still.
+
+Any token with **Control playback** works. One already on the phone (such as the share menu shortcut's) is fine. A token of its own can be revoked without breaking anything else.
 
 **How it behaves**
 

@@ -1467,18 +1467,18 @@ export function AudioPlayer({
           handleSpeedChange(speed);
           break;
         }
-        case 'archive': {
-          // Archive what plays now, then go on to the next item the way the next button does
-          if (!content.is_archived) {
-            const store = useContentStore.getState();
-            if (store.allItems.some(i => i.id === content.id)) await store.toggleArchived(content.id);
-            else await contentAPI.update(content.id, { is_archived: true });
-            try {
-              const fresh = await contentAPI.getById(content.id);
-              onContentUpdated?.(fresh.data);
-            } catch { /* the archive itself went through */ }
-          }
-          if (hasNextTrack) onSkipNextTrack?.(isPlaying);
+        case 'archive':
+        case 'unarchive': {
+          // Like the player's archive button: the item goes on playing (its audio stays 7 days)
+          const archive = command.action === 'archive';
+          if (!!content.is_archived === archive) break;
+          const store = useContentStore.getState();
+          if (store.allItems.some(i => i.id === content.id)) await store.toggleArchived(content.id);
+          else await contentAPI.update(content.id, { is_archived: archive });
+          try {
+            const fresh = await contentAPI.getById(content.id);
+            onContentUpdated?.(fresh.data);
+          } catch { /* the archive itself went through */ }
           break;
         }
       }

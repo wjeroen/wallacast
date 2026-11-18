@@ -8,16 +8,19 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.InputType;
 import android.util.TypedValue;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
 /**
- * The settings screen: the Spotify switch (off by default), notification access, and what the
- * service sees right now, so a missing player is easy to spot.
+ * The settings screen: the Spotify switch (off by default), notification access, the watch
+ * bridge's server address and token, and what the service sees right now, so a missing player
+ * is easy to spot.
  */
 public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -76,6 +79,33 @@ public class MainActivity extends Activity {
             if (s != null) s.refreshSessions();
         });
         col.addView(allChrome);
+
+        TextView bridge = text(16);
+        bridge.setText("Watch bridge");
+        bridge.setPadding(0, dp(24), 0, dp(4));
+        col.addView(bridge);
+        EditText server = new EditText(this);
+        server.setHint("Server, for example https://your-backend.up.railway.app");
+        server.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        server.setText(prefs.getString(LinkService.PREF_SERVER, ""));
+        col.addView(server);
+        EditText token = new EditText(this);
+        token.setHint(prefs.getString(LinkService.PREF_TOKEN, "").isEmpty() ? "API token (wcr_...)" : "API token saved");
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        col.addView(token);
+        Button save = new Button(this);
+        save.setText("Save");
+        save.setOnClickListener(v -> {
+            String address = server.getText().toString().trim().replaceAll("/+$", "").replaceAll("/api$", "");
+            SharedPreferences.Editor edit = prefs.edit().putString(LinkService.PREF_SERVER, address);
+            String typed = token.getText().toString().trim();
+            if (typed.startsWith("wcr_")) edit.putString(LinkService.PREF_TOKEN, typed);
+            if (address.isEmpty()) edit.remove(LinkService.PREF_TOKEN);
+            edit.apply();
+            token.setText("");
+            token.setHint(prefs.getString(LinkService.PREF_TOKEN, "").isEmpty() ? "API token (wcr_...)" : "API token saved");
+        });
+        col.addView(save);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(col);

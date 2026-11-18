@@ -289,6 +289,7 @@ export const TOKEN_ROUTES: readonly TokenRoute[] = [
   { method: 'DELETE', path: /^\/api\/podcasts\/\d+$/, anyOf: ['subscribe'] },
   { method: 'GET', path: /^\/api\/remote\/state$/, anyOf: ['remote'] },
   { method: 'POST', path: /^\/api\/remote\/command$/, anyOf: ['remote'] },
+  { method: 'GET', path: /^\/api\/remote\/fallback$/, anyOf: ['remote'] },
   { method: 'GET', path: /^\/api\/auth\/token$/, anyOf: 'any' },
 ];
 
