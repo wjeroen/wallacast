@@ -95,7 +95,7 @@ export function startRemote(): () => void {
     wake?.();
     if (Date.now() < playWhenShownUntil) {
       playWhenShownUntil = 0;
-      void handlers?.run({ id: 0, action: 'play', created_at: Date.now() });
+      void handlers?.run({ id: 0, action: 'play' });
     }
   };
   document.addEventListener('visibilitychange', onVisibility);
