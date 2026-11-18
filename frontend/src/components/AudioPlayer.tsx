@@ -372,7 +372,7 @@ export function AudioPlayer({
           const since = lastPauseTimeRef.current > 0 ? sincePause : null;
           if (lastPauseTimeRef.current > 0 && sincePause < 800) {
             console.log(`[AudioPlayer] Blocked rogue media-control play ${sincePause}ms after pause`);
-            logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: 'blocked' });
+            logPlayback('media-play', { id: contentRef.current?.id, was, sincePause: since, result: 'blocked' });
             return;
           }
           userPausedRef.current = false;
@@ -380,11 +380,11 @@ export function AudioPlayer({
           autoPlayStartingRef.current = false;
           appPlayRef.current = true;
           audio.play()
-            .then(() => logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: 'played' }))
+            .then(() => logPlayback('media-play', { id: contentRef.current?.id, was, sincePause: since, result: 'played' }))
             .catch((err) => {
               console.error('[AudioPlayer] media-control play() rejected:', err);
               appPlayRef.current = false;
-              logPlayback('media-play', { id: contentRef.current?.id, was, since_pause_ms: since, result: `refused ${(err as Error)?.name || ''}` });
+              logPlayback('media-play', { id: contentRef.current?.id, was, sincePause: since, result: `refused ${(err as Error)?.name || ''}` });
             });
         });
         ms.setActionHandler('pause', () => {
@@ -867,7 +867,7 @@ export function AudioPlayer({
       const timeSincePause = Date.now() - lastPauseTimeRef.current;
       if (lastPauseTimeRef.current > 0 && timeSincePause < 800) {
         console.log(`[AudioPlayer] Blocked rogue play ${timeSincePause}ms after pause`);
-        logPlayback('play-blocked', { id: contentRef.current?.id, reason: 'within 800 ms of a pause', since_pause_ms: timeSincePause });
+        logPlayback('play-blocked', { id: contentRef.current?.id, reason: 'within 800 ms of a pause', sincePause: timeSincePause });
         audio.pause();
         return;
       }
