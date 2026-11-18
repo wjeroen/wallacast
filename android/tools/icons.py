@@ -27,8 +27,8 @@ CENTER = 216
 MARGIN_RADIUS = 120
 
 SIDE = 136      # side of each triangle
-STROKE = 15
-GAP = 5         # the gap around the outline that lies on top
+STROKE = 19
+GAP = 7         # the gap around the outline that lies on top
 DX = 76         # how far the second triangle sits right of the first
 
 
