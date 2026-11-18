@@ -34,17 +34,20 @@ The watch never talks to the phone directly. It asks the Wallacast server what t
 
 1. In Wallacast: Settings → API tokens → create a token named "Watch". Under it, tick **Control playback** and, for the archive button, **Archive and unarchive**. Untick everything else. Copy the token.
 2. On the watch (Galaxy Watch): Settings → About watch → Software information → tap **Software version** 7 times. Then Settings → Developer options: turn on **ADB debugging** and **Wireless debugging**. The watch must be on the same Wi-Fi as the phone. Tap **Pair new device**: it shows an address, a port and a code.
-3. In Termux, with the token still copied:
+3. In Termux:
 
 ```bash
 adb pair WATCH_IP:PAIR_PORT PAIR_CODE
 adb connect WATCH_IP:PORT          # the port on the Wireless debugging screen itself
 adb install -r android/build/wallacast-watch.apk
+read -rs -p "Paste the token: " T; echo
 adb shell am start -n io.github.wjeroen.wallacast.watch/.MainActivity \
-  --es server https://YOUR-BACKEND.up.railway.app --es token "$(termux-clipboard-get)"
+  --es server https://YOUR-BACKEND.up.railway.app --es token "$T"
 ```
 
-The server is the backend address (the app's `VITE_API_URL`, with or without `/api`), not the frontend address. The watch shows "Set up" when it saved them. Turn off ADB debugging afterwards to save battery.
+The server is the backend address (the app's `VITE_API_URL`, with or without `/api`), not the frontend address. The token is pasted at the prompt, since Android lets no app in the background read the clipboard. The watch shows "Set up" when it saved them. Turn off ADB debugging afterwards to save battery.
+
+If pairing fails with "protocol fault (couldn't read status message)": the watch is not answering on Wi-Fi. Turn the watch's Bluetooth off for the setup (connected to the phone, Wear OS keeps Wi-Fi asleep), keep tapping its screen, check with `ping WATCH_IP` that it answers, and pair again with a fresh code. On the phone itself, `adb kill-server` before pairing helped.
 
 **How it behaves**
 
