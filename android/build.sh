@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds the two Android apps without Gradle: android/watch (the Wear OS remote) and
-# android/link (the phone helper that pauses and plays Spotify with Wallacast).
+# Builds the two Android apps without Gradle: android/watch (the Wallacast remote for a Wear OS
+# watch) and android/player-link (Player Link, pauses and plays the players you link together).
 #
 # Needs: aapt2, d8, apksigner, javac (JDK 17 or later), python3, and android.jar of API 35.
 #   Termux:  pkg install aapt2 d8 apksigner openjdk-21 python
 #            then the platform zip from Google, see android/README.md
 #   Elsewhere: the Android SDK's build-tools and platforms/android-35/android.jar
 #
-# Usage: android/build.sh [watch|link]   (both when no app is named)
-# Output: android/build/wallacast-watch.apk and android/build/wallacast-link.apk
+# Usage: android/build.sh [watch|player-link]   (both when no app is named)
+# Output: android/build/wallacast-watch.apk and android/build/player-link.apk
 #
 # Signing: the key in $WALLACAST_KEYSTORE (default ~/.android-keys/wallacast.jks) with its
 # password in the file $WALLACAST_KEYSTORE_PASS (default ~/.android-keys/wallacast.pass).
@@ -38,7 +38,7 @@ if [ ! -f "$KEYSTORE" ]; then
 fi
 
 build_app() {
-  local app="$1" min_sdk="$2"
+  local app="$1" min_sdk="$2" apk="$3"
   local src="$HERE/$app" out="$HERE/build/$app"
   echo "Building $app (version $VERSION_NAME, code $VERSION_CODE)"
   rm -rf "$out"
@@ -52,14 +52,14 @@ build_app() {
   d8 --release --min-api "$min_sdk" --lib "$ANDROID_JAR" --output "$out/dex" $(find "$out/classes" -name '*.class')
   python3 "$HERE/tools/apkpack.py" "$out/base.apk" "$out/dex/classes.dex" "$out/unsigned.apk"
   apksigner sign --ks "$KEYSTORE" --ks-pass "file:$KEYPASS" --ks-key-alias wallacast \
-    --out "$HERE/build/wallacast-$app.apk" "$out/unsigned.apk"
-  rm -f "$HERE/build/wallacast-$app.apk.idsig"
-  echo "  -> android/build/wallacast-$app.apk"
+    --out "$HERE/build/$apk" "$out/unsigned.apk"
+  rm -f "$HERE/build/$apk.idsig"
+  echo "  -> android/build/$apk"
 }
 
 case "${1:-all}" in
-  watch) build_app watch 30 ;;
-  link) build_app link 26 ;;
-  all) build_app watch 30; build_app link 26 ;;
-  *) echo "Usage: $0 [watch|link]"; exit 1 ;;
+  watch) build_app watch 30 wallacast-watch.apk ;;
+  player-link) build_app player-link 26 player-link.apk ;;
+  all) build_app watch 30 wallacast-watch.apk; build_app player-link 26 player-link.apk ;;
+  *) echo "Usage: $0 [watch|player-link]"; exit 1 ;;
 esac

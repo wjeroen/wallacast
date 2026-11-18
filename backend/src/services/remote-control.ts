@@ -17,17 +17,17 @@ import { query } from '../database/db.js';
  * The app only polls while the user has a live token with the `remote` permission
  * (remoteEnabled), so other users cost nothing.
  *
- * When Chrome froze the page (paused for minutes with the screen off), the Wallacast Link app on
- * the phone stands in (android/link): it long-polls GET /api/remote/fallback with a remote token
+ * When Chrome froze the page (paused for minutes with the screen off), the Player Link app on
+ * the phone stands in (android/player-link): it long-polls GET /api/remote/fallback with a remote token
  * and presses FALLBACK_ACTIONS on Chrome's own player, which works on a frozen page and wakes it.
  * Other commands then answer 409 with code 'asleep' until the page runs again.
  */
 
 export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive', 'unarchive'] as const;
 export type RemoteAction = typeof REMOTE_ACTIONS[number];
-/** What Wallacast Link can do on Chrome's player while the page sleeps. */
+/** What Player Link can do on Chrome's player while the page sleeps. */
 export const FALLBACK_ACTIONS: readonly RemoteAction[] = ['play', 'pause', 'toggle', 'forward', 'back'];
-/** The device id Wallacast Link polls under. It never reports a player state, so it is never
+/** The device id Player Link polls under. It never reports a player state, so it is never
  *  the app's target, only the fallback. */
 export const FALLBACK_DEVICE = 'link-fallback';
 
@@ -73,7 +73,7 @@ interface UserRemote {
   devices: Map<string, Device>;
   pending: Array<RemoteCommand & { device: string }>;
   waiters: Waiter[];
-  /** What Wallacast Link last saw of Chrome's Wallacast player: playing, paused, or none */
+  /** What Player Link last saw of Chrome's Wallacast player: playing, paused, or none */
   fallbackPlaying: boolean | null;
 }
 
@@ -190,14 +190,14 @@ function targetDevice(u: UserRemote): string | null {
   return best?.id ?? null;
 }
 
-/** Wallacast Link polled recently and sees Wallacast's player in Chrome. */
+/** Player Link polled recently and sees Wallacast's player in Chrome. */
 function fallbackReady(u: UserRemote): boolean {
   const d = u.devices.get(FALLBACK_DEVICE);
   return !!d && Date.now() - d.polledAt <= DEVICE_ONLINE_MS && u.fallbackPlaying !== null;
 }
 
 /** What the watch shows: the target device's player, whether it is reachable, how old the
- *  report is, and the mode: 'app' (every command), 'link' (the page sleeps, Wallacast Link
+ *  report is, and the mode: 'app' (every command), 'link' (the page sleeps, Player Link
  *  takes FALLBACK_ACTIONS) or 'none'. */
 export function currentState(userId: number): { online: boolean; mode: 'app' | 'link' | 'none'; age_seconds: number | null; state: PlayerState | null } {
   const u = forUser(userId);
@@ -218,7 +218,7 @@ export function currentState(userId: number): { online: boolean; mode: 'app' | '
   return { online: false, mode: 'none', age_seconds: age, state: newest?.state ?? null };
 }
 
-/** Wallacast Link's long poll: remember what it sees of Chrome's player, then wait for commands. */
+/** Player Link's long poll: remember what it sees of Chrome's player, then wait for commands. */
 export function waitAsFallback(userId: number, playing: boolean | null, onClose: (cancel: () => void) => void): Promise<RemoteCommand[]> {
   forUser(userId).fallbackPlaying = playing;
   return waitForCommands(userId, FALLBACK_DEVICE, onClose);
@@ -241,7 +241,7 @@ export function parseCommand(raw: unknown): { action: RemoteAction; value?: bool
   return { action: action as RemoteAction };
 }
 
-/** Queue a command for the open app, or for Wallacast Link while the page sleeps. Returns it,
+/** Queue a command for the open app, or for Player Link while the page sleeps. Returns it,
  *  'asleep' when only Link listens and it cannot do this command, or null when nothing listens. */
 export function sendCommand(userId: number, command: { action: RemoteAction; value?: boolean | number }): RemoteCommand | 'asleep' | null {
   const u = forUser(userId);

@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
  * sends play, pause, next, previous, 15 seconds back and forward, shuffle, speed and archive.
  *
  * While Chrome lets the page sleep (paused for minutes with the screen off), the server passes
- * play, pause and the skips to Wallacast Link on the phone instead (mode "link"), and the other
+ * play, pause and the skips to Player Link on the phone instead (mode "link"), and the other
  * buttons wait until the page runs again.
  *
  * The watch never talks to the phone directly. It asks the Wallacast server, which passes
@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
 
     private JSONObject state;
     private boolean online;
-    /** "app": the page listens, "link": the page sleeps and Wallacast Link stands in, "none" */
+    /** "app": the page listens, "link": the page sleeps and Player Link stands in, "none" */
     private String mode = "none";
     private boolean polling;
     private long archiveArmedUntil;
@@ -409,7 +409,7 @@ public class MainActivity extends Activity {
             status.setText(line);
         }
 
-        // Play, pause and the skips also work through Wallacast Link, the rest needs the page
+        // Play, pause and the skips also work through Player Link, the rest needs the page
         boolean transport = isSetUp() && (appMode && hasItem || linkMode);
         boolean full = isSetUp() && appMode && hasItem;
         play.setEnabled(transport);

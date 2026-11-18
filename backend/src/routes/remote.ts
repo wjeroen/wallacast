@@ -17,7 +17,7 @@ import {
  *   POST /api/remote/state             the app reports its player { device, state } (app sessions only)
  *   GET  /api/remote/state             what the player is doing (the watch, a token with `remote`)
  *   POST /api/remote/command           { action, value? } for the player (the watch)
- *   GET  /api/remote/fallback?playing=  Wallacast Link's long poll, while the page may sleep
+ *   GET  /api/remote/fallback?playing=  Player Link's long poll, while the page may sleep
  * Tokens reach only the last three (TOKEN_ROUTES in services/api-tokens.ts).
  */
 const router = express.Router();
@@ -65,7 +65,7 @@ router.post('/command', (req, res) => {
   res.status(202).json({ id: sent.id, action: sent.action });
 });
 
-// Wallacast Link's long poll (android/link). `playing` is what it sees of Wallacast's player in
+// Player Link's long poll (android/player-link). `playing` is what it sees of Wallacast's player in
 // Chrome: true, false, or none when there is none (then nothing is sent to it).
 router.get('/fallback', async (req, res) => {
   try {
