@@ -645,7 +645,8 @@ public class LinkService extends NotificationListenerService {
         view.addCategory(Intent.CATEGORY_BROWSABLE);
         PackageManager pm = getPackageManager();
         try {
-            for (ResolveInfo r : pm.queryIntentActivities(view, 0)) {
+            // MATCH_ALL: for web addresses Android otherwise lists only the browsers
+            for (ResolveInfo r : pm.queryIntentActivities(view, PackageManager.MATCH_ALL)) {
                 String pkg = r.activityInfo.packageName;
                 // A home screen app brings back the open page as it was, a browser opens a new tab
                 if (pkg.contains(".webapk")) {

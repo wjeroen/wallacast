@@ -8,12 +8,18 @@
          used to open Wallacast when play is pressed on the watch and Chrome has no Wallacast player -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- To find the app that opens Wallacast's site (its home screen app) -->
+    <!-- To find the app that opens Wallacast's site, its home screen app: Android shows an app
+         only the apps its queries match, and a home screen app matches only its own site, so
+         the launcher query makes every app with an icon visible -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
