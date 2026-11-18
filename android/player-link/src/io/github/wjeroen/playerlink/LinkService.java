@@ -20,7 +20,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileDescriptor;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -135,6 +137,7 @@ public class LinkService extends NotificationListenerService {
     /** Wallacast's player as last seen: playing, paused, or null when there is none */
     private volatile Boolean seenPlaying;
     private volatile String bridgeStatus = "";
+    private volatile String bridgeError = "";
 
     @Override
     public void onListenerConnected() {
@@ -303,7 +306,19 @@ public class LinkService extends NotificationListenerService {
 
     // ---- copying pause and play ---------------------------------------------------------------
 
+    /** Which players play, as of the last schedule(): a player reports often (position, track,
+     *  buffering), and only a change of playing or paused may move the check, or the check
+     *  could be put off again and again and never run. */
+    private String lastSignature = "";
+    private boolean evaluatePending;
+
     private void schedule() {
+        StringBuilder sig = new StringBuilder();
+        for (Player p : players.values()) sig.append(p.key).append(playing(p.controller) ? ":1," : ":0,");
+        String now = sig.toString();
+        if (now.equals(lastSignature) && evaluatePending) return;
+        lastSignature = now;
+        evaluatePending = true;
         main.removeCallbacks(evaluateTask);
         boolean chromePaused = false;
         for (Player p : players.values()) {
@@ -320,6 +335,7 @@ public class LinkService extends NotificationListenerService {
     }
 
     private void evaluate() {
+        evaluatePending = false;
         long now = SystemClock.elapsedRealtime();
         Set<String> linked = linkedKeys();
         List<Player> group = new ArrayList<>();
@@ -340,6 +356,7 @@ public class LinkService extends NotificationListenerService {
             else failed = true;
         }
         if (waiting) {
+            evaluatePending = true;
             main.postDelayed(evaluateTask, 500);
             return;
         }
@@ -396,6 +413,7 @@ public class LinkService extends NotificationListenerService {
         expectUntil = now + COMMAND_TIMEOUT_MS;
         allPausedSince = wanted ? 0 : now;
         lastEvent = (wanted ? "Played " : "Paused ") + names;
+        evaluatePending = true;
         main.postDelayed(evaluateTask, 600);
     }
 
@@ -505,6 +523,7 @@ public class LinkService extends NotificationListenerService {
                 Boolean now = seenPlaying;
                 if (now == null ? seen != null : !now.equals(seen)) continue; // cut on purpose, the player changed
                 failures++;
+                bridgeError = e.getClass().getSimpleName() + ": " + e.getMessage();
                 bridgeStatus = "Watch bridge: no connection";
                 rest(Math.min(60000, 5000L * failures));
             } finally {
@@ -527,6 +546,30 @@ public class LinkService extends NotificationListenerService {
             default: return;
         }
         lastEvent = "Watch: " + action;
+    }
+
+    // ---- diagnostics: adb shell dumpsys activity service io.github.wjeroen.playerlink/.LinkService ----
+
+    @Override
+    protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        try {
+            pw.println("enabled=" + (prefs != null && prefs.getBoolean(PREF_ENABLED, false)));
+            pw.println("ticked=" + linkedKeys());
+            pw.println("joined=" + new ArrayList<>(joined) + " allPausedSince=" + allPausedSince);
+            for (Player p : new ArrayList<>(players.values())) {
+                pw.println("player key=" + p.key + " pkg=" + p.controller.getPackageName() + " playing=" + playing(p.controller)
+                    + " settled=" + p.settled + " expect=" + p.expect);
+            }
+            pw.println("chromeSites=" + new ArrayList<>(chromeSites.values()) + " wallacastTokens=" + wallacastTokens.size());
+            String server = prefs != null ? prefs.getString(PREF_SERVER, "") : "";
+            String token = prefs != null ? prefs.getString(PREF_TOKEN, "") : "";
+            pw.println("bridge=" + bridgeStatus + " seenPlaying=" + seenPlaying + " server=" + server
+                + " token=" + (token.isEmpty() ? "none" : token.substring(0, Math.min(4, token.length())) + "... (" + token.length() + " chars)")
+                + " lastError=" + bridgeError);
+            pw.println("last=" + lastEvent);
+        } catch (Exception e) {
+            pw.println("dump failed: " + e);
+        }
     }
 
     // ---- for the settings screen ----------------------------------------------------------------
