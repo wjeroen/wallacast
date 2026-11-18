@@ -10,6 +10,10 @@ import { remoteAPI, type RemoteCommand } from './api';
  * AudioPlayer registers the handlers: run() carries out a command, state() describes the
  * player (null when no item is open). remoteStateChanged() sends a fresh report, a moment
  * later so a burst of changes becomes one report.
+ *
+ * When the page comes back to the front (Chrome may have frozen it, and Player Link may have
+ * opened it for a play from the watch), a waiting pause ends, so a waiting command arrives
+ * at once.
  */
 
 export interface RemoteHandlers {
@@ -74,6 +78,8 @@ export function pokeRemote(): void {
 export function startRemote(): () => void {
   const mine = ++loop;
   const running = () => loop === mine;
+  const onVisible = () => { if (document.visibilityState === 'visible') wake?.(); };
+  document.addEventListener('visibilitychange', onVisible);
   void (async () => {
     let failures = 0;
     while (running()) {
@@ -111,6 +117,7 @@ export function startRemote(): () => void {
     }
   })();
   return () => {
+    document.removeEventListener('visibilitychange', onVisible);
     if (!running()) return;
     loop = 0;
     enabled = false;

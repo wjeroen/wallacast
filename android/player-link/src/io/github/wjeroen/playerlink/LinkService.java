@@ -2,17 +2,21 @@ package io.github.wjeroen.playerlink;
 
 import android.app.Notification;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 
@@ -62,7 +66,9 @@ import java.util.regex.Pattern;
  * it. With a server address and an API token that has "Control playback", this service waits
  * for those commands itself (GET /api/remote/fallback, only while Wallacast has a player in
  * Chrome) and presses play, pause or a 15-second skip on Chrome's player, which works on a
- * frozen page and wakes it.
+ * frozen page and wakes it. Chrome drops that player soon after a pause in the background, so
+ * with "Display over other apps" allowed it also waits while there is none: a play from the
+ * watch then opens Wallacast (its home screen app), and the server hands the page that play.
  */
 public class LinkService extends NotificationListenerService {
     static final String PREFS = "link";
@@ -72,6 +78,8 @@ public class LinkService extends NotificationListenerService {
     static final String PREF_SERVER = "server";
     static final String PREF_TOKEN = "token";
     static final String PREF_ANY_CHROME_IS_WALLACAST = "all_chrome";
+    /** Wallacast's site as its Chrome player last named it, to open it again */
+    static final String PREF_SITE = "wallacast_site";
 
     /** A change must last this long before it is copied: a web player pauses for a moment
      *  while it loads its next item, an app while it skips. */
@@ -519,6 +527,9 @@ public class LinkService extends NotificationListenerService {
      *  ends the waiting request, so the server learns it at once from the next one. */
     private void updateSeen() {
         Player w = wallacast();
+        if (w != null && w.key.startsWith("chrome:") && prefs != null && !w.key.substring(7).equals(prefs.getString(PREF_SITE, ""))) {
+            prefs.edit().putString(PREF_SITE, w.key.substring(7)).apply();
+        }
         Boolean now = w == null ? null : playing(w.controller);
         Boolean before = seenPlaying;
         if (now == null ? before == null : now.equals(before)) return;
@@ -569,14 +580,17 @@ public class LinkService extends NotificationListenerService {
                 rest(5000);
                 continue;
             }
-            if (seen == null) {
+            boolean canOpen = seen == null && openIntent() != null;
+            if (seen == null && !canOpen) {
                 bridgeStatus = "Watch bridge: waiting for Wallacast's player";
                 rest(5000);
                 continue;
             }
             long started = SystemClock.elapsedRealtime();
             try {
-                HttpURLConnection c = (HttpURLConnection) new URL(server + "/api/remote/fallback?playing=" + seen).openConnection();
+                // "closed": no Wallacast player in Chrome, but a play opens Wallacast
+                String seenParam = seen == null ? "closed" : seen.toString();
+                HttpURLConnection c = (HttpURLConnection) new URL(server + "/api/remote/fallback?playing=" + seenParam).openConnection();
                 bridgeConnection = c;
                 c.setConnectTimeout(10000);
                 c.setReadTimeout(40000);
@@ -590,7 +604,7 @@ public class LinkService extends NotificationListenerService {
                 if (code != 200) throw new IOException("HTTP " + code);
                 JSONArray commands = new JSONObject(read(c.getInputStream())).optJSONArray("commands");
                 failures = 0;
-                bridgeStatus = "Watch bridge: on";
+                bridgeStatus = canOpen ? "Watch bridge: on, a play opens Wallacast" : "Watch bridge: on";
                 if (commands != null) {
                     for (int i = 0; i < commands.length(); i++) {
                         String action = commands.getJSONObject(i).optString("action", "");
@@ -613,10 +627,53 @@ public class LinkService extends NotificationListenerService {
         }
     }
 
-    /** A command from the watch, on Chrome's player. Chrome passes it to the page, waking it. */
+    /** How to open Wallacast: its home screen app, else its site in the browser. Null without
+     *  "Display over other apps", or before Wallacast's player was ever seen. */
+    private Intent openIntent() {
+        if (prefs == null || !Settings.canDrawOverlays(this)) return null;
+        String site = prefs.getString(PREF_SITE, "");
+        if (site.isEmpty()) return null;
+        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse("https://" + site + "/"));
+        view.addCategory(Intent.CATEGORY_BROWSABLE);
+        PackageManager pm = getPackageManager();
+        try {
+            for (ResolveInfo r : pm.queryIntentActivities(view, 0)) {
+                String pkg = r.activityInfo.packageName;
+                // A home screen app brings back the open page as it was, a browser opens a new tab
+                if (pkg.contains(".webapk")) {
+                    Intent launch = pm.getLaunchIntentForPackage(pkg);
+                    if (launch != null) return launch;
+                }
+            }
+        } catch (Exception ignored) {
+            // fall back to the browser
+        }
+        return view;
+    }
+
+    private void openWallacast() {
+        Intent open = openIntent();
+        if (open == null) {
+            note("Watch: play, but Wallacast cannot be opened");
+            return;
+        }
+        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(open);
+            note("Watch: opened Wallacast");
+        } catch (Exception e) {
+            note("Watch: opening Wallacast failed (" + e.getClass().getSimpleName() + ")");
+        }
+    }
+
+    /** A command from the watch, on Chrome's player. Chrome passes it to the page, waking it.
+     *  Without that player, a play opens Wallacast instead. */
     private void runCommand(String action) {
         Player w = wallacast();
-        if (w == null) return;
+        if (w == null) {
+            if (action.equals("play") || action.equals("toggle")) openWallacast();
+            return;
+        }
         MediaController.TransportControls t = w.controller.getTransportControls();
         switch (action) {
             case "play": t.play(); break;
@@ -645,8 +702,9 @@ public class LinkService extends NotificationListenerService {
             String server = prefs != null ? prefs.getString(PREF_SERVER, "") : "";
             String token = prefs != null ? prefs.getString(PREF_TOKEN, "") : "";
             pw.println("bridge=" + bridgeStatus + " seenPlaying=" + seenPlaying + " server=" + server
-                + " token=" + (token.isEmpty() ? "none" : token.substring(0, Math.min(4, token.length())) + "... (" + token.length() + " chars)")
-                + " lastError=" + bridgeError);
+                + " token=" + (token.isEmpty() ? "none" : "set") + " lastError=" + bridgeError);
+            pw.println("site=" + (prefs != null ? prefs.getString(PREF_SITE, "") : "") + " overlay=" + Settings.canDrawOverlays(this)
+                + " open=" + openIntent());
             pw.println("last=" + lastEvent);
             for (String h : new ArrayList<>(history)) pw.println("  " + h);
         } catch (Exception e) {

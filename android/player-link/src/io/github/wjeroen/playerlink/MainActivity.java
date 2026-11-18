@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -26,14 +27,16 @@ import java.util.Set;
 /**
  * The settings screen: the main switch (off by default), notification access, the players to
  * link (every player Android knows now, plus the linked ones that are not open), what the
- * service does, and the Wallacast watch bridge's server address and token.
+ * service does, and the Wallacast watch bridge: server address, token, and the permission to
+ * open Wallacast.
  */
 public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
     private TextView access, status;
     private Switch enabled;
-    private Button grant;
+    private Button grant, allowOpen;
+    private TextView openState;
     private LinearLayout playerList;
     private final Map<String, CheckBox> boxes = new HashMap<>();
     private String shownKeys = "";
@@ -128,6 +131,13 @@ public class MainActivity extends Activity {
             if (s != null) s.refreshSessions();
         });
         col.addView(anyChrome);
+        openState = text(14);
+        openState.setPadding(0, dp(12), 0, dp(4));
+        col.addView(openState);
+        allowOpen = new Button(this);
+        allowOpen.setText("Allow display over other apps");
+        allowOpen.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))));
+        col.addView(allowOpen);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(col);
@@ -163,6 +173,11 @@ public class MainActivity extends Activity {
         boolean ok = hasAccess();
         access.setText(ok ? "Notification access: on" : "Notification access: off. Turn it on for Player Link.");
         grant.setVisibility(ok ? Button.GONE : Button.VISIBLE);
+        boolean overlay = Settings.canDrawOverlays(this);
+        openState.setText(overlay
+            ? "Play on the watch opens Wallacast when Chrome has no Wallacast player: on"
+            : "Play on the watch opens Wallacast when Chrome has no Wallacast player: needs \"Display over other apps\"");
+        allowOpen.setVisibility(overlay ? Button.GONE : Button.VISIBLE);
         LinkService s = LinkService.instance;
         if (s == null) {
             status.setText(ok ? "Starting…" : "");

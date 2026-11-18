@@ -40,7 +40,8 @@ import java.util.concurrent.Executors;
  *
  * While Chrome lets the page sleep (paused for minutes with the screen off), the server passes
  * play, pause and the skips to Player Link on the phone instead (mode "link"), and the other
- * buttons wait until the page runs again.
+ * buttons wait until the page runs again. Once Chrome dropped its player, play alone works:
+ * Player Link opens Wallacast, which then plays (mode "open").
  *
  * The watch never talks to the phone directly. It asks the Wallacast server, which passes
  * commands on to the open app (backend/src/services/remote-control.ts), with an API token that
@@ -68,7 +69,8 @@ public class MainActivity extends Activity {
 
     private JSONObject state;
     private boolean online;
-    /** "app": the page listens, "link": the page sleeps and Player Link stands in, "none" */
+    /** "app": the page listens, "link": the page sleeps and Player Link stands in, "open":
+     *  Player Link opens Wallacast on a play, "none" */
     private String mode = "none";
     private boolean polling;
     private long archiveArmedUntil;
@@ -548,11 +550,13 @@ public class MainActivity extends Activity {
 
         boolean appMode = online && "app".equals(mode);
         boolean linkMode = online && "link".equals(mode);
+        boolean openMode = online && "open".equals(mode);
         if (isSetUp()) {
             String line;
             if (System.currentTimeMillis() < messageUntil && message != null) line = message;
             else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
             else if (linkMode) line = "Asleep on the phone: play, pause and skips only";
+            else if (openMode) line = "Closed on the phone: play opens it";
             else if (hasItem) line = clock(state.optInt("position")) + " / " + clock(state.optInt("duration"));
             else line = "";
             status.setText(line);
@@ -561,7 +565,7 @@ public class MainActivity extends Activity {
         // Play, pause and the skips also work through Player Link, the rest needs the page
         boolean transport = isSetUp() && (appMode && hasItem || linkMode);
         boolean full = isSetUp() && appMode && hasItem;
-        play.setEnabled(transport);
+        play.setEnabled(transport || isSetUp() && openMode);
         back.setEnabled(transport);
         forward.setEnabled(transport);
         speed.setEnabled(full);

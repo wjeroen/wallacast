@@ -69,12 +69,13 @@ router.post('/command', (req, res) => {
 });
 
 // Player Link's long poll (android/player-link). `playing` is what it sees of Wallacast's player in
-// Chrome: true, false, or none when there is none (then nothing is sent to it).
+// Chrome: true, false, closed (there is none, but a play opens Wallacast), or none (nothing is
+// sent to it).
 router.get('/fallback', async (req, res) => {
   try {
     const raw = req.query.playing;
-    const playing = raw === 'true' ? true : raw === 'false' ? false : null;
-    const commands = await waitAsFallback(req.user!.userId, playing, (cancel) => res.on('close', cancel));
+    const seen = raw === 'true' ? 'playing' : raw === 'false' ? 'paused' : raw === 'closed' ? 'closed' : null;
+    const commands = await waitAsFallback(req.user!.userId, seen, (cancel) => res.on('close', cancel));
     if (!res.headersSent && !res.writableEnded) res.json({ commands });
   } catch (error) {
     console.error('[Remote] fallback poll failed:', error);

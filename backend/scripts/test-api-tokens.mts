@@ -228,7 +228,7 @@ assert.deepEqual(remote.parseCommand({ action: 'star' }), { action: 'star' });
 const SLEEPY = 999_002;
 remote.reportState(SLEEPY, 'phone-9', remote.cleanState({ item_id: 3, title: 'Old', playing: false }));
 let cancelLink: (() => void) | undefined;
-const linkPoll = remote.waitAsFallback(SLEEPY, false, (cancel) => { cancelLink = cancel; });
+const linkPoll = remote.waitAsFallback(SLEEPY, 'paused', (cancel) => { cancelLink = cancel; });
 const sleepy = remote.currentState(SLEEPY);
 assert.equal(sleepy.mode, 'link', 'Link stands in for the sleeping page');
 assert.equal(sleepy.online, true);
@@ -239,7 +239,7 @@ const play = remote.sendCommand(SLEEPY, { action: 'play' });
 assert.ok(play && play !== 'asleep');
 assert.deepEqual((await linkPoll).map((c) => c.action), ['play'], 'Link gets the play');
 // Once the page polls again, commands go to the page, not to Link
-const linkPoll2 = remote.waitAsFallback(SLEEPY, true, (cancel) => { cancelLink = cancel; });
+const linkPoll2 = remote.waitAsFallback(SLEEPY, 'playing', (cancel) => { cancelLink = cancel; });
 const pagePoll = remote.waitForCommands(SLEEPY, 'phone-9', () => {});
 remote.reportState(SLEEPY, 'phone-9', remote.cleanState({ item_id: 3, playing: true }));
 assert.equal(remote.currentState(SLEEPY).mode, 'app');
@@ -247,6 +247,20 @@ remote.sendCommand(SLEEPY, { action: 'next' });
 assert.deepEqual((await pagePoll).map((c) => c.action), ['next']);
 cancelLink!();
 assert.deepEqual(await linkPoll2, []);
-console.log('✅ remote control commands and state, and Player Link for a sleeping page');
+
+// Chrome dropped the player: Link opens Wallacast on a play, and the play waits for the page
+const CLOSED = 999_003;
+remote.reportState(CLOSED, 'phone-7', remote.cleanState({ item_id: 5, title: 'Paused long ago', playing: false }));
+const openPoll = remote.waitAsFallback(CLOSED, 'closed', () => {});
+const closed = remote.currentState(CLOSED);
+assert.equal(closed.mode, 'open', 'Link can open Wallacast');
+assert.equal(closed.state!.title, 'Paused long ago');
+assert.equal(closed.state!.playing, false);
+assert.equal(remote.sendCommand(CLOSED, { action: 'pause' }), 'asleep', 'nothing to pause');
+assert.equal(remote.sendCommand(CLOSED, { action: 'forward' }), 'asleep', 'nothing to skip');
+assert.ok(remote.sendCommand(CLOSED, { action: 'toggle' }), 'a toggle opens it too');
+assert.deepEqual((await openPoll).map((c) => c.action), ['play'], 'Link gets a play, which opens Wallacast');
+assert.deepEqual((await remote.waitForCommands(CLOSED, 'phone-7', () => {})).map((c) => c.action), ['play'], 'the opened page finds the play');
+console.log('✅ remote control commands and state, and Player Link for a sleeping or closed page');
 
 console.log('\nALL API TOKEN CHECKS PASSED');

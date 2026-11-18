@@ -112,7 +112,7 @@ Both are logged, and Undo in Settings unsubscribes from a feed the token added, 
 
 `POST /api/remote/command` with `{ "action": "play" }`. Actions: `play`, `pause`, `toggle`, `next`, `previous`, `forward` and `back` (15 seconds), `shuffle` (`value` true or false, none flips it), `speed` (`value`, the nearest speed the app offers), `archive` and `unarchive` (need the `archive` permission too, the item goes on playing), `star` and `unstar` (need the `star` permission too). Answers `202`, or `409` with `code` `closed` when nothing listens, or `asleep` when only Player Link listens and cannot do this one.
 
-`GET /api/remote/fallback?playing=true|false|none` is Player Link's own long poll (`android/player-link`): it says what it sees of Wallacast's player in Chrome and waits up to 25 seconds for a command. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
+`GET /api/remote/fallback?playing=true|false|closed|none` is Player Link's own long poll (`android/player-link`): it says what it sees of Wallacast's player in Chrome (`closed`: none, but a play opens Wallacast) and waits up to 25 seconds for a command. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
 
 ## Limits
 
