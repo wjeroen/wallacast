@@ -78,8 +78,14 @@ export function startRemote(): () => void {
     let failures = 0;
     while (running()) {
       try {
+        const askedAt = Date.now();
         const res = await remoteAPI.commands(deviceId());
         if (!running()) break;
+        // An empty answer should take about 25 seconds. A quick one means something cut the
+        // wait short, so pause instead of asking again in a tight loop.
+        if (res.data.enabled && res.data.commands.length === 0 && Date.now() - askedAt < 2000) {
+          await pause(10_000);
+        }
         failures = 0;
         const wasEnabled = enabled;
         enabled = res.data.enabled;

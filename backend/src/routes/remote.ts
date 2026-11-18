@@ -26,7 +26,8 @@ router.get('/commands', async (req, res) => {
     const deviceId = parseDeviceId(req.query.device);
     if (!deviceId) return res.status(400).json({ error: 'device must be 6 to 64 letters, digits, - or _' });
     if (!(await remoteEnabled(userId))) return res.json({ enabled: false, commands: [] });
-    const commands = await waitForCommands(userId, deviceId, (cancel) => req.on('close', cancel));
+    // res, not req: a request's own 'close' fires as soon as its (empty) body was read
+    const commands = await waitForCommands(userId, deviceId, (cancel) => res.on('close', cancel));
     if (!res.headersSent && !res.writableEnded) res.json({ enabled: true, commands });
   } catch (error) {
     console.error('[Remote] command poll failed:', error);
