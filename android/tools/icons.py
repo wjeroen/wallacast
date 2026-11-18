@@ -27,9 +27,9 @@ CENTER = 216
 MARGIN_RADIUS = 120
 
 SIDE = 136      # side of each triangle
-STROKE = 19
-GAP = 7         # the gap around the outline that lies on top
-DX = 60         # how far the second triangle sits right of the first
+STROKE = 15
+GAP = 5         # the gap around the outline that lies on top
+DX = 76         # how far the second triangle sits right of the first
 
 
 def blank():
@@ -68,7 +68,7 @@ def glyph(shift=0.0):
     # a's slanted edges cross b's flat side twice: b lies on top at the upper crossing, a at the
     # lower one, so the outlines go over and under each other like chain links
     y_low = CENTER + h * (1 - DX / w)
-    a_on_top = disc(left_b, y_low, STROKE * 1.7)
+    a_on_top = disc(left_b, y_low, STROKE * 1.4)
     a_vis = ImageChops.subtract(a, ImageChops.subtract(b_wide, a_on_top))
     b_vis = ImageChops.subtract(b, ImageChops.multiply(a_wide, a_on_top))
     return ImageChops.lighter(a_vis, b_vis)
