@@ -261,6 +261,28 @@ assert.equal(remote.sendCommand(CLOSED, { action: 'forward' }), 'asleep', 'nothi
 assert.ok(remote.sendCommand(CLOSED, { action: 'toggle' }), 'a toggle opens it too');
 assert.deepEqual((await openPoll).map((c) => c.action), ['play'], 'Link gets a play, which opens Wallacast');
 assert.deepEqual((await remote.waitForCommands(CLOSED, 'phone-7', () => {})).map((c) => c.action), ['play'], 'the opened page finds the play');
-console.log('✅ remote control commands and state, and Player Link for a sleeping or closed page');
+
+// A page in the background gets no turn to play sound: a play goes to Player Link instead
+const HIDDEN = 999_004;
+assert.equal(remote.hasState(HIDDEN, 'phone-5'), false, 'a fresh server asks the page to report');
+remote.reportState(HIDDEN, 'phone-5', remote.cleanState({ item_id: 8, playing: false, hidden: true }));
+assert.equal(remote.hasState(HIDDEN, 'phone-5'), true);
+const hiddenPage = remote.waitForCommands(HIDDEN, 'phone-5', () => {});
+const hiddenLink = remote.waitAsFallback(HIDDEN, 'paused', () => {});
+assert.equal(remote.currentState(HIDDEN).mode, 'app');
+remote.sendCommand(HIDDEN, { action: 'toggle' });
+assert.deepEqual((await hiddenLink).map((c) => c.action), ['play'], 'Player Link presses play for a hidden page');
+remote.sendCommand(HIDDEN, { action: 'next' });
+assert.deepEqual((await hiddenPage).map((c) => c.action), ['next'], 'other commands still go to the page');
+const hiddenPage2 = remote.waitForCommands(HIDDEN, 'phone-5', () => {});
+const hiddenLink2 = remote.waitAsFallback(HIDDEN, 'closed', () => {});
+remote.sendCommand(HIDDEN, { action: 'play' });
+assert.deepEqual((await hiddenLink2).map((c) => c.action), ['play'], 'without Chrome\'s player, Player Link brings Wallacast to the front');
+assert.deepEqual((await hiddenPage2).map((c) => c.action), ['play'], 'and the page plays once it is in front');
+remote.reportState(HIDDEN, 'phone-5', remote.cleanState({ item_id: 8, playing: false, hidden: false }));
+const shownPage = remote.waitForCommands(HIDDEN, 'phone-5', () => {});
+remote.sendCommand(HIDDEN, { action: 'play' });
+assert.deepEqual((await shownPage).map((c) => c.action), ['play'], 'a page in front plays itself');
+console.log('✅ remote control commands and state, and Player Link for a sleeping, closed or hidden page');
 
 console.log('\nALL API TOKEN CHECKS PASSED');

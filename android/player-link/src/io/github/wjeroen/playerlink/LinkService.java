@@ -69,6 +69,10 @@ import java.util.regex.Pattern;
  * frozen page and wakes it. Chrome drops that player soon after a pause in the background, so
  * with "Display over other apps" allowed it also waits while there is none: a play from the
  * watch then opens Wallacast (its home screen app), and the server hands the page that play.
+ * Android gives an app in the background no turn to play sound (audio focus), so the server
+ * sends every play for a hidden Wallacast here: when Chrome's player still does not play
+ * PLAY_CHECK_MS after the press, this service brings Wallacast to the front and presses
+ * play again.
  */
 public class LinkService extends NotificationListenerService {
     static final String PREFS = "link";
@@ -89,6 +93,10 @@ public class LinkService extends NotificationListenerService {
      *  drops the first command after a pause, as it drops the first headphone press. */
     private static final long COMMAND_TIMEOUT_MS = 2000;
     private static final long UNLINK_AFTER_MS = 6L * 60 * 60 * 1000;
+    /** A play from the watch that Android refused shows as not playing by then */
+    private static final long PLAY_CHECK_MS = 2000;
+    /** Time for Wallacast to come to the front before play is pressed again */
+    private static final long PLAY_AFTER_OPEN_MS = 1500;
     private static final Pattern SITE = Pattern.compile("\\b((?:[a-z0-9-]+\\.)+[a-z]{2,})\\b");
 
     static volatile LinkService instance;
@@ -651,19 +659,37 @@ public class LinkService extends NotificationListenerService {
         return view;
     }
 
-    private void openWallacast() {
+    private boolean openWallacast() {
         Intent open = openIntent();
         if (open == null) {
             note("Watch: play, but Wallacast cannot be opened");
-            return;
+            return false;
         }
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(open);
             note("Watch: opened Wallacast");
+            return true;
         } catch (Exception e) {
             note("Watch: opening Wallacast failed (" + e.getClass().getSimpleName() + ")");
+            return false;
         }
+    }
+
+    /** A play from the watch: press Chrome's play button, and if Android refused Wallacast its
+     *  turn to play sound, bring it to the front and press play again. */
+    private void playFromWatch(Player w) {
+        w.controller.getTransportControls().play();
+        note("Watch: play");
+        main.postDelayed(() -> {
+            Player now = wallacast();
+            if (now != null && playing(now.controller)) return;
+            if (!openWallacast()) return;
+            main.postDelayed(() -> {
+                Player shown = wallacast();
+                if (shown != null && !playing(shown.controller)) shown.controller.getTransportControls().play();
+            }, PLAY_AFTER_OPEN_MS);
+        }, PLAY_CHECK_MS);
     }
 
     /** A command from the watch, on Chrome's player. Chrome passes it to the page, waking it.
@@ -675,10 +701,13 @@ public class LinkService extends NotificationListenerService {
             return;
         }
         MediaController.TransportControls t = w.controller.getTransportControls();
+        if (action.equals("play") || action.equals("toggle") && !playing(w.controller)) {
+            playFromWatch(w);
+            return;
+        }
         switch (action) {
-            case "play": t.play(); break;
-            case "pause": t.pause(); break;
-            case "toggle": if (playing(w.controller)) t.pause(); else t.play(); break;
+            case "pause":
+            case "toggle": t.pause(); break;
             case "forward": t.fastForward(); break;
             case "back": t.rewind(); break;
             default: return;

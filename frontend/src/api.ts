@@ -398,7 +398,7 @@ export const remoteAPI = {
   // Long poll: answers within about 25 seconds, at once with enabled false when no token has
   // the remote permission
   commands: (device: string) =>
-    api.get<{ enabled: boolean; commands: RemoteCommand[] }>('/remote/commands', { params: { device }, timeout: 40000 }),
+    api.get<{ enabled: boolean; commands: RemoteCommand[]; report?: boolean }>('/remote/commands', { params: { device }, timeout: 40000 }),
   reportState: (device: string, state: Record<string, unknown>) => api.post('/remote/state', { device, state }),
 };
 

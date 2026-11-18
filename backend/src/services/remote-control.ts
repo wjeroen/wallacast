@@ -24,6 +24,14 @@ import { query } from '../database/db.js';
  * 'closed' and takes only a play (OPEN_ACTIONS): it opens Wallacast, and the same play waits
  * here for the page, which picks it up as soon as it polls again. Other commands answer 409
  * with code 'asleep' until the page runs again.
+ *
+ * A page in the background cannot start playing: since Android 15 an app gets no turn to
+ * play sound (audio focus) unless it is in front or already playing. So while Player Link
+ * listens, a play for a hidden page goes to Player Link instead, which presses Chrome's own
+ * play button and, if Wallacast still does not play, brings it to the front.
+ *
+ * After a deploy this memory is empty. A page that polls without a known player is told to
+ * report it first (hasState, `report` in GET /commands).
  */
 
 export const REMOTE_ACTIONS = ['play', 'pause', 'toggle', 'next', 'previous', 'forward', 'back', 'shuffle', 'speed', 'archive', 'unarchive', 'star', 'unstar'] as const;
@@ -60,6 +68,8 @@ export interface PlayerState {
   is_starred: boolean;
   has_next: boolean;
   has_previous: boolean;
+  /** The page is in the background, so Android will not let it start playing */
+  hidden: boolean;
   /** The id of the last command this device carried out */
   last_command: number | null;
 }
@@ -178,8 +188,14 @@ export function cleanState(raw: unknown): PlayerState {
     is_starred: s.is_starred === true,
     has_next: s.has_next === true,
     has_previous: s.has_previous === true,
+    hidden: s.hidden === true,
     last_command: Number.isInteger(s.last_command) ? (s.last_command as number) : null,
   };
+}
+
+/** True when the server knows this device's player. False after a deploy emptied the memory. */
+export function hasState(userId: number, deviceId: string): boolean {
+  return !!forUser(userId).devices.get(deviceId)?.state;
 }
 
 export function reportState(userId: number, deviceId: string, state: PlayerState): void {
@@ -267,13 +283,23 @@ export function sendCommand(userId: number, command: { action: RemoteAction; val
   const u = forUser(userId);
   prune(u);
   let target = targetDevice(u);
-  if (!target && fallbackReady(u)) {
+  if (target && fallbackReady(u)) {
+    // A hidden page gets no turn to play sound: Player Link starts it instead
+    const state = u.devices.get(target)!.state!;
+    const startsPlay = command.action === 'play' || (command.action === 'toggle' && !state.playing);
+    if (state.hidden && startsPlay) {
+      // Without Chrome's player, Player Link brings Wallacast to the front, where the page plays
+      if (u.fallbackSeen === 'closed') deliver(u, target, { id: nextCommandId++, action: 'play', created_at: Date.now() });
+      command = { action: 'play' };
+      target = FALLBACK_DEVICE;
+    }
+  } else if (!target && fallbackReady(u)) {
     if (u.fallbackSeen === 'closed') {
       if (!OPEN_ACTIONS.includes(command.action)) return 'asleep';
       // Player Link opens Wallacast, and the page finds the play waiting when it polls again
       command = { action: 'play' };
       const page = newestDevice(u);
-      if (page) u.pending.push({ id: nextCommandId++, action: 'play', created_at: Date.now(), device: page.id });
+      if (page) deliver(u, page.id, { id: nextCommandId++, action: 'play', created_at: Date.now() });
     } else if (!FALLBACK_ACTIONS.includes(command.action)) {
       return 'asleep';
     }
@@ -281,14 +307,19 @@ export function sendCommand(userId: number, command: { action: RemoteAction; val
   }
   if (!target) return null;
   const cmd: RemoteCommand = { id: nextCommandId++, ...command, created_at: Date.now() };
-  const waiterIndex = u.waiters.findIndex((w) => w.device === target);
+  deliver(u, target, cmd);
+  return cmd;
+}
+
+/** Hand a command to the device's waiting poll, or keep it for its next poll. */
+function deliver(u: UserRemote, device: string, cmd: RemoteCommand): void {
+  const waiterIndex = u.waiters.findIndex((w) => w.device === device);
   if (waiterIndex >= 0) {
     const [waiter] = u.waiters.splice(waiterIndex, 1);
     waiter.resolve([cmd]);
   } else {
-    u.pending.push({ ...cmd, device: target });
+    u.pending.push({ ...cmd, device });
   }
-  return cmd;
 }
 
 /** The app's long poll: commands waiting for this device at once, else the first one that

@@ -2,6 +2,7 @@ import express from 'express';
 import {
   cleanState,
   currentState,
+  hasState,
   parseCommand,
   parseDeviceId,
   remoteEnabled,
@@ -28,6 +29,8 @@ router.get('/commands', async (req, res) => {
     const deviceId = parseDeviceId(req.query.device);
     if (!deviceId) return res.status(400).json({ error: 'device must be 6 to 64 letters, digits, - or _' });
     if (!(await remoteEnabled(userId))) return res.json({ enabled: false, commands: [] });
+    // The server does not know this page's player (a deploy emptied its memory): report it first
+    if (!hasState(userId, deviceId)) return res.json({ enabled: true, commands: [], report: true });
     // res, not req: a request's own 'close' fires as soon as its (empty) body was read
     const commands = await waitForCommands(userId, deviceId, (cancel) => res.on('close', cancel));
     if (!res.headersSent && !res.writableEnded) res.json({ enabled: true, commands });

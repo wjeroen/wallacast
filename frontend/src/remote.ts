@@ -11,9 +11,12 @@ import { remoteAPI, type RemoteCommand } from './api';
  * player (null when no item is open). remoteStateChanged() sends a fresh report, a moment
  * later so a burst of changes becomes one report.
  *
- * When the page comes back to the front (Chrome may have frozen it, and Player Link may have
- * opened it for a play from the watch), a waiting pause ends, so a waiting command arrives
- * at once.
+ * Each report says whether the page is hidden: Android gives a page in the background no turn
+ * to play sound, so the server then sends a play to Player Link, which brings Wallacast to
+ * the front if needed. A play that comes while hidden is tried, and tried again when the page
+ * comes to the front within PLAY_WHEN_SHOWN_MS. Coming to the front also ends a waiting pause,
+ * so a waiting command arrives at once. When the server answers `report` (a deploy emptied
+ * its memory), the page reports its player before it waits for commands.
  */
 
 export interface RemoteHandlers {
@@ -23,6 +26,7 @@ export interface RemoteHandlers {
 
 const DISABLED_RECHECK_MS = 5 * 60 * 1000;
 const REPORT_DELAY_MS = 400;
+const PLAY_WHEN_SHOWN_MS = 30_000;
 
 let handlers: RemoteHandlers | null = null;
 let enabled = false;
@@ -31,6 +35,9 @@ let lastCommand: number | null = null;
 let reportTimer: ReturnType<typeof setTimeout> | null = null;
 let wake: (() => void) | null = null;
 let device: string | null = null;
+let playWhenShownUntil = 0;
+
+const pageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
 function deviceId(): string {
   if (device) return device;
@@ -51,10 +58,14 @@ function pause(ms: number): Promise<void> {
   });
 }
 
+async function sendReportNow(): Promise<void> {
+  const state = handlers?.state() ?? { item_id: null, playing: false };
+  await remoteAPI.reportState(deviceId(), { ...state, hidden: pageHidden(), last_command: lastCommand });
+}
+
 function sendReport(): void {
   if (!enabled) return;
-  const state = handlers?.state() ?? { item_id: null, playing: false };
-  remoteAPI.reportState(deviceId(), { ...state, last_command: lastCommand }).catch(() => { /* the next report retries */ });
+  sendReportNow().catch(() => { /* the next report retries */ });
 }
 
 /** Report the player's state soon. Does nothing while remote control is off. */
@@ -78,8 +89,16 @@ export function pokeRemote(): void {
 export function startRemote(): () => void {
   const mine = ++loop;
   const running = () => loop === mine;
-  const onVisible = () => { if (document.visibilityState === 'visible') wake?.(); };
-  document.addEventListener('visibilitychange', onVisible);
+  const onVisibility = () => {
+    remoteStateChanged();
+    if (pageHidden()) return;
+    wake?.();
+    if (Date.now() < playWhenShownUntil) {
+      playWhenShownUntil = 0;
+      void handlers?.run({ id: 0, action: 'play', created_at: Date.now() });
+    }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
   void (async () => {
     let failures = 0;
     while (running()) {
@@ -87,6 +106,12 @@ export function startRemote(): () => void {
         const askedAt = Date.now();
         const res = await remoteAPI.commands(deviceId());
         if (!running()) break;
+        if (res.data.enabled && res.data.report) {
+          enabled = true;
+          await sendReportNow();
+          failures = 0;
+          continue;
+        }
         // An empty answer should take about 25 seconds. A quick one means something cut the
         // wait short, so pause instead of asking again in a tight loop.
         if (res.data.enabled && res.data.commands.length === 0 && Date.now() - askedAt < 2000) {
@@ -101,6 +126,8 @@ export function startRemote(): () => void {
         }
         if (!wasEnabled) sendReport();
         for (const command of res.data.commands) {
+          const startsPlay = command.action === 'play' || (command.action === 'toggle' && handlers?.state()?.playing !== true);
+          playWhenShownUntil = startsPlay && pageHidden() ? Date.now() + PLAY_WHEN_SHOWN_MS : 0;
           try {
             await handlers?.run(command);
           } catch (error) {
@@ -117,7 +144,7 @@ export function startRemote(): () => void {
     }
   })();
   return () => {
-    document.removeEventListener('visibilitychange', onVisible);
+    document.removeEventListener('visibilitychange', onVisibility);
     if (!running()) return;
     loop = 0;
     enabled = false;
