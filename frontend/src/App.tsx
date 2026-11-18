@@ -13,6 +13,7 @@ import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
 import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
+import { startRemote } from './remote';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -159,6 +160,12 @@ function App() {
   useEffect(() => {
     if (isAuthenticated) logPageStart();
   }, [isAuthenticated]);
+
+  // Remote control by the watch app (remote.ts): only polls while a token allows it
+  useEffect(() => {
+    if (!isAuthenticated || user?.demo) return;
+    return startRemote();
+  }, [isAuthenticated, user?.demo]);
 
   // Optional "start playing when opening an item" preference (off by default). Refetched
   // when leaving the Settings page so a toggle takes effect without a reload.

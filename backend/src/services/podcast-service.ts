@@ -101,8 +101,18 @@ export async function searchRSSByUrl(url: string, userId: number): Promise<Podca
       }
     }
 
-    // Fetch feed details
-    const details = await fetchPodcastDetails(feedUrl);
+    // Fetch feed details. A web page that is not a feed itself may name its feed in a
+    // <link rel="alternate"> tag, which is then followed once.
+    let details;
+    try {
+      details = await fetchPodcastDetails(feedUrl);
+    } catch (error) {
+      const discovered = await discoverFeedUrl(feedUrl);
+      if (!discovered) throw error;
+      console.log(`[Feeds] ${feedUrl} is a web page that links its feed: ${discovered}`);
+      feedUrl = discovered;
+      details = await fetchPodcastDetails(feedUrl);
+    }
 
     return [{
       title: details.title,
@@ -115,6 +125,33 @@ export async function searchRSSByUrl(url: string, userId: number): Promise<Podca
   } catch (error) {
     console.error('Error fetching RSS feed:', error);
     throw new Error('Could not load RSS feed. Make sure the URL is correct. For Substack newsletters, use: yourname.substack.com/feed');
+  }
+}
+
+/** The RSS or Atom feed a web page names in a <link rel="alternate"> tag, as an absolute
+ *  address, or null when the page names none or cannot be read. */
+async function discoverFeedUrl(pageUrl: string): Promise<string | null> {
+  try {
+    const response = await safeFetch(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,*/*',
+      },
+    });
+    if (!response.ok) return null;
+    const html = (await response.text()).slice(0, 500_000);
+    for (const tag of html.match(/<link\b[^>]*>/gi) || []) {
+      const attr = (name: string) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i'))?.[1] ?? '';
+      if (!/(^|\s)alternate(\s|$)/i.test(attr('rel'))) continue;
+      if (!/^application\/(rss|atom)\+xml$/i.test(attr('type').trim())) continue;
+      const href = attr('href').trim();
+      if (!href) continue;
+      const resolved = new URL(href.replace(/&amp;/g, '&'), response.url || pageUrl);
+      if (resolved.protocol === 'http:' || resolved.protocol === 'https:') return resolved.toString();
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

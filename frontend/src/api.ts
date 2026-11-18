@@ -301,7 +301,7 @@ export const authAPI = {
     api.patch<ApiTokenSettings>(`/auth/tokens/${id}`, patch),
   // Usage counts from now on, and the last limit hit is cleared.
   resetTokenUsage: (id: number) => api.post<{ success: boolean }>(`/auth/tokens/${id}/reset-usage`),
-  // The token's tag and star changes, newest first (max 200).
+  // The token's changes (tags, stars, archive, feeds), newest first (max 200).
   listTokenChanges: (id: number) => api.get<{ changes: TokenChange[] }>(`/auth/tokens/${id}/changes`),
   undoTokenChanges: (id: number, body: { ids: number[] } | { all: true }) =>
     api.post<{ undone: number }>(`/auth/tokens/${id}/changes/undo`, body),
@@ -311,14 +311,16 @@ export const authAPI = {
 };
 
 // What a token may do. add_any and add_feed exclude each other.
-export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star';
+export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star' | 'archive' | 'subscribe' | 'remote';
 
-// Per-token limits on items added and minutes of AI generation started, in rolling windows.
+// Per-token limits on items added, minutes of AI generation started and feeds subscribed to,
+// in rolling windows.
 export interface TokenLimits {
   items_hour: number;
   items_2d: number;
   minutes_hour: number;
   minutes_2d: number;
+  subscriptions_hour: number;
 }
 
 // What is generated for items a token adds. With follow on, the app's auto-generation
@@ -352,8 +354,8 @@ export interface ApiTokenSettings {
   limit_hit_at: string | null;
 }
 
-// One live API token as listed by GET /auth/tokens, with its usage and the number of tag and
-// star changes that are not undone.
+// One live API token as listed by GET /auth/tokens, with its usage and the number of its
+// changes that are not undone.
 export interface ApiToken extends ApiTokenSettings {
   usage: TokenUsage;
   open_changes: number;
@@ -365,12 +367,14 @@ export interface ApiTokenPatch {
   generation?: Partial<TokenGeneration>;
 }
 
-// One tag or star change a token made. title is null when the item was deleted since.
+// One change a token made. title is the item's, or the feed's for subscribe and unsubscribe,
+// and null when it was deleted since.
 export interface TokenChange {
   id: number;
-  kind: 'tag_add' | 'star' | 'unstar';
+  kind: 'tag_add' | 'star' | 'unstar' | 'archive' | 'unarchive' | 'subscribe' | 'unsubscribe';
   tag: string | null;
   content_item_id: number | null;
+  podcast_id: number | null;
   title: string | null;
   created_at: string;
   undone_at: string | null;
@@ -382,6 +386,21 @@ export interface TokenAlert {
   limit_hit: string;
   limit_hit_at: string;
 }
+
+// Remote control of this app's player by the watch app (backend services/remote-control.ts)
+export interface RemoteCommand {
+  id: number;
+  action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'forward' | 'back' | 'shuffle' | 'speed' | 'archive';
+  value?: boolean | number;
+}
+
+export const remoteAPI = {
+  // Long poll: answers within about 25 seconds, at once with enabled false when no token has
+  // the remote permission
+  commands: (device: string) =>
+    api.get<{ enabled: boolean; commands: RemoteCommand[] }>('/remote/commands', { params: { device }, timeout: 40000 }),
+  reportState: (device: string, state: Record<string, unknown>) => api.post('/remote/state', { device, state }),
+};
 
 export const userSettingsAPI = {
   getAll: () => api.get<{ settings: Record<string, string | null> }>('/users/settings'),

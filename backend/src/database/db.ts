@@ -291,6 +291,17 @@ export async function initializeDatabase() {
     const youtubeDetailsMigration = await fs.readFile(youtubeDetailsMigrationPath, 'utf-8');
     await client.query(youtubeDetailsMigration);
 
+    // Run migration adding archived_at (archived audio is deleted 7 days later) and the feed
+    // column of the token change log. Guarded: if it fails, the app still starts, the audio
+    // of archived items is simply kept and token subscriptions are refused.
+    try {
+      const archiveGraceMigrationPath = path.join(__dirname, 'migrations', '033_archive_grace_and_token_feeds.sql');
+      const archiveGraceMigration = await fs.readFile(archiveGraceMigrationPath, 'utf-8');
+      await client.query(archiveGraceMigration);
+    } catch (error) {
+      console.error('❌ Migration 033 (archived_at, token feed changes) failed:', error);
+    }
+
     // Reset any stuck generation statuses (server restart during generation).
     // generation_status and current_operation say what was interrupted: a refetch
     // ('fetching'), a transcript ('generating_transcript', or the read-along step after audio)

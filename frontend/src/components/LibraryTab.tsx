@@ -418,12 +418,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleToggleArchive = async (id: number) => {
     // The one destructive case: archiving a NON-STARRED article/text WITH generated
-    // audio wipes that audio server-side. Warn exactly there (toggleable in Settings).
+    // audio removes that audio 7 days later (services/archive.ts). Warn exactly there
+    // (toggleable in Settings).
     const item = content.find(c => c.id === id);
     if (
       warnArchiveAudio && item && !item.is_archived && !item.is_starred &&
       (item.type === 'article' || item.type === 'text') && item.audio_url &&
-      !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")
+      !confirm("Archiving removes this item's generated audio after 7 days (starred items keep theirs). Archive anyway?")
     ) return;
     await toggleArchived(id);
   };
@@ -464,7 +465,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   // Instant bulk actions: one request to POST /content/bulk, then refetch.
   // Refetching (instead of optimistic updates) keeps us in sync with server
-  // side effects like archive wiping audio or delete propagating to Wallabag.
+  // side effects like delete propagating to Wallabag.
   const runInstantBulk = async (action: BulkAction, confirmMsg?: string) => {
     // Intersect with the visible list. Defensive, selection should already
     // only contain visible items
@@ -1098,7 +1099,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   runInstantBulk(
                     'archive',
                     warnArchiveAudio && risky > 0
-                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes (starred items keep theirs).`
+                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes after 7 days (starred items keep theirs).`
                       : undefined
                   );
                 }}

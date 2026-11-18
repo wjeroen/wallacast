@@ -5,18 +5,24 @@ import { normalizeEAForumUrl } from './article-fetcher.js';
 import { youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
 import {
   reserveItem,
+  reserveSubscription,
+  finishSubscription,
+  cancelSubscription,
   checkChanges,
   logChanges,
   type LimitResult,
   type ChangeRecord,
   type TokenContext,
 } from './token-limits.js';
+import { archiveItems, unarchiveItems } from './archive.js';
+import { AlreadySubscribedError, searchRSSByUrl, subscribeToPodcast } from './podcast-service.js';
 import type { TokenPermission } from './api-tokens.js';
 
 /**
  * What an API token may change, beyond reading (see TOKEN_ROUTES in services/api-tokens.ts):
- * adding an item (POST /content), and tagging or starring items (POST /content/bulk). The
- * routes call these helpers for a token and keep their own code for a normal session.
+ * adding an item (POST /content), tagging, starring and archiving items (POST /content/bulk),
+ * and subscribing to feeds (POST /podcasts/subscribe, DELETE /podcasts/:id). The routes call
+ * these helpers for a token and keep their own code for a normal session.
  */
 
 export interface TokenRequestContext extends TokenContext {
@@ -227,8 +233,9 @@ export async function shapeTokenAdd(
 
 /**
  * POST /content/bulk for a token: add_tags (tag permission, existing tags only), star and
- * unstar (star permission). Every real change is logged, so Settings can undo it, and only
- * real changes count against the hourly change limit.
+ * unstar (star permission), archive and unarchive (archive permission, the same as the app's
+ * archive: the audio stays 7 days, see services/archive.ts). Every real change is logged, so
+ * Settings can undo it, and only real changes count against the hourly change limit.
  */
 export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -237,8 +244,10 @@ export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promi
     if (!token.permissions.includes('tag')) return { status: 403, json: { error: 'This token needs the tag permission' } };
   } else if (action === 'star' || action === 'unstar') {
     if (!token.permissions.includes('star')) return { status: 403, json: { error: 'This token needs the star permission' } };
+  } else if (action === 'archive' || action === 'unarchive') {
+    if (!token.permissions.includes('archive')) return { status: 403, json: { error: 'This token needs the archive permission' } };
   } else {
-    return { status: 403, json: { error: 'An API token may only use the add_tags, star and unstar actions' } };
+    return { status: 403, json: { error: 'An API token may only use the add_tags, star, unstar, archive and unarchive actions' } };
   }
   if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500 || !ids.every((n) => Number.isInteger(n))) {
     return { status: 400, json: { error: 'ids must be a non-empty array of integers (max 500)' } };
@@ -262,7 +271,7 @@ export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promi
         const r = limitRefusal(room);
         return { status: r.status, json: { error: r.error, ...r.extra } };
       }
-      const changedIds = Array.from(new Set(changes.map((c) => c.itemId)));
+      const changedIds = Array.from(new Set(changes.map((c) => c.itemId as number)));
       await query(
         `UPDATE content_items
             SET tags = ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(tags, '{}') || $3::text[]) x ORDER BY x),
@@ -270,6 +279,25 @@ export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promi
           WHERE user_id = $1 AND id = ANY($2::int[])`,
         [token.userId, changedIds, checked.tags]
       );
+    }
+  } else if (action === 'archive' || action === 'unarchive') {
+    const target = action === 'archive';
+    const before = await query(
+      'SELECT id, is_archived FROM content_items WHERE user_id = $1 AND id = ANY($2::int[])',
+      [token.userId, ids]
+    );
+    changes = before.rows
+      .filter((row: any) => Boolean(row.is_archived) !== target)
+      .map((row: any) => ({ itemId: row.id, kind: action as 'archive' | 'unarchive' }));
+    if (changes.length > 0) {
+      const room = await checkChanges(token, changes.length);
+      if (!room.ok) {
+        const r = limitRefusal(room);
+        return { status: r.status, json: { error: r.error, ...r.extra } };
+      }
+      const changedIds = changes.map((c) => c.itemId as number);
+      if (target) await archiveItems(token.userId, changedIds);
+      else await unarchiveItems(token.userId, changedIds);
     }
   } else {
     const target = action === 'star';
@@ -289,7 +317,7 @@ export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promi
       await query(
         `UPDATE content_items SET is_starred = $3, updated_at = NOW(), wallabag_needs_push = TRUE
           WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [token.userId, changes.map((c) => c.itemId), target]
+        [token.userId, changes.map((c) => c.itemId as number), target]
       );
     }
   }
@@ -297,4 +325,66 @@ export async function tokenBulk(token: TokenRequestContext, raw: unknown): Promi
   const affected = new Set(changes.map((c) => c.itemId)).size;
   console.log(`[bulk] token=${token.id} user=${token.userId} action=${String(action)} ids=${ids.length} affected=${affected} changes=${changes.length}`);
   return { status: 200, json: { affected, changes: changes.length } };
+}
+
+/**
+ * POST /podcasts/subscribe for a token (subscribe permission): `{ url }` is any address the
+ * Feed tab's search box takes, a feed, a YouTube channel, a Substack, or a website that links
+ * its feed, resolved the same way (searchRSSByUrl). Counts against the token's
+ * subscriptions_hour limit only when the subscription succeeds. 201 with the feed, 409 with
+ * the feed when it is already followed, 502 when no feed could be read there.
+ */
+export async function tokenSubscribe(token: TokenRequestContext, raw: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const extra = Object.keys(body).filter((k) => k !== 'url');
+  if (extra.length > 0) return { status: 400, json: { error: `An API token may send only url (not: ${extra.join(', ')})` } };
+  const url = parseHttpUrl(body.url);
+  if (!url) return { status: 400, json: { error: 'url must be an http or https address' } };
+
+  const reserved = await reserveSubscription(token);
+  if (!reserved.ok) {
+    const r = limitRefusal(reserved);
+    return { status: r.status, json: { error: r.error, ...r.extra } };
+  }
+  let feedUrl: string;
+  try {
+    const found = await searchRSSByUrl(url, token.userId);
+    if (!found[0]?.feed_url) throw new Error('No feed found at this address');
+    feedUrl = found[0].feed_url;
+  } catch (error) {
+    await cancelSubscription(reserved.eventId);
+    return { status: 502, json: { error: (error as Error).message || 'No feed found at this address' } };
+  }
+  try {
+    const podcast = await subscribeToPodcast(feedUrl, token.userId);
+    await finishSubscription(reserved.eventId, podcast.id);
+    console.log(`[subscribe] token=${token.id} user=${token.userId} feed=${podcast.id} ${feedUrl}`);
+    return { status: 201, json: podcast };
+  } catch (error) {
+    await cancelSubscription(reserved.eventId);
+    if (error instanceof AlreadySubscribedError) {
+      return { status: 409, json: { error: 'Already subscribed', podcast: error.podcast } };
+    }
+    return { status: 502, json: { error: (error as Error).message || 'Could not subscribe to this feed' } };
+  }
+}
+
+/** DELETE /podcasts/:id for a token (subscribe permission): unsubscribe from any of the user's
+ *  feeds. Logged and undoable, counts against the hourly change limit. */
+export async function tokenUnsubscribe(token: TokenRequestContext, podcastId: number): Promise<{ status: number; json: Record<string, unknown> }> {
+  const r = await query('SELECT id, is_subscribed FROM podcasts WHERE id = $1 AND user_id = $2', [podcastId, token.userId]);
+  if (r.rows.length === 0) return { status: 404, json: { error: 'Podcast not found' } };
+  if (!r.rows[0].is_subscribed) return { status: 200, json: { ...r.rows[0], changed: false } };
+  const room = await checkChanges(token, 1);
+  if (!room.ok) {
+    const refusal = limitRefusal(room);
+    return { status: refusal.status, json: { error: refusal.error, ...refusal.extra } };
+  }
+  const updated = await query(
+    'UPDATE podcasts SET is_subscribed = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 RETURNING *',
+    [podcastId, token.userId]
+  );
+  await logChanges(token, [{ podcastId, kind: 'unsubscribe' }]);
+  console.log(`[unsubscribe] token=${token.id} user=${token.userId} feed=${podcastId}`);
+  return { status: 200, json: updated.rows[0] };
 }

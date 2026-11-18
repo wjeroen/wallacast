@@ -58,7 +58,7 @@ for (const [m, p] of [
 console.log('✅ the default permissions read the library and nothing else');
 
 // ---- 2. every permission opens exactly its own routes ------------------------------------
-const all = ['read_library', 'feed', 'add_any', 'tag', 'star'];
+const all = ['read_library', 'feed', 'add_any', 'tag', 'star', 'archive', 'subscribe', 'remote'];
 assert.ok(allowed(['feed'], 'GET', '/api/podcasts'));
 assert.ok(allowed(['feed'], 'GET', '/api/podcasts/feed-items?limit=50'));
 assert.ok(allowed(['feed'], 'GET', '/api/podcasts/refresh-status'));
@@ -76,6 +76,17 @@ for (const add of ['add_any', 'add_feed']) {
 }
 assert.ok(allowed(['tag'], 'POST', '/api/content/bulk') && allowed(['star'], 'POST', '/api/content/bulk'));
 assert.ok(allowed(['tag'], 'GET', '/api/content/tags/all'), 'tagging needs the tag list');
+assert.ok(allowed(['archive'], 'POST', '/api/content/bulk'), 'archive uses the bulk route');
+assert.ok(!allowed(['archive'], 'PATCH', '/api/content/5'), 'archive never opens the item PATCH');
+assert.ok(allowed(['subscribe'], 'POST', '/api/podcasts/subscribe'));
+assert.ok(allowed(['subscribe'], 'DELETE', '/api/podcasts/12'));
+assert.ok(allowed(['subscribe'], 'GET', '/api/podcasts'), 'unsubscribing needs the feed list');
+assert.ok(!allowed(['subscribe'], 'DELETE', '/api/podcasts/abc'));
+assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/feed-items'), 'subscribe alone does not read the feed');
+assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/search?q=x'));
+assert.ok(allowed(['remote'], 'GET', '/api/remote/state'));
+assert.ok(allowed(['remote'], 'POST', '/api/remote/command'));
+assert.ok(!allowed(['remote'], 'GET', '/api/content/index'), 'remote alone does not read the library');
 for (const [m, p] of [
   ['POST', '/api/content/tags/rename'],
   ['POST', '/api/content/tags/remove'],
@@ -86,6 +97,10 @@ for (const [m, p] of [
   ['DELETE', '/api/auth/tokens/1'],
   ['POST', '/api/auth/tokens/1/changes/undo'],
   ['GET', '/api/content/markdown-zip?ids=1'],
+  ['GET', '/api/remote/commands?device=abcdef'],
+  ['POST', '/api/remote/state'],
+  ['DELETE', '/api/content/5'],
+  ['DELETE', '/api/queue/5'],
 ]) assert.ok(!allowed(all, m, p), `${m} ${p} must stay closed for every token`);
 assert.match(
   (tokenRouteDecision(['read_library'], 'POST', '/api/content') as any).error,
@@ -110,7 +125,11 @@ assert.deepEqual(validateLimits({ items_hour: MAX_LIMITS.items_hour }, DEFAULT_L
 for (const bad of [{ items_hour: 501 }, { items_hour: -1 }, { items_hour: 1.5 }, { items_hour: '5' }, { foo: 1 }, [], null]) {
   assert.ok('error' in validateLimits(bad, DEFAULT_LIMITS), `limits ${JSON.stringify(bad)} refused`);
 }
-assert.deepEqual(MAX_LIMITS, { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000 });
+assert.deepEqual(MAX_LIMITS, { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, subscriptions_hour: 100 });
+assert.equal(DEFAULT_LIMITS.subscriptions_hour, 10);
+assert.equal(effectiveLimits({ items_hour: 7 }).subscriptions_hour, 10, 'a token saved before the subscription limit gets the default');
+assert.ok('error' in validateLimits({ subscriptions_hour: 101 }, DEFAULT_LIMITS));
+assert.deepEqual(validateLimits({ subscriptions_hour: 0 }, DEFAULT_LIMITS), { limits: { ...DEFAULT_LIMITS, subscriptions_hour: 0 } });
 
 assert.deepEqual(parseGeneration(undefined), { follow: true, audio: false, transcribe: false, transcribe_video: false, summary: false, summary_on_transcript: false, summary_audio: false });
 // A token saved before videos had their own switch keeps one transcript switch for both
@@ -157,5 +176,50 @@ assert.ok(isApiToken(tok) && !isApiToken('eyJhbGciOiJIUzI1NiJ9.x.y'), 'token vs 
 assert.match(hashApiToken(tok), /^[0-9a-f]{64}$/, 'sha256 hex');
 assert.notEqual(generateApiToken(), tok, 'random');
 console.log('✅ token format');
+
+// ---- 6. remote control (in memory, services/remote-control.ts) ---------------------------------
+const remote = await import('../src/services/remote-control.ts');
+assert.deepEqual(remote.parseCommand({ action: 'speed', value: 1.5 }), { action: 'speed', value: 1.5 });
+assert.ok('error' in remote.parseCommand({ action: 'speed' }), 'speed needs a value');
+assert.ok('error' in remote.parseCommand({ action: 'speed', value: 9 }));
+assert.deepEqual(remote.parseCommand({ action: 'shuffle' }), { action: 'shuffle' }, 'shuffle without a value flips');
+assert.ok('error' in remote.parseCommand({ action: 'shuffle', value: 'yes' }));
+assert.ok('error' in remote.parseCommand({ action: 'delete' }), 'unknown actions are refused');
+assert.equal(remote.parseDeviceId('abc'), null);
+assert.equal(remote.parseDeviceId('a1b2c3d4'), 'a1b2c3d4');
+assert.equal(remote.parseDeviceId('../etc'), null);
+const cleaned = remote.cleanState({ item_id: 5, title: 'x'.repeat(400), playing: true, speed: 1.5, speeds: [1, 'x', 9, 2], evil: 'y' });
+assert.equal(cleaned.item_id, 5);
+assert.equal(cleaned.title!.length, 300, 'titles are cut');
+assert.deepEqual(cleaned.speeds, [1, 2], 'only real speeds are kept');
+assert.ok(!('evil' in cleaned), 'unknown fields are dropped');
+
+const USER = 999_001;
+assert.equal(remote.sendCommand(USER, { action: 'play' }), null, 'no app listening: nothing is sent');
+assert.equal(remote.currentState(USER).online, false);
+// An app polls and reports, then a command reaches its waiting poll
+let cancelPoll: (() => void) | undefined;
+const waiting = remote.waitForCommands(USER, 'phone-1', (cancel) => { cancelPoll = cancel; });
+remote.reportState(USER, 'phone-1', remote.cleanState({ item_id: 7, playing: false }));
+assert.equal(remote.currentState(USER).online, true);
+assert.equal(remote.currentState(USER).state!.item_id, 7);
+const sent = remote.sendCommand(USER, { action: 'play' });
+assert.ok(sent && sent.action === 'play');
+const got = await waiting;
+assert.deepEqual(got.map((c) => c.action), ['play'], 'the waiting poll gets the command at once');
+// A command sent between two polls waits for the next poll
+const queued = remote.sendCommand(USER, { action: 'next' });
+assert.ok(queued);
+const next = await remote.waitForCommands(USER, 'phone-1', () => {});
+assert.deepEqual(next.map((c) => c.action), ['next']);
+// The device that reported last gets the command
+const w1 = remote.waitForCommands(USER, 'phone-1', (cancel) => { cancelPoll = cancel; });
+const w2 = remote.waitForCommands(USER, 'laptop-1', () => {});
+remote.reportState(USER, 'laptop-1', remote.cleanState({ item_id: 8, playing: true }));
+remote.sendCommand(USER, { action: 'pause' });
+assert.deepEqual((await w2).map((c) => c.action), ['pause'], 'the newest player is the target');
+cancelPoll!();
+assert.deepEqual(await w1, [], 'a cancelled poll ends empty');
+console.log('✅ remote control commands and state');
 
 console.log('\nALL API TOKEN CHECKS PASSED');

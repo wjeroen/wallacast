@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { ContentItem } from '../types';
-import { contentAPI, userSettingsAPI } from '../api';
+import { contentAPI, userSettingsAPI, type RemoteCommand } from '../api';
 import { MiniPlayer } from './MiniPlayer';
 import { FullscreenPlayer } from './FullscreenPlayer';
 import { YouTubeVideo, VIDEO_STATE, type YouTubePlayer } from './YouTubeVideo';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions, getEffectiveAudio, hasPlayableMedia, videoPlaysHere, youtubeVideoId, type AudioVariant } from '../format';
 import { logPlayback, playbackChainOpen, screenRecentlyOff, setPlayerProbe } from '../playback-log';
 import { useAuthStore } from '../store/authStore';
+import { useQueueStore } from '../store/queueStore';
+import { useContentStore } from '../store/contentStore';
+import { setRemoteHandlers, remoteStateChanged } from '../remote';
 
 function getStoredSpeed(): number {
   try {
@@ -1435,6 +1438,80 @@ export function AudioPlayer({
     videoHiddenRef.current = true;
     setVideoHidden(true);
   };
+
+  // Remote control by the watch app (remote.ts). The registered handlers call through a ref
+  // that every render refreshes, so a command always acts on the item and state shown now.
+  const shuffleOn = useQueueStore(s => s.shuffleNonManual);
+  const remoteRef = useRef<{ run: (command: RemoteCommand) => Promise<void>; state: () => Record<string, unknown> | null }>({
+    run: async () => {},
+    state: () => null,
+  });
+  remoteRef.current = {
+    run: async (command) => {
+      if (!content) return;
+      switch (command.action) {
+        case 'play': if (!isPlaying) togglePlay(); break;
+        case 'pause': if (isPlaying) togglePlay(); break;
+        case 'toggle': togglePlay(); break;
+        case 'next': if (hasNextTrack) onSkipNextTrack?.(isPlaying); break;
+        case 'previous': if (hasPrevTrack) onSkipPrevTrack?.(isPlaying); break;
+        case 'forward': handleSkipForward(); break;
+        case 'back': handleSkipBackward(); break;
+        case 'shuffle':
+          useQueueStore.getState().setShuffleNonManual(typeof command.value === 'boolean' ? command.value : !shuffleOn, content.id);
+          break;
+        case 'speed': {
+          const wanted = typeof command.value === 'number' ? command.value : 1;
+          // The nearest speed the app offers
+          const speed = SPEED_CATALOG.reduce((best, s) => Math.abs(s - wanted) < Math.abs(best - wanted) ? s : best, SPEED_CATALOG[0]);
+          handleSpeedChange(speed);
+          break;
+        }
+        case 'archive': {
+          // Archive what plays now, then go on to the next item the way the next button does
+          if (!content.is_archived) {
+            const store = useContentStore.getState();
+            if (store.allItems.some(i => i.id === content.id)) await store.toggleArchived(content.id);
+            else await contentAPI.update(content.id, { is_archived: true });
+            try {
+              const fresh = await contentAPI.getById(content.id);
+              onContentUpdated?.(fresh.data);
+            } catch { /* the archive itself went through */ }
+          }
+          if (hasNextTrack) onSkipNextTrack?.(isPlaying);
+          break;
+        }
+      }
+    },
+    state: () => content ? {
+      item_id: content.id,
+      title: content.title,
+      subtitle: content.podcast_show_name || content.author || null,
+      type: content.type,
+      playing: isPlaying,
+      position: Math.floor(currentTime),
+      duration: Math.floor(duration || content.duration || 0),
+      speed: playbackSpeed,
+      speeds: speedOptions,
+      shuffle: shuffleOn,
+      is_archived: !!content.is_archived,
+      has_next: hasNextTrack,
+      has_previous: hasPrevTrack,
+    } : null,
+  };
+  useEffect(() => {
+    setRemoteHandlers({ run: (command) => remoteRef.current.run(command), state: () => remoteRef.current.state() });
+    return () => setRemoteHandlers(null);
+  }, []);
+  useEffect(() => {
+    remoteStateChanged();
+  }, [content?.id, content?.is_archived, isPlaying, playbackSpeed, shuffleOn, hasNextTrack, hasPrevTrack, effectiveVariant]);
+  // The position, while playing
+  useEffect(() => {
+    if (!isPlaying) return;
+    const timer = setInterval(remoteStateChanged, 15_000);
+    return () => clearInterval(timer);
+  }, [isPlaying]);
 
   if (!content) return null;
 

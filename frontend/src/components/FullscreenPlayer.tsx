@@ -1566,8 +1566,8 @@ export function FullscreenPlayer({
   }, []);
 
   // Archive/unarchive from the header button. Same behavior as a library card:
-  // one confirm popup when archiving would wipe generated audio (article/text,
-  // not starred, warning toggleable in Settings), instant otherwise.
+  // one confirm popup when archiving will remove generated audio 7 days later
+  // (article/text, not starred, warning toggleable in Settings), instant otherwise.
   const handleArchiveClick = async () => {
     const archiveWipesAudio = !!content.audio_url
       && (content.type === 'article' || content.type === 'text')
@@ -1578,7 +1578,7 @@ export function FullscreenPlayer({
         const res = await userSettingsAPI.get('warn_archive_removes_audio');
         warn = res.data.value !== 'false';
       } catch { /* setting unreadable, keep the warning */ }
-      if (warn && !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")) return;
+      if (warn && !confirm("Archiving removes this item's generated audio after 7 days (starred items keep theirs). Archive anyway?")) return;
     }
     // toggleArchived does the optimistic store update + the server PATCH,
     // then fetch the fresh item for the player.

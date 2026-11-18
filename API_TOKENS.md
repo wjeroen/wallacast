@@ -1,6 +1,6 @@
 # Wallacast API tokens
 
-An API token lets a tool outside the app work with your Wallacast account: the Obsidian commands, or a cloud Claude Code routine that reads your feed and helps you decide what to add. Create one in Settings → API tokens, then tick what it may do. A token can never read your settings or API keys, change or delete library items, rename or delete tags, or manage tokens.
+An API token lets a tool outside the app work with your Wallacast account: the Obsidian commands, a cloud Claude Code routine that reads your feed and helps you decide what to add, or the watch remote (`android/README.md`). Create one in Settings → API tokens, then tick what it may do. A token can never read your settings or API keys, delete library items or change their text, rename or delete tags, or manage tokens.
 
 Every request sends the token as a Bearer header:
 
@@ -17,10 +17,10 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 ```json
 {
   "name": "Routine",
-  "permissions": ["read_library", "feed", "add_any", "tag", "star"],
-  "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600 },
-  "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80 },
-  "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "changes_hour": 500 },
+  "permissions": ["read_library", "feed", "add_any", "tag", "star", "archive", "subscribe"],
+  "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600, "subscriptions_hour": 10 },
+  "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80, "subscriptions_hour": 1 },
+  "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "subscriptions_hour": 9, "changes_hour": 500 },
   "generation": { "follows_app_settings": true, "audio": false, "transcribe": true, "transcribe_video": true, "summary": true, "summary_on_transcript": true, "summary_audio": false },
   "refresh_interval_minutes": 15,
   "chars_per_minute": 900
@@ -33,10 +33,13 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 |---|---|
 | `read_library` | `GET /api/content/index`, `GET /api/content/markdown?url=`, `GET /api/content/:id/markdown`, `GET /api/content/summaries?ids=`, `GET /api/content/tags/all` |
 | `feed` | `GET /api/podcasts`, `GET /api/podcasts/feed-items`, `POST /api/podcasts/refresh-feeds`, `GET /api/podcasts/refresh-status` |
+| `subscribe` | `POST /api/podcasts/subscribe`, `DELETE /api/podcasts/:id`, `GET /api/podcasts` |
 | `add_any` | `POST /api/content` with `url` or `feed_item_id`, `GET /api/content/preview` with `url` or `feed_item_id` |
 | `add_feed` | the same two routes, but only with `feed_item_id`: items from your own feeds, never a free address |
 | `tag` | `POST /api/content/bulk` with `add_tags` (tags that already exist), and `tags` when adding. `GET /api/content/tags/all` |
 | `star` | `POST /api/content/bulk` with `star` or `unstar` |
+| `archive` | `POST /api/content/bulk` with `archive` or `unarchive`, and `archive` through `remote` |
+| `remote` | `GET /api/remote/state`, `POST /api/remote/command`: the watch remote, see below |
 
 `add_any` and `add_feed` exclude each other. Any other route answers `403`.
 
@@ -89,9 +92,25 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 `generation` (one word, no "s") lists what started for the item (`audio`, `summary`, `summary_audio`, `transcript`) and what was skipped and why. `warnings` says the same in one plain sentence per skip, and is empty when nothing was skipped. A skipped summary or summary audio is also marked on the item: its `summary_status` or `summary_audio_status` is `skipped`, the reason is in `summary_error` or `summary_audio_error`, and the app shows it on the card with a Generate button. A skipped article audio or transcript is only in the answer and in the app's limit notice. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
 
-### Tags and stars
+### Tags, stars and archive
 
-`POST /api/content/bulk` with `{ "action": "add_tags", "ids": [1, 2], "tags": ["ai-safety"] }`, `{ "action": "star", "ids": [...] }` or `{ "action": "unstar", "ids": [...] }` (at most 500 ids). Answers `{ "affected": 2, "changes": 3 }`. Only real changes count: a tag an item already has, or a star it already has, is skipped. Every change is logged, and Settings can undo one change or all of them.
+`POST /api/content/bulk` with `{ "action": "add_tags", "ids": [1, 2], "tags": ["ai-safety"] }`, `{ "action": "star", "ids": [...] }`, `{ "action": "unstar", "ids": [...] }`, `{ "action": "archive", "ids": [...] }` or `{ "action": "unarchive", "ids": [...] }` (at most 500 ids). Answers `{ "affected": 2, "changes": 3 }`. Only real changes count: a tag an item already has, or a star it already has, is skipped. Every change is logged, and Settings can undo one change or all of them.
+
+Archiving works as in the app: the generated audio of an article or text stays 7 days and is removed after that, unless the item is starred. Undoing an archive within those 7 days brings the item back with its audio.
+
+### Feeds
+
+`POST /api/podcasts/subscribe` with `{ "url": "https://..." }`: any address the Feed tab's search box takes, a feed, a YouTube channel, a Substack, or a web page that names its feed. Answers `201` with the feed (its `id` is the feed's id), `409` with `podcast` when you already follow it, `502` when no feed could be read there. Counts against the subscriptions limit only when it succeeds.
+
+`DELETE /api/podcasts/:id` unsubscribes from one of your feeds (`GET /api/podcasts` lists them with their `id`). Counts as a change.
+
+Both are logged, and Undo in Settings unsubscribes from a feed the token added, or follows a feed again that it left.
+
+### The watch remote
+
+`GET /api/remote/state` answers `{ online, age_seconds, state }`: what the player of the open Wallacast app does (`item_id`, `title`, `subtitle`, `playing`, `position`, `duration`, `speed`, `speeds`, `shuffle`, `has_next`, `has_previous`, `is_archived`). `online` is false when no app has asked for commands in the last 40 seconds.
+
+`POST /api/remote/command` with `{ "action": "play" }`. Actions: `play`, `pause`, `toggle`, `next`, `previous`, `forward` and `back` (15 seconds), `shuffle` (`value` true or false, none flips it), `speed` (`value`, the nearest speed the app offers), `archive` (needs the `archive` permission too: archives what plays and goes on to the next item). Answers `202`, or `409` when no app listens. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
 
 ## Limits
 
@@ -103,12 +122,13 @@ Each token has four limits, set under the token in Settings. They are rolling wi
 | Items per 2 days | 100 | 5,000 | the same |
 | Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
+| Subscriptions per hour | 10 | 100 | every feed the token subscribed to |
 
 Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
 - Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
-- Fixed limits: one feed refresh per 15 minutes, 500 tag and star changes per hour.
+- Fixed limits: one feed refresh per 15 minutes, 500 changes per hour (tags, stars, archive, unarchive, unsubscribe).
 
 Each limit hit shows a notice in the app. The Reset button in Settings counts usage from that moment. Usage is kept in the database, so a deploy does not reset it, and deleting an item does not give back what it used.
 

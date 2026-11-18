@@ -13,6 +13,7 @@ import { createReadStream } from 'fs';
 import type { Readable } from 'stream';
 import { startHourlyMemoryLog } from './services/memory-log.js';
 import { startYouTubeRefresh } from './services/youtube-refresh.js';
+import { startArchiveCleanup } from './services/archive.js';
 import contentRouter from './routes/content.js';
 import podcastRouter from './routes/podcasts.js';
 import queueRouter from './routes/queue.js';
@@ -20,6 +21,7 @@ import transcriptionRouter from './routes/transcription.js';
 import authRouter from './routes/auth.js';
 import usersRouter from './routes/users.js';
 import wallabagRouter from './routes/wallabag.js';
+import remoteRouter from './routes/remote.js';
 import { requireAuth, requireDatabaseReady } from './middleware/auth.js';
 import { bootstrapFirstUser } from './services/auth.js';
 import { query } from './database/db.js';
@@ -414,6 +416,7 @@ app.use('/api/content', requireDatabaseReady, requireAuth, contentRouter);
 app.use('/api/podcasts', requireDatabaseReady, requireAuth, podcastRouter);
 app.use('/api/queue', requireDatabaseReady, requireAuth, queueRouter);
 app.use('/api/transcription', requireDatabaseReady, requireAuth, transcriptionRouter);
+app.use('/api/remote', requireDatabaseReady, requireAuth, remoteRouter);
 app.use('/api/wallabag', requireDatabaseReady, wallabagRouter);
 
 // Log how much disk the database is using (audio blobs, transcripts, etc.) to the
@@ -575,6 +578,7 @@ async function start() {
       // Reads stored YouTube details again before YouTube's 30-day limit (hourly, first run
       // after 5 minutes)
       startYouTubeRefresh();
+      startArchiveCleanup();
       break;
     } catch (error) {
       retries--;

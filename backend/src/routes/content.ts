@@ -12,10 +12,11 @@ import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
+import { deleteAudioFile } from '../services/audio-storage.js';
 import { summaryAudioKey, generateSummaryAudioForContent } from '../services/summary-audio.js';
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
+import { archiveItems, unarchiveItems } from '../services/archive.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
@@ -523,47 +524,13 @@ router.post('/bulk', async (req, res) => {
       affected = r.rowCount ?? 0;
     }
 
+    // Archiving keeps the generated audio for 7 days, see services/archive.ts
     if (action === 'archive') {
-      // Mirrors PATCH /:id is_archived=true: wipe generated audio + read-along data for
-      // NON-STARRED articles/texts only. Podcasts keep their (external) audio_url and
-      // starred items keep everything.
-      // NOTE: no longer guarded on `audio_data IS NOT NULL`. Audio now lives on disk, so
-      // that guard would skip disk-backed items and leave their files orphaned. We clear
-      // the (now-mostly-empty) audio columns and delete the disk file for each affected id.
-      const clearedArchive = await query(
-        `UPDATE content_items
-         SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
-             transcript = NULL, transcript_words = NULL, tts_chunks = NULL
-         WHERE user_id = $1 AND id = ANY($2::int[])
-           AND type IN ('article', 'text') AND is_starred = false
-         RETURNING id`,
-        [userId, ids]
-      );
-      for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
-      // Archiving drops transient podcast-cache copies, except for starred items
-      // (starred keeps audio on archive, cached podcast copies included).
-      const nonStarredIds = await query(
-        'SELECT id FROM content_items WHERE user_id = $1 AND id = ANY($2::int[]) AND is_starred = false',
-        [userId, ids]
-      );
-      for (const row of nonStarredIds.rows) evictCachedPodcastAudio(row.id).catch(() => {});
-      const r = await query(
-        `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
-         WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [userId, ids]
-      );
-      affected = r.rowCount ?? 0;
+      affected = (await archiveItems(userId, ids)).length;
     }
 
     if (action === 'unarchive') {
-      // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio. Implicitly
-      // kicking off dozens of TTS jobs would be a cost surprise. Use bulk "Generate audio".
-      const r = await query(
-        `UPDATE content_items SET is_archived = false, updated_at = NOW(), wallabag_needs_push = TRUE
-         WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [userId, ids]
-      );
-      affected = r.rowCount ?? 0;
+      affected = (await unarchiveItems(userId, ids)).length;
     }
 
     if (action === 'remove_audio') {
@@ -1759,45 +1726,15 @@ router.patch('/:id', async (req, res) => {
     }
 
     if (updates.is_archived === true) {
-      // Only read whether a blob exists and its stored size, never the blob itself.
-      // Loading audio_data (BYTEA, tens of MB) into RAM just to check existence was wasteful.
+      // Archiving keeps the generated audio for 7 days (services/archive.ts removes it later).
+      // Only a transient podcast-cache copy goes now, unless the item is or becomes starred.
       const contentResult = await query(
-        'SELECT audio_data IS NOT NULL AS has_blob, pg_column_size(audio_data) AS blob_bytes, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT is_starred FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
-
       if (contentResult.rows.length > 0) {
-        const { has_blob, blob_bytes, type, is_starred: dbStarred } = contentResult.rows[0];
-
-        // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
-        // If updates.is_starred is present, use it. Otherwise use DB value.
-        const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
-
-        // Archiving drops any transient podcast-cache copy, UNLESS starred: starred
-        // items keep their audio on archive, cached podcast copies included.
+        const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : contentResult.rows[0].is_starred;
         if (!effectiveStarred) evictCachedPodcastAudio(id).catch(() => {});
-
-        // Audio may be in the DB blob (legacy) OR on the disk volume (new). Check both, so
-        // archiving still frees space after the migration (when audio_data is NULL).
-        const diskBytes = await getAudioFileSize(id);
-        const hasAudio = has_blob || diskBytes !== null;
-
-        // Only delete audio for articles (not podcasts) and only if not favorited
-        if (hasAudio && (type === 'article' || type === 'text') && !effectiveStarred) {
-          const sizeMB = ((blob_bytes ?? diskBytes ?? 0) / 1024 / 1024).toFixed(2);
-          console.log(`Archived: Deleting ${sizeMB} MB of audio to save space`);
-          updates.audio_data = null;
-          updates.audio_url = null;
-          updates.duration = null;
-          updates.content_alignment = null;
-          updates.transcript = null;
-          updates.transcript_words = null;
-          updates.tts_chunks = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks');
-          await deleteAudioFile(id); // remove the on-disk file too
-        } else if (hasAudio && effectiveStarred) {
-          console.log(`Archived: Preserving audio for favorited item ${id}`);
-        }
       }
     }
 

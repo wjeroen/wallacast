@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
 import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission, type TokenGeneration } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { pokeRemote } from '../remote';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 interface SettingsPageProps {
@@ -141,7 +142,16 @@ const TOKEN_LIMIT_FIELDS: Array<{ key: keyof TokenLimits; label: string }> = [
   { key: 'items_2d', label: 'Items per 2 days' },
   { key: 'minutes_hour', label: 'Generation minutes per hour' },
   { key: 'minutes_2d', label: 'Generation minutes per 2 days' },
+  { key: 'subscriptions_hour', label: 'Subscriptions per hour' },
 ];
+const TOKEN_CHANGE_WORDS: Record<string, string> = {
+  star: 'Starred',
+  unstar: 'Unstarred',
+  archive: 'Archived',
+  unarchive: 'Unarchived',
+  subscribe: 'Subscribed',
+  unsubscribe: 'Unsubscribed',
+};
 // The same six as the app's automatic settings, in the order Settings shows them
 const TOKEN_GENERATION_FLAGS: Array<{ key: Exclude<keyof TokenGeneration, 'follow'>; label: string }> = [
   { key: 'audio', label: 'Audio for articles' },
@@ -793,6 +803,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setTokenBusy(true);
     try {
       await authAPI.revokeToken(token.id);
+      pokeRemote();
       await loadApiTokens();
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Could not revoke the token');
@@ -815,6 +826,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       const response = await authAPI.updateToken(token.id, patch);
       setApiTokens(list => list && list.map(t => (t.id === token.id ? { ...t, ...response.data } : t)));
+      pokeRemote();
       return true;
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Could not change the token');
@@ -899,11 +911,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     }
   };
 
-  // The editor panel under a token row. Limits and generation only apply to a token that may
-  // add items, the change log only to one that may tag or star.
+  // The editor panel under a token row. Item and minute limits and generation only apply to a
+  // token that may add items, the subscription limit to one that may subscribe, the change log
+  // to one that may change items or feeds.
   const renderTokenEditor = (t: ApiToken) => {
     const busy = tokenEditBusy === t.id;
     const canAdd = t.permissions.includes('add_any') || t.permissions.includes('add_feed');
+    const canSubscribe = t.permissions.includes('subscribe');
+    const canChange = (['tag', 'star', 'archive', 'subscribe'] as TokenPermission[]).some(p => t.permissions.includes(p));
     const addMode = t.permissions.includes('add_any') ? 'add_any' : t.permissions.includes('add_feed') ? 'add_feed' : 'none';
     const permissionBox = (permission: TokenPermission, label: string) => (
       <label>
@@ -939,13 +954,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
           {permissionBox('tag', 'Add existing tags')}
           {permissionBox('star', 'Star and unstar')}
+          {permissionBox('archive', 'Archive and unarchive')}
+          {permissionBox('subscribe', 'Subscribe to feeds')}
+          {permissionBox('remote', 'Control playback')}
         </div>
 
-        {canAdd && (
+        {(canAdd || canSubscribe) && (
           <div className="settings-token-editor-group">
             <span className="settings-token-editor-title">Limits</span>
             <div className="settings-token-limits">
-              {TOKEN_LIMIT_FIELDS.map(({ key, label }) => (
+              {TOKEN_LIMIT_FIELDS.filter(({ key }) => (key === 'subscriptions_hour' ? canSubscribe : canAdd)).map(({ key, label }) => (
                 <div key={key} className="settings-token-limit">
                   <label htmlFor={`token-${t.id}-${key}`}>{label}</label>
                   <input
@@ -964,7 +982,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </div>
               ))}
             </div>
-            <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>
+            {canAdd && <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>}
             <button type="button" disabled={busy} onClick={() => handleResetTokenUsage(t)}>Reset usage</button>
           </div>
         )}
@@ -999,7 +1017,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         )}
 
-        {(t.permissions.includes('tag') || t.permissions.includes('star')) && (
+        {canChange && (
           <div className="settings-token-editor-group">
             <span className="settings-token-editor-title">Changes</span>
             <button type="button" disabled={busy} onClick={() => toggleTokenChanges(t)} aria-expanded={showTokenChanges}>
@@ -1015,7 +1033,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   {tokenChanges.map((c) => (
                     <div key={c.id} className={c.undone_at ? 'settings-token-change undone' : 'settings-token-change'}>
                       <span className="settings-token-change-when">{formatTokenTime(c.created_at)}</span>
-                      <span>{c.kind === 'tag_add' ? `Added tag "${c.tag}"` : c.kind === 'star' ? 'Starred' : 'Unstarred'}</span>
+                      <span>{c.kind === 'tag_add' ? `Added tag "${c.tag}"` : TOKEN_CHANGE_WORDS[c.kind]}</span>
                       <span className="settings-token-change-item">{c.title ?? 'Deleted item'}</span>
                       {c.undone_at ? (
                         <span>Undone</span>

@@ -43,9 +43,13 @@ const LAST_USED_WRITE_INTERVAL_MS = 60_000;
  *   add_feed      the same, but only items from the user's own feeds, never a free URL
  *   tag           add tags that already exist in the library to items (logged, undoable)
  *   star          star and unstar items (logged, undoable)
+ *   archive       archive and unarchive items (logged, undoable, audio kept 7 days)
+ *   subscribe     subscribe to feeds and unsubscribe from them (logged, undoable)
+ *   remote        control the player of the open app: play, pause, next, previous, shuffle,
+ *                 speed (services/remote-control.ts), for a watch app
  * add_any and add_feed exclude each other.
  */
-export const TOKEN_PERMISSIONS = ['read_library', 'feed', 'add_any', 'add_feed', 'tag', 'star'] as const;
+export const TOKEN_PERMISSIONS = ['read_library', 'feed', 'add_any', 'add_feed', 'tag', 'star', 'archive', 'subscribe', 'remote'] as const;
 export type TokenPermission = typeof TOKEN_PERMISSIONS[number];
 export const DEFAULT_PERMISSIONS: TokenPermission[] = ['read_library'];
 
@@ -258,11 +262,12 @@ export function touchApiToken(tokenId: number): void {
  * one (any of them is enough). Everything else answers 403, every other GET included:
  * `GET /api/users/settings` exists and must never be reachable with a token. Routes that
  * take part of a permission check their body themselves: POST /api/content accepts only a
- * `url` or a `feed_item_id` from a token, POST /api/content/bulk only add_tags, star and
- * unstar. HEAD counts as GET.
+ * `url` or a `feed_item_id` from a token, POST /api/content/bulk only add_tags, star,
+ * unstar, archive and unarchive, POST /api/remote/command an archive only with the archive
+ * permission. HEAD counts as GET.
  */
 interface TokenRoute {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'DELETE';
   path: RegExp;
   anyOf: readonly TokenPermission[] | 'any';
 }
@@ -273,13 +278,17 @@ export const TOKEN_ROUTES: readonly TokenRoute[] = [
   { method: 'GET', path: /^\/api\/content\/\d+\/markdown$/, anyOf: ['read_library'] },
   { method: 'GET', path: /^\/api\/content\/summaries$/, anyOf: ['read_library'] },
   { method: 'GET', path: /^\/api\/content\/tags\/all$/, anyOf: ['read_library', 'tag'] },
-  { method: 'GET', path: /^\/api\/podcasts$/, anyOf: ['feed'] },
+  { method: 'GET', path: /^\/api\/podcasts$/, anyOf: ['feed', 'subscribe'] },
   { method: 'GET', path: /^\/api\/podcasts\/feed-items$/, anyOf: ['feed'] },
   { method: 'GET', path: /^\/api\/podcasts\/refresh-status$/, anyOf: ['feed'] },
   { method: 'POST', path: /^\/api\/podcasts\/refresh-feeds$/, anyOf: ['feed'] },
   { method: 'POST', path: /^\/api\/content$/, anyOf: ['add_any', 'add_feed'] },
   { method: 'GET', path: /^\/api\/content\/preview$/, anyOf: ['add_any', 'add_feed'] },
-  { method: 'POST', path: /^\/api\/content\/bulk$/, anyOf: ['tag', 'star'] },
+  { method: 'POST', path: /^\/api\/content\/bulk$/, anyOf: ['tag', 'star', 'archive'] },
+  { method: 'POST', path: /^\/api\/podcasts\/subscribe$/, anyOf: ['subscribe'] },
+  { method: 'DELETE', path: /^\/api\/podcasts\/\d+$/, anyOf: ['subscribe'] },
+  { method: 'GET', path: /^\/api\/remote\/state$/, anyOf: ['remote'] },
+  { method: 'POST', path: /^\/api\/remote\/command$/, anyOf: ['remote'] },
   { method: 'GET', path: /^\/api\/auth\/token$/, anyOf: 'any' },
 ];
 

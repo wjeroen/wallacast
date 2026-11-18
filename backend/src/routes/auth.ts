@@ -24,8 +24,10 @@ import {
   CHANGES_PER_HOUR,
   REFRESH_INTERVAL_MINUTES,
   CHARS_PER_MINUTE,
+  CHANGE_KINDS_SQL,
 } from '../services/token-limits.js';
 import { query } from '../database/db.js';
+import { forgetRemoteEnabled } from '../services/remote-control.js';
 
 const router = Router();
 
@@ -325,12 +327,14 @@ router.get('/token', requireAuth, async (req, res) => {
         items_2d: usage.items_2d,
         minutes_hour: usage.minutes_hour,
         minutes_2d: usage.minutes_2d,
+        subscriptions_hour: usage.subscriptions_hour,
       },
       remaining: {
         items_hour: left(t.limits.items_hour, usage.items_hour),
         items_2d: left(t.limits.items_2d, usage.items_2d),
         minutes_hour: left(t.limits.minutes_hour, usage.minutes_hour),
         minutes_2d: left(t.limits.minutes_2d, usage.minutes_2d),
+        subscriptions_hour: left(t.limits.subscriptions_hour, usage.subscriptions_hour),
         changes_hour: Math.max(0, CHANGES_PER_HOUR - usage.changes_hour),
       },
       generation: { follows_app_settings: t.generation.follow, ...generation },
@@ -386,8 +390,8 @@ router.get('/tokens', requireAuth, async (req, res) => {
       `SELECT e.token_id, COUNT(*)::int AS n
          FROM api_token_events e JOIN api_tokens t ON t.id = e.token_id
         WHERE t.user_id = $1 AND t.revoked_at IS NULL
-          AND e.kind IN ('tag_add', 'star', 'unstar') AND e.undone_at IS NULL
-          AND e.content_item_id IS NOT NULL
+          AND e.kind IN (${CHANGE_KINDS_SQL}) AND e.undone_at IS NULL
+          AND (e.content_item_id IS NOT NULL OR e.podcast_id IS NOT NULL)
         GROUP BY e.token_id`,
       [userId]
     );
@@ -454,6 +458,7 @@ router.patch('/tokens/:id', requireAuth, async (req, res) => {
     }
     const { permissions, limits, generation } = req.body || {};
     const updated = await updateApiToken(req.user!.userId, id, { permissions, limits, generation });
+    forgetRemoteEnabled(req.user!.userId);
     if (updated === null) {
       return res.status(404).json({ error: 'Token not found' });
     }
@@ -490,8 +495,9 @@ router.post('/tokens/:id/reset-usage', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/auth/tokens/:id/changes - The token's tag and star changes, newest first, with the
-// item title (null when the item was deleted since) and whether each one was undone.
+// GET /api/auth/tokens/:id/changes - The token's changes (tags, stars, archive, feeds), newest
+// first, with the item's or feed's title (null when it was deleted since) and whether each one
+// was undone.
 router.get('/tokens/:id/changes', requireAuth, async (req, res) => {
   try {
     if (req.apiToken) {
@@ -554,6 +560,7 @@ router.delete('/tokens/:id', tokenLimiter, requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid token id' });
     }
     const revoked = await revokeApiToken(req.user!.userId, id);
+    forgetRemoteEnabled(req.user!.userId);
     if (!revoked) {
       return res.status(404).json({ error: 'Token not found' });
     }

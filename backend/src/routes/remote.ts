@@ -1,0 +1,62 @@
+import express from 'express';
+import {
+  cleanState,
+  currentState,
+  parseCommand,
+  parseDeviceId,
+  remoteEnabled,
+  reportState,
+  sendCommand,
+  waitForCommands,
+} from '../services/remote-control.js';
+
+/**
+ * Remote control of the open app's player (services/remote-control.ts explains the flow).
+ *   GET  /api/remote/commands?device=  the app's long poll for commands (app sessions only)
+ *   POST /api/remote/state             the app reports its player { device, state } (app sessions only)
+ *   GET  /api/remote/state             what the player is doing (the watch, a token with `remote`)
+ *   POST /api/remote/command           { action, value? } for the player (the watch)
+ * Tokens reach only the last two (TOKEN_ROUTES in services/api-tokens.ts).
+ */
+const router = express.Router();
+
+router.get('/commands', async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const deviceId = parseDeviceId(req.query.device);
+    if (!deviceId) return res.status(400).json({ error: 'device must be 6 to 64 letters, digits, - or _' });
+    if (!(await remoteEnabled(userId))) return res.json({ enabled: false, commands: [] });
+    const commands = await waitForCommands(userId, deviceId, (cancel) => req.on('close', cancel));
+    if (!res.headersSent && !res.writableEnded) res.json({ enabled: true, commands });
+  } catch (error) {
+    console.error('[Remote] command poll failed:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Remote command poll failed' });
+  }
+});
+
+router.post('/state', (req, res) => {
+  const deviceId = parseDeviceId(req.body?.device);
+  if (!deviceId) return res.status(400).json({ error: 'device must be 6 to 64 letters, digits, - or _' });
+  reportState(req.user!.userId, deviceId, cleanState(req.body?.state));
+  res.json({ ok: true });
+});
+
+router.get('/state', (req, res) => {
+  res.json(currentState(req.user!.userId));
+});
+
+router.post('/command', (req, res) => {
+  const parsed = parseCommand(req.body);
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  if (parsed.action === 'archive' && req.apiToken && !req.apiToken.permissions.includes('archive')) {
+    return res.status(403).json({ error: 'This token needs the archive permission to archive' });
+  }
+  const sent = sendCommand(req.user!.userId, parsed);
+  if (!sent) {
+    return res.status(409).json({ error: 'No open Wallacast app is listening. Open Wallacast on your phone.' });
+  }
+  console.log(`[Remote] user=${req.user!.userId} ${req.apiToken ? `token=${req.apiToken.id} ` : ''}command ${sent.id} ${sent.action}${sent.value !== undefined ? `=${sent.value}` : ''}`);
+  res.status(202).json({ id: sent.id, action: sent.action });
+});
+
+export default router;
