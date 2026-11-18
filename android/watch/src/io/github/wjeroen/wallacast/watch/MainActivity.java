@@ -389,9 +389,12 @@ public class MainActivity extends Activity {
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         unit = Math.max(0.75f, Math.min(1.4f, (Math.min(dm.widthPixels, dm.heightPixels) / dm.density) / 225f));
 
+        // The controls fill exactly one screen, centered as before. The Update button sits below
+        // them, so it takes a scroll to reach and moves nothing else.
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
+        col.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dm.heightPixels));
 
         // Two lines of text where the round screen is still narrow: the title and a status line
         title = label(13, 0xFFF1F5F9, true);
@@ -441,19 +444,30 @@ public class MainActivity extends Activity {
         LinearLayout last = row();
         archive = button(32, 32, 4, v -> onArchive());
         star = button(32, 32, 4, v -> send(state != null && state.optBoolean("is_starred") ? "unstar" : "star", null));
-        update = button(62, 26, 4, v -> installUpdate());
-        update.setText("Update");
-        update.setColors(0xFF3B82F6, 0xFFFFFFFF);
         last.addView(archive);
         last.addView(star);
-        last.addView(update);
         col.addView(last);
+
+        LinearLayout below = row();
+        below.setPadding(0, 0, 0, s(40));
+        update = button(84, 32, 4, v -> installUpdate());
+        update.setText("Update");
+        update.setColors(0xFF3B82F6, 0xFFFFFFFF);
+        below.addView(update);
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.addView(col);
+        page.addView(below);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(0xFF0F172A);
-        scroll.setFillViewport(true);
         scroll.setVerticalScrollBarEnabled(false);
-        scroll.addView(col, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        scroll.addView(page, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // The rotating bezel or crown scrolls the focused view
+        scroll.setFocusable(true);
+        scroll.setFocusableInTouchMode(true);
+        scroll.requestFocus();
         return scroll;
     }
 
@@ -554,7 +568,8 @@ public class MainActivity extends Activity {
         boolean archived = state != null && state.optBoolean("is_archived");
         archive.setIcon(archived ? R.drawable.ic_archive_restore : R.drawable.ic_archive, 0.5f, null);
         archive.setColors(armed ? 0xFFB91C1C : 0xFF1E293B, 0xFFF1F5F9);
-        update.setVisibility(newerVersion > 0 ? View.VISIBLE : View.GONE);
+        // the whole row below the screen, so without an update there is nothing to scroll to
+        ((View) update.getParent()).setVisibility(newerVersion > 0 || installing ? View.VISIBLE : View.GONE);
         update.setEnabled(!installing);
     }
 }

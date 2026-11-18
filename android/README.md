@@ -51,7 +51,7 @@ If pairing fails with "protocol fault (couldn't read status message)": the watch
 
 **How it behaves**
 
-- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others.
+- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others. The Update button sits below them: scroll down to reach it.
 - The watch asks for the player's state every 2 seconds while its screen is on.
 - Wallacast must be open on the phone (in the background is fine). While audio plays, Chrome keeps the page running. After about 5 minutes of pause in the background, Chrome freezes the page, and only Chrome's own player still answers. Then:
   - With Player Link's watch bridge set up (below), play, pause and the skips still work: Player Link presses them on Chrome's player, which wakes the page. The watch shows "Asleep on the phone" and greys out the other buttons until the page runs again.
