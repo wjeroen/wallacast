@@ -391,8 +391,8 @@ public class MainActivity extends Activity {
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         unit = Math.max(0.75f, Math.min(1.4f, (Math.min(dm.widthPixels, dm.heightPixels) / dm.density) / 225f));
 
-        // The controls fill exactly one screen, centered as before. The Update button sits below
-        // them, so it takes a scroll to reach and moves nothing else.
+        // The controls fill exactly one screen, centered. The Update button peeks in below them
+        // at the bottom edge, and a scroll shows it whole.
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
@@ -461,6 +461,17 @@ public class MainActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         page.addView(col);
         page.addView(below);
+        // Pull the Update row up over the empty bottom of the screen: below archive and star by
+        // the same gap as theirs below shuffle
+        col.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> below.post(() -> {
+            int gap = (last.getTop() + archive.getTop()) - (middle.getTop() + shuffle.getBottom());
+            int top = last.getTop() + archive.getBottom() + gap - s(2) - col.getHeight();
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) below.getLayoutParams();
+            if (lp.topMargin != top) {
+                lp.topMargin = top;
+                below.setLayoutParams(lp);
+            }
+        }));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(0xFF0F172A);

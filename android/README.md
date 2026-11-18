@@ -7,7 +7,7 @@ Two small optional apps. Wallacast itself stays a web app: both apps work next t
 | **Wallacast** (`watch/`) | A Wear OS watch | Shows what Wallacast plays on your phone, with play/pause, previous and next item, 15-second skips, shuffle, speed, archive or unarchive, and star, in the app's own icons |
 | **Player Link** (`player-link/`) | Your Android phone | Pauses and plays the players you tick together (for example Wallacast and Spotify), whichever one got the press. Also passes the Wallacast watch app's play, pause and skips on while Chrome lets Wallacast sleep |
 
-Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux. Player Link's icon is drawn by `tools/icons.py`.
+Both are plain Java with no libraries, built without Gradle by `build.sh`, so they build on the phone itself in Termux. Player Link's icon is drawn by `tools/icons.py`. The watch app's icon is the Wallacast W as a vector shape on a dark circle (`watch/res/drawable/ic_launcher_foreground.xml`).
 
 ## Build
 
@@ -51,7 +51,7 @@ If pairing fails with "protocol fault (couldn't read status message)": the watch
 
 **How it behaves**
 
-- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others. The Update button sits below them: scroll down to reach it.
+- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others. When a new version exists, an Update button peeks in below them: scroll down to see it whole.
 - The watch asks for the player's state every 2 seconds while its screen is on.
 - Wallacast must be open on the phone (in the background is fine). While audio plays, Chrome keeps the page running. After about 5 minutes of pause in the background, Chrome freezes the page, and only Chrome's own player still answers. Then:
   - With Player Link's watch bridge set up (below), play, pause and the skips still work: Player Link presses them on Chrome's player, which wakes the page. The watch shows "Asleep on the phone" and greys out the other buttons until the page runs again.

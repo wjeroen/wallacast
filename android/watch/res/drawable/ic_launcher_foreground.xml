@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Wallacast W (frontend/public/logo-transparent.png) as strokes, sized to sit inside the
-     round mask of an adaptive icon -->
+<!-- The Wallacast W (frontend/public/logo-transparent.png) as strokes, as big as the round mask
+     of an adaptive icon allows -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:pathData="M45.93,37.68 L37.68,41.81 L37.68,70.32 L54.00,62.16 L70.32,70.32 L70.32,41.81 L62.07,37.68"
-        android:strokeColor="#FF60A5FA" android:strokeWidth="7.31"
+    <path android:pathData="M43.91,33.61 L33.61,38.76 L33.61,74.39 L54.00,64.20 L74.39,74.39 L74.39,38.76 L64.09,33.61"
+        android:strokeColor="#FF60A5FA" android:strokeWidth="9.14"
         android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:pathData="M54.00,49.91 L54.00,62.16"
-        android:strokeColor="#FF60A5FA" android:strokeWidth="7.31"
+    <path android:pathData="M54.00,48.88 L54.00,64.20"
+        android:strokeColor="#FF60A5FA" android:strokeWidth="9.14"
         android:strokeLineCap="round" android:strokeLineJoin="round" />
 </vector>
