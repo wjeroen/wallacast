@@ -70,6 +70,8 @@ export interface PlayerState {
   has_previous: boolean;
   /** The page is in the background, so Android will not let it start playing */
   hidden: boolean;
+  /** False when no player is open and this is the last item: a play loads it */
+  loaded: boolean;
   /** The id of the last command this device carried out */
   last_command: number | null;
 }
@@ -189,6 +191,7 @@ export function cleanState(raw: unknown): PlayerState {
     has_next: s.has_next === true,
     has_previous: s.has_previous === true,
     hidden: s.hidden === true,
+    loaded: s.loaded !== false,
     last_command: Number.isInteger(s.last_command) ? (s.last_command as number) : null,
   };
 }

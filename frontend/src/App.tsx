@@ -13,9 +13,11 @@ import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
 import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
-import { startRemote } from './remote';
+import { setRemoteIdle, startRemote } from './remote';
 import type { ContentItem } from './types';
 import './App.css';
+
+const LAST_ITEM_KEY = 'wallacast-last-item';
 
 type Tab = 'feed' | 'add' | 'library';
 type Page = 'main' | 'settings';
@@ -91,6 +93,19 @@ function App() {
   // What another app shared, until the Add tab takes it (after login when signed out)
   const [shared, setShared] = useState<SharedContent | null>(sharedAtStartup);
   const [currentContent, setCurrentContent] = useState<ContentItem | null>(null);
+  // The last item in the player, for the watch's play while no player is open (see below)
+  useEffect(() => {
+    if (!currentContent) return;
+    try {
+      localStorage.setItem(LAST_ITEM_KEY, JSON.stringify({
+        id: currentContent.id,
+        title: currentContent.title,
+        subtitle: currentContent.podcast_show_name || currentContent.author || null,
+        type: currentContent.type,
+        duration: currentContent.duration || 0,
+      }));
+    } catch { /* private mode */ }
+  }, [currentContent]);
   // Which fullscreen-player tab to open on next play (e.g. "Read more" → Summary tab)
   const [initialPlayerTab, setInitialPlayerTab] = useState<'summary' | undefined>(undefined);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -166,6 +181,50 @@ function App() {
     if (!isAuthenticated || user?.demo) return;
     return startRemote();
   }, [isAuthenticated, user?.demo]);
+
+  // While no player is open (Wallacast started fresh, or the player was closed), the watch
+  // sees the last item, and its play loads that item into the mini player and plays it.
+  // resumeLastRef keeps the newest render's helpers (they read preferSummaryAudio).
+  const resumeLastRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    const lastItem = () => {
+      try {
+        const raw = localStorage.getItem(LAST_ITEM_KEY);
+        return raw ? JSON.parse(raw) as { id: number; title?: string; subtitle?: string | null; type?: string; duration?: number } : null;
+      } catch {
+        return null;
+      }
+    };
+    resumeLastRef.current = async () => {
+      const last = lastItem();
+      if (!last) return;
+      try {
+        const res = await contentAPI.getById(last.id);
+        if (!hasPlayableMedia(res.data)) return;
+        logPlayback('remote-resume', { to: last.id });
+        setCurrentContent(resetIfNearlyFinished(res.data));
+        setAutoPlayToken(t => t + 1);
+      } catch { /* the item is gone */ }
+    };
+  });
+  useEffect(() => {
+    setRemoteIdle({
+      run: async (command) => {
+        if (command.action === 'play' || command.action === 'toggle') await resumeLastRef.current();
+      },
+      state: () => {
+        try {
+          const raw = localStorage.getItem(LAST_ITEM_KEY);
+          if (!raw) return null;
+          const last = JSON.parse(raw) as { id: number; title?: string; subtitle?: string | null; type?: string; duration?: number };
+          return { item_id: last.id, title: last.title ?? null, subtitle: last.subtitle ?? null, type: last.type ?? null, playing: false, position: 0, duration: last.duration ?? 0, loaded: false };
+        } catch {
+          return null;
+        }
+      },
+    });
+    return () => setRemoteIdle(null);
+  }, []);
 
   // Optional "start playing when opening an item" preference (off by default). Refetched
   // when leaving the Settings page so a toggle takes effect without a reload.

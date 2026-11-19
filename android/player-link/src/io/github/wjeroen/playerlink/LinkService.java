@@ -2,6 +2,8 @@ package io.github.wjeroen.playerlink;
 
 import android.app.Notification;
 import android.content.ComponentName;
+import android.app.ActivityOptions;
+import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -12,6 +14,7 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -648,10 +651,17 @@ public class LinkService extends NotificationListenerService {
             // MATCH_ALL: for web addresses Android otherwise lists only the browsers
             for (ResolveInfo r : pm.queryIntentActivities(view, PackageManager.MATCH_ALL)) {
                 String pkg = r.activityInfo.packageName;
-                // A home screen app brings back the open page as it was, a browser opens a new tab
+                // A home screen app brings back the open page as it was, a browser opens a new tab.
+                // The intent is the home screen's own (no package, reset flag): one that differs
+                // makes Android start the app anew, and Wallacast loads fresh.
                 if (pkg.contains(".webapk")) {
                     Intent launch = pm.getLaunchIntentForPackage(pkg);
-                    if (launch != null) return launch;
+                    if (launch == null || launch.getComponent() == null) continue;
+                    Intent home = new Intent(Intent.ACTION_MAIN);
+                    home.addCategory(Intent.CATEGORY_LAUNCHER);
+                    home.setComponent(launch.getComponent());
+                    home.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                    return home;
                 }
             }
         } catch (Exception ignored) {
@@ -660,7 +670,27 @@ public class LinkService extends NotificationListenerService {
         return view;
     }
 
-    private boolean openWallacast() {
+    /** Bring Wallacast to the front. With Chrome's player, as a tap on its media notification
+     *  does: that brings back the very page. Else like the home screen icon. */
+    private boolean openWallacast(Player w) {
+        PendingIntent page = w != null ? w.controller.getSessionActivity() : null;
+        if (page != null && Settings.canDrawOverlays(this)) {
+            try {
+                Bundle options = null;
+                if (Build.VERSION.SDK_INT >= 34) {
+                    // Android 14+ lets a sent PendingIntent open an activity only when the
+                    // sender (Player Link, allowed to open apps) says so
+                    options = ActivityOptions.makeBasic()
+                        .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                        .toBundle();
+                }
+                page.send(this, 0, null, null, null, null, options);
+                note("Watch: brought Wallacast's page back");
+                return true;
+            } catch (Exception e) {
+                note("Watch: Chrome's page did not open (" + e.getClass().getSimpleName() + ")");
+            }
+        }
         Intent open = openIntent();
         if (open == null) {
             note("Watch: play, but Wallacast cannot be opened");
@@ -685,7 +715,7 @@ public class LinkService extends NotificationListenerService {
         main.postDelayed(() -> {
             Player now = wallacast();
             if (now != null && playing(now.controller)) return;
-            if (!openWallacast()) return;
+            if (!openWallacast(now)) return;
             main.postDelayed(() -> {
                 Player shown = wallacast();
                 if (shown != null && !playing(shown.controller)) shown.controller.getTransportControls().play();
@@ -698,7 +728,7 @@ public class LinkService extends NotificationListenerService {
     private void runCommand(String action) {
         Player w = wallacast();
         if (w == null) {
-            if (action.equals("play") || action.equals("toggle")) openWallacast();
+            if (action.equals("play") || action.equals("toggle")) openWallacast(null);
             return;
         }
         MediaController.TransportControls t = w.controller.getTransportControls();

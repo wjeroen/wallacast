@@ -534,6 +534,8 @@ public class MainActivity extends Activity {
         if (title == null) return;
         boolean playing = state != null && state.optBoolean("playing");
         boolean hasItem = state != null && !state.isNull("item_id");
+        // false: no player is open on the phone, this is the last item and play loads it
+        boolean loaded = state == null || state.optBoolean("loaded", true);
         play.setIcon(playing ? R.drawable.ic_pause : R.drawable.ic_play, 0.46f, null);
 
         if (!isSetUp()) {
@@ -557,15 +559,15 @@ public class MainActivity extends Activity {
             else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
             else if (linkMode) line = "Asleep on the phone: play, pause and skips only";
             else if (openMode) line = "Closed on the phone: play opens it";
-            else if (hasItem) line = clock(state.optInt("position")) + " / " + clock(state.optInt("duration"));
+            else if (hasItem && loaded) line = clock(state.optInt("position")) + " / " + clock(state.optInt("duration"));
             else line = "";
             status.setText(line);
         }
 
         // Play, pause and the skips also work through Player Link, the rest needs the page
-        boolean transport = isSetUp() && (appMode && hasItem || linkMode);
-        boolean full = isSetUp() && appMode && hasItem;
-        play.setEnabled(transport || isSetUp() && openMode);
+        boolean transport = isSetUp() && (appMode && hasItem && loaded || linkMode);
+        boolean full = isSetUp() && appMode && hasItem && loaded;
+        play.setEnabled(transport || isSetUp() && (openMode || appMode && hasItem));
         back.setEnabled(transport);
         forward.setEnabled(transport);
         speed.setEnabled(full);

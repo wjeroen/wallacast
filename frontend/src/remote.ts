@@ -8,7 +8,9 @@ import { remoteAPI, type RemoteCommand } from './api';
  * only every 5 minutes, or at once after pokeRemote() (Settings calls it when a token changes).
  *
  * AudioPlayer registers the handlers: run() carries out a command, state() describes the
- * player (null when no item is open). remoteStateChanged() sends a fresh report, a moment
+ * player (null when no item is open). While no player is open, App's idle handlers answer
+ * instead: they describe the last item (loaded false) and a play loads it into the mini
+ * player and plays it, as Spotify continues its last song. remoteStateChanged() sends a fresh report, a moment
  * later so a burst of changes becomes one report.
  *
  * Each report says whether the page is hidden: Android gives a page in the background no turn
@@ -29,6 +31,8 @@ const REPORT_DELAY_MS = 400;
 const PLAY_WHEN_SHOWN_MS = 30_000;
 
 let handlers: RemoteHandlers | null = null;
+let idle: RemoteHandlers | null = null;
+const active = () => handlers ?? idle;
 let enabled = false;
 let loop = 0; // the running loop's number, 0 while stopped
 let lastCommand: number | null = null;
@@ -59,7 +63,7 @@ function pause(ms: number): Promise<void> {
 }
 
 async function sendReportNow(): Promise<void> {
-  const state = handlers?.state() ?? { item_id: null, playing: false };
+  const state = active()?.state() ?? { item_id: null, playing: false };
   await remoteAPI.reportState(deviceId(), { ...state, hidden: pageHidden(), last_command: lastCommand });
 }
 
@@ -80,6 +84,12 @@ export function setRemoteHandlers(next: RemoteHandlers | null): void {
   remoteStateChanged();
 }
 
+/** What answers while no player is open (App: the last item). */
+export function setRemoteIdle(next: RemoteHandlers | null): void {
+  idle = next;
+  remoteStateChanged();
+}
+
 /** Ask the server again at once whether remote control is on (after a token change). */
 export function pokeRemote(): void {
   wake?.();
@@ -95,7 +105,7 @@ export function startRemote(): () => void {
     wake?.();
     if (Date.now() < playWhenShownUntil) {
       playWhenShownUntil = 0;
-      void handlers?.run({ id: 0, action: 'play' });
+      void active()?.run({ id: 0, action: 'play' });
     }
   };
   document.addEventListener('visibilitychange', onVisibility);
@@ -126,10 +136,10 @@ export function startRemote(): () => void {
         }
         if (!wasEnabled) sendReport();
         for (const command of res.data.commands) {
-          const startsPlay = command.action === 'play' || (command.action === 'toggle' && handlers?.state()?.playing !== true);
+          const startsPlay = command.action === 'play' || (command.action === 'toggle' && active()?.state()?.playing !== true);
           playWhenShownUntil = startsPlay && pageHidden() ? Date.now() + PLAY_WHEN_SHOWN_MS : 0;
           try {
-            await handlers?.run(command);
+            await active()?.run(command);
           } catch (error) {
             console.error('[Remote] command failed:', command, error);
           }
