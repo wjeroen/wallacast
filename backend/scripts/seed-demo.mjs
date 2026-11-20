@@ -312,18 +312,41 @@ async function triggerSummary(id, generateTranscript = false) {
 }
 
 // Fetch just the tiny status fields for one item (POST /api/content/status, batched by design).
-async function fetchStatus(id) {
-  const { data } = await apiFetch('POST', '/content/status', { body: { ids: [id] } });
+async function fetchStatus(id, label) {
+  const { data } = await untilServerAnswers(
+    () => apiFetch('POST', '/content/status', { body: { ids: [id] } }),
+    label
+  );
   const rows = Array.isArray(data) ? data : [];
   return rows.find((r) => r.id === id) || null;
 }
+
+// A deploy restarts the server while the seed runs (pushing a change does that). Its requests
+// then fail for a minute or two, and the step it was running ends as failed with "Server
+// restarted ...". The polls wait through such an outage (up to 5 minutes) and start an
+// interrupted step once more.
+const RESTART_WAIT_MS = 10_000;
+const RESTART_ATTEMPTS = 30;
+async function untilServerAnswers(fn, label) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= RESTART_ATTEMPTS) throw err;
+      if (attempt === 1) console.log(`  [${label}] the server does not answer (${err.message}), waiting for it...`);
+      await sleep(RESTART_WAIT_MS);
+    }
+  }
+}
+const interruptedByRestart = (message) => /^Server restarted/.test(message || '');
 
 // Poll generation_status until it reaches a terminal state. Terminal means 'completed' or
 // 'failed'. We also treat 'ready' with a null current_operation as done (the audio pipeline
 // parks at 'ready' before transcription/alignment, but keeps current_operation non-null while
 // those run, so this only fires when there is genuinely nothing left to do). Prints progress
 // as it changes. Throws loudly on 'failed', including generation_error.
-async function pollGeneration(id, label) {
+async function pollGeneration(id, label, restart) {
+  let restarted = false;
   const start = Date.now();
   let lastProgress = -1;
   let lastStatus = '';
@@ -331,7 +354,7 @@ async function pollGeneration(id, label) {
     if (Date.now() - start > ITEM_TIMEOUT_MS) {
       throw new Error(`${label}: generation timed out after 30 minutes (id ${id}).`);
     }
-    const row = await fetchStatus(id);
+    const row = await fetchStatus(id, label);
     if (!row) {
       // The item should exist (we just created it). Keep trying briefly in case of replica lag.
       await sleep(POLL_INTERVAL_MS);
@@ -346,6 +369,13 @@ async function pollGeneration(id, label) {
       lastProgress = progress;
     }
     if (status === 'failed') {
+      if (restart && !restarted && interruptedByRestart(row.generation_error)) {
+        restarted = true;
+        console.log(`  [${label}] the server restarted during this step, starting it again...`);
+        await untilServerAnswers(restart, label);
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
       throw new Error(`${label}: generation FAILED (id ${id}): ${row.generation_error || 'no error message'}`);
     }
     if (status === 'completed') return status;
@@ -356,14 +386,15 @@ async function pollGeneration(id, label) {
 
 // Poll summary_status until terminal ('completed' or 'failed'). The status endpoint does not
 // return summary_error, so on failure we fetch the full item once to surface the message.
-async function pollSummary(id, label) {
+async function pollSummary(id, label, restart) {
+  let restarted = false;
   const start = Date.now();
   let lastStatus = '';
   while (true) {
     if (Date.now() - start > ITEM_TIMEOUT_MS) {
       throw new Error(`${label}: summary timed out after 30 minutes (id ${id}).`);
     }
-    const row = await fetchStatus(id);
+    const row = await fetchStatus(id, label);
     const status = row ? row.summary_status : null;
     if (status !== lastStatus) {
       console.log(`  [${label}] summary_status=${status}`);
@@ -376,6 +407,14 @@ async function pollSummary(id, label) {
         msg = (data && data.summary_error) || msg;
       } catch {
         // Best effort. Fall through with the generic message.
+      }
+      if (restart && !restarted && interruptedByRestart(msg)) {
+        restarted = true;
+        console.log(`  [${label}] the server restarted during this step, starting it again...`);
+        await untilServerAnswers(restart, label);
+        lastStatus = '';
+        await sleep(POLL_INTERVAL_MS);
+        continue;
       }
       throw new Error(`${label}: summary FAILED (id ${id}): ${msg}`);
     }
@@ -581,7 +620,7 @@ async function main() {
     console.log('\n[gen 1/6] Text item: generating audio...');
     let t = Date.now();
     await triggerAudio(text.id);
-    report.text.status = await pollGeneration(text.id, 'text audio');
+    report.text.status = await pollGeneration(text.id, 'text audio', () => triggerAudio(text.id));
     report.text.genSec = secsSince(t);
 
     // 5b. Article audio (a kept article already has it).
@@ -589,7 +628,7 @@ async function main() {
       console.log('\n[gen 2/6] Article: generating audio...');
       t = Date.now();
       await triggerAudio(article.id);
-      report.article.status = await pollGeneration(article.id, 'article audio');
+      report.article.status = await pollGeneration(article.id, 'article audio', () => triggerAudio(article.id));
       report.article.genSec = secsSince(t);
     }
 
@@ -598,7 +637,7 @@ async function main() {
       console.log('\n[gen 3/6] Podcast episode: transcribing...');
       t = Date.now();
       await triggerTranscript(podcast.id);
-      report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript');
+      report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript', () => triggerTranscript(podcast.id));
       report.podcast.genSec = secsSince(t);
     }
 
@@ -606,14 +645,14 @@ async function main() {
     console.log('\n[gen 4/6] Text item: generating summary...');
     t = Date.now();
     await triggerSummary(text.id);
-    report.text.summaryStatus = await pollSummary(text.id, 'text summary');
+    report.text.summaryStatus = await pollSummary(text.id, 'text summary', () => triggerSummary(text.id));
     report.text.summarySec = secsSince(t);
 
     if (!report.article.kept) {
       console.log('\n[gen 5/6] Article: generating summary...');
       t = Date.now();
       await triggerSummary(article.id);
-      report.article.summaryStatus = await pollSummary(article.id, 'article summary');
+      report.article.summaryStatus = await pollSummary(article.id, 'article summary', () => triggerSummary(article.id));
       report.article.summarySec = secsSince(t);
     }
 
@@ -621,7 +660,7 @@ async function main() {
       console.log('\n[gen 6/6] Podcast episode: generating summary from the transcript...');
       t = Date.now();
       await triggerSummary(podcast.id, false);
-      report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary');
+      report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary', () => triggerSummary(podcast.id, false));
       report.podcast.summarySec = secsSince(t);
     }
 
