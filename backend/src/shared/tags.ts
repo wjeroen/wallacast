@@ -5,7 +5,7 @@
 // `.js` extension: this file is copied byte for byte into backend/src/shared/ (see markdown.ts).
 import type { ContentItem } from './types.js';
 
-export const TYPE_TAGS = ['article', 'text', 'podcast'] as const;
+export const TYPE_TAGS = ['article', 'text', 'podcast', 'video'] as const;
 export const RESERVED_TAGS = new Set<string>([...TYPE_TAGS, 'nosync', '#nosync']);
 export const MAX_TAG_LENGTH = 100;
 
@@ -32,9 +32,12 @@ export function reservedTagReason(label: string): string | null {
   return null;
 }
 
+// The type tag the Markdown export writes first, the same one Wallabag gets (backend
+// services/tags.ts).
 export function typeTagFor(type: ContentItem['type']): string {
   if (type === 'podcast_episode') return 'podcast';
   if (type === 'text') return 'text';
+  if (type === 'video') return 'video';
   return 'article';
 }
 

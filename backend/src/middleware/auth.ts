@@ -106,6 +106,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
       // Exception a) the lean status poll the frontend uses to watch processing progress.
       const isStatusPoll = method === 'POST' && path === '/api/content/status';
+      // Exception c) the playback diagnostics (one log line, nothing stored).
+      const isPlaybackLog = method === 'POST' && path === '/api/content/playback-log';
 
       // Exception b) persisting playback position/speed on a single content item, so the shared
       // demo account can remember where playback stopped. Only allowed when every body key is in
@@ -118,7 +120,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
         bodyKeys.length > 0 &&
         bodyKeys.every((key) => PLAYBACK_KEYS.includes(key));
 
-      if (!isStatusPoll && !isPlaybackUpdate) {
+      if (!isStatusPoll && !isPlaybackLog && !isPlaybackUpdate) {
         return res.status(403).json({
           error: 'This action is not available in the read-only demo.',
           demo: true,

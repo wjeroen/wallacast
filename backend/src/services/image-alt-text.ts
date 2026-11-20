@@ -511,7 +511,7 @@ export class ImageAltTextService {
   const prompt = await resolveCustomPrompt(this.userId, 'prompt_image_description', IMAGE_DESCRIPTION_DEFAULT);
 
   try {
-    // Provider: 'gemini' (native SDK, default), 'deepinfra' (Gemma 4), 'openai' (GPT-5 Mini),
+    // Provider: 'gemini' (native SDK, default), 'deepinfra' (Gemma 4), 'openai' (GPT-6 Luna),
     // or 'openrouter'. All non-Gemini paths are OpenAI-compatible vision.
     const provider = (await getUserSetting(this.userId, 'image_alt_text_provider')) || (await this.defaultImageProvider());
     console.log(`[ImageAltText] Sending ${(imageData.data.length / 1024).toFixed(1)}KB image to ${provider}`);
@@ -633,8 +633,9 @@ export class ImageAltTextService {
   }
 
   // OpenAI path: same OpenAI-compatible vision call against api.openai.com. Default model is
-  // GPT-5 Mini (vision-capable, verified 2026-07-02). No temperature param: the GPT-5 family
-  // rejects non-default temperatures.
+  // GPT-6 Luna (takes images, one test call 2026-10-22: 823 tokens in, 95 out, $0.00013, a
+  // fitting description). No temperature param: the GPT-5 family rejects non-default
+  // temperatures.
   private async describeViaOpenAI(prompt: string, imageData: { data: string; mimeType: string }): Promise<string> {
     const apiKey = await getUserSetting(this.userId, 'openai_api_key');
     if (!apiKey) {
@@ -643,7 +644,7 @@ export class ImageAltTextService {
     const client = new OpenAI({ apiKey });
     const dataUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
     const response = await client.chat.completions.create({
-      model: await this.getModelName('gpt-5-mini'),
+      model: await this.getModelName('gpt-6-luna'),
       messages: [
         {
           role: 'user',

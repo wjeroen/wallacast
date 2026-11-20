@@ -1,11 +1,11 @@
 import { create } from 'zustand';
 import { contentAPI } from '../api';
 import type { ContentItem } from '../types';
-import { hasWordTimings } from '../format';
+import { hasAudioBadge, hasWordTimings } from '../format';
 
 // Library filter model: content type × five combinable facet rows plus a
 // search query. Shared with queueStore so "Up next" matches the library view.
-export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts';
+export type TypeFilter = 'all' | 'articles' | 'texts' | 'podcasts' | 'videos';
 
 // One facet per row of the library filter grid. Each row is either one of its
 // two mutually exclusive options or null (no preference). Rows combine with AND.
@@ -15,6 +15,8 @@ export interface FacetFilter {
   audio: 'audio' | 'no_audio' | null;
   summary: 'summary' | 'no_summary' | null;
   transcript: 'transcript' | 'no_transcript' | null;
+  // The heard check: the audio or the summary audio counted as heard (AudioPlayer)
+  heard: 'heard' | 'not_heard' | null;
 }
 
 export type FacetDim = keyof FacetFilter;
@@ -26,6 +28,7 @@ export const DEFAULT_FACETS: FacetFilter = {
   audio: null,
   summary: null,
   transcript: null,
+  heard: null,
 };
 
 export interface LibraryFilter {
@@ -41,6 +44,7 @@ const TYPE_MAP: Record<Exclude<TypeFilter, 'all'>, ContentItem['type']> = {
   articles: 'article',
   texts: 'text',
   podcasts: 'podcast_episode',
+  videos: 'video',
 };
 
 // Persist the chosen filters (type + facets + sort direction, NOT the transient
@@ -60,6 +64,7 @@ const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
   audio: ['audio', 'no_audio'],
   summary: ['summary', 'no_summary'],
   transcript: ['transcript', 'no_transcript'],
+  heard: ['heard', 'not_heard'],
 };
 
 interface StoredFilters {
@@ -75,7 +80,7 @@ function loadStoredFilters(): StoredFilters {
     const raw = localStorage.getItem(FILTERS_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts'].includes(parsed?.typeFilter)
+    const typeFilter: TypeFilter = ['all', 'articles', 'texts', 'podcasts', 'videos'].includes(parsed?.typeFilter)
       ? parsed.typeFilter
       : 'all';
     const facets: FacetFilter = { ...DEFAULT_FACETS };
@@ -112,7 +117,8 @@ function sortByDateAdded(items: ContentItem[], dir: SortDir): ContentItem[] {
 
 // Fields covered by search, besides the full body text in `content`.
 function metadataFields(item: ContentItem): (string | undefined | null)[] {
-  return [item.title, item.author, item.description, item.tags?.join(' '), item.podcast_show_name];
+  // The address too, so "euronews" finds every euronews.com article
+  return [item.title, item.author, item.description, item.tags?.join(' '), item.podcast_show_name, item.url, item.summary];
 }
 
 // Check if an item should be visible given the current filter.
@@ -123,20 +129,25 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   // Tag filter: any selected tag present on the item.
   if (f.tags.length > 0 && !f.tags.some(t => item.tags?.includes(t))) return false;
 
-  // Facets: every non-null row must match. Summary/transcript presence mirrors
-  // the library card badges (summary_generated_at / hasWordTimings, since the
-  // list endpoint never sends the large transcript column).
-  const { archive, star, audio, summary, transcript } = f.facets;
+  // Facets: every non-null row must match. Each row mirrors a library card badge:
+  // audio = an audio file or a YouTube video that plays in the app (hasAudioBadge),
+  // summary = summary_generated_at, transcript = hasWordTimings (the list endpoint
+  // never sends the large transcript column). Summary audio alone does not count
+  // as audio.
+  const { archive, star, audio, summary, transcript, heard } = f.facets;
   if (archive === 'active' && item.is_archived) return false;
   if (archive === 'archived' && !item.is_archived) return false;
   if (star === 'starred' && !item.is_starred) return false;
   if (star === 'unstarred' && item.is_starred) return false;
-  if (audio === 'audio' && !item.audio_url) return false;
-  if (audio === 'no_audio' && item.audio_url) return false;
+  if (audio === 'audio' && !hasAudioBadge(item)) return false;
+  if (audio === 'no_audio' && hasAudioBadge(item)) return false;
   if (summary === 'summary' && !item.summary_generated_at) return false;
   if (summary === 'no_summary' && item.summary_generated_at) return false;
   if (transcript === 'transcript' && !hasWordTimings(item)) return false;
   if (transcript === 'no_transcript' && hasWordTimings(item)) return false;
+  const isHeard = !!(item.heard_at || item.summary_heard_at);
+  if (heard === 'heard' && !isHeard) return false;
+  if (heard === 'not_heard' && isHeard) return false;
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;
@@ -296,8 +307,13 @@ export const useContentStore = create<ContentStore>((set, get) => {
         const activeResponse = await contentAPI.getAll({ archived: false });
         const activeItems = activeResponse.data;
 
-        // Show active items immediately (loading done)
-        commit(activeItems, { loading: false });
+        // Show active items immediately (loading done). On a refresh, the archived items
+        // already loaded stay until step 2 brings their fresh copies, so the Archived
+        // filter and its count do not empty out in between.
+        const activeIds = new Set(activeItems.map(i => i.id));
+        const keptArchived = get().allItems.filter(i => i.is_archived && !activeIds.has(i.id));
+        const keptIds = new Set(keptArchived.map(i => i.id));
+        commit([...activeItems, ...keptArchived], { loading: false });
 
         // Step 2: Fetch archived items in the background (could be hundreds)
         // so the Archived/Favorites filters work instantly when clicked.
@@ -310,10 +326,15 @@ export const useContentStore = create<ContentStore>((set, get) => {
         const current = get().allItems;
         const seen = new Set<number>();
         // Update existing entries with fresh server data, preserving current ordering.
-        const merged = current.map(i => {
+        // A kept archived item that the server no longer sends was deleted elsewhere and
+        // goes, unless it was unarchived here in the meantime.
+        const merged: ContentItem[] = [];
+        for (const i of current) {
+          const fresh = fetchedById.get(i.id);
+          if (!fresh && keptIds.has(i.id) && i.is_archived) continue;
           seen.add(i.id);
-          return fetchedById.get(i.id) ?? i;
-        });
+          merged.push(fresh ?? i);
+        }
         // Append fetched items that aren't already present (e.g. archived items on
         // first load), keeping their fetch order.
         for (const i of fetched) {

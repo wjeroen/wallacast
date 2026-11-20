@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, TvMinimalPlay, X, Search, Inbox, ChevronDown, Check, Circle, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -8,14 +8,14 @@ import { TagEditor } from './TagEditor';
 import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
 import { loadCopyContentOptions } from '../copy-settings';
-import { isVeryLongArticle, hasWordTimings } from '../format';
+import { isVeryLongArticle, hasWordTimings, transcriptItemsLabel } from '../format';
 import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
   onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
 
-// The 2x5 filter grid: one facet row per dimension, two mutually exclusive
+// The 2x6 filter grid: one facet row per dimension, two mutually exclusive
 // options per row. Selecting an option deselects its sibling; clicking the
 // selected option again clears the row (1-or-none per row). The same icons
 // mark the filter button, the library card badges, and the dropdown actions.
@@ -55,7 +55,20 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
       { value: 'no_transcript', label: 'None', icon: <CaptionsOff size={16} /> },
     ],
   },
+  {
+    // The heard check: the audio or the summary audio counted as heard (AudioPlayer)
+    dim: 'heard',
+    options: [
+      { value: 'heard', label: 'Heard', icon: <Check size={16} /> },
+      { value: 'not_heard', label: 'Not heard', icon: <Circle size={16} /> },
+    ],
+  },
 ];
+
+// The list draws its cards LIST_PAGE_SIZE at a time, the next page as its end comes near:
+// drawing 1,500 archived cards (and loading all their pictures) at once took seconds. Only the
+// drawing is paged. The filtered list (selection, counts) and the queues still hold every item.
+const LIST_PAGE_SIZE = 60;
 
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Use Zustand store for content state
@@ -86,6 +99,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
+
+  // Paged drawing of the list (see LIST_PAGE_SIZE): a new filter starts at the first page
+  const [shownCount, setShownCount] = useState(LIST_PAGE_SIZE);
+  const listEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setShownCount(LIST_PAGE_SIZE);
+  }, [typeFilter, facets, tagFilter, searchQuery, sortDir]);
+  useEffect(() => {
+    const end = listEndRef.current;
+    if (!end) return;
+    const observer = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) setShownCount(n => n + LIST_PAGE_SIZE); },
+      { rootMargin: '1200px 0px' }
+    );
+    observer.observe(end);
+    return () => observer.disconnect();
+  }, [shownCount, content.length]);
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -126,7 +156,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // askAudio (bulk select-mode only): the auto_generate_summary_audio setting is on, so the
   // dialog also asks whether summary audio should be generated, plus an opt-in checkbox for
   // selected items that already have summaries. Single-item flows chain audio silently.
-  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio?: boolean; existingSummaryIds?: number[] } | null>(null);
+  // video: the one item without a transcript is a YouTube video (its transcript comes from
+  // Gemini); videoCount: how many of podcastIds are videos, in a bulk selection
+  const [transcriptWarning, setTranscriptWarning] = useState<{ podcastIds: number[]; readyIds: number[]; askAudio?: boolean; existingSummaryIds?: number[]; video?: boolean; videoCount?: number } | null>(null);
   const [bulkAudioChecked, setBulkAudioChecked] = useState(true);
   const [bulkAudioExistingChecked, setBulkAudioExistingChecked] = useState(false);
   // "Twitter feed" mode: show the article summary instead of the description on library cards.
@@ -253,7 +285,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // "reset to just this"). The two single-click toggles that fire first cancel
   // each other out, so the end state is exactly the solo selection.
   const soloFacet = (dim: FacetDim, value: FacetValue) => {
-    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, [dim]: value });
+    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, heard: null, [dim]: value });
     setSelectedItems(new Set());
   };
 
@@ -268,13 +300,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // same debounced pace the list filters at, so the number stays calm while
   // typing. The count is shown on the ACTIVE type chip.
   const typeCounts = useMemo(() => {
-    const counts = { all: 0, articles: 0, texts: 0, podcasts: 0 };
+    const counts = { all: 0, articles: 0, texts: 0, podcasts: 0, videos: 0 };
     for (const i of allItems) {
       if (!itemMatchesFilter(i, { typeFilter: 'all', facets, tags: tagFilter, searchQuery })) continue;
       counts.all++;
       if (i.type === 'article') counts.articles++;
       else if (i.type === 'text') counts.texts++;
       else if (i.type === 'podcast_episode') counts.podcasts++;
+      else if (i.type === 'video') counts.videos++;
     }
     return counts;
   }, [allItems, facets, tagFilter, searchQuery]);
@@ -371,13 +404,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     return () => clearInterval(pollInterval);
   }, [content, updateItem, refreshItem]);
 
-  // In-progress audio items from the CURRENT filtered view (so archived items stay
-  // hidden while viewing Active, etc.), most recently played first. 1%-99% window:
+  // In-progress audio items and videos from the CURRENT filtered view (so archived items
+  // stay hidden while viewing Active, etc.), most recently played first. 1%-99% window:
   // below 1% is accidental-tap noise, above 99% is effectively finished.
   const continueItems = useMemo(() => {
     return content
       .filter(item => {
-        if (!item.audio_url || !item.duration || !item.last_played_at) return false;
+        if (!(item.audio_url || item.type === 'video') || !item.duration || !item.last_played_at) return false;
         const frac = (item.playback_position || 0) / item.duration;
         return frac > 0.01 && frac < 0.99;
       })
@@ -386,14 +419,15 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   }, [content]);
 
   const continueTypeIcon = (t: string) =>
-    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : <Newspaper size={12} />;
+    t === 'podcast_episode' ? <Podcast size={12} /> : t === 'text' ? <NotebookPen size={12} /> : t === 'video' ? <TvMinimalPlay size={12} /> : <Newspaper size={12} />;
 
   // The progress bar carries the type identity (icon stays muted), using the
-  // same trio as the card type pills.
+  // same colours as the card type pills.
   const TYPE_BAR_COLORS: Record<string, string> = {
     article: '#3b82f6',
     text: '#10b981',
     podcast_episode: '#a855f7',
+    video: '#dc2626',
   };
 
   const handlePlayContent = async (item: ContentItem, opts?: { tab?: 'summary' }) => {
@@ -414,12 +448,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const handleToggleArchive = async (id: number) => {
     // The one destructive case: archiving a NON-STARRED article/text WITH generated
-    // audio wipes that audio server-side. Warn exactly there (toggleable in Settings).
+    // audio removes that audio 7 days later (services/archive.ts). Warn exactly there
+    // (toggleable in Settings).
     const item = content.find(c => c.id === id);
     if (
       warnArchiveAudio && item && !item.is_archived && !item.is_starred &&
       (item.type === 'article' || item.type === 'text') && item.audio_url &&
-      !confirm("Archiving removes this item's generated audio (starred items keep theirs). Archive anyway?")
+      !confirm("Archiving removes this item's generated audio after 7 days (starred items keep theirs). Archive anyway?")
     ) return;
     await toggleArchived(id);
   };
@@ -460,7 +495,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   // Instant bulk actions: one request to POST /content/bulk, then refetch.
   // Refetching (instead of optimistic updates) keeps us in sync with server
-  // side effects like archive wiping audio or delete propagating to Wallabag.
+  // side effects like delete propagating to Wallabag.
   const runInstantBulk = async (action: BulkAction, confirmMsg?: string) => {
     // Intersect with the visible list. Defensive, selection should already
     // only contain visible items
@@ -579,14 +614,16 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     setBulkMenuOpen(false);
     if (selectedItems.size === 0) return;
     const eligible = selectedContentItems().filter(item =>
-      (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode') &&
+      (item.type === 'article' || item.type === 'text' || item.type === 'podcast_episode' || item.type === 'video') &&
       !item.summary_generated_at &&
       item.summary_status !== 'generating'
     );
-    // Podcasts without a transcript need Whisper first, so ask via the modal instead
-    // of silently spending transcription credits
-    const podcastIds = eligible.filter(i => i.type === 'podcast_episode' && !hasWordTimings(i)).map(i => i.id);
-    const readyIds = eligible.filter(i => !(i.type === 'podcast_episode' && !hasWordTimings(i))).map(i => i.id);
+    // Podcasts and videos without a transcript need one first (Whisper, or Gemini for a
+    // video), so ask via the modal instead of silently spending transcription credits
+    const needsTranscript = (i: ContentItem) => (i.type === 'podcast_episode' || i.type === 'video') && !hasWordTimings(i);
+    const podcastIds = eligible.filter(needsTranscript).map(i => i.id);
+    const readyIds = eligible.filter(i => !needsTranscript(i)).map(i => i.id);
+    const videoCount = eligible.filter(i => needsTranscript(i) && i.type === 'video').length;
 
     // The audio question only appears when the auto_generate_summary_audio setting
     // is on; off keeps this flow exactly as before.
@@ -611,7 +648,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     if (podcastIds.length > 0 || askAudio) {
       setBulkAudioChecked(true);
       setBulkAudioExistingChecked(true);
-      setTranscriptWarning({ podcastIds, readyIds, askAudio, existingSummaryIds });
+      setTranscriptWarning({ podcastIds, readyIds, askAudio, existingSummaryIds, videoCount });
       return;
     }
     if (!confirm(`Generate summaries for ${readyIds.length} item(s)? This uses your LLM API credits.`)) return;
@@ -621,12 +658,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleBulkRefetch = async () => {
     setBulkMenuOpen(false);
     if (selectedItems.size === 0) return;
-    const eligible = selectedContentItems().filter(item => item.type === 'article' && item.url);
+    // Videos refetch their YouTube details
+    const eligible = selectedContentItems().filter(item => (item.type === 'article' || item.type === 'video') && item.url);
     if (eligible.length === 0) {
-      alert('No selected items are eligible (needs to be an article with a URL).');
+      alert('No selected items are eligible (needs to be an article or video with a URL).');
       return;
     }
-    if (!confirm(`Refetch ${eligible.length} article(s) from the web?`)) return;
+    if (!confirm(`Refetch ${eligible.length} item(s) from the web?`)) return;
     await runSequentialBulk('Refetching', eligible.map(i => i.id), id => contentAPI.refetch(id));
     // Refetch is fire-and-forget on the backend, so refresh after delays to pick
     // up updated data (bulk analogue of the 3s/8s per-item refreshes)
@@ -680,8 +718,8 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     // Podcasts summarize their TRANSCRIPT (not the episode description). If there's no
     // transcript yet, ask before kicking off Whisper + summary
     const item = allItems.find(c => c.id === id);
-    if (item && item.type === 'podcast_episode' && !hasWordTimings(item)) {
-      setTranscriptWarning({ podcastIds: [id], readyIds: [] });
+    if (item && (item.type === 'podcast_episode' || item.type === 'video') && !hasWordTimings(item)) {
+      setTranscriptWarning({ podcastIds: [id], readyIds: [], video: item.type === 'video' });
       return;
     }
     try {
@@ -772,9 +810,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
       setTimeout(() => refreshItem(id), 3000);
       setTimeout(() => refreshItem(id), 8000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to refetch content:', error);
-      alert('Failed to refetch content');
+      alert(error?.response?.data?.error || 'Failed to refetch content');
     }
   };
 
@@ -1028,6 +1066,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 <Podcast size={16} />
                 <span className="filter-label">Podcasts</span>
               </button>
+              <button
+                className={typeFilter === 'videos' ? 'active' : ''}
+                onClick={() => changeTypeFilter('videos')}
+              >
+                <TvMinimalPlay size={16} />
+                <span className="filter-label">Videos</span>
+              </button>
             </div>
             </div>
           </div>
@@ -1084,7 +1129,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                   runInstantBulk(
                     'archive',
                     warnArchiveAudio && risky > 0
-                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes (starred items keep theirs).`
+                      ? `Archive ${selectedItems.size} item(s)? ${risky} of these have generated audio, which archiving removes after 7 days (starred items keep theirs).`
                       : undefined
                   );
                 }}
@@ -1173,7 +1218,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         </div>
       ) : (
         <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
-          {content.map((item) => (
+          {content.slice(0, shownCount).map((item) => (
             <ContentCard
               key={item.id}
               item={item}
@@ -1206,6 +1251,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onEditTags={(it) => { setOpenDropdown(null); setTagEditorItem(it); }}
             />
           ))}
+          {shownCount < content.length && <div ref={listEndRef} className="list-end" aria-hidden="true" />}
         </div>
       )}
 
@@ -1246,10 +1292,12 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                 ) : (
                   <>All selected items already have summaries.</>
                 )
+              ) : w.video || (w.videoCount === 1 && w.podcastIds.length === 1 && w.readyIds.length === 0 && !w.askAudio) ? (
+                <>This video has <strong>no transcript</strong> yet. Video summaries are made from the transcript, so one needs to be generated first (Gemini writes it, with your Gemini API key). The summary follows automatically.</>
               ) : w.podcastIds.length === 1 && w.readyIds.length === 0 && !w.askAudio ? (
                 <>This episode has <strong>no transcript</strong> yet. Podcast summaries are made from the transcript, so one needs to be generated first (this uses your transcription API credits). The summary follows automatically.</>
               ) : (
-                <><strong>{w.podcastIds.length} podcast episode{w.podcastIds.length > 1 ? 's' : ''}</strong> in your selection {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. Podcast summaries are made from the transcript, so those need to be generated first (this uses your transcription API credits). Summaries follow automatically.</>
+                <><strong>{transcriptItemsLabel(w.podcastIds.length - (w.videoCount || 0), w.videoCount || 0)}</strong> in your selection {w.podcastIds.length > 1 ? 'have' : 'has'} no transcript yet. {!w.videoCount ? 'Podcast summaries' : w.videoCount === w.podcastIds.length ? 'Video summaries' : 'Podcast and video summaries'} are made from the transcript, so those need to be generated first ({!w.videoCount ? 'this uses your transcription API credits' : w.videoCount === w.podcastIds.length ? 'Gemini writes them, with your Gemini API key' : 'this uses your transcription API credits, and your Gemini API key for the videos'}). Summaries follow automatically.</>
               )}
             </p>
             {w.askAudio && (w.readyIds.length > 0 || w.podcastIds.length > 0) && (
@@ -1292,7 +1340,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
                         runSummaryBatch(w.readyIds, [], audioOpts);
                       }}
                     >
-                      Skip episodes without transcript
+                      Skip {(w.videoCount || 0) > 0 ? 'items' : 'episodes'} without transcript
                     </button>
                   )}
                 </>

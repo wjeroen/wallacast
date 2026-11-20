@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { AlreadySubscribedError, searchPodcasts, searchRSSByUrl, subscribeToPodcast, fetchPodcastEpisodes, getPreviewEpisodes, searchFeedEpisodes, getCachedFeedItems, startFeedRefresh, getFeedRefreshStatus, getLastRefreshTime } from '../services/podcast-service.js';
 import { reserveRefresh } from '../services/token-limits.js';
+import { tokenSubscribe, tokenUnsubscribe, parsePositiveInt } from '../services/token-actions.js';
 
 /** An API token gets at most this many feed items per request, the app's own page size
  *  (FEED_PAGE_SIZE in the frontend's feedStore.ts). It pages on with offset. */
@@ -44,7 +45,7 @@ router.get('/search', async (req, res) => {
     // Detect if query is a URL or search term
     if (looksLikeUrl(q)) {
       // Treat as URL - fetch RSS feed directly
-      const results = await searchRSSByUrl(q);
+      const results = await searchRSSByUrl(q, req.user!.userId);
       res.json(results);
     } else {
       // Treat as search term - use iTunes API
@@ -57,9 +58,14 @@ router.get('/search', async (req, res) => {
   }
 });
 
-// Subscribe to a podcast
+// Subscribe to a podcast. An API token sends { url }, any address the Feed tab's search box
+// takes, and is logged and limited (tokenSubscribe in services/token-actions.ts).
 router.post('/subscribe', async (req, res) => {
   try {
+    if (req.apiToken) {
+      const r = await tokenSubscribe(req.apiToken, req.body);
+      return res.status(r.status).json(r.json);
+    }
     const { feed_url } = req.body;
 
     if (!feed_url) {
@@ -77,9 +83,15 @@ router.post('/subscribe', async (req, res) => {
   }
 });
 
-// Unsubscribe from a podcast
+// Unsubscribe from a podcast. An API token's unsubscribe is logged and undoable.
 router.delete('/:id', async (req, res) => {
   try {
+    if (req.apiToken) {
+      const podcastId = parsePositiveInt(req.params.id);
+      if (!podcastId) return res.status(400).json({ error: 'Invalid podcast id' });
+      const r = await tokenUnsubscribe(req.apiToken, podcastId);
+      return res.status(r.status).json(r.json);
+    }
     const result = await query(
       'UPDATE podcasts SET is_subscribed = false WHERE id = $1 AND user_id = $2 RETURNING *',
       [req.params.id, req.user!.userId]

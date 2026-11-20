@@ -19,6 +19,8 @@ import {
   COMMENT_SUMMARY_SINGLE_DEFAULT,
   PODCAST_SUMMARY_MULTI_DEFAULT,
   PODCAST_SUMMARY_SINGLE_DEFAULT,
+  VIDEO_SUMMARY_MULTI_DEFAULT,
+  VIDEO_SUMMARY_SINGLE_DEFAULT,
 } from './summarizer.js';
 import { NARRATION_SCRIPT_DEFAULT, NARRATION_SCRIPT_RETRY_DEFAULT } from './openai-tts.js';
 import { IMAGE_DESCRIPTION_DEFAULT } from './image-alt-text.js';
@@ -86,6 +88,18 @@ export const PROMPT_REGISTRY: PromptDef[] = [
     label: 'Podcast summary (single paragraph)',
     description: 'Summarizes a short podcast episode in one paragraph.',
     vars: [V.maxWords], default: PODCAST_SUMMARY_SINGLE_DEFAULT,
+  },
+  {
+    id: 'summary_video_multi', category: CAT_SUMMARIES,
+    label: 'Video summary (multiple paragraphs)',
+    description: 'Summarizes a YouTube video transcript across several paragraphs.',
+    vars: [V.maxTweets, V.maxWords], default: VIDEO_SUMMARY_MULTI_DEFAULT,
+  },
+  {
+    id: 'summary_video_single', category: CAT_SUMMARIES,
+    label: 'Video summary (single paragraph)',
+    description: 'Summarizes a short YouTube video in one paragraph.',
+    vars: [V.maxWords], default: VIDEO_SUMMARY_SINGLE_DEFAULT,
   },
 
   // ----- Narration / TTS scriptwriter -----

@@ -21,6 +21,19 @@ import DOMPurify from 'dompurify';
 // them (DOMPurify's KEEP_CONTENT), so a labelled button loses its box and not its words.
 const FORBID_TAGS = ['input', 'button', 'select', 'textarea', 'option', 'optgroup'];
 
+// The stored page's own hiding is dropped: the `hidden` attribute and inline `display: none`
+// or `visibility: hidden`. Copy content, the Markdown editor, summaries and audio all use the
+// hidden parts (they convert or read the HTML, they do not show it), so the Content tab shows
+// them too and every view holds the same text (backend/scripts/test-views-match.mts). A
+// LessWrong page read without its API, for one, arrives in blocks marked `hidden` that its
+// own scripts reveal, and its Content tab looked empty while Copy content held the whole
+// page (2026-10-23). Applies to every sanitized piece of HTML, comments and descriptions too.
+const HIDING_STYLE = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*(hidden|collapse))\s*(!important)?\s*(?=;|$)/gi;
+DOMPurify.addHook('uponSanitizeAttribute', (_node, data) => {
+  if (data.attrName === 'hidden') data.keepAttr = false;
+  else if (data.attrName === 'style') data.attrValue = data.attrValue.replace(HIDING_STYLE, '$1');
+});
+
 // Strict: for third-party COMMENTS and podcast descriptions, which never need a stylesheet.
 export function safeHtml(dirty: string | null | undefined): string {
   if (!dirty) return '';

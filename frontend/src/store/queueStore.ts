@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { queueAPI, userSettingsAPI, contentAPI } from '../api';
 import { useContentStore, itemMatchesFilter, type LibraryFilter } from './contentStore';
-import { hasAnyAudio } from '../format';
+import { hasPlayableMedia } from '../format';
 import type { ContentItem, QueueItem } from '../types';
 
 /**
@@ -144,19 +144,20 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     let pivot = currentId != null ? streamIds.indexOf(currentId) : -1;
     if (pivot < 0) pivot = streamIds.indexOf(libraryContext.capturedFromId);
 
-    // Items that match the captured library filter AND have audio (original or
-    // summary audio both count: a summary-audio-only item is playable). Used by
-    // the visible "Up next" list and autoplay continuation (listening features).
+    // Items that match the captured library filter AND have something to play:
+    // original or summary audio (a summary-audio-only item is playable), or a
+    // YouTube video that plays in the app (user decision 2026-11-08, also with the
+    // screen off). Used by the visible "Up next" list and autoplay continuation.
     const matches = (item: ContentItem | undefined): item is ContentItem =>
-      !!item && hasAnyAudio(item) && itemMatchesFilter(item, libraryContext.filter);
+      !!item && hasPlayableMedia(item) && itemMatchesFilter(item, libraryContext.filter);
 
     // Filter-only variant for the prev/next BUTTONS: they navigate every
     // matching item, audio or not, so reading flows item-to-item too
     // (user decision 2026-07-26). Autoplay and the queue keep `matches`.
-    const matchesAnyAudio = (item: ContentItem | undefined): item is ContentItem =>
+    const matchesFilter = (item: ContentItem | undefined): item is ContentItem =>
       !!item && itemMatchesFilter(item, libraryContext.filter);
 
-    return { streamIds, byId, pivot, matches, matchesAnyAudio };
+    return { streamIds, byId, pivot, matches, matchesFilter };
   };
 
   return {
@@ -422,7 +423,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
     for (const id of after) {
       const item = stream.byId.get(id);
-      if (stream.matchesAnyAudio(item) && !manualIds.has(item.id) && item.id !== currentId) {
+      if (stream.matchesFilter(item) && !manualIds.has(item.id) && item.id !== currentId) {
         return item;
       }
     }
@@ -440,7 +441,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     if (!stream || stream.pivot <= 0) return null;
     for (let i = stream.pivot - 1; i >= 0; i--) {
       const item = stream.byId.get(stream.streamIds[i]);
-      if (stream.matchesAnyAudio(item)) return item;
+      if (stream.matchesFilter(item)) return item;
     }
     return null;
   },

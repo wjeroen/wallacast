@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The device's dark theme drew switches and ticked boxes dark on dark: amber when on (the
+         icon's colour), light grey when off -->
+    <style name="PlayerLinkTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:colorAccent">#F59E0B</item>
+        <item name="android:colorControlNormal">#9CA3AF</item>
+        <item name="android:colorControlActivated">#F59E0B</item>
+    </style>
+</resources>

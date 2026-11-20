@@ -7,22 +7,26 @@ import { fetchArticleContent, normalizeEAForumUrl, flattenEmailTables, normalize
 import { isProgressId, setFetchProgress, getFetchProgress, clearFetchProgress } from '../services/fetch-progress.js';
 // CHANGED: Removed unused 'extractArticleContent' from import
 import { generateAudioForContent } from '../services/openai-tts.js';
-import { generateSummaryForContent } from '../services/summarizer.js';
+import { generateSummaryForContent, summarizeAfterTranscript } from '../services/summarizer.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { getUserSetting } from '../services/ai-providers.js';
 import { generateLLMAlignment } from '../services/llm-alignment.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
-import { deleteAudioFile, getAudioFileSize } from '../services/audio-storage.js';
+import { deleteAudioFile } from '../services/audio-storage.js';
 import { summaryAudioKey, generateSummaryAudioForContent } from '../services/summary-audio.js';
 import { withAudioToken, audioToken } from '../services/audio-token.js';
 import { shouldCachePodcastHost, evictCachedPodcastAudio } from '../services/podcast-cache.js';
+import { archiveItems, unarchiveItems } from '../services/archive.js';
 import { snapshotContentVersion } from '../services/content-versions.js';
 import { freshFeedItemDescription } from '../services/podcast-service.js';
 import { normalizeTag, normalizeTagList, findReservedTags } from '../services/tags.js';
 import { findItem } from '../services/url-match.js';
-import { sourceUrls } from '../shared/format.js';
-import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal } from '../services/token-actions.js';
-import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
+import { sourceUrls, youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
+import { fetchYouTubeComments, fetchYouTubeMetadata, youtubeApiKey, YouTubeUnavailableError } from '../services/youtube.js';
+import { refreshVideoDetails } from '../services/youtube-refresh.js';
+import { transcribeYouTubeVideo } from '../services/video-transcript.js';
+import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal, existingItemIdForUrl } from '../services/token-actions.js';
+import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
 const router = express.Router();
@@ -54,7 +58,7 @@ router.get('/', async (req, res) => {
     // several times that as objects) was read and serialized on every library load, twice per
     // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -157,9 +161,10 @@ router.get('/index', async (req, res) => {
     const result = await query(
       `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
               is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
+              heard_at, summary_heard_at,
               COALESCE(comment_count_total, 0) AS comment_count,
               LEFT(description, 1500) AS description,
-              COALESCE(type = 'podcast_episode'
+              COALESCE(type IN ('podcast_episode', 'video')
                 AND octet_length(transcript) > 0
                 AND (octet_length(transcript) > 1000 OR transcript ~ '[^[:space:]]'), false
               ) AS has_transcript
@@ -421,6 +426,28 @@ router.post('/audio-error-log', (req, res) => {
   res.json({ ok: true });
 });
 
+// Debug endpoint: the steps of moving on to the next item (frontend playback-log.ts), one
+// [Playback] line each in the Railway logs, so a stop shows where the chain ended.
+// Only short plain values are printed, and none of them come from the item's text.
+// IMPORTANT: must be defined before '/:id', like audio-error-log.
+router.post('/playback-log', (req, res) => {
+  const { event, fields } = req.body || {};
+  if (typeof event !== 'string' || !/^[a-z-]{1,24}$/.test(event)) {
+    return res.status(400).json({ error: 'Unknown event' });
+  }
+  const parts: string[] = [];
+  if (fields && typeof fields === 'object') {
+    for (const [key, value] of Object.entries(fields).slice(0, 20)) {
+      if (!/^[a-zA-Z]{1,12}$/.test(key) || value === null || value === undefined) continue;
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') continue;
+      const text = String(value).replace(/[\r\n"]/g, ' ').slice(0, 80);
+      parts.push(`${key}=${/\s/.test(text) ? `"${text}"` : text}`);
+    }
+  }
+  console.log(`[Playback] user=${req.user!.userId} ${event} ${parts.join(' ')}`);
+  res.json({ ok: true });
+});
+
 // Bulk actions on many items at once (used by the library's Select mode).
 // IMPORTANT: defined before '/:id'-shaped routes so Express matches the literal path first.
 // No transaction on purpose: query() has a connection-retry wrapper (see the wipe-all comment
@@ -498,47 +525,13 @@ router.post('/bulk', async (req, res) => {
       affected = r.rowCount ?? 0;
     }
 
+    // Archiving keeps the generated audio for 7 days, see services/archive.ts
     if (action === 'archive') {
-      // Mirrors PATCH /:id is_archived=true: wipe generated audio + read-along data for
-      // NON-STARRED articles/texts only. Podcasts keep their (external) audio_url and
-      // starred items keep everything.
-      // NOTE: no longer guarded on `audio_data IS NOT NULL`. Audio now lives on disk, so
-      // that guard would skip disk-backed items and leave their files orphaned. We clear
-      // the (now-mostly-empty) audio columns and delete the disk file for each affected id.
-      const clearedArchive = await query(
-        `UPDATE content_items
-         SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
-             transcript = NULL, transcript_words = NULL, tts_chunks = NULL
-         WHERE user_id = $1 AND id = ANY($2::int[])
-           AND type IN ('article', 'text') AND is_starred = false
-         RETURNING id`,
-        [userId, ids]
-      );
-      for (const row of clearedArchive.rows) await deleteAudioFile(row.id);
-      // Archiving drops transient podcast-cache copies, except for starred items
-      // (starred keeps audio on archive, cached podcast copies included).
-      const nonStarredIds = await query(
-        'SELECT id FROM content_items WHERE user_id = $1 AND id = ANY($2::int[]) AND is_starred = false',
-        [userId, ids]
-      );
-      for (const row of nonStarredIds.rows) evictCachedPodcastAudio(row.id).catch(() => {});
-      const r = await query(
-        `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
-         WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [userId, ids]
-      );
-      affected = r.rowCount ?? 0;
+      affected = (await archiveItems(userId, ids)).length;
     }
 
     if (action === 'unarchive') {
-      // Unlike single-item PATCH, bulk unarchive does NOT auto-regenerate audio. Implicitly
-      // kicking off dozens of TTS jobs would be a cost surprise. Use bulk "Generate audio".
-      const r = await query(
-        `UPDATE content_items SET is_archived = false, updated_at = NOW(), wallabag_needs_push = TRUE
-         WHERE user_id = $1 AND id = ANY($2::int[])`,
-        [userId, ids]
-      );
-      affected = r.rowCount ?? 0;
+      affected = (await unarchiveItems(userId, ids)).length;
     }
 
     if (action === 'remove_audio') {
@@ -795,7 +788,7 @@ router.get('/fetch-progress/:id', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -841,7 +834,7 @@ router.post('/', async (req, res) => {
       tokenTags = shaped.tags;
     }
     const {
-      type,
+      type: requestedType,
       title,
       url: rawUrl,
       content,
@@ -861,17 +854,44 @@ router.post('/', async (req, res) => {
       progress_id,
     } = req.body;
 
+    // A YouTube address added as an article (the Add tab, a token, the Feed tab) becomes a
+    // video item: it is stored with YouTube's details instead of a fetched article, and
+    // nothing is generated for it, since every generation step below checks the type. An
+    // article that arrives with its content (a Markdown import) stays an article.
+    const youtubeId = (requestedType === 'article' || requestedType === 'video') && !content
+      ? youtubeVideoId(rawUrl)
+      : null;
+    if (requestedType === 'video' && !youtubeId) {
+      return res.status(400).json({ error: 'Only YouTube video addresses can be added as a video.' });
+    }
+    const type = youtubeId ? 'video' : requestedType;
+
     // Rewrite EA Forum links to the bot-friendly mirror (forum.effectivealtruism.org ->
     // forum-bots.effectivealtruism.org). Applies to BOTH the Add tab and RSS "add to library",
     // since both add paths go through this endpoint. Non-EA-Forum links are left untouched.
-    const url = normalizeEAForumUrl(rawUrl);
+    // A video is stored under its plain watch address, whichever form was added.
+    const url = youtubeId ? youtubeWatchUrl(youtubeId) : normalizeEAForumUrl(rawUrl);
+
+    // A link shared to Wallacast from another app (the Android share menu) is never added a
+    // second time: Android can hand the same share over again, for example when the app is
+    // reopened from the recent apps or the back button leads to it, which added copies of a
+    // video (2026-10-23). The Add tab says it is already there. Typed links still add freely.
+    if (!token && req.body?.unless_in_library === true && typeof rawUrl === 'string' && rawUrl) {
+      const existing = await existingItemIdForUrl(req.user!.userId, rawUrl);
+      if (existing) {
+        return res.status(409).json({ error: 'This is already in your library', id: existing });
+      }
+    }
 
     let processedContent = content;
     let htmlContent = null;
+    // Set when the fetched story is very short: the page may not have been read fully
+    let shortTextChars: number | undefined;
     let audioUrlValue = audio_url || null;
     let finalTitle = title;
     let finalAuthor = author;
     let finalDescription = description;
+    let finalDuration = duration || null;
     // An episode added from the Feed tab's cached list arrives with only the start of its
     // description (getCachedFeedItems), so the full text comes from its feed as it reads now
     // (a refresh never reads a cached item again, see freshFeedItemDescription), else from the
@@ -1031,6 +1051,7 @@ router.post('/', async (req, res) => {
       }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;
+      shortTextChars = articleData.short_text_chars;
 
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
@@ -1044,7 +1065,7 @@ router.post('/', async (req, res) => {
         finalDescription = articleData.excerpt;
       }
 
-      // FIX 2: If we don't have a picture yet, try to use the one from the scraper
+      // Without a picture from the request, the article's own lead image
       if (!finalPreviewPicture && articleData.lead_image_url) {
         finalPreviewPicture = articleData.lead_image_url;
       }
@@ -1071,8 +1092,48 @@ router.post('/', async (req, res) => {
       commentCountTotal = articleData.comment_count_total || 0;
     }
 
+    // YouTube's view count and embed status, and when the details were read: now, unless a
+    // key exists but the Data API failed (oEmbed's title only), then the refresh job reads
+    // them within the hour.
+    let viewCount: number | null = null;
+    let embedBlocked: string | null = null;
+    let videoFetchedAt: Date | null = null;
+    if (youtubeId) {
+      const key = await youtubeApiKey(req.user!.userId);
+      let video;
+      try {
+        video = await fetchYouTubeMetadata(youtubeId, key);
+      } catch (videoError) {
+        if (videoError instanceof YouTubeUnavailableError) {
+          return res.status(502).json({ error: `Could not add this video. ${videoError.message}` });
+        }
+        throw videoError;
+      }
+      if ((!finalTitle || finalTitle === 'Untitled') && video.title) finalTitle = video.title;
+      if (!finalAuthor && video.author) finalAuthor = video.author;
+      if (!finalDescription && video.description) finalDescription = video.description;
+      if (!finalPreviewPicture) finalPreviewPicture = video.preview_picture;
+      if (!finalPublishedAt && video.published_at) finalPublishedAt = video.published_at;
+      if (!finalDuration && video.duration) finalDuration = video.duration;
+      if (video.source === 'data_api') {
+        viewCount = video.view_count;
+        embedBlocked = video.embed_blocked;
+        // YouTube's total, while comments holds its most relevant threads
+        commentCountTotal = video.comment_count ?? 0;
+        const youtubeComments = await fetchYouTubeComments(youtubeId, key!).catch((err: Error) => {
+          console.warn(`[YouTube] ${youtubeId}: comments failed: ${err.message}`);
+          return [];
+        });
+        if (youtubeComments.length > 0) {
+          extractedComments = JSON.stringify(youtubeComments);
+          commentSource = 'youtube';
+        }
+      }
+      if (video.source === 'data_api' || !key) videoFetchedAt = new Date();
+    }
+
     if (!finalTitle || finalTitle === 'Untitled') {
-      finalTitle = 'Untitled Article';
+      finalTitle = type === 'video' ? 'Untitled video' : 'Untitled Article';
     }
 
     // Comments supplied by the caller (a Markdown import round-tripping an exported
@@ -1120,14 +1181,15 @@ router.post('/', async (req, res) => {
     const dbType = type;
 
     // FIX 3: Use finalPreviewPicture instead of raw preview_picture
-    // Set content_fetched_at for articles fetched from a URL
-    const contentFetchedAt = (type === 'article' && url) ? new Date() : null;
+    // Set content_fetched_at for articles fetched from a URL, and for videos when their
+    // YouTube details were read (the refresh job reads them again after 7 days)
+    const contentFetchedAt = (type === 'article' && url) ? new Date() : videoFetchedAt;
     const result = await query(
       `INSERT INTO content_items
-       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+       (type, title, url, content, html_content, author, description, preview_picture, audio_url, podcast_id, podcast_show_name, published_at, duration, karma, agree_votes, disagree_votes, comments, comment_source, comment_count_total, content_source, user_id, content_fetched_at, tags, summary, comment_summary, summary_status, summary_generated_at, view_count, embed_blocked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
        RETURNING *`,
-      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, duration || null, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null]
+      [dbType, finalTitle, url, processedContent, htmlContent, finalAuthor, finalDescription, finalPreviewPicture, audioUrlValue, podcast_id || null, podcastShowName, finalPublishedAt || null, finalDuration, karma, agreeVotes, disagreeVotes, extractedComments, commentSource, commentCountTotal, 'wallacast', req.user!.userId, contentFetchedAt, initialTags, importedSummary, importedCommentSummary, importedSummary ? 'completed' : 'idle', importedSummary ? new Date() : null, viewCount, embedBlocked]
     );
 
     const createdItem = result.rows[0];
@@ -1158,6 +1220,32 @@ router.post('/', async (req, res) => {
     };
     const itemChars = token ? String(processedContent || htmlContent || '').length + commentChars(extractedComments) : 0;
     const itemMinutes = token ? textMinutes(itemChars) : 0;
+
+    // A token's summary of a podcast episode or video starts once its transcript is made
+    // (summarizeAfterTranscript), but its minutes count now, and a skip is marked on the item
+    // like an article's. Without a token the user's setting decides when the transcript is done.
+    const tokenSummaryAfterTranscript = async (durationSeconds: unknown): Promise<{ summary: boolean; generateAudio?: boolean } | undefined> => {
+      if (!tokenGen) return undefined;
+      if (!tokenGen.summary_on_transcript) return { summary: false };
+      if (!(await fitsTokenBudget('summary', episodeSummaryMinutes(durationSeconds)))) {
+        if (tokenGen.summary_audio) {
+          tokenReport.skipped.push({ what: 'summary_audio', reason: 'Skipped because the summary was skipped' });
+        }
+        await query(
+          `UPDATE content_items SET summary_status = 'skipped', summary_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary ?? 'Skipped']
+        );
+        return { summary: false };
+      }
+      const generateAudio = tokenGen.summary_audio && (await fitsTokenBudget('summary_audio', SUMMARY_AUDIO_MINUTES));
+      if (skipReasons.summary_audio) {
+        await query(
+          `UPDATE content_items SET summary_audio_status = 'skipped', summary_audio_error = $2 WHERE id = $1`,
+          [createdItem.id, skipReasons.summary_audio]
+        );
+      }
+      return { summary: true, generateAudio };
+    };
 
     // Auto-generate audio for articles
     if ((type === 'article' || type === 'text') && !audioUrlValue && (processedContent || htmlContent)) {
@@ -1247,13 +1335,46 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Auto-generate transcript for podcast episodes
+    // Auto-generate a transcript for YouTube videos, like podcast episodes below, with its own
+    // setting (auto_transcribe_videos, on unless unticked). Gemini writes it from the video's
+    // address, so it only runs with a Gemini key.
+    if (type === 'video' && url) {
+      const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_videos');
+      const wantsTranscript = tokenGen ? tokenGen.transcribe_video : autoTranscribe === null || autoTranscribe === 'true';
+      const hasGeminiKey = !!(await getUserSetting(req.user!.userId, 'gemini_api_key'));
+      if (wantsTranscript && hasGeminiKey && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
+        console.log(`Auto-generating transcript for video ${createdItem.id}`);
+        const summaryDecision = await tokenSummaryAfterTranscript(createdItem.duration);
+        await query(
+          'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+          ['generating_transcript', 0, 'transcript', createdItem.id]
+        );
+        transcribeYouTubeVideo(req.user!.userId, url, createdItem.duration ? Number(createdItem.duration) : null)
+          .then(async (result) => {
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
+              [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
+            );
+            void summarizeAfterTranscript(createdItem.id, req.user!.userId, summaryDecision);
+          })
+          .catch(async (error) => {
+            console.error('Auto video transcript error:', error);
+            await query(
+              "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
+              ['failed', error.message || 'Failed to generate the video transcript', 0, createdItem.id]
+            );
+          });
+      }
+    }
+
+    // Auto-generate transcript for podcast episodes (auto_transcribe_podcasts, on unless unticked)
     if (type === 'podcast_episode' && audioUrlValue && !createdItem.transcript) {
       const autoTranscribe = tokenGen ? null : await getUserSetting(req.user!.userId, 'auto_transcribe_podcasts');
       const shouldAutoTranscribe = tokenGen ? tokenGen.transcribe : autoTranscribe === null || autoTranscribe === 'true';
 
       if (shouldAutoTranscribe && (await fitsTokenBudget('transcript', episodeMinutes(createdItem.duration)))) {
         console.log(`Auto-generating transcript for podcast episode ${createdItem.id}`);
+        const summaryDecision = await tokenSummaryAfterTranscript(createdItem.duration);
 
         await query(
           'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
@@ -1277,6 +1398,7 @@ router.post('/', async (req, res) => {
               'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
               [result.text, JSON.stringify(result.words), 'completed', 100, createdItem.id]
             );
+            void summarizeAfterTranscript(createdItem.id, req.user!.userId, summaryDecision);
           })
           .catch(async (error) => {
             console.error('Auto transcription error:', error);
@@ -1305,7 +1427,12 @@ router.post('/', async (req, res) => {
         generation: tokenReport,
         // One plain sentence per skipped generation, so a caller that reads nothing else still
         // sees that a limit was reached
-        warnings: tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
+        warnings: [
+          ...tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
+          ...(shortTextChars !== undefined
+            ? [`Only ${shortTextChars} characters of article text were found, so the page may not have been read fully. Check the item before relying on it.`]
+            : []),
+        ],
       });
     }
     res.status(201).json(createdItem);
@@ -1316,6 +1443,84 @@ router.post('/', async (req, res) => {
 });
 
 // Update content item
+/**
+ * A token's own generation request (the generate permissions): its minutes and one generation
+ * count against the token's limits (reserveMinutes). Answers false after sending a 429 when a
+ * limit is reached. Always true for the app itself.
+ */
+async function tokenMayGenerate(
+  req: express.Request,
+  res: express.Response,
+  what: 'audio' | 'summary' | 'summary_audio' | 'transcript',
+  minutes: number,
+  itemId: number
+): Promise<boolean> {
+  const token = req.apiToken;
+  if (!token) return true;
+  const r = await reserveMinutes(token, minutes, what, itemId);
+  if (r.ok) return true;
+  res.status(429).json({ error: r.message, limit: r.limit, max: r.max, used: r.used });
+  return false;
+}
+
+/** An item's text length for a token's minutes: its body plus its comments. */
+async function itemTextChars(id: number, userId: number, withComments = true): Promise<number> {
+  const r = await query('SELECT length(COALESCE(content, \'\')) AS chars, comments FROM content_items WHERE id = $1 AND user_id = $2', [id, userId]);
+  const row = r.rows[0];
+  return row ? Number(row.chars || 0) + (withComments ? commentChars(row.comments) : 0) : 0;
+}
+
+/** The share of a part's length that must really be heard before it counts as heard. */
+function heardShare(variant: 'audio' | 'summary', duration: number): number {
+  if (variant === 'summary') return 0.75;
+  return duration <= 600 ? 0.5 : 0.25;
+}
+
+// The heard check. The player reports the seconds of normal playback since its last report
+// (a jump never counts) and `ended` when the part played to its end, by the same rule that
+// resets its position to 0 (within 30 s of the end or past 99%). The part counts as heard when
+// its listening then reaches heardShare of its length. Only the app reports: tokens cannot
+// reach this route (TOKEN_ROUTES), and the read-only demo is refused by requireAuth.
+router.post('/:id/listened', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+    const variant: 'audio' | 'summary' = req.body?.variant === 'summary' ? 'summary' : 'audio';
+    const seconds = Math.max(0, Math.min(3600, Math.round(Number(req.body?.seconds) || 0)));
+    const ended = req.body?.ended === true;
+    const listenedCol = variant === 'summary' ? 'summary_listened_seconds' : 'listened_seconds';
+    const heardCol = variant === 'summary' ? 'summary_heard_at' : 'heard_at';
+    const durationCol = variant === 'summary' ? 'summary_audio_duration' : 'duration';
+    const result = await query(
+      `UPDATE content_items SET ${listenedCol} = ${listenedCol} + $3 WHERE id = $1 AND user_id = $2
+       RETURNING ${listenedCol} AS listened, ${durationCol} AS duration, ${heardCol} AS heard_at`,
+      [id, req.user!.userId, seconds]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Content not found' });
+    const row = result.rows[0];
+    let heardAt = row.heard_at;
+    if (ended) {
+      // The stored length, else the player's (an item whose length was never saved)
+      const duration = Number(row.duration) || Math.max(0, Number(req.body?.duration) || 0);
+      const needed = duration * heardShare(variant, duration);
+      if (duration > 0 && row.listened >= needed) {
+        const heard = await query(
+          `UPDATE content_items SET ${heardCol} = NOW() WHERE id = $1 AND user_id = $2 RETURNING ${heardCol} AS heard_at`,
+          [id, req.user!.userId]
+        );
+        heardAt = heard.rows[0]?.heard_at ?? heardAt;
+        console.log(`[Heard] item ${id} ${variant} heard: ${row.listened} s listened of ${Math.round(duration)} s`);
+      } else {
+        console.log(`[Heard] item ${id} ${variant} ended, not heard: ${row.listened} s listened, ${Math.round(needed)} s needed`);
+      }
+    }
+    res.json({ variant, listened_seconds: row.listened, heard_at: heardAt });
+  } catch (error) {
+    console.error('Error saving listening:', error);
+    res.status(500).json({ error: 'Failed to save listening' });
+  }
+});
+
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1461,7 +1666,7 @@ router.patch('/:id', async (req, res) => {
 
     if (updates.regenerate_transcript === true) {
       const contentResult = await query(
-        'SELECT type, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT type, url, duration, audio_url, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
@@ -1469,7 +1674,37 @@ router.patch('/:id', async (req, res) => {
         return res.status(404).json({ error: 'Content not found' });
       }
 
-      {
+      // A video has no audio file: Gemini writes its transcript from the YouTube address
+      // (services/video-transcript.ts). Same statuses as a podcast transcript.
+      if (contentResult.rows[0].type === 'video') {
+        const { url, duration } = contentResult.rows[0];
+        console.log(`Generating transcript for video ${id}`);
+        deferredTranscriptRegen = async () => {
+          try {
+            await query(
+              'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+              ['generating_transcript', 0, 'transcript', id]
+            );
+            const result = await transcribeYouTubeVideo(req.user!.userId, url, duration ? Number(duration) : null);
+            await query(
+              'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, generation_error = NULL, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5',
+              [result.text, JSON.stringify(result.words), 'completed', 100, id]
+            );
+            console.log(`Video transcript ready for ${id}: ${result.words.length} words`);
+            void summarizeAfterTranscript(Number(id), req.user!.userId);
+          } catch (error) {
+            console.error('Video transcript error:', error);
+            await query(
+              "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_transcript' WHERE id = $4",
+              ['failed', (error as Error).message || 'Failed to generate the video transcript', 0, id]
+            );
+          }
+        };
+        updates.generation_status = 'generating_transcript';
+        updates.generation_progress = 0;
+        allowedFields.push('generation_status', 'generation_progress');
+        delete updates.regenerate_transcript;
+      } else {
         const { type, audio_url, title, author, published_at, comments } = contentResult.rows[0];
 
         // No audio means nothing to transcribe. Answer with a real reason: this used to
@@ -1558,6 +1793,7 @@ router.patch('/:id', async (req, res) => {
               }
 
               console.log(`Transcript regenerated successfully for ${type} ${id}`);
+              if (type === 'podcast_episode') void summarizeAfterTranscript(Number(id), req.user!.userId);
             } catch (error) {
               console.error('Transcript regeneration error:', error);
               await query(
@@ -1577,45 +1813,15 @@ router.patch('/:id', async (req, res) => {
     }
 
     if (updates.is_archived === true) {
-      // Only read whether a blob exists and its stored size, never the blob itself.
-      // Loading audio_data (BYTEA, tens of MB) into RAM just to check existence was wasteful.
+      // Archiving keeps the generated audio for 7 days (services/archive.ts removes it later).
+      // Only a transient podcast-cache copy goes now, unless the item is or becomes starred.
       const contentResult = await query(
-        'SELECT audio_data IS NOT NULL AS has_blob, pg_column_size(audio_data) AS blob_bytes, type, is_starred FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT is_starred FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
-
       if (contentResult.rows.length > 0) {
-        const { has_blob, blob_bytes, type, is_starred: dbStarred } = contentResult.rows[0];
-
-        // CHECK IF FAVORITED IN THIS UPDATE OR PREVIOUSLY
-        // If updates.is_starred is present, use it. Otherwise use DB value.
-        const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : dbStarred;
-
-        // Archiving drops any transient podcast-cache copy, UNLESS starred: starred
-        // items keep their audio on archive, cached podcast copies included.
+        const effectiveStarred = updates.is_starred !== undefined ? updates.is_starred : contentResult.rows[0].is_starred;
         if (!effectiveStarred) evictCachedPodcastAudio(id).catch(() => {});
-
-        // Audio may be in the DB blob (legacy) OR on the disk volume (new). Check both, so
-        // archiving still frees space after the migration (when audio_data is NULL).
-        const diskBytes = await getAudioFileSize(id);
-        const hasAudio = has_blob || diskBytes !== null;
-
-        // Only delete audio for articles (not podcasts) and only if not favorited
-        if (hasAudio && (type === 'article' || type === 'text') && !effectiveStarred) {
-          const sizeMB = ((blob_bytes ?? diskBytes ?? 0) / 1024 / 1024).toFixed(2);
-          console.log(`Archived: Deleting ${sizeMB} MB of audio to save space`);
-          updates.audio_data = null;
-          updates.audio_url = null;
-          updates.duration = null;
-          updates.content_alignment = null;
-          updates.transcript = null;
-          updates.transcript_words = null;
-          updates.tts_chunks = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks');
-          await deleteAudioFile(id); // remove the on-disk file too
-        } else if (hasAudio && effectiveStarred) {
-          console.log(`Archived: Preserving audio for favorited item ${id}`);
-        }
       }
     }
 
@@ -1698,7 +1904,7 @@ router.patch('/:id', async (req, res) => {
     // For content updates, return the same columns as the list endpoint (has_word_timings, not
     // the word timings themselves).
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, view_count::float8 AS view_count, embed_blocked'
       : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
@@ -1770,7 +1976,7 @@ router.get('/:id/export', async (req, res) => {
               generation_status, generation_progress, generation_error, current_operation,
               tts_chunks, transcript_words, content_alignment,
               karma, agree_votes, disagree_votes, comments, comment_source,
-              COALESCE(comment_count_total, 0) AS comment_count,
+              COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked,
               content_source, content_fetched_at, audio_generated_at,
               images_processed, image_alt_text_data,
               summary, comment_summary, summary_status, summary_generated_at, summary_error,
@@ -1842,7 +2048,7 @@ router.post('/:id/refetch', async (req, res) => {
     const { id } = req.params;
 
     const contentResult = await query(
-      'SELECT type, url FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT type, url, generation_status, current_operation FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -1850,10 +2056,53 @@ router.post('/:id/refetch', async (req, res) => {
       return res.status(404).json({ error: 'Content not found' });
     }
 
-    const { type, url } = contentResult.rows[0];
+    const { type, url, generation_status: status, current_operation: operation } = contentResult.rows[0];
+
+    // A refetch writes its own status over a running job's, so the job looked finished and
+    // could be started a second time (a second paid video transcript). It waits instead.
+    const jobRunning = ['starting', 'fetching', 'extracting_content', 'generating_audio', 'generating_transcript'].includes(status)
+      || (status === 'ready' && !!operation);
+    if (jobRunning) {
+      return res.status(409).json({ error: 'This item is still being processed. Refetch it once that is done.' });
+    }
+
+    // A video refetches its YouTube details (title, channel, description, date, length,
+    // counts, embed status and comments), for example after a YouTube key was added in
+    // Settings, the same way the refresh job does (refreshVideoDetails). A value YouTube does
+    // not give keeps the stored one. There is no body, so there is no version snapshot.
+    const videoId = type === 'video' ? youtubeVideoId(url) : null;
+    // A token's refetch counts as one item (items per hour and per 2 days)
+    if (req.apiToken && (videoId || (type === 'article' && url))) {
+      const r = await reserveItem(req.apiToken, 'refetch', String(id));
+      if (!r.ok) return res.status(429).json({ error: r.message, limit: r.limit, max: r.max, used: r.used });
+    }
+    if (videoId) {
+      (async () => {
+        try {
+          await query(
+            'UPDATE content_items SET generation_status = $1, generation_progress = $2, current_operation = $3 WHERE id = $4',
+            ['fetching', 10, 'fetching_article', id]
+          );
+          await refreshVideoDetails(Number(id), videoId, await youtubeApiKey(req.user!.userId));
+          await query(
+            `UPDATE content_items SET generation_status = 'completed', generation_progress = 100, current_operation = NULL
+             WHERE id = $1`,
+            [id]
+          );
+          console.log(`Refetch completed for video ${id}`);
+        } catch (error) {
+          console.error(`Refetch error for video ${id}:`, error);
+          await query(
+            "UPDATE content_items SET generation_status = $1, generation_error = $2, generation_progress = $3, current_operation = 'failed_refetch' WHERE id = $4",
+            ['failed', (error as Error).message || 'Failed to refetch the video details', 0, id]
+          ).catch(() => { /* swallow */ });
+        }
+      })();
+      return res.json({ message: 'Refetch started' });
+    }
 
     if (type !== 'article' || !url) {
-      return res.status(400).json({ error: 'Refetch only available for articles with URLs' });
+      return res.status(400).json({ error: 'Refetch only available for articles and videos with URLs' });
     }
 
     (async () => {
@@ -2075,6 +2324,8 @@ router.post('/:id/generate-audio', async (req, res) => {
       console.log(`Regenerating: Will replace existing audio data`);
     }
 
+    if (!(await tokenMayGenerate(req, res, 'audio', textMinutes(await itemTextChars(Number(id), req.user!.userId, !exclude_comments)), Number(id)))) return;
+
     await query(
       'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
       ['generating_audio', 0, 'audio', id]
@@ -2119,7 +2370,7 @@ router.post('/:id/generate-summary', async (req, res) => {
     const generateAudio = typeof req.body?.generate_audio === 'boolean' ? req.body.generate_audio : undefined;
 
     const contentResult = await query(
-      'SELECT id, type, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, url, duration, summary_status, transcript, audio_url, generation_status, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -2129,7 +2380,7 @@ router.post('/:id/generate-summary', async (req, res) => {
 
     const contentItem = contentResult.rows[0];
 
-    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode') {
+    if (contentItem.type !== 'article' && contentItem.type !== 'text' && contentItem.type !== 'podcast_episode' && contentItem.type !== 'video') {
       return res.status(400).json({ error: 'Summaries are not available for this content type' });
     }
 
@@ -2140,19 +2391,42 @@ router.post('/:id/generate-summary', async (req, res) => {
       });
     }
 
-    const needsTranscript = contentItem.type === 'podcast_episode' && !(contentItem.transcript || '').trim();
+    // Podcasts and videos summarize their transcript
+    const isVideo = contentItem.type === 'video';
+    const needsTranscript = (contentItem.type === 'podcast_episode' || isVideo) && !(contentItem.transcript || '').trim();
 
     if (needsTranscript && !generateTranscript) {
       return res.status(400).json({
-        error: 'This podcast episode has no transcript yet. Generate the transcript first.',
+        error: isVideo
+          ? 'This video has no transcript yet. Generate the transcript first.'
+          : 'This podcast episode has no transcript yet. Generate the transcript first.',
         code: 'no_transcript',
       });
     }
-    if (needsTranscript && !contentItem.audio_url) {
+    if (needsTranscript && !isVideo && !contentItem.audio_url) {
       return res.status(400).json({ error: 'Episode has no audio to transcribe' });
     }
     if (needsTranscript && contentItem.generation_status === 'generating_transcript') {
       return res.status(409).json({ error: 'Transcription already in progress' });
+    }
+
+    // A token pays for what it starts: a transcript first only with generate_transcript, and
+    // the summary audio only when it asks for it (generate_audio) with generate_summary_audio,
+    // never because of the app's own auto settings
+    let summaryAudio = generateAudio;
+    if (req.apiToken) {
+      const token = req.apiToken;
+      if (needsTranscript && !token.permissions.includes('generate_transcript')) {
+        return res.status(403).json({ error: 'This token needs the generate_transcript permission to transcribe first' });
+      }
+      const isEpisode = contentItem.type === 'podcast_episode' || isVideo;
+      const minutes = isEpisode
+        ? episodeSummaryMinutes(contentItem.duration)
+        : summaryMinutes(await itemTextChars(Number(id), req.user!.userId));
+      if (needsTranscript && !(await tokenMayGenerate(req, res, 'transcript', episodeMinutes(contentItem.duration), Number(id)))) return;
+      if (!(await tokenMayGenerate(req, res, 'summary', minutes, Number(id)))) return;
+      summaryAudio = generateAudio === true && token.permissions.includes('generate_summary_audio')
+        && (await reserveMinutes(token, SUMMARY_AUDIO_MINUTES, 'summary_audio', Number(id))).ok;
     }
 
     await query(
@@ -2161,7 +2435,7 @@ router.post('/:id/generate-summary', async (req, res) => {
     );
 
     const runSummary = () =>
-      generateSummaryForContent(parseInt(id), { generateAudio })
+      generateSummaryForContent(parseInt(id), { generateAudio: summaryAudio })
         .then(() => console.log(`Summary generation finished for ${id}`))
         .catch(async (error) => {
           console.error('Background summary generation error:', error);
@@ -2184,8 +2458,11 @@ router.post('/:id/generate-summary', async (req, res) => {
         published_at: contentItem.published_at,
         comments: contentItem.comments,
       });
-      transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt,
-        contentItem.type === 'podcast_episode' && shouldCachePodcastHost(contentItem.audio_url) ? Number(id) : undefined)
+      const transcription = isVideo
+        ? transcribeYouTubeVideo(req.user!.userId, contentItem.url, contentItem.duration ? Number(contentItem.duration) : null)
+        : transcribeWithTimestamps(contentItem.audio_url, req.user!.userId, whisperPrompt,
+          contentItem.type === 'podcast_episode' && shouldCachePodcastHost(contentItem.audio_url) ? Number(id) : undefined);
+      transcription
         .then(async (result) => {
           console.log(`Transcription complete for ${id} (${result.words.length} words), starting summary`);
           await query(
@@ -2244,6 +2521,8 @@ router.post('/:id/generate-summary-audio', async (req, res) => {
         summary_audio_status: 'generating',
       });
     }
+
+    if (!(await tokenMayGenerate(req, res, 'summary_audio', SUMMARY_AUDIO_MINUTES, Number(id)))) return;
 
     // Set the status before responding so the frontend's next status poll sees it
     // even if the background job has not started yet.

@@ -5,12 +5,16 @@ import { getUserSetting } from './ai-providers.js';
 /**
  * Limits, usage and the change log for API tokens (table api_token_events, migration 031).
  *
- * Every token has four limits, set per token in Settings (a leaked token cannot change them,
+ * Every token has these limits, set per token in Settings (a leaked token cannot change them,
  * token management only accepts a normal login):
- *   items_hour / items_2d       items added plus pages read without saving
- *   minutes_hour / minutes_2d   minutes of AI generation started for items the token added: an
- *                               article's audio counts its narration time, a transcript the
- *                               episode's length, a summary a tenth of its article's narration time
+ *   items_hour / items_2d       items added, pages read without saving, and items refetched
+ *   minutes_hour / minutes_2d   minutes of AI generation the token started (for items it added,
+ *                               or asked for with a generate permission): an article's audio
+ *                               counts its narration time, a transcript the episode's length, a
+ *                               summary a tenth of its article's narration time
+ *   generations_hour / _2d      the same generations counted one each, so many short ones are
+ *                               limited too. Whichever limit a generation would cross first
+ *                               stops it.
  * "Per hour" and "per 2 days" are rolling windows (the last 60 minutes, the last 48 hours).
  * The Reset button in Settings sets usage_reset_at, and nothing before it counts.
  *
@@ -18,25 +22,33 @@ import { getUserSetting } from './ai-providers.js';
  * added, only the generation that does not fit is skipped, and the reply says so. Either way
  * the token's limit_hit and limit_hit_at are set, which the app shows as a notice.
  *
+ *   subscriptions_hour          feeds subscribed to in the last hour
  * Two more limits are fixed, not settings: one feed refresh per REFRESH_INTERVAL_MINUTES per
- * token, and CHANGES_PER_HOUR tag and star changes (undoable through the change log).
+ * token, and CHANGES_PER_HOUR changes to items and feeds (tags, stars, archive, unsubscribe,
+ * each undoable through the change log).
  *
  * Usage comes from the event log, so a deploy does not reset it and deleting an item does
  * not free what it used. A check and the event it records run under a row lock on the
  * token, so a burst of parallel requests cannot all slip under the limit together.
  */
 
-export const LIMIT_KEYS = ['items_hour', 'items_2d', 'minutes_hour', 'minutes_2d'] as const;
+export const LIMIT_KEYS = ['items_hour', 'items_2d', 'minutes_hour', 'minutes_2d', 'generations_hour', 'generations_2d', 'subscriptions_hour'] as const;
 export type LimitKey = typeof LIMIT_KEYS[number];
 export type TokenLimits = Record<LimitKey, number>;
 
 /** What a token gets until the user changes it. */
-export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600 };
+export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600, generations_hour: 60, generations_2d: 300, subscriptions_hour: 10 };
 
 /** The highest values Settings accepts. Items cost only server work and storage (an add
  *  takes about 2 to 5 seconds, articles average about 18 KB of stored HTML), minutes cost
- *  money on the user's own API keys. */
-export const MAX_LIMITS: TokenLimits = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000 };
+ *  money on the user's own API keys, and every feed makes each feed refresh longer. */
+export const MAX_LIMITS: TokenLimits = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, generations_hour: 500, generations_2d: 5000, subscriptions_hour: 100 };
+
+/** Generations per item a token may add: an add often starts two (a summary and its audio),
+ *  and the AI Radio's token started 68 in one hour for 33 items (2026-11-20). The defaults
+ *  above follow it (3 x 20 and 3 x 100), and limits saved before the generation limits existed
+ *  get it from their own item limits (effectiveLimits). */
+const GENERATIONS_PER_SAVED_ITEM = 3;
 
 export const REFRESH_INTERVAL_MINUTES = 15;
 export const CHANGES_PER_HOUR = 500;
@@ -54,7 +66,11 @@ export const SUMMARY_AUDIO_MINUTES = 3;
  *  article counted 31 minutes at the full share. */
 export const SUMMARY_SHARE = 0.1;
 
-export const CHANGE_KINDS = ['tag_add', 'star', 'unstar'] as const;
+/** Changes a token makes, each logged and undoable from Settings. All but 'subscribe' count
+ *  against CHANGES_PER_HOUR, a subscription against its own subscriptions_hour limit. */
+export const CHANGE_KINDS = ['tag_add', 'star', 'unstar', 'archive', 'unarchive', 'subscribe', 'unsubscribe'] as const;
+const COUNTED_CHANGE_KINDS = "'tag_add', 'star', 'unstar', 'archive', 'unarchive', 'unsubscribe'";
+const ALL_CHANGE_KINDS = "'tag_add', 'star', 'unstar', 'archive', 'unarchive', 'subscribe', 'unsubscribe'";
 export type ChangeKind = typeof CHANGE_KINDS[number];
 
 /** The four limits a token has, its stored values over the defaults. */
@@ -64,6 +80,14 @@ export function effectiveLimits(raw: unknown): TokenLimits {
   for (const key of LIMIT_KEYS) {
     const v = stored[key];
     if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_LIMITS[key]) out[key] = v;
+  }
+  // Limits saved before the generation limits existed: three generations per item, so a
+  // routine that already ran within its limits keeps running
+  if (stored.generations_hour === undefined && typeof stored.items_hour === 'number') {
+    out.generations_hour = Math.min(MAX_LIMITS.generations_hour, out.items_hour * GENERATIONS_PER_SAVED_ITEM);
+  }
+  if (stored.generations_2d === undefined && typeof stored.items_2d === 'number') {
+    out.generations_2d = Math.min(MAX_LIMITS.generations_2d, out.items_2d * GENERATIONS_PER_SAVED_ITEM);
   }
   return out;
 }
@@ -85,25 +109,36 @@ export function validateLimits(raw: unknown, current: TokenLimits): { limits: To
 
 // ---- generation for items a token adds -----------------------------------------------
 
+/** The same six switches as the app's automatic settings. */
 export interface TokenGeneration {
-  /** True: the app's own auto-generation settings decide. False: the four flags below. */
+  /** True: the app's own auto-generation settings decide. False: the six flags below. */
   follow: boolean;
+  /** Audio for articles and texts */
   audio: boolean;
-  summary: boolean;
-  summary_audio: boolean;
+  /** A transcript for podcast episodes */
   transcribe: boolean;
+  /** A transcript for YouTube videos */
+  transcribe_video: boolean;
+  /** A summary of articles and texts */
+  summary: boolean;
+  /** A summary of a podcast episode or video once its transcript is made */
+  summary_on_transcript: boolean;
+  summary_audio: boolean;
 }
 
-const GENERATION_FLAGS = ['audio', 'summary', 'summary_audio', 'transcribe'] as const;
+const GENERATION_FLAGS = ['audio', 'transcribe', 'transcribe_video', 'summary', 'summary_on_transcript', 'summary_audio'] as const;
 
 export function parseGeneration(raw: unknown): TokenGeneration {
   const g = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
     follow: g.follow !== false,
     audio: g.audio === true,
-    summary: g.summary === true,
-    summary_audio: g.summary_audio === true,
     transcribe: g.transcribe === true,
+    // Tokens saved before videos had their own switch used the transcript switch for both
+    transcribe_video: typeof g.transcribe_video === 'boolean' ? g.transcribe_video : g.transcribe === true,
+    summary: g.summary === true,
+    summary_on_transcript: g.summary_on_transcript === true,
+    summary_audio: g.summary_audio === true,
   };
 }
 
@@ -120,23 +155,28 @@ export function validateGeneration(raw: unknown, current: TokenGeneration): { ge
 
 export type ResolvedGeneration = Omit<TokenGeneration, 'follow'>;
 
-/** What actually runs for an item this token adds. Following the app reads the same four
+/** What actually runs for an item this token adds. Following the app reads the same six
  *  settings, with the same defaults, that POST /content and the summarizer read. */
 export async function resolveGeneration(userId: number, gen: TokenGeneration): Promise<ResolvedGeneration> {
   if (!gen.follow) {
-    return { audio: gen.audio, summary: gen.summary, summary_audio: gen.summary_audio, transcribe: gen.transcribe };
+    const { follow: _follow, ...own } = gen;
+    return own;
   }
-  const [audio, summary, summaryAudio, transcribe] = await Promise.all([
+  const [audio, summary, summaryAudio, transcribe, transcribeVideo, summaryOnTranscript] = await Promise.all([
     getUserSetting(userId, 'auto_generate_audio_for_articles'),
     getUserSetting(userId, 'auto_generate_summary'),
     getUserSetting(userId, 'auto_generate_summary_audio'),
     getUserSetting(userId, 'auto_transcribe_podcasts'),
+    getUserSetting(userId, 'auto_transcribe_videos'),
+    getUserSetting(userId, 'auto_generate_summary_on_transcript'),
   ]);
   return {
     audio: audio === 'true',
     summary: summary === 'true',
     summary_audio: summaryAudio === 'true',
     transcribe: transcribe === null || transcribe === 'true',
+    transcribe_video: transcribeVideo === null || transcribeVideo === 'true',
+    summary_on_transcript: summaryOnTranscript === null || summaryOnTranscript === 'true',
   };
 }
 
@@ -149,6 +189,11 @@ export function textMinutes(chars: number): number {
 /** The minutes a summary of a text counts: SUMMARY_SHARE of its narration, at least 1. */
 export function summaryMinutes(chars: number): number {
   return Math.max(1, Math.ceil((Math.max(0, chars) / CHARS_PER_MINUTE) * SUMMARY_SHARE));
+}
+
+/** The minutes the summary of a podcast episode or video counts: SUMMARY_SHARE of its length. */
+export function episodeSummaryMinutes(durationSeconds: unknown): number {
+  return Math.max(1, Math.ceil(episodeMinutes(durationSeconds) * SUMMARY_SHARE));
 }
 
 /** The plain-text length of a comment tree (the stored JSON, or the array). Comment bodies
@@ -181,17 +226,23 @@ export interface TokenUsage {
   items_2d: number;
   minutes_hour: number;
   minutes_2d: number;
+  generations_hour: number;
+  generations_2d: number;
+  subscriptions_hour: number;
   changes_hour: number;
 }
 
 /** Usage of one token since its last reset, inside the 48-hour window. $1 is the token id. */
 const USAGE_SQL = `
   SELECT
-    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read') AND e.created_at > NOW() - INTERVAL '1 hour')::int AS items_hour,
-    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read'))::int AS items_2d,
+    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read', 'refetch') AND e.created_at > NOW() - INTERVAL '1 hour')::int AS items_hour,
+    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read', 'refetch'))::int AS items_2d,
     COALESCE(SUM(e.minutes) FILTER (WHERE e.kind = 'generation' AND e.created_at > NOW() - INTERVAL '1 hour'), 0)::float AS minutes_hour,
     COALESCE(SUM(e.minutes) FILTER (WHERE e.kind = 'generation'), 0)::float AS minutes_2d,
-    COUNT(*) FILTER (WHERE e.kind IN ('tag_add', 'star', 'unstar') AND e.created_at > NOW() - INTERVAL '1 hour')::int AS changes_hour
+    COUNT(*) FILTER (WHERE e.kind = 'generation' AND e.created_at > NOW() - INTERVAL '1 hour')::int AS generations_hour,
+    COUNT(*) FILTER (WHERE e.kind = 'generation')::int AS generations_2d,
+    COUNT(*) FILTER (WHERE e.kind = 'subscribe' AND e.created_at > NOW() - INTERVAL '1 hour')::int AS subscriptions_hour,
+    COUNT(*) FILTER (WHERE e.kind IN (${COUNTED_CHANGE_KINDS}) AND e.created_at > NOW() - INTERVAL '1 hour')::int AS changes_hour
   FROM api_token_events e
   JOIN api_tokens t ON t.id = e.token_id
   WHERE e.token_id = $1
@@ -208,6 +259,9 @@ async function usageWith(runner: Runner, tokenId: number): Promise<TokenUsage> {
     items_2d: row.items_2d ?? 0,
     minutes_hour: Math.round((row.minutes_hour ?? 0) * 10) / 10,
     minutes_2d: Math.round((row.minutes_2d ?? 0) * 10) / 10,
+    generations_hour: row.generations_hour ?? 0,
+    generations_2d: row.generations_2d ?? 0,
+    subscriptions_hour: row.subscriptions_hour ?? 0,
     changes_hour: row.changes_hour ?? 0,
   };
 }
@@ -252,6 +306,9 @@ const LIMIT_WORDS: Record<LimitKey, string> = {
   items_2d: 'items per 2 days',
   minutes_hour: 'generation minutes per hour',
   minutes_2d: 'generation minutes per 2 days',
+  generations_hour: 'generations per hour',
+  generations_2d: 'generations per 2 days',
+  subscriptions_hour: 'subscriptions per hour',
 };
 
 function overLimit(key: LimitKey, max: number, used: number): LimitResult {
@@ -265,8 +322,9 @@ async function recordLimitHit(tokenId: number, message: string): Promise<void> {
   });
 }
 
-/** Count one added item ('add') or one page read without saving ('read'), or refuse. */
-export async function reserveItem(token: TokenContext, kind: 'add' | 'read', detail?: string): Promise<LimitResult> {
+/** Count one added item ('add'), one page read without saving ('read') or one item refetched
+ *  ('refetch'), or refuse. */
+export async function reserveItem(token: TokenContext, kind: 'add' | 'read' | 'refetch', detail?: string): Promise<LimitResult> {
   const limits = effectiveLimits(token.limits);
   const result = await withTokenLock(token.id, async (client) => {
     const used = await usageWith(client, token.id);
@@ -285,7 +343,7 @@ export async function reserveItem(token: TokenContext, kind: 'add' | 'read', det
   return result;
 }
 
-/** Count `minutes` of generation for an item, or refuse (the caller then skips it). */
+/** Count `minutes` and one generation for an item, or refuse (the caller then skips it). */
 export async function reserveMinutes(
   token: TokenContext,
   minutes: number,
@@ -297,6 +355,8 @@ export async function reserveMinutes(
     const used = await usageWith(client, token.id);
     if (used.minutes_hour + minutes > limits.minutes_hour) return overLimit('minutes_hour', limits.minutes_hour, used.minutes_hour);
     if (used.minutes_2d + minutes > limits.minutes_2d) return overLimit('minutes_2d', limits.minutes_2d, used.minutes_2d);
+    if (used.generations_hour + 1 > limits.generations_hour) return overLimit('generations_hour', limits.generations_hour, used.generations_hour);
+    if (used.generations_2d + 1 > limits.generations_2d) return overLimit('generations_2d', limits.generations_2d, used.generations_2d);
     await client.query(
       'INSERT INTO api_token_events (token_id, user_id, kind, content_item_id, minutes, detail) VALUES ($1, $2, $3, $4, $5, $6)',
       [token.id, token.userId, 'generation', contentItemId, minutes, detail]
@@ -339,8 +399,8 @@ export async function reserveRefresh(token: TokenContext): Promise<LimitResult> 
   });
 }
 
-/** Room for `count` more tag or star changes this hour? The changes themselves are logged
- *  by logChanges once they are made, since only real changes count. */
+/** Room for `count` more changes this hour (tags, stars, archive, unsubscribe)? The changes
+ *  themselves are logged by logChanges once they are made, since only real changes count. */
 export async function checkChanges(token: TokenContext, count: number): Promise<LimitResult> {
   const used = await getTokenUsage(token.id);
   if (used.changes_hour + count > CHANGES_PER_HOUR) {
@@ -349,7 +409,7 @@ export async function checkChanges(token: TokenContext, count: number): Promise<
       limit: 'changes_hour',
       max: CHANGES_PER_HOUR,
       used: used.changes_hour,
-      message: `This token reached its limit of ${CHANGES_PER_HOUR} tag and star changes per hour`,
+      message: `This token reached its limit of ${CHANGES_PER_HOUR} changes per hour`,
     };
     await recordLimitHit(token.id, result.message);
     return result;
@@ -357,10 +417,46 @@ export async function checkChanges(token: TokenContext, count: number): Promise<
   return { ok: true };
 }
 
+// ---- subscriptions -------------------------------------------------------------------------
+
+/** Count one subscription against subscriptions_hour, or refuse. The event is written before
+ *  the feed is fetched, under the token lock, so parallel requests cannot all slip under the
+ *  limit. finishSubscription() then names the feed, cancelSubscription() removes the event when
+ *  subscribing fails, so only real subscriptions count. */
+export async function reserveSubscription(token: TokenContext): Promise<(LimitResult & { ok: false }) | { ok: true; eventId: number }> {
+  const limits = effectiveLimits(token.limits);
+  const result = await withTokenLock(token.id, async (client) => {
+    const used = await usageWith(client, token.id);
+    if (used.subscriptions_hour + 1 > limits.subscriptions_hour) {
+      return overLimit('subscriptions_hour', limits.subscriptions_hour, used.subscriptions_hour) as LimitResult & { ok: false };
+    }
+    const r = await client.query(
+      'INSERT INTO api_token_events (token_id, user_id, kind) VALUES ($1, $2, $3) RETURNING id',
+      [token.id, token.userId, 'subscribe']
+    );
+    return { ok: true as const, eventId: r.rows[0].id as number };
+  });
+  if (!result.ok) {
+    console.log(`[ApiToken] token ${token.id} refused (subscribe): ${result.message}`);
+    await recordLimitHit(token.id, result.message);
+  }
+  return result;
+}
+
+export async function finishSubscription(eventId: number, podcastId: number): Promise<void> {
+  await query('UPDATE api_token_events SET podcast_id = $2 WHERE id = $1', [eventId, podcastId]);
+}
+
+export async function cancelSubscription(eventId: number): Promise<void> {
+  await query('DELETE FROM api_token_events WHERE id = $1', [eventId]);
+}
+
 // ---- the change log ------------------------------------------------------------------------
 
+/** One change to one item (itemId) or one feed (podcastId, for 'unsubscribe'). */
 export interface ChangeRecord {
-  itemId: number;
+  itemId?: number;
+  podcastId?: number;
   kind: ChangeKind;
   tag?: string;
 }
@@ -368,10 +464,16 @@ export interface ChangeRecord {
 export async function logChanges(token: TokenContext, changes: ChangeRecord[]): Promise<void> {
   if (changes.length === 0) return;
   await query(
-    `INSERT INTO api_token_events (token_id, user_id, kind, content_item_id, tag)
-     SELECT $1, $2, c.kind, c.item_id, c.tag
-       FROM unnest($3::text[], $4::int[], $5::text[]) AS c(kind, item_id, tag)`,
-    [token.id, token.userId, changes.map((c) => c.kind), changes.map((c) => c.itemId), changes.map((c) => c.tag ?? null)]
+    `INSERT INTO api_token_events (token_id, user_id, kind, content_item_id, podcast_id, tag)
+     SELECT $1, $2, c.kind, c.item_id, c.podcast_id, c.tag
+       FROM unnest($3::text[], $4::int[], $5::int[], $6::text[]) AS c(kind, item_id, podcast_id, tag)`,
+    [
+      token.id, token.userId,
+      changes.map((c) => c.kind),
+      changes.map((c) => c.itemId ?? null),
+      changes.map((c) => c.podcastId ?? null),
+      changes.map((c) => c.tag ?? null),
+    ]
   );
 }
 
@@ -380,19 +482,26 @@ export interface ChangeRow {
   kind: ChangeKind;
   tag: string | null;
   content_item_id: number | null;
+  podcast_id: number | null;
+  /** The item's title, or the feed's for subscribe and unsubscribe. Null once it was deleted. */
   title: string | null;
   created_at: Date;
   undone_at: Date | null;
 }
 
-/** A token's tag and star changes, newest first. */
+/** SQL for the change kinds, for callers that count open changes. */
+export const CHANGE_KINDS_SQL = ALL_CHANGE_KINDS;
+
+/** A token's changes, newest first. */
 export async function listChanges(userId: number, tokenId: number, limit = 200): Promise<ChangeRow[]> {
   const r = await query(
-    `SELECT e.id, e.kind, e.tag, e.content_item_id, c.title, e.created_at, e.undone_at
+    `SELECT e.id, e.kind, e.tag, e.content_item_id, e.podcast_id, COALESCE(c.title, p.title) AS title,
+            e.created_at, e.undone_at
        FROM api_token_events e
        JOIN api_tokens t ON t.id = e.token_id AND t.user_id = $1
        LEFT JOIN content_items c ON c.id = e.content_item_id
-      WHERE e.token_id = $2 AND e.kind IN ('tag_add', 'star', 'unstar')
+       LEFT JOIN podcasts p ON p.id = e.podcast_id
+      WHERE e.token_id = $2 AND e.kind IN (${ALL_CHANGE_KINDS})
       ORDER BY e.created_at DESC, e.id DESC
       LIMIT $3`,
     [userId, tokenId, Math.min(Math.max(1, limit), 1000)]
@@ -403,15 +512,18 @@ export async function listChanges(userId: number, tokenId: number, limit = 200):
 /**
  * Undo a token's changes: the given event ids, or every change not yet undone. Newest first,
  * so an item starred and then unstarred by the token ends where it started. A tag the token
- * added is removed from the item, a star it set is taken off, an unstar is starred again.
- * Items deleted since are skipped. Each undone item is pushed to Wallabag again.
+ * added is removed from the item, a star it set is taken off, an unstar is starred again, an
+ * archived item is unarchived (with its audio, within the 7 days archived audio is kept) and
+ * an unarchived one archived again, a feed it subscribed to is unsubscribed and one it left is
+ * subscribed again. Items and feeds deleted since are skipped. Each undone item is pushed to
+ * Wallabag again.
  */
 export async function undoChanges(userId: number, tokenId: number, eventIds: number[] | 'all'): Promise<number> {
   const r = await query(
-    `SELECT e.id, e.kind, e.tag, e.content_item_id
+    `SELECT e.id, e.kind, e.tag, e.content_item_id, e.podcast_id
        FROM api_token_events e
        JOIN api_tokens t ON t.id = e.token_id AND t.user_id = $1
-      WHERE e.token_id = $2 AND e.kind IN ('tag_add', 'star', 'unstar') AND e.undone_at IS NULL
+      WHERE e.token_id = $2 AND e.kind IN (${ALL_CHANGE_KINDS}) AND e.undone_at IS NULL
         ${eventIds === 'all' ? '' : 'AND e.id = ANY($3::int[])'}
       ORDER BY e.created_at DESC, e.id DESC`,
     eventIds === 'all' ? [userId, tokenId] : [userId, tokenId, eventIds]
@@ -432,7 +544,19 @@ export async function undoChanges(userId: number, tokenId: number, eventIds: num
             WHERE id = $1 AND user_id = $2 AND is_starred IS DISTINCT FROM $3`,
           [ev.content_item_id, userId, ev.kind === 'unstar']
         );
+      } else if (ev.kind === 'archive' || ev.kind === 'unarchive') {
+        await query(
+          `UPDATE content_items SET is_archived = $3, updated_at = NOW(), wallabag_needs_push = TRUE
+            WHERE id = $1 AND user_id = $2 AND is_archived IS DISTINCT FROM $3`,
+          [ev.content_item_id, userId, ev.kind === 'unarchive']
+        );
       }
+    } else if (ev.podcast_id && (ev.kind === 'subscribe' || ev.kind === 'unsubscribe')) {
+      await query(
+        `UPDATE podcasts SET is_subscribed = $3, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1 AND user_id = $2 AND is_subscribed IS DISTINCT FROM $3`,
+        [ev.podcast_id, userId, ev.kind === 'unsubscribe']
+      );
     }
     await query('UPDATE api_token_events SET undone_at = NOW() WHERE id = $1', [ev.id]);
     undone++;
