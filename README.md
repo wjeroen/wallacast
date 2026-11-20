@@ -66,7 +66,7 @@ Wallacast supports multiple users with complete data isolation:
 - Each user stores their own API keys (OpenAI, DeepInfra, Gemini, and so on) in Settings, encrypted at rest. There is no global/shared API key.
 - Audio endpoints (`/api/content/:id/audio`) are public so HTML5 players can stream them, but content IDs stay private and support byte-range seeking.
 - Optional per-instance gates: registration can require an invite code (`INVITE_CODE` env var), and a "Forgot password?" email flow activates when `RESEND_API_KEY` is set (see RAILWAY_DEPLOYMENT.md).
-- Logged-out visitors see a marketing home page with a "Try the demo" button: a passwordless login into a shared read-only account (`DEMO_USERNAME`, default `demo`) whose library is pre-seeded via `backend/scripts/seed-demo.mjs`. Demo sessions can browse and listen but cannot change anything.
+- Logged-out visitors see a marketing home page with a "Try the demo" button: a passwordless login into a shared read-only account (`DEMO_USERNAME`, default `demo`) whose library is pre-seeded via `backend/scripts/seed-demo.mjs` (`npm run seed:demo`, the script's header lists its settings). A rerun redoes only the onboarding guide and keeps the complete podcast and article, unless `REBUILD_ALL=1` is set. Demo sessions can browse and listen but cannot change anything.
 
 The full security model (encryption, storage layout, byte-range serving) is documented in **ARCHITECTURE.md**.
 

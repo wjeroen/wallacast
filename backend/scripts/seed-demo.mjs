@@ -8,6 +8,9 @@
 //   BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \
 //   DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo
 // Add INVITE_CODE=... only to create the demo account on an invite-only instance.
+// The podcast episode and the article are kept when they already exist with their audio,
+// transcript and summary, so a run that only updates the guide pays only for the guide.
+// Add REBUILD_ALL=1 to delete and regenerate them too (after a change to narration or models).
 //
 // Node 18+ is assumed (native fetch, no external libraries). Plain ESM.
 //
@@ -17,7 +20,8 @@
 //   3. Saves the demo account settings (models, voice, transcription, keys, toggles).
 //   4. Adds three library items in an order that leaves the onboarding guide NEWEST:
 //        a) an 80,000 Hours podcast episode, b) an EA Forum article, c) the text guide.
-//   5. Generates audio / transcript / summaries for each, polling until each is done.
+//      a) and b) stay as they are when complete (see REBUILD_ALL above), c) is always redone.
+//   5. Generates audio / transcript / summaries for each new item, polling until each is done.
 //   6. Removes all three API keys from the demo account so it holds no usable keys.
 //
 // SECURITY: API key VALUES are never printed. They are referenced by variable name only
@@ -37,6 +41,7 @@ const cfg = {
   deepinfraKey: process.env.DEEPINFRA_API_KEY,
   anthropicKey: process.env.ANTHROPIC_API_KEY,
   inviteCode: (process.env.INVITE_CODE || '').trim(),
+  rebuildAll: /^(1|true|yes)$/i.test(process.env.REBUILD_ALL || ''),
 };
 
 const missing = [];
@@ -262,6 +267,19 @@ async function subscribe(feedUrl) {
   return status === 409 ? data.podcast : data;
 }
 
+// An existing item worth keeping: exactly one match, with everything the seed generates for it
+// done. Null when the item must be added (again).
+async function completeMatch(predicate, isComplete, label) {
+  if (cfg.rebuildAll) return null;
+  const matches = (await getLibrary()).filter(predicate);
+  if (matches.length !== 1 || !isComplete(matches[0])) return null;
+  console.log(`  Kept the existing ${label} "${matches[0].title}" (id ${matches[0].id}), it is complete.`);
+  return matches[0];
+}
+
+const generationDone = (it) =>
+  it.generation_status === 'completed' || (it.generation_status === 'ready' && !it.current_operation);
+
 // Re-runnability: delete any existing library items matching `predicate` before adding a fresh copy.
 async function deleteMatching(predicate, label) {
   const items = await getLibrary();
@@ -426,10 +444,15 @@ async function addPodcastEpisode() {
   }
   console.log(`  Found episode: "${episode.title}".`);
 
-  await deleteMatching(
-    (it) => (episode.audio_url && it.audio_url === episode.audio_url) || it.title === episode.title,
-    'podcast episode'
-  );
+  const isEpisode = (it) => (episode.audio_url && it.audio_url === episode.audio_url) || it.title === episode.title;
+  const kept = await completeMatch(isEpisode, (it) => it.has_word_timings && it.summary_status === 'completed', 'podcast episode');
+  if (kept) {
+    report.podcast.id = kept.id;
+    report.podcast.title = kept.title;
+    report.podcast.kept = true;
+    return kept;
+  }
+  await deleteMatching(isEpisode, 'podcast episode');
 
   const { data: created } = await apiFetch('POST', '/content', {
     body: {
@@ -453,10 +476,15 @@ async function addPodcastEpisode() {
 async function addArticle() {
   const t0 = Date.now();
   console.log('\n[add 2/3] Article: adding by URL from the EA Forum (fetch happens server-side)...');
-  await deleteMatching(
-    (it) => it.type === 'article' && typeof it.url === 'string' && (it.url.includes(ARTICLE_SLUG) || it.url === ARTICLE_URL),
-    'article'
-  );
+  const isArticle = (it) => it.type === 'article' && typeof it.url === 'string' && (it.url.includes(ARTICLE_SLUG) || it.url === ARTICLE_URL);
+  const kept = await completeMatch(isArticle, (it) => !!it.audio_url && generationDone(it) && it.summary_status === 'completed', 'article');
+  if (kept) {
+    report.article.id = kept.id;
+    report.article.title = kept.title;
+    report.article.kept = true;
+    return kept;
+  }
+  await deleteMatching(isArticle, 'article');
   const { data: created } = await apiFetch('POST', '/content', { body: { type: 'article', url: ARTICLE_URL } });
   console.log(`  Added article "${created.title}" (content id ${created.id}).`);
   report.article.id = created.id;
@@ -489,7 +517,7 @@ function printSummary() {
     const r = report[key];
     const genLabel = key === 'podcast' ? 'transcript' : 'audio';
     console.log(`- ${r.label}`);
-    console.log(`    id: ${r.id == null ? '-' : r.id}    title: ${r.title || '-'}`);
+    console.log(`    id: ${r.id == null ? '-' : r.id}    title: ${r.title || '-'}${r.kept ? '    (kept, nothing regenerated)' : ''}`);
     console.log(
       `    add: ${fmtDuration(r.addSec)}   ${genLabel}: ${fmtDuration(r.genSec)}   ` +
       `summary: ${fmtDuration(r.summarySec)}   status: ${r.status || '-'} / summary ${r.summaryStatus || '-'}`
@@ -556,19 +584,23 @@ async function main() {
     report.text.status = await pollGeneration(text.id, 'text audio');
     report.text.genSec = secsSince(t);
 
-    // 5b. Article audio.
-    console.log('\n[gen 2/6] Article: generating audio...');
-    t = Date.now();
-    await triggerAudio(article.id);
-    report.article.status = await pollGeneration(article.id, 'article audio');
-    report.article.genSec = secsSince(t);
+    // 5b. Article audio (a kept article already has it).
+    if (!report.article.kept) {
+      console.log('\n[gen 2/6] Article: generating audio...');
+      t = Date.now();
+      await triggerAudio(article.id);
+      report.article.status = await pollGeneration(article.id, 'article audio');
+      report.article.genSec = secsSince(t);
+    }
 
-    // 5c. Podcast transcript.
-    console.log('\n[gen 3/6] Podcast episode: transcribing...');
-    t = Date.now();
-    await triggerTranscript(podcast.id);
-    report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript');
-    report.podcast.genSec = secsSince(t);
+    // 5c. Podcast transcript (a kept episode already has it).
+    if (!report.podcast.kept) {
+      console.log('\n[gen 3/6] Podcast episode: transcribing...');
+      t = Date.now();
+      await triggerTranscript(podcast.id);
+      report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript');
+      report.podcast.genSec = secsSince(t);
+    }
 
     // 5d. Summaries: text, article, then podcast (podcast only after its transcript exists).
     console.log('\n[gen 4/6] Text item: generating summary...');
@@ -577,17 +609,21 @@ async function main() {
     report.text.summaryStatus = await pollSummary(text.id, 'text summary');
     report.text.summarySec = secsSince(t);
 
-    console.log('\n[gen 5/6] Article: generating summary...');
-    t = Date.now();
-    await triggerSummary(article.id);
-    report.article.summaryStatus = await pollSummary(article.id, 'article summary');
-    report.article.summarySec = secsSince(t);
+    if (!report.article.kept) {
+      console.log('\n[gen 5/6] Article: generating summary...');
+      t = Date.now();
+      await triggerSummary(article.id);
+      report.article.summaryStatus = await pollSummary(article.id, 'article summary');
+      report.article.summarySec = secsSince(t);
+    }
 
-    console.log('\n[gen 6/6] Podcast episode: generating summary from the transcript...');
-    t = Date.now();
-    await triggerSummary(podcast.id, false);
-    report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary');
-    report.podcast.summarySec = secsSince(t);
+    if (!report.podcast.kept) {
+      console.log('\n[gen 6/6] Podcast episode: generating summary from the transcript...');
+      t = Date.now();
+      await triggerSummary(podcast.id, false);
+      report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary');
+      report.podcast.summarySec = secsSince(t);
+    }
 
     // 6. Cleanup: remove the API keys on success.
     console.log('\nCleanup: removing API keys from the demo account...');
