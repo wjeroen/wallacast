@@ -180,7 +180,7 @@
 
 ## Completed Recently ✅
 
-- [x] **Heard check** (2026-11-20): an item heard to its end gets a check on its Audio chip (Summary chip for the summary audio), counting only real listening (half up to 10 minutes, a quarter above, three quarters for summaries), a Heard row in the filter grid, and `heard_at`/`summary_heard_at` in the token index. Videos in YouTube's player are not counted yet
+- [x] **Heard check** (2026-11-20): an item heard to its end gets a check on its Audio chip (Summary chip for the summary audio), counting only real listening (half up to 10 minutes, a quarter above, three quarters for summaries), a Heard row in the filter grid, and `heard_at`/`summary_heard_at` in the token index. YouTube videos count through their player clock
 - [x] **Articles saved without their text** (2026-11-20): the story is the `<article>` with the most text (not the first), `<main>` beside a small card (GAO), the Times of India's `data-articlebody` marker, a JSON-LD `articleBody` safety net, and a token warning for a story under 500 characters. 41 of 44 recent pages extracted the same, the three broken ones got their text
 - [x] **Substack comments stopped arriving** (2026-11-20): Substack moved its page data into a `preloads-json` script block, which the comment reader now reads
 

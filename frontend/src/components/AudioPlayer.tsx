@@ -260,7 +260,15 @@ export function AudioPlayer({
       const t = player.getCurrentTime();
       if (Number.isFinite(t)) {
         videoTimeRef.current = t;
-        if (videoDrivesControls()) setCurrentTime(t);
+        if (videoDrivesControls()) {
+          setCurrentTime(t);
+          // The heard check: a step of up to 8 s between two readings is playback (2x speed
+          // with a slow clock), a longer one or a seek (handleSeek resets the reading) is not
+          const last = lastVideoTickRef.current;
+          lastVideoTickRef.current = t;
+          const c = contentRef.current;
+          if (c && last !== null && t > last && t - last <= 8) addListening(c.id, 'audio', t - last);
+        }
       }
     } catch { /* player gone */ }
     readVideoDuration();
@@ -752,9 +760,24 @@ export function AudioPlayer({
   // part, sent every 10 s while playing, on pause, when the page hides, on a change of item, and
   // with `ended` when the part plays to its end. Only a forward step no longer than a normal time
   // update at this speed counts, and a seek (a 15-second skip included) resets the count's
-  // starting point, so a jump never counts as listening.
+  // starting point, so a jump never counts as listening. The <audio> element counts in its
+  // timeupdate, a YouTube video in its clock (readVideoTime), both as the item's audio.
   const listenedRef = useRef<{ id: number; variant: 'audio' | 'summary'; seconds: number } | null>(null);
   const lastTickRef = useRef<number | null>(null);
+  const lastVideoTickRef = useRef<number | null>(null);
+  const addListening = (id: number, variant: 'audio' | 'summary', step: number) => {
+    const pending = listenedRef.current;
+    if (pending && (pending.id !== id || pending.variant !== variant)) flushListened();
+    if (!listenedRef.current || listenedRef.current.id !== id || listenedRef.current.variant !== variant) {
+      listenedRef.current = { id, variant, seconds: 0 };
+    }
+    listenedRef.current.seconds += step;
+  };
+  // The part played to its end: report it with the listening so far
+  const endListening = (id: number, variant: 'audio' | 'summary', duration: number) => {
+    addListening(id, variant, 0);
+    flushListened(true, duration);
+  };
   const flushListened = (ended = false, duration = 0) => {
     const pending = listenedRef.current;
     if (!pending) return;
@@ -806,13 +829,7 @@ export function AudioPlayer({
       if (last === null || !c || audio.paused || audio.seeking) return;
       const step = now - last;
       if (step <= 0 || step > 4 * Math.max(1, audio.playbackRate)) return;
-      const variant = positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio';
-      const pending = listenedRef.current;
-      if (pending && (pending.id !== c.id || pending.variant !== variant)) flushListened();
-      if (!listenedRef.current || listenedRef.current.id !== c.id || listenedRef.current.variant !== variant) {
-        listenedRef.current = { id: c.id, variant, seconds: 0 };
-      }
-      listenedRef.current.seconds += step;
+      addListening(c.id, positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio', step);
     };
     const resetListeningTick = () => { lastTickRef.current = null; };
     const pauseListening = () => { lastTickRef.current = null; flushListened(); };
@@ -874,13 +891,7 @@ export function AudioPlayer({
       // The heard check: the part played to its end (the same rule as the reset to 0 below)
       const ended = contentRef.current;
       if (nearEnd && ended) {
-        const variant = positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio';
-        const pending = listenedRef.current;
-        if (pending && (pending.id !== ended.id || pending.variant !== variant)) flushListened();
-        if (!listenedRef.current || listenedRef.current.id !== ended.id || listenedRef.current.variant !== variant) {
-          listenedRef.current = { id: ended.id, variant, seconds: 0 };
-        }
-        flushListened(true, dur);
+        endListening(ended.id, positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio', dur);
       }
       lastTickRef.current = null;
       if (nearEnd) savePlaybackPosition(0);
@@ -1145,6 +1156,7 @@ export function AudioPlayer({
 
   const handleSeek = (time: number) => {
     if (playsVideo) {
+      lastVideoTickRef.current = null;
       videoTimeRef.current = time;
       setCurrentTime(time);
       savePlaybackPosition(time);
@@ -1455,10 +1467,16 @@ export function AudioPlayer({
     } else if (state === VIDEO_STATE.PAUSED) {
       stopVideoClock();
       readVideoTime();
+      lastVideoTickRef.current = null;
+      flushListened();
       setIsPlaying(false);
       savePlaybackPosition(videoTimeRef.current);
     } else if (state === VIDEO_STATE.ENDED) {
       stopVideoClock();
+      readVideoTime();
+      lastVideoTickRef.current = null;
+      const ended = contentRef.current;
+      if (ended) endListening(ended.id, 'audio', durationRef.current || ended.duration || 0);
       setIsPlaying(false);
       logPlayback('ended', {
         id: contentRef.current?.id, variant: 'video', t: Math.round(videoTimeRef.current),
