@@ -59,6 +59,9 @@ export interface ArticleContent {
   comments?: Comment[];
   comment_source?: string; // 'ea_forum', 'lesswrong', 'substack', or undefined
   comment_count_total?: number; // total comments including nested replies
+  /** Set when the stored story holds under MIN_STORY_TEXT_CHARS characters of non-link text:
+   *  the page may not have been read fully (a token's add answer warns about it) */
+  short_text_chars?: number;
 }
 
 // --- NEW GRAPHQL LOGIC START ---
@@ -292,12 +295,24 @@ function buildSubstackCommentsUrl(articleUrl: string): string {
 /**
  * Extract window._preloads JSON from raw HTML.
  * Substack embeds hydration data in various formats:
+ *   - <script type="application/json" id="preloads-json">{...}</script>, which the page then
+ *     reads with `window._preloads = JSON.parse(document.querySelector(...).textContent)`
+ *     (since 2026-11 at the latest, when comments stopped arriving)
  *   - window._preloads = JSON.parse("...escaped...")
  *   - window._preloads = JSON.parse('...escaped...')
  *   - window._preloads = {...}  (direct assignment)
  * Handles whitespace variations and different quote styles.
  */
-function parseSubstackPreloads(html: string): any | null {
+export function parseSubstackPreloads(html: string): any | null {
+  const jsonScript = html.match(/<script[^>]*\bid=["']preloads-json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (jsonScript) {
+    try {
+      return JSON.parse(jsonScript[1]);
+    } catch (e: any) {
+      console.log(`[Fetcher] _preloads: the preloads-json script did not parse: ${e.message?.substring(0, 100)}`);
+    }
+  }
+
   // Find the window._preloads ASSIGNMENT (not property accesses like window._preloads.sentry_dsn)
   // We need to find "window._preloads" followed by optional whitespace then "=" (not ".something")
   const needle = 'window._preloads';
@@ -1364,9 +1379,10 @@ export function removeEmptyVideoPlayers(root: Element): number {
 
 // Names pages give their story body. They are ids and attributes, not class names, so an
 // archive.is copy keeps them: FT's `#article-body`, the New York Times' `<section
-// name="articleBody">`, and schema.org's `itemprop="articleBody"`.
+// name="articleBody">`, schema.org's `itemprop="articleBody"`, and the Times of India's
+// `data-articlebody` (a page with no <article> or <main>, 2026-11-20).
 const STORY_BODY_MARKERS =
-  '[itemprop="articleBody"], section[name="articleBody"], #article-body, #articleBody, #article_body';
+  '[itemprop="articleBody"], section[name="articleBody"], #article-body, #articleBody, #article_body, [data-articlebody]';
 const MIN_STORY_BODY_CHARS = 500;
 
 /**
@@ -1402,6 +1418,85 @@ const BLOG_POST_MARKERS = '.post, .post-body, .post-content, .entry-content';
  */
 export function blogPostBox(doc: Document): Element | null {
   return singleMarkedBox(doc, BLOG_POST_MARKERS);
+}
+
+/**
+ * The page's story <article>: the one with the most non-link text outside the comments, or null
+ * when the page has none. The first one is often not the story: GAO's report page starts with a
+ * contact card in an <article> and keeps the report outside any (2026-11-20), and euronews puts
+ * 17 teaser cards in <article>s around the story. An <article> inside another counts on its own
+ * too, but the outer one holds its text as well, so nestedStoryArticle still decides those.
+ */
+export function storyArticle(doc: Document): Element | null {
+  let best: Element | null = null;
+  let bestChars = -1;
+  for (const el of Array.from(doc.querySelectorAll('article'))) {
+    if (insideCommentArea(el)) continue;
+    const chars = nonLinkTextChars(el);
+    if (chars > bestChars) {
+      best = el;
+      bestChars = chars;
+    }
+  }
+  return best;
+}
+
+/** Below this much non-link text an <article> is a card, not a story, and a <main> beside it wins. */
+const MIN_STORY_ARTICLE_CHARS = 500;
+/** Below this much non-link text the stored story warns that the page may not have been read fully. */
+const MIN_STORY_TEXT_CHARS = 500;
+/** A JSON-LD articleBody replaces the extracted story when it holds this much text and the story
+ *  holds less than half of it, or when only the whole <body> was found. */
+const MIN_JSON_LD_BODY_CHARS = 1000;
+
+/**
+ * The longest `articleBody` text of the page's schema.org JSON-LD article nodes, or undefined.
+ * News sites give search engines the whole story there. Wallacast uses it only as a safety net
+ * (articleBodyHtml), since it is plain text without pictures, links or headings.
+ *
+ * MUST be called BEFORE the fetcher strips <script> elements from the document.
+ */
+export function articleBodyFromJsonLd(doc: Document): string | undefined {
+  let best: string | undefined;
+  for (const script of Array.from(doc.querySelectorAll('script[type="application/ld+json"]'))) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(script.textContent || '');
+    } catch {
+      continue;
+    }
+    const nodes: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.['@graph'])
+        ? parsed['@graph']
+        : [parsed];
+    for (const node of nodes) {
+      const body = node?.articleBody;
+      if (typeof body === 'string' && body.trim().length > (best?.length ?? 0)) best = body.trim();
+    }
+  }
+  return best;
+}
+
+/**
+ * articleBody text as paragraphs. A line break starts a paragraph, and so does a sentence end
+ * glued to the next sentence ("rules.In an interview"): the Times of India runs its paragraphs
+ * together that way. Entities and stray tags in the text are resolved by reading it as HTML.
+ */
+export function articleBodyHtml(doc: Document, body: string): string {
+  const scratch = doc.createElement('div');
+  scratch.innerHTML = body.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n');
+  const text = scratch.textContent || '';
+  const paragraphs = text
+    .replace(/([.!?]["\u201d\u2019)]?)(?=[A-Z\u201c"])/g, '$1\n')
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean);
+  return paragraphs.map(p => {
+    const el = doc.createElement('p');
+    el.textContent = p;
+    return el.outerHTML;
+  }).join('\n');
 }
 
 const MIN_NESTED_STORY_CHARS = 1000;
@@ -2228,6 +2323,7 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
     // in a <script type="application/ld+json">). Only used further down if nothing better
     // is found.
     const jsonLdAuthor = authorFromJsonLd(doc);
+    const jsonLdBody = articleBodyFromJsonLd(doc);
 
     // Remove scripts and styles globally
     const scripts = doc.querySelectorAll('script');
@@ -2312,6 +2408,7 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
 
     // Smart content selection
     let contentEl;
+    let wholeBody = false;
 
     // Substack-specific selectors (more precise). Works on custom domains too.
     if (note) {
@@ -2336,7 +2433,20 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
 
     // Fallback to generic selectors
     if (!contentEl) {
-      const article = doc.querySelector('article');
+      // The <article> with the most text, unless it is a card beside a <main> that holds the
+      // story (GAO), see storyArticle
+      let article = storyArticle(doc);
+      const firstArticle = doc.querySelector('article');
+      const pageMain = doc.querySelector('main');
+      if (article && pageMain && !article.contains(pageMain)) {
+        const articleChars = nonLinkTextChars(article);
+        const mainChars = nonLinkTextChars(pageMain);
+        if (articleChars < MIN_STORY_ARTICLE_CHARS && mainChars > articleChars * 4) {
+          console.log(`[Fetcher] The longest <article> holds ${articleChars} characters, using <main> (${mainChars})`);
+          article = null;
+        }
+      }
+      if (article && article !== firstArticle) console.log('[Fetcher] Using the <article> with the most text, not the first');
       // A page-sized <article> with the story in a second <article> inside it (FT): take the
       // inner one (see nestedStoryArticle).
       const nestedStory = article ? nestedStoryArticle(article) : null;
@@ -2361,6 +2471,8 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
           // Neither <article> nor <main>: a blog post box beats the whole <body> (see blogPostBox)
           const post = blogPostBox(doc);
           if (post) console.log(`[Fetcher] No <article> or <main>, using the blog post box (.${post.classList[0] || post.tagName.toLowerCase()})`);
+          else console.log('[Fetcher] No <article>, <main> or post box, using the whole <body>');
+          wholeBody = !post;
           contentEl = post || doc.body;
         }
       }
@@ -2644,8 +2756,25 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
     stripInlineColors(contentEl);
     stripLayoutStyles(contentEl);
     normalizeTweetEmbeds(contentEl);
+
+    // Safety net: the JSON-LD articleBody replaces a story that missed most of it, or a whole
+    // <body> (menus and trending lists around the story). euronews, CNN and Business Standard
+    // carry the full text there (the AI Radio's site notes, 2026-11).
+    if (!note && !isSubstack && jsonLdBody) {
+      const bodyChars = jsonLdBody.replace(/\s+/g, '').length;
+      const storyChars = nonLinkTextChars(contentEl);
+      if (bodyChars >= MIN_JSON_LD_BODY_CHARS && (wholeBody || storyChars < bodyChars * 0.5)) {
+        console.log(`[Fetcher] Using the JSON-LD articleBody (${bodyChars} characters) instead of ${wholeBody ? 'the whole <body>' : `a story of ${storyChars}`}`);
+        contentEl.innerHTML = articleBodyHtml(doc, jsonLdBody);
+      }
+    }
+
     const cleanedHtml = contentEl.innerHTML;
     const textContent = contentEl.textContent || '';
+    const finalStoryChars = nonLinkTextChars(contentEl);
+    if (!note && finalStoryChars < MIN_STORY_TEXT_CHARS) {
+      console.log(`[Fetcher] ⚠ Only ${finalStoryChars} characters of story text, the page may not have been read fully`);
+    }
 
     // An article without text or pictures is never stored: before 2026-10-07 DPG Media's consent
     // page was saved as two empty articles. A comic or a Substack note may be just a picture.
@@ -2682,6 +2811,7 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
       comments,
       comment_source,
       comment_count_total,
+      short_text_chars: !note && finalStoryChars < MIN_STORY_TEXT_CHARS ? finalStoryChars : undefined,
     };
 
   } catch (error) {

@@ -4,7 +4,9 @@
 //       Substack notes and blog post boxes, (0e) page-layout styles, (0f) print-hidden
 //       parts and empty video players, (0g) consent gates, login forms, captchas and
 //       empty pages, (0h) paid previews and archive.ph timemaps, and (0i) teaser copies and
-//       the error without an archive link, all on small fixtures (no network)
+//       the error without an archive link, (0j) the story <article> with the most text, the
+//       Times of India marker, JSON-LD articleBody paragraphs and Substack's preloads-json
+//       block, all on small fixtures (no network)
 //   1.  the <main>-inside-<article> preference and the share-menu removal (live Compact fetch)
 //   2.  archive.is paragraph restore (runs on a stored export, no network)
 //   3.  the widened email-table flattener (runs on a stored export, no network)
@@ -47,6 +49,10 @@ import {
   noCopyError,
   lightenHtml,
   parsePage,
+  storyArticle,
+  articleBodyFromJsonLd,
+  articleBodyHtml,
+  parseSubstackPreloads,
 } from '../src/services/article-fetcher.js';
 import { newestArchiveCopy } from '../src/services/url-guard.js';
 
@@ -502,6 +508,30 @@ const dir = process.argv[2];
   assert.equal(noCopy.message, 'This article is behind a login, and no other copy of the article could be found.', 'without a copy the message stays');
   assert.equal(noCopy.archiveSubmitUrl, archiveSubmitUrl(knack), 'and offers the archive link');
   console.log('✅ Teaser copies, and the error without an archive link');
+}
+
+// 0j. Story boxes and text sources found on 2026-11-20: the longest <article> instead of the
+//     first (euronews, GAO), the Times of India's data-articlebody marker, the JSON-LD articleBody
+//     as paragraphs, and Substack's preloads-json block (comments had stopped arriving)
+{
+  const doc = (html: string) => new JSDOM(html).window.document;
+  const long = 'A sentence of the story with plenty of words in it. '.repeat(30);
+  const teasers = doc(`<article><p>Teaser one.</p></article><article><p>${long}</p></article><article><p>Teaser two.</p></article>`);
+  assert.ok(storyArticle(teasers)!.textContent!.includes('A sentence of the story'), 'the longest <article> wins, not the first');
+  assert.equal(storyArticle(doc('<main><p>No articles.</p></main>')), null);
+  const toi = doc(`<ul><li><a href="/x">Trending</a></li></ul><div data-articlebody="1"><p>${long}</p></div>`);
+  assert.ok(findStoryBody(toi)?.hasAttribute('data-articlebody'), 'the Times of India marks its story body');
+  const ld = doc('<script type="application/ld+json">{"@type":"NewsArticle","articleBody":"First part.Second part &amp; more.\\nThird."}</script>');
+  const body = articleBodyFromJsonLd(ld);
+  assert.ok(body, 'articleBody is read');
+  assert.equal(articleBodyHtml(ld, body!), '<p>First part.</p>\n<p>Second part &amp; more.</p>\n<p>Third.</p>', 'glued sentences and line breaks start paragraphs');
+  assert.equal(articleBodyFromJsonLd(doc('<p>none</p>')), undefined);
+  assert.deepEqual(
+    parseSubstackPreloads('<script type="application/json" id="preloads-json" nonce="x">{"comments":[{"id":1}]}</script>'),
+    { comments: [{ id: 1 }] },
+    'the preloads-json block is read'
+  );
+  console.log('✅ The longest story <article>, the Times of India marker, JSON-LD articleBody paragraphs, Substack preloads-json');
 }
 
 // --- 0j. Scripts and styles are cut before a page is read ---------------------------

@@ -108,6 +108,10 @@ export const contentAPI = {
   fetchProgress: (progressId: string) =>
     api.get<{ text: string | null }>(`/content/fetch-progress/${progressId}`),
 
+  // The heard check: seconds of normal playback since the last report, and `ended` when the part
+  // played to its end. Answers when the part last counted as heard.
+  listened: (id: number, data: { variant: 'audio' | 'summary'; seconds: number; ended: boolean; duration: number }) =>
+    api.post<{ variant: 'audio' | 'summary'; listened_seconds: number; heard_at: string | null }>(`/content/${id}/listened`, data),
   update: (id: number, data: Partial<ContentItem>) =>
     api.patch<ContentItem>(`/content/${id}`, data),
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
-import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, TvMinimalPlay, X, Search, Inbox, ChevronDown, Check, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
+import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, TvMinimalPlay, X, Search, Inbox, ChevronDown, Check, Circle, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
 import { contentAPI, userSettingsAPI } from '../api';
 import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
@@ -15,7 +15,7 @@ interface LibraryTabProps {
   onPlayContent: (content: ContentItem, opts?: { tab?: 'summary' }) => void;
 }
 
-// The 2x5 filter grid: one facet row per dimension, two mutually exclusive
+// The 2x6 filter grid: one facet row per dimension, two mutually exclusive
 // options per row. Selecting an option deselects its sibling; clicking the
 // selected option again clears the row (1-or-none per row). The same icons
 // mark the filter button, the library card badges, and the dropdown actions.
@@ -53,6 +53,14 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
     options: [
       { value: 'transcript', label: 'Transcript', icon: <Captions size={16} /> },
       { value: 'no_transcript', label: 'None', icon: <CaptionsOff size={16} /> },
+    ],
+  },
+  {
+    // The heard check: the audio or the summary audio counted as heard (AudioPlayer)
+    dim: 'heard',
+    options: [
+      { value: 'heard', label: 'Heard', icon: <Check size={16} /> },
+      { value: 'not_heard', label: 'Not heard', icon: <Circle size={16} /> },
     ],
   },
 ];
@@ -255,7 +263,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // "reset to just this"). The two single-click toggles that fire first cancel
   // each other out, so the end state is exactly the solo selection.
   const soloFacet = (dim: FacetDim, value: FacetValue) => {
-    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, [dim]: value });
+    setFacets({ archive: null, star: null, audio: null, summary: null, transcript: null, heard: null, [dim]: value });
     setSelectedItems(new Set());
   };
 

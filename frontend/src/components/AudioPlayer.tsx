@@ -748,6 +748,29 @@ export function AudioPlayer({
   // screen when the player first mounted, not the one that actually just ended
   // (found 2026-08-22). Reading the ref instead makes every caller, old closure
   // or new, always target the CURRENT item.
+  // The heard check (POST /content/:id/listened): the seconds of normal playback, per item and
+  // part, sent every 10 s while playing, on pause, when the page hides, on a change of item, and
+  // with `ended` when the part plays to its end. Only a forward step no longer than a normal time
+  // update at this speed counts, and a seek (a 15-second skip included) resets the count's
+  // starting point, so a jump never counts as listening.
+  const listenedRef = useRef<{ id: number; variant: 'audio' | 'summary'; seconds: number } | null>(null);
+  const lastTickRef = useRef<number | null>(null);
+  const flushListened = (ended = false, duration = 0) => {
+    const pending = listenedRef.current;
+    if (!pending) return;
+    const whole = Math.floor(pending.seconds);
+    if (whole < 1 && !ended) return;
+    pending.seconds -= whole;
+    if (useAuthStore.getState().user?.demo) return;
+    const { id, variant } = pending;
+    contentAPI.listened(id, { variant, seconds: whole, ended, duration: Math.round(duration) })
+      .then(res => {
+        if (!res.data.heard_at) return;
+        useContentStore.getState().updateItem(id, variant === 'summary' ? { summary_heard_at: res.data.heard_at } : { heard_at: res.data.heard_at });
+      })
+      .catch(() => { /* the next report carries on counting */ });
+  };
+
   const savePlaybackPosition = async (position: number) => {
     const c = contentRef.current;
     if (!c) return;
@@ -773,7 +796,27 @@ export function AudioPlayer({
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+      // The heard check: count this step when it is normal playback (see flushListened)
+      const now = audio.currentTime;
+      const last = lastTickRef.current;
+      lastTickRef.current = now;
+      const c = contentRef.current;
+      if (last === null || !c || audio.paused || audio.seeking) return;
+      const step = now - last;
+      if (step <= 0 || step > 4 * Math.max(1, audio.playbackRate)) return;
+      const variant = positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio';
+      const pending = listenedRef.current;
+      if (pending && (pending.id !== c.id || pending.variant !== variant)) flushListened();
+      if (!listenedRef.current || listenedRef.current.id !== c.id || listenedRef.current.variant !== variant) {
+        listenedRef.current = { id: c.id, variant, seconds: 0 };
+      }
+      listenedRef.current.seconds += step;
+    };
+    const resetListeningTick = () => { lastTickRef.current = null; };
+    const pauseListening = () => { lastTickRef.current = null; flushListened(); };
+    const flushWhenHidden = () => { if (document.visibilityState === 'hidden') flushListened(); };
     const handleLoadedMetadata = () => setDuration(audio.duration);
     // Keep retrying the resume-seek until the stream becomes seekable (see
     // pendingResumeSeekRef). Attached once here (refs only), because the setup
@@ -828,6 +871,18 @@ export function AudioPlayer({
       const dur = audio.duration;
       const nearEnd = isFinite(dur) && dur > 0 &&
         (dur - audio.currentTime <= 30 || audio.currentTime / dur >= 0.99);
+      // The heard check: the part played to its end (the same rule as the reset to 0 below)
+      const ended = contentRef.current;
+      if (nearEnd && ended) {
+        const variant = positionFieldRef.current === 'summary_playback_position' ? 'summary' : 'audio';
+        const pending = listenedRef.current;
+        if (pending && (pending.id !== ended.id || pending.variant !== variant)) flushListened();
+        if (!listenedRef.current || listenedRef.current.id !== ended.id || listenedRef.current.variant !== variant) {
+          listenedRef.current = { id: ended.id, variant, seconds: 0 };
+        }
+        flushListened(true, dur);
+      }
+      lastTickRef.current = null;
       if (nearEnd) savePlaybackPosition(0);
       logPlayback('ended', {
         id: contentRef.current?.id,
@@ -913,6 +968,10 @@ export function AudioPlayer({
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('seeking', resetListeningTick);
+    audio.addEventListener('emptied', resetListeningTick);
+    audio.addEventListener('pause', pauseListening);
+    document.addEventListener('visibilitychange', flushWhenHidden);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('waiting', handleStalled);
@@ -927,6 +986,11 @@ export function AudioPlayer({
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('seeking', resetListeningTick);
+      audio.removeEventListener('emptied', resetListeningTick);
+      audio.removeEventListener('pause', pauseListening);
+      document.removeEventListener('visibilitychange', flushWhenHidden);
+      flushListened();
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('waiting', handleStalled);
@@ -951,8 +1015,12 @@ export function AudioPlayer({
       if (!isPlayingRef.current) return;
       if (videoDrivesControls()) savePlaybackPosition(videoTimeRef.current);
       else if (audioRef.current) savePlaybackPosition(audioRef.current.currentTime);
+      flushListened();
     }, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      flushListened();
+    };
   }, [content?.id]);
 
   // The player's state for the screen-off diagnostics (page-hidden, page-visible and

@@ -302,6 +302,16 @@ export async function initializeDatabase() {
       console.error('❌ Migration 033 (archived_at, token feed changes) failed:', error);
     }
 
+    // Run migration adding the heard check's columns. Guarded: if it fails, the app still
+    // starts, and the listening reports answer 500 until it runs.
+    try {
+      const heardMigrationPath = path.join(__dirname, 'migrations', '034_heard.sql');
+      const heardMigration = await fs.readFile(heardMigrationPath, 'utf-8');
+      await client.query(heardMigration);
+    } catch (error) {
+      console.error('❌ Migration 034 (heard check) failed:', error);
+    }
+
     // Reset any stuck generation statuses (server restart during generation).
     // generation_status and current_operation say what was interrupted: a refetch
     // ('fetching'), a transcript ('generating_transcript', or the read-along step after audio)

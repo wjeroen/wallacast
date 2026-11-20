@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Star, Archive, ArchiveRestore, Trash2, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, Eye, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
+import { Star, Archive, ArchiveRestore, Trash2, Check, CheckSquare, Square, MoreVertical, SquareArrowOutUpRight, Newspaper, NotebookPen, Podcast, TvMinimalPlay, FileText, ArrowUp, Eye, MessageCircle, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, RefreshCw, ListPlus, Copy, FolderDown, Tag, Plus } from 'lucide-react';
 import { getSearchSnippet } from '../store/contentStore';
 import { GenerationStatus } from './GenerationStatus';
 import { cleanHtml, formatDuration, getDomainFromUrl, toTweets, displayUrl, truncate, hasWordTimings, compactCount, hasAudioBadge } from '../format';
@@ -165,7 +165,11 @@ export function ContentCard({
             {item.type === 'video' && <><TvMinimalPlay size={14} /> <span className="type-label">Video</span></>}
             {item.type === 'pdf' && <><FileText size={14} /> <span className="type-label">PDF</span></>}
           </span>
-          {hasAudioBadge(item) && <span className="badge"><Volume2 size={12} /> Audio</span>}
+          {hasAudioBadge(item) && (
+            <span className="badge" title={item.heard_at ? 'Audio heard' : undefined}>
+              <Volume2 size={12} /> Audio{item.heard_at && <Check size={12} />}
+            </span>
+          )}
           {item.type === 'video' && item.embed_blocked && (
             <span
               className="badge"
@@ -175,9 +179,10 @@ export function ContentCard({
             </span>
           )}
           {item.summary_status !== 'generating' && item.summary_generated_at && (
-            <span className="badge summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
+            <span className="badge summary" title={item.summary_heard_at ? 'Summary heard' : item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
               <MessageSquareText size={12} /> Summary
               {item.summary_audio_url && <Volume2 size={11} />}
+              {item.summary_heard_at && <Check size={11} />}
             </span>
           )}
           {/* All types, not just podcasts: articles/texts get a Whisper transcript

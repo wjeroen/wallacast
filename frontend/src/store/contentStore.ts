@@ -15,6 +15,8 @@ export interface FacetFilter {
   audio: 'audio' | 'no_audio' | null;
   summary: 'summary' | 'no_summary' | null;
   transcript: 'transcript' | 'no_transcript' | null;
+  // The heard check: the audio or the summary audio counted as heard (AudioPlayer)
+  heard: 'heard' | 'not_heard' | null;
 }
 
 export type FacetDim = keyof FacetFilter;
@@ -26,6 +28,7 @@ export const DEFAULT_FACETS: FacetFilter = {
   audio: null,
   summary: null,
   transcript: null,
+  heard: null,
 };
 
 export interface LibraryFilter {
@@ -61,6 +64,7 @@ const FACET_VALUES: Record<FacetDim, [FacetValue, FacetValue]> = {
   audio: ['audio', 'no_audio'],
   summary: ['summary', 'no_summary'],
   transcript: ['transcript', 'no_transcript'],
+  heard: ['heard', 'not_heard'],
 };
 
 interface StoredFilters {
@@ -129,7 +133,7 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   // summary = summary_generated_at, transcript = hasWordTimings (the list endpoint
   // never sends the large transcript column). Summary audio alone does not count
   // as audio.
-  const { archive, star, audio, summary, transcript } = f.facets;
+  const { archive, star, audio, summary, transcript, heard } = f.facets;
   if (archive === 'active' && item.is_archived) return false;
   if (archive === 'archived' && !item.is_archived) return false;
   if (star === 'starred' && !item.is_starred) return false;
@@ -140,6 +144,9 @@ export function itemMatchesFilter(item: ContentItem, f: LibraryFilter): boolean 
   if (summary === 'no_summary' && item.summary_generated_at) return false;
   if (transcript === 'transcript' && !hasWordTimings(item)) return false;
   if (transcript === 'no_transcript' && hasWordTimings(item)) return false;
+  const isHeard = !!(item.heard_at || item.summary_heard_at);
+  if (heard === 'heard' && !isHeard) return false;
+  if (heard === 'not_heard' && isHeard) return false;
 
   const q = f.searchQuery.trim().toLowerCase();
   if (!q) return true;

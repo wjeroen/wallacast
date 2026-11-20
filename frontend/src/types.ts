@@ -81,6 +81,8 @@ export interface ContentItem {
   summary_audio_error?: string; // Error message when summary_audio_status === 'failed', the reason when 'skipped'
   summary_audio_generated_at?: string; // Also the cache-buster for the summary audio URL
   summary_playback_position?: number; // Separate saved position, never mixed with playback_position
+  heard_at?: string | null; // When the audio last counted as heard (the heard check, AudioPlayer)
+  summary_heard_at?: string | null; // The same for the summary audio
   versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 

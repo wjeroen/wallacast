@@ -58,7 +58,7 @@ router.get('/', async (req, res) => {
     // several times that as objects) was read and serialized on every library load, twice per
     // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked FROM content_items WHERE user_id = $1';
+    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked FROM content_items WHERE user_id = $1';
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -161,6 +161,7 @@ router.get('/index', async (req, res) => {
     const result = await query(
       `SELECT id, type, title, url, author, published_at, created_at, updated_at, tags,
               is_starred, is_archived, summary_status, karma, podcast_show_name, audio_url,
+              heard_at, summary_heard_at,
               COALESCE(comment_count_total, 0) AS comment_count,
               LEFT(description, 1500) AS description,
               COALESCE(type IN ('podcast_episode', 'video')
@@ -787,7 +788,7 @@ router.get('/fetch-progress/:id', (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
+      `SELECT id, type, title, url, content, html_content, author, description, preview_picture, audio_url, transcript, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, transcript_words, content_alignment, karma, agree_votes, disagree_votes, comments, content_source, comment_source, audio_generated_at, content_fetched_at, summary, comment_summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, (SELECT COUNT(*)::int FROM content_versions v WHERE v.content_item_id = content_items.id) AS versions_count FROM content_items WHERE id = $1 AND user_id = $2`,
       [req.params.id, req.user!.userId]
     );
 
@@ -884,6 +885,8 @@ router.post('/', async (req, res) => {
 
     let processedContent = content;
     let htmlContent = null;
+    // Set when the fetched story is very short: the page may not have been read fully
+    let shortTextChars: number | undefined;
     let audioUrlValue = audio_url || null;
     let finalTitle = title;
     let finalAuthor = author;
@@ -1048,6 +1051,7 @@ router.post('/', async (req, res) => {
       }
       htmlContent = articleData.cleaned_html;
       processedContent = articleData.content;
+      shortTextChars = articleData.short_text_chars;
 
       if ((!finalTitle || finalTitle === 'Untitled') && articleData.title) {
         finalTitle = articleData.title;
@@ -1423,7 +1427,12 @@ router.post('/', async (req, res) => {
         generation: tokenReport,
         // One plain sentence per skipped generation, so a caller that reads nothing else still
         // sees that a limit was reached
-        warnings: tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
+        warnings: [
+          ...tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
+          ...(shortTextChars !== undefined
+            ? [`Only ${shortTextChars} characters of article text were found, so the page may not have been read fully. Check the item before relying on it.`]
+            : []),
+        ],
       });
     }
     res.status(201).json(createdItem);
@@ -1434,6 +1443,57 @@ router.post('/', async (req, res) => {
 });
 
 // Update content item
+/** The share of a part's length that must really be heard before it counts as heard. */
+function heardShare(variant: 'audio' | 'summary', duration: number): number {
+  if (variant === 'summary') return 0.75;
+  return duration <= 600 ? 0.5 : 0.25;
+}
+
+// The heard check. The player reports the seconds of normal playback since its last report
+// (a jump never counts) and `ended` when the part played to its end, by the same rule that
+// resets its position to 0 (within 30 s of the end or past 99%). The part counts as heard when
+// its listening then reaches heardShare of its length. Only the app reports: tokens cannot
+// reach this route (TOKEN_ROUTES), and the read-only demo is refused by requireAuth.
+router.post('/:id/listened', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+    const variant: 'audio' | 'summary' = req.body?.variant === 'summary' ? 'summary' : 'audio';
+    const seconds = Math.max(0, Math.min(3600, Math.round(Number(req.body?.seconds) || 0)));
+    const ended = req.body?.ended === true;
+    const listenedCol = variant === 'summary' ? 'summary_listened_seconds' : 'listened_seconds';
+    const heardCol = variant === 'summary' ? 'summary_heard_at' : 'heard_at';
+    const durationCol = variant === 'summary' ? 'summary_audio_duration' : 'duration';
+    const result = await query(
+      `UPDATE content_items SET ${listenedCol} = ${listenedCol} + $3 WHERE id = $1 AND user_id = $2
+       RETURNING ${listenedCol} AS listened, ${durationCol} AS duration, ${heardCol} AS heard_at`,
+      [id, req.user!.userId, seconds]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Content not found' });
+    const row = result.rows[0];
+    let heardAt = row.heard_at;
+    if (ended) {
+      // The stored length, else the player's (an item whose length was never saved)
+      const duration = Number(row.duration) || Math.max(0, Number(req.body?.duration) || 0);
+      const needed = duration * heardShare(variant, duration);
+      if (duration > 0 && row.listened >= needed) {
+        const heard = await query(
+          `UPDATE content_items SET ${heardCol} = NOW() WHERE id = $1 AND user_id = $2 RETURNING ${heardCol} AS heard_at`,
+          [id, req.user!.userId]
+        );
+        heardAt = heard.rows[0]?.heard_at ?? heardAt;
+        console.log(`[Heard] item ${id} ${variant} heard: ${row.listened} s listened of ${Math.round(duration)} s`);
+      } else {
+        console.log(`[Heard] item ${id} ${variant} ended, not heard: ${row.listened} s listened, ${Math.round(needed)} s needed`);
+      }
+    }
+    res.json({ variant, listened_seconds: row.listened, heard_at: heardAt });
+  } catch (error) {
+    console.error('Error saving listening:', error);
+    res.status(500).json({ error: 'Failed to save listening' });
+  }
+});
+
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1817,7 +1877,7 @@ router.patch('/:id', async (req, res) => {
     // For content updates, return the same columns as the list endpoint (has_word_timings, not
     // the word timings themselves).
     const returningClause = updatingContentFields
-      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, view_count::float8 AS view_count, embed_blocked'
+      ? 'RETURNING id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, view_count::float8 AS view_count, embed_blocked'
       : 'RETURNING id, playback_position, summary_playback_position, playback_speed, last_played_at';
 
     const sql = `UPDATE content_items SET ${setClause.join(', ')} WHERE id = $${paramCount - 1} AND user_id = $${paramCount} ${returningClause}`;
