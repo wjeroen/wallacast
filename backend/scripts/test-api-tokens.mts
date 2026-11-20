@@ -131,9 +131,10 @@ assert.deepEqual(parsePermissions(null), []);
 
 assert.deepEqual(effectiveLimits({}), DEFAULT_LIMITS);
 assert.deepEqual(effectiveLimits({ items_hour: 7, minutes_2d: 99999 }), { ...DEFAULT_LIMITS, items_hour: 7, generations_hour: 21 }, 'an out-of-range stored value falls back');
-// Generation limits: 20 and 100 for a new token, three per item for limits saved before they existed
-assert.equal(DEFAULT_LIMITS.generations_hour, 20);
-assert.equal(DEFAULT_LIMITS.generations_2d, 100);
+// Generation limits: three per item, 60 and 300 for a new token, and from the saved item limits
+// for limits saved before they existed
+assert.equal(DEFAULT_LIMITS.generations_hour, 3 * DEFAULT_LIMITS.items_hour);
+assert.equal(DEFAULT_LIMITS.generations_2d, 3 * DEFAULT_LIMITS.items_2d);
 assert.deepEqual(
   [effectiveLimits({ items_hour: 40, items_2d: 100 }).generations_hour, effectiveLimits({ items_hour: 40, items_2d: 100 }).generations_2d],
   [120, 300],

@@ -37,16 +37,17 @@ export type LimitKey = typeof LIMIT_KEYS[number];
 export type TokenLimits = Record<LimitKey, number>;
 
 /** What a token gets until the user changes it. */
-export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600, generations_hour: 20, generations_2d: 100, subscriptions_hour: 10 };
+export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600, generations_hour: 60, generations_2d: 300, subscriptions_hour: 10 };
 
 /** The highest values Settings accepts. Items cost only server work and storage (an add
  *  takes about 2 to 5 seconds, articles average about 18 KB of stored HTML), minutes cost
  *  money on the user's own API keys, and every feed makes each feed refresh longer. */
 export const MAX_LIMITS: TokenLimits = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, generations_hour: 500, generations_2d: 5000, subscriptions_hour: 100 };
 
-/** A token whose limits were saved before the generation limits existed gets this many
- *  generations per item it may add: an add often starts two (a summary and its audio), and
- *  the AI Radio's token started 68 in one hour for 33 items (2026-11-20). */
+/** Generations per item a token may add: an add often starts two (a summary and its audio),
+ *  and the AI Radio's token started 68 in one hour for 33 items (2026-11-20). The defaults
+ *  above follow it (3 x 20 and 3 x 100), and limits saved before the generation limits existed
+ *  get it from their own item limits (effectiveLimits). */
 const GENERATIONS_PER_SAVED_ITEM = 3;
 
 export const REFRESH_INTERVAL_MINUTES = 15;

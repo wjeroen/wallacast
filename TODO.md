@@ -182,7 +182,7 @@
 
 ## Completed Recently ✅
 
-- [x] **Tokens can refetch and generate** (2026-11-20): five new permissions, off for every token (refetch, audio, summaries, summary audio, transcripts). A refetch counts as an item, a generation its minutes and one of the new generations per hour and per 2 days (20 and 100 for a new token, three per item for limits saved earlier)
+- [x] **Tokens can refetch and generate** (2026-11-20): five new permissions, off for every token (refetch, audio, summaries, summary audio, transcripts). A refetch counts as an item, a generation its minutes and one of the new generations per hour and per 2 days (three per item: 60 and 300 for a new token, from the saved item limits for older tokens)
 - [x] **Page leftovers** (2026-11-20): dead "Skip to"/"Jump to" links, comment boxes around an empty input field, and the Times of India's run-together paragraphs
 - [x] **Player Link: no more x.com** (2026-11-20): "Every Chrome player is Wallacast" no longer takes a tab of another site, readable switches, and the top no longer sits under the status bar
 

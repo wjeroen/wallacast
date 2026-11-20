@@ -141,15 +141,15 @@ Each token has these limits, set under the token in Settings. They are rolling w
 | Items per 2 days | 100 | 5,000 | the same |
 | Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds or asked for with a generate permission |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
-| Generations per hour | 20 | 500 | the same generations, one each, whatever their length. Whichever limit a generation would cross first stops it |
-| Generations per 2 days | 100 | 5,000 | the same |
+| Generations per hour | 60 | 500 | the same generations, one each, whatever their length. Whichever limit a generation would cross first stops it |
+| Generations per 2 days | 300 | 5,000 | the same |
 | Subscriptions per hour | 10 | 100 | every feed the token subscribed to |
 
 Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
 - Over a minute or generation limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
-- A token whose limits were saved before the generation limits existed gets three generations per item: 3 times its items per hour and per 2 days, at most the highest value, until they are saved again. An add often starts two generations (a summary and its audio).
+- The generation defaults are three per item (an add often starts two: a summary and its audio). A token whose limits were saved before the generation limits existed gets 3 times its own items per hour and per 2 days, at most the highest value.
 - Fixed limits: one feed refresh per 15 minutes, 500 changes per hour (tags, stars, archive, unarchive, unsubscribe).
 
 Each limit hit shows a notice in the app. The Reset button in Settings counts usage from that moment. Usage is kept in the database, so a deploy does not reset it, and deleting an item does not give back what it used.
