@@ -44,7 +44,8 @@
 - [ ] **[P2]** Watch app (installed 2026-11-18, fills the screen): try every button with Wallacast playing, archive while playing (it must go on playing), star (the token needs "Star and unstar"), the Update button (release 1177 against the installed 1175), and after a long pause with the screen off, play through Player Link's watch bridge
 - [ ] **[P2]** Player Link (installed 2026-11-18, finds Wallacast by its site): watch whether the link holds over a day of use, with the shorter waits, the second try of a dropped command, the tile, and the start of the other player when it is turned on. Its screen lists the last 8 actions
 - [ ] **[P2]** Try play on the watch while Wallacast is in the background (YouTube in front), and after Chrome dropped Wallacast's player: Player Link should press play, or bring Wallacast to the front when Android refuses it the turn to play sound. Unknown: whether Player Link's press alone gets Chrome that turn, and whether it works with the phone locked (2026-11-18)
-- [ ] **[P2]** Try the heard check on the phone: play an item to its end, the Audio chip should get a check, and a jump to the end should not (2026-11-20)
+- [ ] **[P2]** Try the heard check on the phone: play an item (and a YouTube video) to its end, the Audio chip should get a check, and a jump to the end should not (2026-11-20)
+- [ ] **[P2]** Try the watch's play when Wallacast's player is empty (it should load the last item into the mini player and play), and Player Link bringing back the open page through Chrome's player (2026-11-20)
 - [ ] **[P4]** Headphones: after a pause the headphones did not make (in the app, or taking them off), the first double tap is lost when it goes to Chrome. YouTube in Chrome does the same (user test 2026-11-18), so it is Chrome or the headphones, not Wallacast. Idea, not chosen: Player Link catches the headphone keys itself (it would have to play a moment of silence to become the app Android sends them to)
 - [ ] **[P4]** Build the Android apps on GitHub Actions, so others can build without Termux. `android/release.sh` publishes the release `android-latest` from Termux today. Needs the signing key as a repository secret (2026-11-18)
 - [ ] **[P4]** Pair the watch with a short code shown on the watch and typed in Settings, instead of adb with the token (2026-11-18)
@@ -179,6 +180,10 @@
 - `backend/mock-server.mjs` accepts any credentials (local-only dev tool, by design).
 
 ## Completed Recently ✅
+
+- [x] **Library search and long lists** (2026-11-20): search also covers the address and the summary, and the list draws 60 cards at a time while every item stays in the filtered list and the queues
+- [x] **Demo seed reruns** (2026-11-20): a rerun keeps the complete podcast and article and redoes only the guide (`REBUILD_ALL=1` redoes all), and the polls wait through a server restart
+- [x] **Navigation menus left out of stories** (2026-11-20): `<nav>` boxes are removed like `<aside>` (GAO's 115-item "Jump To" menu, epoch.ai's site menu)
 
 - [x] **Heard check** (2026-11-20): an item heard to its end gets a check on its Audio chip (Summary chip for the summary audio), counting only real listening (half up to 10 minutes, a quarter above, three quarters for summaries), a Heard row in the filter grid, and `heard_at`/`summary_heard_at` in the token index. YouTube videos count through their player clock
 - [x] **Articles saved without their text** (2026-11-20): the story is the `<article>` with the most text (not the first), `<main>` beside a small card (GAO), the Times of India's `data-articlebody` marker, a JSON-LD `articleBody` safety net, and a token warning for a story under 500 characters. 41 of 44 recent pages extracted the same, the three broken ones got their text
