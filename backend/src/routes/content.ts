@@ -1065,7 +1065,7 @@ router.post('/', async (req, res) => {
         finalDescription = articleData.excerpt;
       }
 
-      // FIX 2: If we don't have a picture yet, try to use the one from the scraper
+      // Without a picture from the request, the article's own lead image
       if (!finalPreviewPicture && articleData.lead_image_url) {
         finalPreviewPicture = articleData.lead_image_url;
       }

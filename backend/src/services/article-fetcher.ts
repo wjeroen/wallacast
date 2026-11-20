@@ -51,7 +51,7 @@ export interface ArticleContent {
   byline?: string;
   site_name?: string;
   published_date?: string;
-  lead_image_url?: string; // <--- ADDED THIS TO FIX BUILD ERROR
+  lead_image_url?: string;
   karma?: number;
   agree_votes?: number;
   disagree_votes?: number;
@@ -2662,7 +2662,8 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
       });
 
       // Remove <aside> elements (membership pitches, supplementary content, never article body)
-      contentEl.querySelectorAll('aside').forEach(el => el.remove());
+      // and <nav> menus: GAO's <main> holds a "Jump To" menu of 115 site sections (2026-11-20)
+      contentEl.querySelectorAll('aside, nav').forEach(el => el.remove());
 
       // Remove sidebar rails (Vox "Most Popular", ad slots, etc.)
       contentEl.querySelectorAll('[class*="layout--rail"]').forEach(el => el.remove());
