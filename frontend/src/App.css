@@ -1231,6 +1231,11 @@ button {
   gap: 0.75rem;
 }
 
+/* The point near the list's end that draws the next page of cards (LibraryTab) */
+.list-end {
+  height: 1px;
+}
+
 .content-card {
   display: flex;
   gap: 1rem;

@@ -65,6 +65,11 @@ const FACET_ROWS: { dim: FacetDim; options: { value: FacetValue; label: string; 
   },
 ];
 
+// The list draws its cards LIST_PAGE_SIZE at a time, the next page as its end comes near:
+// drawing 1,500 archived cards (and loading all their pictures) at once took seconds. Only the
+// drawing is paged. The filtered list (selection, counts) and the queues still hold every item.
+const LIST_PAGE_SIZE = 60;
+
 export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Use Zustand store for content state
   const {
@@ -94,6 +99,23 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
 
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
+
+  // Paged drawing of the list (see LIST_PAGE_SIZE): a new filter starts at the first page
+  const [shownCount, setShownCount] = useState(LIST_PAGE_SIZE);
+  const listEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setShownCount(LIST_PAGE_SIZE);
+  }, [typeFilter, facets, tagFilter, searchQuery, sortDir]);
+  useEffect(() => {
+    const end = listEndRef.current;
+    if (!end) return;
+    const observer = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) setShownCount(n => n + LIST_PAGE_SIZE); },
+      { rootMargin: '1200px 0px' }
+    );
+    observer.observe(end);
+    return () => observer.disconnect();
+  }, [shownCount, content.length]);
   const [openDropdown, setOpenDropdown] = useState<number | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -1196,7 +1218,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
         </div>
       ) : (
         <div className={`content-list${showSummaryInLibrary ? ' tweet-mode' : ''}`}>
-          {content.map((item) => (
+          {content.slice(0, shownCount).map((item) => (
             <ContentCard
               key={item.id}
               item={item}
@@ -1229,6 +1251,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
               onEditTags={(it) => { setOpenDropdown(null); setTagEditorItem(it); }}
             />
           ))}
+          {shownCount < content.length && <div ref={listEndRef} className="list-end" aria-hidden="true" />}
         </div>
       )}
 

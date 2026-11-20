@@ -117,7 +117,8 @@ function sortByDateAdded(items: ContentItem[], dir: SortDir): ContentItem[] {
 
 // Fields covered by search, besides the full body text in `content`.
 function metadataFields(item: ContentItem): (string | undefined | null)[] {
-  return [item.title, item.author, item.description, item.tags?.join(' '), item.podcast_show_name];
+  // The address too, so "euronews" finds every euronews.com article
+  return [item.title, item.author, item.description, item.tags?.join(' '), item.podcast_show_name, item.url, item.summary];
 }
 
 // Check if an item should be visible given the current filter.
