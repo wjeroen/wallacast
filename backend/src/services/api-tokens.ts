@@ -49,7 +49,10 @@ const LAST_USED_WRITE_INTERVAL_MS = 60_000;
  *                 speed (services/remote-control.ts), for a watch app
  * add_any and add_feed exclude each other.
  */
-export const TOKEN_PERMISSIONS = ['read_library', 'feed', 'add_any', 'add_feed', 'tag', 'star', 'archive', 'subscribe', 'remote'] as const;
+export const TOKEN_PERMISSIONS = [
+  'read_library', 'feed', 'add_any', 'add_feed', 'tag', 'star', 'archive', 'subscribe', 'remote',
+  'refetch', 'generate_audio', 'generate_summary', 'generate_summary_audio', 'generate_transcript',
+] as const;
 export type TokenPermission = typeof TOKEN_PERMISSIONS[number];
 export const DEFAULT_PERMISSIONS: TokenPermission[] = ['read_library'];
 
@@ -290,6 +293,11 @@ export const TOKEN_ROUTES: readonly TokenRoute[] = [
   { method: 'GET', path: /^\/api\/remote\/state$/, anyOf: ['remote'] },
   { method: 'POST', path: /^\/api\/remote\/command$/, anyOf: ['remote'] },
   { method: 'GET', path: /^\/api\/remote\/fallback$/, anyOf: ['remote'] },
+  { method: 'POST', path: /^\/api\/content\/\d+\/refetch$/, anyOf: ['refetch'] },
+  { method: 'POST', path: /^\/api\/content\/\d+\/generate-audio$/, anyOf: ['generate_audio'] },
+  { method: 'POST', path: /^\/api\/content\/\d+\/generate-summary$/, anyOf: ['generate_summary'] },
+  { method: 'POST', path: /^\/api\/content\/\d+\/generate-summary-audio$/, anyOf: ['generate_summary_audio'] },
+  { method: 'POST', path: /^\/api\/transcription\/content\/\d+$/, anyOf: ['generate_transcript'] },
   { method: 'GET', path: /^\/api\/auth\/token$/, anyOf: 'any' },
 ];
 

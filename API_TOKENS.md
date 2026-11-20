@@ -40,6 +40,11 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 | `star` | `POST /api/content/bulk` with `star` or `unstar` |
 | `archive` | `POST /api/content/bulk` with `archive` or `unarchive`, and `archive` through `remote` |
 | `remote` | `GET /api/remote/state`, `POST /api/remote/command`: the watch remote, see below |
+| `refetch` | `POST /api/content/:id/refetch` |
+| `generate_audio` | `POST /api/content/:id/generate-audio` |
+| `generate_summary` | `POST /api/content/:id/generate-summary` |
+| `generate_summary_audio` | `POST /api/content/:id/generate-summary-audio`, and `generate_audio: true` with a summary |
+| `generate_transcript` | `POST /api/transcription/content/:id`, and `generate_transcript: true` with a summary |
 
 `add_any` and `add_feed` exclude each other. Any other route answers `403`.
 
@@ -106,6 +111,18 @@ Archiving works as in the app: the generated audio of an article or text stays 7
 
 Both are logged, and Undo in Settings unsubscribes from a feed the token added, or follows a feed again that it left.
 
+### Refetching and generating
+
+All five are off for a new token.
+
+- `POST /api/content/:id/refetch` reads an article (or a YouTube video's details) from the web again, as the app's "Refetch from web" does. It counts as one item and answers `{ message }`, or `409` while the item is still being processed. The summary is not renewed by it.
+- `POST /api/content/:id/generate-audio` with `{ "regenerate": true }` to replace existing audio (`exclude_comments` leaves the comments out).
+- `POST /api/content/:id/generate-summary` (`{ "regenerate": true }` to replace one). A podcast episode or video needs its transcript first: add `"generate_transcript": true` (needs `generate_transcript`). Add `"generate_audio": true` for its summary audio too (needs `generate_summary_audio`). The app's own automatic settings never add anything to a token's request.
+- `POST /api/content/:id/generate-summary-audio` reads an existing summary aloud.
+- `POST /api/transcription/content/:id` transcribes a podcast episode (`{ "regenerate": true }` to replace a transcript). No summary follows by itself.
+
+Each counts its minutes and one generation against the limits below. Over a limit it answers `429` with `{ error, limit, max, used }` and nothing starts. Follow the progress with `GET /api/content/index` (`summary_status`) or the item's Markdown.
+
 ### The watch remote
 
 `GET /api/remote/state` answers `{ online, mode, age_seconds, state }`: what the player of the open Wallacast app does (`item_id`, `title`, `subtitle`, `playing`, `position`, `duration`, `speed`, `speeds`, `shuffle`, `has_next`, `has_previous`, `is_archived`, `is_starred`). `mode` is `app` while a Wallacast page listens, `link` while Chrome lets the page sleep and Player Link stands in (play, pause, `toggle`, `forward` and `back` only), and `none` with `online` false when neither asked for commands in the last 40 seconds.
@@ -116,20 +133,23 @@ Both are logged, and Undo in Settings unsubscribes from a feed the token added, 
 
 ## Limits
 
-Each token has four limits, set under the token in Settings. They are rolling windows: the last hour and the last 48 hours.
+Each token has these limits, set under the token in Settings. They are rolling windows: the last hour and the last 48 hours.
 
 | Limit | Default | Highest | Counts |
 |---|---|---|---|
-| Items per hour | 20 | 500 | every add and every preview that passes its checks, also one whose page then cannot be fetched |
+| Items per hour | 20 | 500 | every add, preview and refetch that passes its checks, also one whose page then cannot be fetched |
 | Items per 2 days | 100 | 5,000 | the same |
-| Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
+| Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds or asked for with a generate permission |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
+| Generations per hour | 20 | 500 | the same generations, one each, whatever their length. Whichever limit a generation would cross first stops it |
+| Generations per 2 days | 100 | 5,000 | the same |
 | Subscriptions per hour | 10 | 100 | every feed the token subscribed to |
 
 Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
-- Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
+- Over a minute or generation limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
+- A token whose limits were saved before the generation limits existed gets three generations per item: 3 times its items per hour and per 2 days, at most the highest value, until they are saved again. An add often starts two generations (a summary and its audio).
 - Fixed limits: one feed refresh per 15 minutes, 500 changes per hour (tags, stars, archive, unarchive, unsubscribe).
 
 Each limit hit shows a notice in the app. The Reset button in Settings counts usage from that moment. Usage is kept in the database, so a deploy does not reset it, and deleting an item does not give back what it used.

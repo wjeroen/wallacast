@@ -87,6 +87,16 @@ assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/search?q=x'));
 assert.ok(allowed(['remote'], 'GET', '/api/remote/state'));
 assert.ok(allowed(['remote'], 'POST', '/api/remote/command'));
 assert.ok(allowed(['remote'], 'GET', '/api/remote/fallback?playing=false'), 'Player Link polls with a remote token');
+// Refetch and the generate permissions each open their own route only
+assert.ok(allowed(['refetch'], 'POST', '/api/content/12/refetch'));
+assert.ok(!allowed(['add_any'], 'POST', '/api/content/12/refetch'), 'adding is not refetching');
+assert.ok(allowed(['generate_audio'], 'POST', '/api/content/12/generate-audio'));
+assert.ok(!allowed(['generate_summary'], 'POST', '/api/content/12/generate-audio'));
+assert.ok(allowed(['generate_summary'], 'POST', '/api/content/12/generate-summary'));
+assert.ok(allowed(['generate_summary_audio'], 'POST', '/api/content/12/generate-summary-audio'));
+assert.ok(!allowed(['generate_summary'], 'POST', '/api/content/12/generate-summary-audio'));
+assert.ok(allowed(['generate_transcript'], 'POST', '/api/transcription/content/12'));
+assert.ok(!allowed(['generate_transcript'], 'POST', '/api/content/12/cancel-generation'), 'cancelling stays app-only');
 assert.ok(!allowed(['remote'], 'GET', '/api/content/index'), 'remote alone does not read the library');
 for (const [m, p] of [
   ['POST', '/api/content/tags/rename'],
@@ -120,13 +130,23 @@ assert.deepEqual(parsePermissions(['read_library', 'bogus', 'feed']), ['read_lib
 assert.deepEqual(parsePermissions(null), []);
 
 assert.deepEqual(effectiveLimits({}), DEFAULT_LIMITS);
-assert.deepEqual(effectiveLimits({ items_hour: 7, minutes_2d: 99999 }), { ...DEFAULT_LIMITS, items_hour: 7 }, 'an out-of-range stored value falls back');
+assert.deepEqual(effectiveLimits({ items_hour: 7, minutes_2d: 99999 }), { ...DEFAULT_LIMITS, items_hour: 7, generations_hour: 21 }, 'an out-of-range stored value falls back');
+// Generation limits: 20 and 100 for a new token, three per item for limits saved before they existed
+assert.equal(DEFAULT_LIMITS.generations_hour, 20);
+assert.equal(DEFAULT_LIMITS.generations_2d, 100);
+assert.deepEqual(
+  [effectiveLimits({ items_hour: 40, items_2d: 100 }).generations_hour, effectiveLimits({ items_hour: 40, items_2d: 100 }).generations_2d],
+  [120, 300],
+  'the AI Radio token (40 and 100 items) keeps room for its 68 generations an hour'
+);
+assert.equal(effectiveLimits({ items_hour: 400, generations_hour: 30 }).generations_hour, 30, 'a saved generation limit is kept');
+assert.equal(effectiveLimits({ items_hour: 400 }).generations_hour, 500, 'capped at the maximum');
 assert.deepEqual(validateLimits({ items_hour: 0 }, DEFAULT_LIMITS), { limits: { ...DEFAULT_LIMITS, items_hour: 0 } }, '0 is allowed: no adds at all');
 assert.deepEqual(validateLimits({ items_hour: MAX_LIMITS.items_hour }, DEFAULT_LIMITS), { limits: { ...DEFAULT_LIMITS, items_hour: 500 } });
 for (const bad of [{ items_hour: 501 }, { items_hour: -1 }, { items_hour: 1.5 }, { items_hour: '5' }, { foo: 1 }, [], null]) {
   assert.ok('error' in validateLimits(bad, DEFAULT_LIMITS), `limits ${JSON.stringify(bad)} refused`);
 }
-assert.deepEqual(MAX_LIMITS, { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, subscriptions_hour: 100 });
+assert.deepEqual(MAX_LIMITS, { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, generations_hour: 500, generations_2d: 5000, subscriptions_hour: 100 });
 assert.equal(DEFAULT_LIMITS.subscriptions_hour, 10);
 assert.equal(effectiveLimits({ items_hour: 7 }).subscriptions_hour, 10, 'a token saved before the subscription limit gets the default');
 assert.ok('error' in validateLimits({ subscriptions_hour: 101 }, DEFAULT_LIMITS));

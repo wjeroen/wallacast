@@ -315,7 +315,8 @@ export const authAPI = {
 };
 
 // What a token may do. add_any and add_feed exclude each other.
-export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star' | 'archive' | 'subscribe' | 'remote';
+export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star' | 'archive' | 'subscribe' | 'remote'
+  | 'refetch' | 'generate_audio' | 'generate_summary' | 'generate_summary_audio' | 'generate_transcript';
 
 // Per-token limits on items added, minutes of AI generation started and feeds subscribed to,
 // in rolling windows.
@@ -324,6 +325,8 @@ export interface TokenLimits {
   items_2d: number;
   minutes_hour: number;
   minutes_2d: number;
+  generations_hour: number;
+  generations_2d: number;
   subscriptions_hour: number;
 }
 

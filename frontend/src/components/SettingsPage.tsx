@@ -142,8 +142,14 @@ const TOKEN_LIMIT_FIELDS: Array<{ key: keyof TokenLimits; label: string }> = [
   { key: 'items_2d', label: 'Items per 2 days' },
   { key: 'minutes_hour', label: 'Generation minutes per hour' },
   { key: 'minutes_2d', label: 'Generation minutes per 2 days' },
+  { key: 'generations_hour', label: 'Generations per hour' },
+  { key: 'generations_2d', label: 'Generations per 2 days' },
   { key: 'subscriptions_hour', label: 'Subscriptions per hour' },
 ];
+// Limits that count items, and limits that count generations
+const TOKEN_ITEM_LIMITS: Array<keyof TokenLimits> = ['items_hour', 'items_2d'];
+const TOKEN_GENERATION_LIMITS: Array<keyof TokenLimits> = ['minutes_hour', 'minutes_2d', 'generations_hour', 'generations_2d'];
+const TOKEN_GENERATE_PERMISSIONS: TokenPermission[] = ['generate_audio', 'generate_summary', 'generate_summary_audio', 'generate_transcript'];
 const TOKEN_CHANGE_WORDS: Record<string, string> = {
   star: 'Starred',
   unstar: 'Unstarred',
@@ -918,6 +924,15 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     const busy = tokenEditBusy === t.id;
     const canAdd = t.permissions.includes('add_any') || t.permissions.includes('add_feed');
     const canSubscribe = t.permissions.includes('subscribe');
+    const canRefetch = t.permissions.includes('refetch');
+    const canGenerate = TOKEN_GENERATE_PERMISSIONS.some(p => t.permissions.includes(p));
+    // Which limits apply: items for adds and refetches, generations for adds and generate
+    // permissions, subscriptions for subscribing
+    const limitShown = (key: keyof TokenLimits) =>
+      key === 'subscriptions_hour' ? canSubscribe
+        : TOKEN_ITEM_LIMITS.includes(key) ? canAdd || canRefetch
+          : TOKEN_GENERATION_LIMITS.includes(key) ? canAdd || canGenerate
+            : canAdd;
     const canChange = (['tag', 'star', 'archive', 'subscribe'] as TokenPermission[]).some(p => t.permissions.includes(p));
     const addMode = t.permissions.includes('add_any') ? 'add_any' : t.permissions.includes('add_feed') ? 'add_feed' : 'none';
     const permissionBox = (permission: TokenPermission, label: string) => (
@@ -957,13 +972,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           {permissionBox('archive', 'Archive and unarchive')}
           {permissionBox('subscribe', 'Subscribe to feeds')}
           {permissionBox('remote', 'Control playback')}
+          {permissionBox('refetch', 'Refetch items')}
+          {permissionBox('generate_audio', 'Generate audio')}
+          {permissionBox('generate_summary', 'Generate summaries')}
+          {permissionBox('generate_summary_audio', 'Generate summary audio')}
+          {permissionBox('generate_transcript', 'Generate transcripts')}
         </div>
 
-        {(canAdd || canSubscribe) && (
+        {(canAdd || canSubscribe || canRefetch || canGenerate) && (
           <div className="settings-token-editor-group">
             <span className="settings-token-editor-title">Limits</span>
             <div className="settings-token-limits">
-              {TOKEN_LIMIT_FIELDS.filter(({ key }) => (key === 'subscriptions_hour' ? canSubscribe : canAdd)).map(({ key, label }) => (
+              {TOKEN_LIMIT_FIELDS.filter(({ key }) => limitShown(key)).map(({ key, label }) => (
                 <div key={key} className="settings-token-limit">
                   <label htmlFor={`token-${t.id}-${key}`}>{label}</label>
                   <input
@@ -982,7 +1002,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </div>
               ))}
             </div>
-            {canAdd && <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>}
+            {(canAdd || canGenerate) && <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>}
             <button type="button" disabled={busy} onClick={() => handleResetTokenUsage(t)}>Reset usage</button>
           </div>
         )}

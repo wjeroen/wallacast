@@ -1499,6 +1499,48 @@ export function articleBodyHtml(doc: Document, body: string): string {
   }).join('\n');
 }
 
+/**
+ * Three leftovers no story needs, each matched narrowly (2026-11-20):
+ * - a "Skip to" or "Jump to" link that leads nowhere in the story: no address, or an anchor
+ *   whose target is not in the stored story (GAO's "Jump To:" pointed at the removed menu).
+ *   One that jumps to a heading in the story stays, like a footnote link.
+ * - a comment box: the largest box around an empty <textarea> that holds under 200 characters
+ *   of text, so the Times of India's "Join conversation / Share your thoughts in the comments"
+ *   goes with its input field. A <textarea> that holds text (a code sample) stays.
+ * - an empty element whose class is "br", which the Times of India puts between its paragraphs
+ *   instead of a line break, so they ran together ("for Beijing.Asked about")
+ */
+export function removePageLeftovers(root: Element): void {
+  const hasTarget = (id: string) => {
+    if (!id) return false;
+    try {
+      return !!root.querySelector(`[id="${id.replace(/["\\]/g, '')}"], a[name="${id.replace(/["\\]/g, '')}"]`);
+    } catch {
+      return false;
+    }
+  };
+  root.querySelectorAll('a').forEach(a => {
+    if (!/^\s*(skip|jump) to\b/i.test(a.textContent || '')) return;
+    const href = (a.getAttribute('href') || '').trim();
+    let target = href.slice(1);
+    try { target = decodeURIComponent(target); } catch { /* keep it as written */ }
+    if (!href || (href.startsWith('#') && !hasTarget(target))) a.remove();
+  });
+  root.querySelectorAll('textarea').forEach(area => {
+    if ((area.textContent || '').trim()) return;
+    let box: Element = area;
+    while (box.parentElement && box.parentElement !== root && (box.parentElement.textContent || '').trim().length < 200) {
+      box = box.parentElement;
+    }
+    box.remove();
+  });
+  root.querySelectorAll('.br').forEach(el => {
+    if (el.children.length > 0 || (el.textContent || '').trim()) return;
+    const doc = el.ownerDocument;
+    el.replaceWith(doc.createElement('br'), doc.createTextNode('\n'), doc.createElement('br'));
+  });
+}
+
 const MIN_NESTED_STORY_CHARS = 1000;
 
 /**
@@ -2664,6 +2706,7 @@ export async function fetchArticleContent(url: string, onProgress: FetchProgress
       // Remove <aside> elements (membership pitches, supplementary content, never article body)
       // and <nav> menus: GAO's <main> holds a "Jump To" menu of 115 site sections (2026-11-20)
       contentEl.querySelectorAll('aside, nav').forEach(el => el.remove());
+      removePageLeftovers(contentEl);
 
       // Remove sidebar rails (Vox "Most Popular", ad slots, etc.)
       contentEl.querySelectorAll('[class*="layout--rail"]').forEach(el => el.remove());

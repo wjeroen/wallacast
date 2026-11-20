@@ -1443,6 +1443,33 @@ router.post('/', async (req, res) => {
 });
 
 // Update content item
+/**
+ * A token's own generation request (the generate permissions): its minutes and one generation
+ * count against the token's limits (reserveMinutes). Answers false after sending a 429 when a
+ * limit is reached. Always true for the app itself.
+ */
+async function tokenMayGenerate(
+  req: express.Request,
+  res: express.Response,
+  what: 'audio' | 'summary' | 'summary_audio' | 'transcript',
+  minutes: number,
+  itemId: number
+): Promise<boolean> {
+  const token = req.apiToken;
+  if (!token) return true;
+  const r = await reserveMinutes(token, minutes, what, itemId);
+  if (r.ok) return true;
+  res.status(429).json({ error: r.message, limit: r.limit, max: r.max, used: r.used });
+  return false;
+}
+
+/** An item's text length for a token's minutes: its body plus its comments. */
+async function itemTextChars(id: number, userId: number, withComments = true): Promise<number> {
+  const r = await query('SELECT length(COALESCE(content, \'\')) AS chars, comments FROM content_items WHERE id = $1 AND user_id = $2', [id, userId]);
+  const row = r.rows[0];
+  return row ? Number(row.chars || 0) + (withComments ? commentChars(row.comments) : 0) : 0;
+}
+
 /** The share of a part's length that must really be heard before it counts as heard. */
 function heardShare(variant: 'audio' | 'summary', duration: number): number {
   if (variant === 'summary') return 0.75;
@@ -2044,6 +2071,11 @@ router.post('/:id/refetch', async (req, res) => {
     // Settings, the same way the refresh job does (refreshVideoDetails). A value YouTube does
     // not give keeps the stored one. There is no body, so there is no version snapshot.
     const videoId = type === 'video' ? youtubeVideoId(url) : null;
+    // A token's refetch counts as one item (items per hour and per 2 days)
+    if (req.apiToken && (videoId || (type === 'article' && url))) {
+      const r = await reserveItem(req.apiToken, 'refetch', String(id));
+      if (!r.ok) return res.status(429).json({ error: r.message, limit: r.limit, max: r.max, used: r.used });
+    }
     if (videoId) {
       (async () => {
         try {
@@ -2292,6 +2324,8 @@ router.post('/:id/generate-audio', async (req, res) => {
       console.log(`Regenerating: Will replace existing audio data`);
     }
 
+    if (!(await tokenMayGenerate(req, res, 'audio', textMinutes(await itemTextChars(Number(id), req.user!.userId, !exclude_comments)), Number(id)))) return;
+
     await query(
       'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
       ['generating_audio', 0, 'audio', id]
@@ -2376,13 +2410,32 @@ router.post('/:id/generate-summary', async (req, res) => {
       return res.status(409).json({ error: 'Transcription already in progress' });
     }
 
+    // A token pays for what it starts: a transcript first only with generate_transcript, and
+    // the summary audio only when it asks for it (generate_audio) with generate_summary_audio,
+    // never because of the app's own auto settings
+    let summaryAudio = generateAudio;
+    if (req.apiToken) {
+      const token = req.apiToken;
+      if (needsTranscript && !token.permissions.includes('generate_transcript')) {
+        return res.status(403).json({ error: 'This token needs the generate_transcript permission to transcribe first' });
+      }
+      const isEpisode = contentItem.type === 'podcast_episode' || isVideo;
+      const minutes = isEpisode
+        ? episodeSummaryMinutes(contentItem.duration)
+        : summaryMinutes(await itemTextChars(Number(id), req.user!.userId));
+      if (needsTranscript && !(await tokenMayGenerate(req, res, 'transcript', episodeMinutes(contentItem.duration), Number(id)))) return;
+      if (!(await tokenMayGenerate(req, res, 'summary', minutes, Number(id)))) return;
+      summaryAudio = generateAudio === true && token.permissions.includes('generate_summary_audio')
+        && (await reserveMinutes(token, SUMMARY_AUDIO_MINUTES, 'summary_audio', Number(id))).ok;
+    }
+
     await query(
       'UPDATE content_items SET summary_status = $1 WHERE id = $2',
       ['generating', id]
     );
 
     const runSummary = () =>
-      generateSummaryForContent(parseInt(id), { generateAudio })
+      generateSummaryForContent(parseInt(id), { generateAudio: summaryAudio })
         .then(() => console.log(`Summary generation finished for ${id}`))
         .catch(async (error) => {
           console.error('Background summary generation error:', error);
@@ -2468,6 +2521,8 @@ router.post('/:id/generate-summary-audio', async (req, res) => {
         summary_audio_status: 'generating',
       });
     }
+
+    if (!(await tokenMayGenerate(req, res, 'summary_audio', SUMMARY_AUDIO_MINUTES, Number(id)))) return;
 
     // Set the status before responding so the frontend's next status poll sees it
     // even if the background job has not started yet.

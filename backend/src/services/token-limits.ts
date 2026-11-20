@@ -5,12 +5,16 @@ import { getUserSetting } from './ai-providers.js';
 /**
  * Limits, usage and the change log for API tokens (table api_token_events, migration 031).
  *
- * Every token has four limits, set per token in Settings (a leaked token cannot change them,
+ * Every token has these limits, set per token in Settings (a leaked token cannot change them,
  * token management only accepts a normal login):
- *   items_hour / items_2d       items added plus pages read without saving
- *   minutes_hour / minutes_2d   minutes of AI generation started for items the token added: an
- *                               article's audio counts its narration time, a transcript the
- *                               episode's length, a summary a tenth of its article's narration time
+ *   items_hour / items_2d       items added, pages read without saving, and items refetched
+ *   minutes_hour / minutes_2d   minutes of AI generation the token started (for items it added,
+ *                               or asked for with a generate permission): an article's audio
+ *                               counts its narration time, a transcript the episode's length, a
+ *                               summary a tenth of its article's narration time
+ *   generations_hour / _2d      the same generations counted one each, so many short ones are
+ *                               limited too. Whichever limit a generation would cross first
+ *                               stops it.
  * "Per hour" and "per 2 days" are rolling windows (the last 60 minutes, the last 48 hours).
  * The Reset button in Settings sets usage_reset_at, and nothing before it counts.
  *
@@ -28,17 +32,22 @@ import { getUserSetting } from './ai-providers.js';
  * token, so a burst of parallel requests cannot all slip under the limit together.
  */
 
-export const LIMIT_KEYS = ['items_hour', 'items_2d', 'minutes_hour', 'minutes_2d', 'subscriptions_hour'] as const;
+export const LIMIT_KEYS = ['items_hour', 'items_2d', 'minutes_hour', 'minutes_2d', 'generations_hour', 'generations_2d', 'subscriptions_hour'] as const;
 export type LimitKey = typeof LIMIT_KEYS[number];
 export type TokenLimits = Record<LimitKey, number>;
 
 /** What a token gets until the user changes it. */
-export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600, subscriptions_hour: 10 };
+export const DEFAULT_LIMITS: TokenLimits = { items_hour: 20, items_2d: 100, minutes_hour: 120, minutes_2d: 600, generations_hour: 20, generations_2d: 100, subscriptions_hour: 10 };
 
 /** The highest values Settings accepts. Items cost only server work and storage (an add
  *  takes about 2 to 5 seconds, articles average about 18 KB of stored HTML), minutes cost
  *  money on the user's own API keys, and every feed makes each feed refresh longer. */
-export const MAX_LIMITS: TokenLimits = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, subscriptions_hour: 100 };
+export const MAX_LIMITS: TokenLimits = { items_hour: 500, items_2d: 5000, minutes_hour: 2000, minutes_2d: 10000, generations_hour: 500, generations_2d: 5000, subscriptions_hour: 100 };
+
+/** A token whose limits were saved before the generation limits existed gets this many
+ *  generations per item it may add: an add often starts two (a summary and its audio), and
+ *  the AI Radio's token started 68 in one hour for 33 items (2026-11-20). */
+const GENERATIONS_PER_SAVED_ITEM = 3;
 
 export const REFRESH_INTERVAL_MINUTES = 15;
 export const CHANGES_PER_HOUR = 500;
@@ -70,6 +79,14 @@ export function effectiveLimits(raw: unknown): TokenLimits {
   for (const key of LIMIT_KEYS) {
     const v = stored[key];
     if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_LIMITS[key]) out[key] = v;
+  }
+  // Limits saved before the generation limits existed: three generations per item, so a
+  // routine that already ran within its limits keeps running
+  if (stored.generations_hour === undefined && typeof stored.items_hour === 'number') {
+    out.generations_hour = Math.min(MAX_LIMITS.generations_hour, out.items_hour * GENERATIONS_PER_SAVED_ITEM);
+  }
+  if (stored.generations_2d === undefined && typeof stored.items_2d === 'number') {
+    out.generations_2d = Math.min(MAX_LIMITS.generations_2d, out.items_2d * GENERATIONS_PER_SAVED_ITEM);
   }
   return out;
 }
@@ -208,6 +225,8 @@ export interface TokenUsage {
   items_2d: number;
   minutes_hour: number;
   minutes_2d: number;
+  generations_hour: number;
+  generations_2d: number;
   subscriptions_hour: number;
   changes_hour: number;
 }
@@ -215,10 +234,12 @@ export interface TokenUsage {
 /** Usage of one token since its last reset, inside the 48-hour window. $1 is the token id. */
 const USAGE_SQL = `
   SELECT
-    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read') AND e.created_at > NOW() - INTERVAL '1 hour')::int AS items_hour,
-    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read'))::int AS items_2d,
+    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read', 'refetch') AND e.created_at > NOW() - INTERVAL '1 hour')::int AS items_hour,
+    COUNT(*) FILTER (WHERE e.kind IN ('add', 'read', 'refetch'))::int AS items_2d,
     COALESCE(SUM(e.minutes) FILTER (WHERE e.kind = 'generation' AND e.created_at > NOW() - INTERVAL '1 hour'), 0)::float AS minutes_hour,
     COALESCE(SUM(e.minutes) FILTER (WHERE e.kind = 'generation'), 0)::float AS minutes_2d,
+    COUNT(*) FILTER (WHERE e.kind = 'generation' AND e.created_at > NOW() - INTERVAL '1 hour')::int AS generations_hour,
+    COUNT(*) FILTER (WHERE e.kind = 'generation')::int AS generations_2d,
     COUNT(*) FILTER (WHERE e.kind = 'subscribe' AND e.created_at > NOW() - INTERVAL '1 hour')::int AS subscriptions_hour,
     COUNT(*) FILTER (WHERE e.kind IN (${COUNTED_CHANGE_KINDS}) AND e.created_at > NOW() - INTERVAL '1 hour')::int AS changes_hour
   FROM api_token_events e
@@ -237,6 +258,8 @@ async function usageWith(runner: Runner, tokenId: number): Promise<TokenUsage> {
     items_2d: row.items_2d ?? 0,
     minutes_hour: Math.round((row.minutes_hour ?? 0) * 10) / 10,
     minutes_2d: Math.round((row.minutes_2d ?? 0) * 10) / 10,
+    generations_hour: row.generations_hour ?? 0,
+    generations_2d: row.generations_2d ?? 0,
     subscriptions_hour: row.subscriptions_hour ?? 0,
     changes_hour: row.changes_hour ?? 0,
   };
@@ -282,6 +305,8 @@ const LIMIT_WORDS: Record<LimitKey, string> = {
   items_2d: 'items per 2 days',
   minutes_hour: 'generation minutes per hour',
   minutes_2d: 'generation minutes per 2 days',
+  generations_hour: 'generations per hour',
+  generations_2d: 'generations per 2 days',
   subscriptions_hour: 'subscriptions per hour',
 };
 
@@ -296,8 +321,9 @@ async function recordLimitHit(tokenId: number, message: string): Promise<void> {
   });
 }
 
-/** Count one added item ('add') or one page read without saving ('read'), or refuse. */
-export async function reserveItem(token: TokenContext, kind: 'add' | 'read', detail?: string): Promise<LimitResult> {
+/** Count one added item ('add'), one page read without saving ('read') or one item refetched
+ *  ('refetch'), or refuse. */
+export async function reserveItem(token: TokenContext, kind: 'add' | 'read' | 'refetch', detail?: string): Promise<LimitResult> {
   const limits = effectiveLimits(token.limits);
   const result = await withTokenLock(token.id, async (client) => {
     const used = await usageWith(client, token.id);
@@ -316,7 +342,7 @@ export async function reserveItem(token: TokenContext, kind: 'add' | 'read', det
   return result;
 }
 
-/** Count `minutes` of generation for an item, or refuse (the caller then skips it). */
+/** Count `minutes` and one generation for an item, or refuse (the caller then skips it). */
 export async function reserveMinutes(
   token: TokenContext,
   minutes: number,
@@ -328,6 +354,8 @@ export async function reserveMinutes(
     const used = await usageWith(client, token.id);
     if (used.minutes_hour + minutes > limits.minutes_hour) return overLimit('minutes_hour', limits.minutes_hour, used.minutes_hour);
     if (used.minutes_2d + minutes > limits.minutes_2d) return overLimit('minutes_2d', limits.minutes_2d, used.minutes_2d);
+    if (used.generations_hour + 1 > limits.generations_hour) return overLimit('generations_hour', limits.generations_hour, used.generations_hour);
+    if (used.generations_2d + 1 > limits.generations_2d) return overLimit('generations_2d', limits.generations_2d, used.generations_2d);
     await client.query(
       'INSERT INTO api_token_events (token_id, user_id, kind, content_item_id, minutes, detail) VALUES ($1, $2, $3, $4, $5, $6)',
       [token.id, token.userId, 'generation', contentItemId, minutes, detail]

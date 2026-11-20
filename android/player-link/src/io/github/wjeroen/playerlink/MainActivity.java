@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -68,6 +69,7 @@ public class MainActivity extends Activity {
         enabled.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         enabled.setPadding(0, dp(16), 0, dp(8));
         enabled.setChecked(prefs.getBoolean(LinkService.PREF_ENABLED, false));
+        tintSwitch(enabled);
         enabled.setOnCheckedChangeListener((b, on) -> {
             if (on == prefs.getBoolean(LinkService.PREF_ENABLED, false)) return;
             prefs.edit().putBoolean(LinkService.PREF_ENABLED, on).apply();
@@ -125,6 +127,7 @@ public class MainActivity extends Activity {
         anyChrome.setText("Every Chrome player is Wallacast");
         anyChrome.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         anyChrome.setChecked(prefs.getBoolean(LinkService.PREF_ANY_CHROME_IS_WALLACAST, false));
+        tintSwitch(anyChrome);
         anyChrome.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean(LinkService.PREF_ANY_CHROME_IS_WALLACAST, on).apply();
             LinkService s = LinkService.instance;
@@ -141,6 +144,12 @@ public class MainActivity extends Activity {
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(col);
+        // Android 15 and later draw the app under the status and navigation bars, so the column
+        // leaves their height free
+        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            col.setPadding(pad, pad + insets.getSystemWindowInsetTop(), pad, pad + insets.getSystemWindowInsetBottom());
+            return insets;
+        });
         setContentView(scroll);
     }
 
@@ -222,6 +231,13 @@ public class MainActivity extends Activity {
         TextView t = new TextView(this);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
         return t;
+    }
+
+    /** The device's dark theme drew an off switch dark on dark: amber when on, light grey when off. */
+    private static void tintSwitch(Switch s) {
+        int[][] states = { { android.R.attr.state_checked }, {} };
+        s.setThumbTintList(new ColorStateList(states, new int[] { 0xFFF59E0B, 0xFFD1D5DB }));
+        s.setTrackTintList(new ColorStateList(states, new int[] { 0x80F59E0B, 0x809CA3AF }));
     }
 
     private int dp(float v) {

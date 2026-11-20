@@ -327,6 +327,8 @@ router.get('/token', requireAuth, async (req, res) => {
         items_2d: usage.items_2d,
         minutes_hour: usage.minutes_hour,
         minutes_2d: usage.minutes_2d,
+        generations_hour: usage.generations_hour,
+        generations_2d: usage.generations_2d,
         subscriptions_hour: usage.subscriptions_hour,
       },
       remaining: {
@@ -334,6 +336,8 @@ router.get('/token', requireAuth, async (req, res) => {
         items_2d: left(t.limits.items_2d, usage.items_2d),
         minutes_hour: left(t.limits.minutes_hour, usage.minutes_hour),
         minutes_2d: left(t.limits.minutes_2d, usage.minutes_2d),
+        generations_hour: left(t.limits.generations_hour, usage.generations_hour),
+        generations_2d: left(t.limits.generations_2d, usage.generations_2d),
         subscriptions_hour: left(t.limits.subscriptions_hour, usage.subscriptions_hour),
         changes_hour: Math.max(0, CHANGES_PER_HOUR - usage.changes_hour),
       },

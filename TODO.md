@@ -45,6 +45,7 @@
 - [ ] **[P2]** Player Link (installed 2026-11-18, finds Wallacast by its site): watch whether the link holds over a day of use, with the shorter waits, the second try of a dropped command, the tile, and the start of the other player when it is turned on. Its screen lists the last 8 actions
 - [ ] **[P2]** Try play on the watch while Wallacast is in the background (YouTube in front), and after Chrome dropped Wallacast's player: Player Link should press play, or bring Wallacast to the front when Android refuses it the turn to play sound. Unknown: whether Player Link's press alone gets Chrome that turn, and whether it works with the phone locked (2026-11-18)
 - [ ] **[P2]** Try the heard check on the phone: play an item (and a YouTube video) to its end, the Audio chip should get a check, and a jump to the end should not (2026-11-20)
+- [ ] **[P2]** Install the new Player Link (wireless debugging on, then ask Claude) and try the watch's play with Wallacast closed (2026-11-20)
 - [ ] **[P2]** Try the watch's play when Wallacast's player is empty (it should load the last item into the mini player and play), and Player Link bringing back the open page through Chrome's player (2026-11-20)
 - [ ] **[P4]** Headphones: after a pause the headphones did not make (in the app, or taking them off), the first double tap is lost when it goes to Chrome. YouTube in Chrome does the same (user test 2026-11-18), so it is Chrome or the headphones, not Wallacast. Idea, not chosen: Player Link catches the headphone keys itself (it would have to play a moment of silence to become the app Android sends them to)
 - [ ] **[P4]** Build the Android apps on GitHub Actions, so others can build without Termux. `android/release.sh` publishes the release `android-latest` from Termux today. Needs the signing key as a repository secret (2026-11-18)
@@ -180,6 +181,10 @@
 - `backend/mock-server.mjs` accepts any credentials (local-only dev tool, by design).
 
 ## Completed Recently ✅
+
+- [x] **Tokens can refetch and generate** (2026-11-20): five new permissions, off for every token (refetch, audio, summaries, summary audio, transcripts). A refetch counts as an item, a generation its minutes and one of the new generations per hour and per 2 days (20 and 100 for a new token, three per item for limits saved earlier)
+- [x] **Page leftovers** (2026-11-20): dead "Skip to"/"Jump to" links, comment boxes around an empty input field, and the Times of India's run-together paragraphs
+- [x] **Player Link: no more x.com** (2026-11-20): "Every Chrome player is Wallacast" no longer takes a tab of another site, readable switches, and the top no longer sits under the status bar
 
 - [x] **Library search and long lists** (2026-11-20): search also covers the address and the summary, and the list draws 60 cards at a time while every item stays in the filtered list and the queues
 - [x] **Demo seed reruns** (2026-11-20): a rerun keeps the complete podcast and article and redoes only the guide (`REBUILD_ALL=1` redoes all), and the polls wait through a server restart

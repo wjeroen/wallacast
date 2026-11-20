@@ -53,6 +53,7 @@ import {
   articleBodyFromJsonLd,
   articleBodyHtml,
   parseSubstackPreloads,
+  removePageLeftovers,
 } from '../src/services/article-fetcher.js';
 import { newestArchiveCopy } from '../src/services/url-guard.js';
 
@@ -532,6 +533,25 @@ const dir = process.argv[2];
     'the preloads-json block is read'
   );
   console.log('✅ The longest story <article>, the Times of India marker, JSON-LD articleBody paragraphs, Substack preloads-json');
+
+  // Leftovers: dead skip links go, a working one stays, a comment box around an empty textarea
+  // goes, a textarea with text stays, and the Times of India's "br" markers become line breaks
+  const page = doc(`<div id="story">
+    <a href="#gone-menu">Jump To:</a><a id="summary" class="visually-hidden">Skip to Highlights</a>
+    <a href="#findings">Jump to the findings</a>
+    <p>First paragraph.<span class="id-r-component br"></span>Second paragraph.</p>
+    <div><p>Join conversation</p><p>Share your thoughts in the comments</p><div><textarea placeholder="Add your Thoughts..."></textarea></div></div>
+    <textarea>const kept = 'a code sample';</textarea>
+    <h2 id="findings">Findings</h2><p>${long}</p></div>`);
+  const story = page.querySelector('#story')!;
+  removePageLeftovers(story);
+  const text = story.textContent || '';
+  assert.ok(!text.includes('Jump To:') && !text.includes('Skip to Highlights'), 'dead skip links go');
+  assert.ok(text.includes('Jump to the findings'), 'a skip link to a heading in the story stays');
+  assert.ok(!text.includes('Join conversation') && !text.includes('Share your thoughts'), 'the comment box goes');
+  assert.ok(text.includes('a code sample'), 'a textarea with text stays');
+  assert.ok(/First paragraph\.\s+Second paragraph\./.test(text), 'the br marker separates the paragraphs');
+  console.log('✅ Dead skip links, comment boxes and the Times of India line-break markers');
 }
 
 // --- 0j. Scripts and styles are cut before a page is read ---------------------------

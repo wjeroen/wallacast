@@ -87,6 +87,8 @@ public class LinkService extends NotificationListenerService {
     static final String PREF_ANY_CHROME_IS_WALLACAST = "all_chrome";
     /** Wallacast's site as its Chrome player last named it, to open it again */
     static final String PREF_SITE = "wallacast_site";
+    /** True once PREF_SITE came from a player that names Wallacast (see onListenerConnected) */
+    static final String PREF_SITE_CONFIRMED = "wallacast_site_confirmed";
 
     /** A change must last this long before it is copied: a web player pauses for a moment
      *  while it loads its next item, an app while it skips. */
@@ -167,6 +169,13 @@ public class LinkService extends NotificationListenerService {
     public void onListenerConnected() {
         instance = this;
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        // Before 2026-11-20 "Every Chrome player is Wallacast" could save another site's player
+        // (an X video) as Wallacast's site, and a play from the watch then opened x.com. A site
+        // without the word Wallacast that no Wallacast player confirmed is forgotten.
+        String savedSite = prefs.getString(PREF_SITE, "");
+        if (!savedSite.isEmpty() && !savedSite.contains("wallacast") && !prefs.getBoolean(PREF_SITE_CONFIRMED, false)) {
+            prefs.edit().remove(PREF_SITE).apply();
+        }
         sessions = (MediaSessionManager) getSystemService(MEDIA_SESSION_SERVICE);
         self = new ComponentName(this, LinkService.class);
         try {
@@ -524,22 +533,33 @@ public class LinkService extends NotificationListenerService {
 
     // ---- the Wallacast watch bridge -------------------------------------------------------------
 
-    /** Wallacast's player in Chrome, found by its notification or, when the user says so, any Chrome player. */
+    /** A Chrome player whose notification names Wallacast: its site, or the word Wallacast. */
+    private boolean namesWallacast(Player p) {
+        return wallacastTokens.contains(p.controller.getSessionToken()) || p.key.contains("wallacast");
+    }
+
+    /** Wallacast's player in Chrome: the one its notification names. "Every Chrome player is
+     *  Wallacast" adds only a Chrome player whose site is unknown, never a tab of another known
+     *  site: with it on, an X video was taken for Wallacast and a play from the watch opened
+     *  x.com (2026-11-20). */
     private Player wallacast() {
         boolean anyChrome = prefs != null && prefs.getBoolean(PREF_ANY_CHROME_IS_WALLACAST, false);
+        Player unknownSite = null;
         for (Player p : players.values()) {
             if (!isChrome(p.controller.getPackageName())) continue;
-            if (anyChrome || wallacastTokens.contains(p.controller.getSessionToken()) || p.key.contains("wallacast")) return p;
+            if (namesWallacast(p)) return p;
+            if (anyChrome && unknownSite == null && p.key.equals("chrome")) unknownSite = p;
         }
-        return null;
+        return unknownSite;
     }
 
     /** Called on the main thread whenever Wallacast's player may have changed. A changed state
      *  ends the waiting request, so the server learns it at once from the next one. */
     private void updateSeen() {
         Player w = wallacast();
-        if (w != null && w.key.startsWith("chrome:") && prefs != null && !w.key.substring(7).equals(prefs.getString(PREF_SITE, ""))) {
-            prefs.edit().putString(PREF_SITE, w.key.substring(7)).apply();
+        if (w != null && namesWallacast(w) && w.key.startsWith("chrome:") && prefs != null
+                && !w.key.substring(7).equals(prefs.getString(PREF_SITE, ""))) {
+            prefs.edit().putString(PREF_SITE, w.key.substring(7)).putBoolean(PREF_SITE_CONFIRMED, true).apply();
         }
         Boolean now = w == null ? null : playing(w.controller);
         Boolean before = seenPlaying;
