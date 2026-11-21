@@ -433,11 +433,11 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.title}
           </div>
           <div className="queue-row-meta">
-            <span className="queue-row-author">
-              {item.type === 'podcast_episode' && item.podcast_show_name
-                ? item.podcast_show_name
-                : (item.author || '')}
-            </span>
+            {/* No empty author span: its gap would push the chips off the left edge */}
+            {(() => {
+              const by = item.type === 'podcast_episode' && item.podcast_show_name ? item.podcast_show_name : item.author;
+              return by ? <span className="queue-row-author">{by}</span> : null;
+            })()}
             {/* The library card's chips, thinner and mostly icons: the type, Audio (or No
                 audio when nothing plays), the summary (with the speaker when it has audio),
                 and archived */}
@@ -2330,7 +2330,7 @@ export function FullscreenPlayer({
                         onClick={() => setShowPrevious(!showPrevious)}
                         title={showPrevious ? 'Show Up next' : 'Show where previous goes'}
                       >
-                        <SkipBack size={14} /> Previous
+                        <History size={14} /> Previous
                       </button>
                       <button
                         className={`queue-shuffle-btn ${autoplay ? 'active' : ''}`}
