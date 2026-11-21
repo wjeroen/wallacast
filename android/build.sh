@@ -13,7 +13,9 @@
 # Signing: the key in $WALLACAST_KEYSTORE (default ~/.android-keys/wallacast.jks) with its
 # password in the file $WALLACAST_KEYSTORE_PASS (default ~/.android-keys/wallacast.pass).
 # An update must carry the same key as the installed app, so keep that key safe. When it
-# does not exist yet, the script makes one.
+# does not exist, the script stops: a new key cannot update apps signed with the old one.
+# Copy the key over, or make a new one on purpose with WALLACAST_NEW_KEY=1 (a first install,
+# or a test key for an emulator).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -28,7 +30,13 @@ VERSION_CODE="${VERSION_CODE:-$(git -C "$HERE" rev-list --count HEAD 2>/dev/null
 [ -f "$ANDROID_JAR" ] || { echo "android.jar not found at $ANDROID_JAR (see android/README.md)"; exit 1; }
 
 if [ ! -f "$KEYSTORE" ]; then
-  echo "No signing key yet: making one at $KEYSTORE"
+  if [ "${WALLACAST_NEW_KEY:-}" != "1" ]; then
+    echo "No signing key at $KEYSTORE."
+    echo "Copy the key you signed the installed apps with to that place (see android/README.md),"
+    echo "or make a new one with WALLACAST_NEW_KEY=1, which cannot update apps signed with another key."
+    exit 1
+  fi
+  echo "Making a new signing key at $KEYSTORE"
   mkdir -p "$(dirname "$KEYSTORE")"
   chmod 700 "$(dirname "$KEYSTORE")"
   head -c 24 /dev/urandom | base64 | tr -d '/+=' > "$KEYPASS"

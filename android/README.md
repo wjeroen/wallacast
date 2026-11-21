@@ -26,7 +26,7 @@ Then, from the repository folder:
 bash android/build.sh          # both apps, or: bash android/build.sh watch / player-link
 ```
 
-The apps land in `android/build/`. The first build makes a signing key in `~/.android-keys/`. Keep that folder: an update installs over the old app only when it carries the same key. Without it, uninstall the app first (its setup is lost).
+The apps land in `android/build/`, signed with the key in `~/.android-keys/` (`wallacast.jks` and its password file `wallacast.pass`). An update installs over the old app only when it carries the same key, so on another computer copy that folder first: without a key the build stops. `WALLACAST_NEW_KEY=1` makes a new key on purpose (a first install). Apps signed with another key must be uninstalled first, which loses their setup.
 
 ## The watch app
 
@@ -64,7 +64,7 @@ If pairing fails with "protocol fault (couldn't read status message)": the watch
 - **Updates:** an Update button shows when the GitHub release `android-latest` holds a newer version (`android/release.sh` builds both apps and puts them there). Tap it, and the status line shows each step. The first time, Wear OS says the watch "isn't allowed to install unknown apps from this source": tap **Settings**, switch on **Install unknown apps**, and confirm. Then it asks "Do you want to update this app?": scroll down and tap **Update** (tested on the Wear OS 6 emulator, 2026-11-21). The screen stays on until the update ends, and the status line shows how far the download got. The button works again, with the reason on the status line, when the download gets no data for 20 seconds (a slow download that moves goes on), when the watch does not ask within 30 seconds, or when the question gets no answer in 2 minutes. Only the first install needs adb.
 - The phone's own media controls on the watch keep working as before: play, pause and the two skip buttons (15 seconds back and forward).
 
-**Trying it on an emulator** (no token, no phone): create a Wear OS emulator with a 450 x 450 round screen at density 320, like a Galaxy Watch. Build the app with a test key of its own (`WALLACAST_KEYSTORE` and `WALLACAST_KEYSTORE_PASS`), never for the real watch. Then run `node android/tools/fake-remote.mjs`, which plays made-up items and answers like the server, and:
+**Trying it on an emulator** (no token, no phone): create a Wear OS emulator with a 450 x 450 round screen at density 320, like a Galaxy Watch. Build the app with a test key of its own (`WALLACAST_KEYSTORE` and `WALLACAST_KEYSTORE_PASS` pointing elsewhere, with `WALLACAST_NEW_KEY=1`), never for the real watch. Then run `node android/tools/fake-remote.mjs`, which plays made-up items and answers like the server, and:
 
 ```bash
 adb reverse tcp:8790 tcp:8790
