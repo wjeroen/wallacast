@@ -4606,6 +4606,9 @@ blockquote.twitter-tweet.tweet-quoted {
   border-radius: 0.375rem;
   cursor: pointer;
   font-size: 0.8rem;
+  /* Without it, a label's line height makes its button taller than the icon-only ones beside
+     it, and its icon looks higher than the text */
+  line-height: 1;
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
