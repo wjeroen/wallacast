@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A stand-in for the Wallacast server's remote control (backend/src/services/remote-control.ts),
 // to try the watch app on an emulator without a real token or a real player.
-// It plays a short list of made-up items, reports the position every 15 seconds like the real
+// It plays a short list of made-up items, reports the position every 5 seconds like the real
 // page, and carries out the watch's commands about half a second later.
 //
 // Usage:  node android/tools/fake-remote.mjs [port]          (default port 8790)
@@ -12,7 +12,7 @@
 import http from 'node:http';
 
 const port = Number(process.argv[2] || 8790);
-const REPORT_MS = 15_000;
+const REPORT_MS = 5_000;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
 const items = [

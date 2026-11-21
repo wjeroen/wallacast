@@ -994,6 +994,8 @@ export function AudioPlayer({
     audio.addEventListener('progress', retryResumeSeek);
     audio.addEventListener('play', retryResumeSeek);
     audio.addEventListener('seeked', handleResumeSeeked);
+    // Any jump in position (the slider, the skips, the lock screen) goes to the watch at once
+    audio.addEventListener('seeked', remoteStateChanged);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
@@ -1013,6 +1015,7 @@ export function AudioPlayer({
       audio.removeEventListener('progress', retryResumeSeek);
       audio.removeEventListener('play', retryResumeSeek);
       audio.removeEventListener('seeked', handleResumeSeeked);
+      audio.removeEventListener('seeked', remoteStateChanged);
     };
   }, []);
 
@@ -1172,6 +1175,7 @@ export function AudioPlayer({
           player.seekTo(time, true);
         }
       } catch { /* player gone */ }
+      remoteStateChanged();
       return;
     }
     if (!audioRef.current) return;
@@ -1653,10 +1657,10 @@ export function AudioPlayer({
   useEffect(() => {
     remoteStateChanged();
   }, [content?.id, content?.is_archived, content?.is_starred, isPlaying, playbackSpeed, shuffleOn, hasNextTrack, hasPrevTrack, effectiveVariant]);
-  // The position, while playing
+  // The position, while playing (the watch moves its clock on in between)
   useEffect(() => {
     if (!isPlaying) return;
-    const timer = setInterval(remoteStateChanged, 15_000);
+    const timer = setInterval(remoteStateChanged, 5_000);
     return () => clearInterval(timer);
   }, [isPlaying]);
 
