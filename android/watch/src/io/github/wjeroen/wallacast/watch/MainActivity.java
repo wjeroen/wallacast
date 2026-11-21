@@ -59,8 +59,12 @@ public class MainActivity extends Activity {
     private static final long TICK_MS = 250;
     /** How long a tapped archive or star shows its new state before the phone confirms it */
     private static final long WANT_MS = 8000;
-    /** An update that has not finished by then is given up, so the button works again */
-    private static final long INSTALL_TIMEOUT_MS = 120_000;
+    /** An update is given up, so the button works again, when its download gets no data for
+     *  DOWNLOAD_STALL_MS (a slow download that moves goes on), when the watch does not ask to
+     *  confirm within ANSWER_MS of the download, or when nobody answers that question in CONFIRM_MS */
+    private static final long DOWNLOAD_STALL_MS = 20_000;
+    private static final long ANSWER_MS = 30_000;
+    private static final long CONFIRM_MS = 120_000;
 
     /**
      * The screen layouts, chosen with --ei layout N in the start command:
@@ -70,6 +74,8 @@ public class MainActivity extends Activity {
      *      next, and shuffle, speed, archive and star in one row
      */
     private static final int DEFAULT_LAYOUT = 3;
+    /** The gap in dp between the last row of buttons and the Update button */
+    private static final int UPDATE_GAP = 8;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor();
@@ -85,9 +91,16 @@ public class MainActivity extends Activity {
     private long newerVersion;
     private long lastUpdateCheck;
     private boolean installing;
-    private int installSession = -1;
-    /** What the update does now, shown on the status line while it runs */
-    private String installStep;
+    /** The update's steps, shown on the status line while it runs */
+    private static final int DOWNLOADING = 1, WAITING = 2, CONFIRMING = 3;
+    private int installStep;
+    private long installStepSince;
+    /** Each try has its own thread and number: a try given up on may still hang in its
+     *  thread, but its results no longer count, and it blocks neither the remote nor a new try */
+    private volatile int installAttempt;
+    private volatile int installSession = -1;
+    private volatile HttpURLConnection installConnection;
+    private volatile long downloadedBytes, totalBytes, lastProgressAt;
 
     private JSONObject state;
     private boolean online;
@@ -117,10 +130,26 @@ public class MainActivity extends Activity {
             if (polling) main.postDelayed(this, TICK_MS);
         }
     };
-    private final Runnable installTimeout = () -> {
-        if (!installing) return;
-        abandonInstallSession();
-        finishInstall("The update did not finish. Tap Update to try again.");
+    private final Runnable installWatch = new Runnable() {
+        @Override
+        public void run() {
+            if (!installing) return;
+            long now = SystemClock.elapsedRealtime();
+            String problem = null;
+            if (installStep == DOWNLOADING && now - lastProgressAt > DOWNLOAD_STALL_MS) {
+                problem = "The download stopped. Check the connection and tap Update again.";
+            } else if (installStep == WAITING && now - installStepSince > ANSWER_MS) {
+                problem = "The watch did not ask to install. Tap Update again.";
+            } else if (installStep == CONFIRMING && now - installStepSince > CONFIRM_MS) {
+                problem = "No answer to the update question. Tap Update again.";
+            }
+            if (problem != null) {
+                cancelInstall();
+                finishInstall(problem);
+                return;
+            }
+            main.postDelayed(this, 1000);
+        }
     };
 
     interface Done {
@@ -206,37 +235,50 @@ public class MainActivity extends Activity {
     }
 
     /** Downloads the new APK into an install session and asks the watch to install it. The
-     *  screen stays on meanwhile: Android shows the confirmation only over an app in front. */
+     *  download runs on a thread of its own, so a stuck one never holds up the remote's
+     *  requests or a new try (installWatch gives it up). The screen stays on meanwhile:
+     *  Android shows the confirmation only over an app in front. */
     private void installUpdate() {
         if (installing) return;
         installing = true;
-        installStep = "Downloading the update…";
+        final int attempt = ++installAttempt;
+        downloadedBytes = 0;
+        totalBytes = -1;
+        lastProgressAt = SystemClock.elapsedRealtime();
+        setInstallStep(DOWNLOADING);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        main.postDelayed(installTimeout, INSTALL_TIMEOUT_MS);
+        main.removeCallbacks(installWatch);
+        main.postDelayed(installWatch, 1000);
         render();
-        net.execute(() -> {
+        new Thread(() -> {
             String problem = null;
             PackageInstaller installer = getPackageManager().getPackageInstaller();
             int id = -1;
             try {
                 PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
                 id = installer.createSession(params);
-                final int created = id;
-                main.post(() -> installSession = created);
+                installSession = id;
                 PackageInstaller.Session session = installer.openSession(id);
                 HttpURLConnection c = (HttpURLConnection) new URL(RELEASE + "wallacast-watch.apk").openConnection();
-                c.setConnectTimeout(10000);
-                c.setReadTimeout(60000);
+                installConnection = c;
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(20000);
                 if (c.getResponseCode() != 200) throw new java.io.IOException("download failed (" + c.getResponseCode() + ")");
+                totalBytes = c.getContentLengthLong();
                 try (InputStream in = c.getInputStream(); OutputStream out = session.openWrite("update.apk", 0, -1)) {
-                    byte[] buf = new byte[65536];
-                    for (int n = in.read(buf); n > 0; n = in.read(buf)) out.write(buf, 0, n);
+                    byte[] buf = new byte[16384];
+                    for (int n = in.read(buf); n > 0; n = in.read(buf)) {
+                        if (attempt != installAttempt) throw new java.io.IOException("given up");
+                        out.write(buf, 0, n);
+                        downloadedBytes += n;
+                        lastProgressAt = SystemClock.elapsedRealtime();
+                    }
                     session.fsync(out);
                 }
                 c.disconnect();
+                if (attempt != installAttempt) throw new java.io.IOException("given up");
                 main.post(() -> {
-                    installStep = "Installing…";
-                    renderStatus();
+                    if (attempt == installAttempt) setInstallStep(WAITING);
                 });
                 Intent back = new Intent(this, MainActivity.class).setAction(INSTALL_STATUS);
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
@@ -263,9 +305,40 @@ public class MainActivity extends Activity {
             }
             final String shown = problem;
             main.post(() -> {
-                if (shown != null) finishInstall(shown);
+                if (shown != null && attempt == installAttempt) finishInstall(shown);
             });
-        });
+        }, "wallacast-update").start();
+    }
+
+    private void setInstallStep(int step) {
+        installStep = step;
+        installStepSince = SystemClock.elapsedRealtime();
+        renderStatus();
+    }
+
+    /** What the status line says during an update */
+    private String installText() {
+        switch (installStep) {
+            case DOWNLOADING:
+                long got = downloadedBytes / 1024, all = totalBytes / 1024;
+                if (downloadedBytes == 0) return "Downloading the update…";
+                return totalBytes > 0 ? "Downloading " + got + " of " + all + " KB" : "Downloading " + got + " KB";
+            case WAITING:
+                return "Waiting for the watch to ask";
+            case CONFIRMING:
+                return "Confirm the update";
+            default:
+                return "";
+        }
+    }
+
+    /** Gives up the running try: its thread may hang on, but its results no longer count. */
+    private void cancelInstall() {
+        installAttempt++;
+        final HttpURLConnection c = installConnection;
+        installConnection = null;
+        if (c != null) new Thread(c::disconnect).start();
+        abandonInstallSession();
     }
 
     @SuppressWarnings("deprecation")
@@ -277,8 +350,7 @@ public class MainActivity extends Activity {
                 finishInstall("The watch did not ask to confirm the update");
                 return;
             }
-            installStep = "Confirm the update";
-            renderStatus();
+            setInstallStep(CONFIRMING);
             try {
                 startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } catch (Exception e) {
@@ -297,21 +369,27 @@ public class MainActivity extends Activity {
     }
 
     private void abandonInstallSession() {
-        if (installSession < 0) return;
+        int id = installSession;
+        installSession = -1;
+        if (id < 0) return;
         try {
-            getPackageManager().getPackageInstaller().abandonSession(installSession);
+            getPackageManager().getPackageInstaller().abandonSession(id);
         } catch (Exception ignored) {
             // already gone
         }
-        installSession = -1;
     }
 
     private void finishInstall(String problem) {
         installing = false;
-        installStep = null;
-        main.removeCallbacks(installTimeout);
+        installStep = 0;
+        installConnection = null;
+        main.removeCallbacks(installWatch);
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if (problem != null) flash(problem);
+        if (problem != null) {
+            // Long enough to read after looking away while the update ran
+            flash(problem);
+            messageUntil = System.currentTimeMillis() + 10_000;
+        }
         render();
     }
 
@@ -641,13 +719,22 @@ public class MainActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         page.addView(col);
         page.addView(below);
-        // Pull the Update row up over the empty bottom of the screen, below the last row by the
-        // same gap as between the last two rows, so part of its blue always shows
+        // Pull the Update row up over the empty bottom of the screen, UPDATE_GAP below the last
+        // row in every layout, so part of its blue always shows
         col.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> below.post(() -> {
+            if (layout == 3) {
+                // The title takes the whole width the round screen has at its height
+                float radius = col.getWidth() / 2f;
+                float dy = Math.abs(title.getTop() + title.getHeight() / 2f - col.getHeight() / 2f) + title.getHeight() / 2f;
+                int width = (int) (2 * Math.sqrt(Math.max(0, radius * radius - dy * dy))) - s(6);
+                ViewGroup.LayoutParams tlp = title.getLayoutParams();
+                if (width > 0 && tlp.width != width) {
+                    tlp.width = width;
+                    title.setLayoutParams(tlp);
+                }
+            }
             View lastButton = last.getChildAt(0);
-            View above = upper.getChildAt(layout == 3 ? 2 : 1);
-            int gap = (last.getTop() + lastButton.getTop()) - (upper.getTop() + above.getBottom());
-            int top = last.getTop() + lastButton.getBottom() + Math.max(gap, s(4)) - s(2) - col.getHeight();
+            int top = last.getTop() + lastButton.getBottom() + s(UPDATE_GAP) - s(2) - col.getHeight();
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) below.getLayoutParams();
             if (lp.topMargin != top) {
                 lp.topMargin = top;
@@ -748,7 +835,7 @@ public class MainActivity extends Activity {
         boolean loaded = state == null || state.optBoolean("loaded", true);
         String line;
         if (!isSetUp()) line = "See android/README.md";
-        else if (installing && installStep != null) line = installStep;
+        else if (installing && installStep != 0) line = installText();
         else if (System.currentTimeMillis() < messageUntil && message != null) line = message;
         else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
         else if ("link".equals(mode)) line = "Asleep on the phone: play, pause and skips only";
