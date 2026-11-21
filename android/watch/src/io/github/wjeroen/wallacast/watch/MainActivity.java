@@ -75,7 +75,10 @@ public class MainActivity extends Activity {
      */
     private static final int DEFAULT_LAYOUT = 3;
     /** The gap in dp between the last row of buttons and the Update button */
-    private static final int UPDATE_GAP = 8;
+    private static final int UPDATE_GAP = 10;
+    /** The progress ring around play: its width, and the room in dp it adds around the blue circle */
+    private static final float RING_WIDTH = 2f;
+    private static final int RING_SPACE = 4;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor();
@@ -111,7 +114,7 @@ public class MainActivity extends Activity {
     private String message;
     private long messageUntil;
 
-    /** The clock: the page reports its position only every 15 seconds while it plays, so the
+    /** The clock: the page reports its position only every 5 seconds while it plays, so the
      *  watch moves it on itself from the last report (basePosition at baseAt) */
     private double basePosition;
     private long baseAt;
@@ -654,7 +657,7 @@ public class MainActivity extends Activity {
             upper = row();
             back = skip(36, 1, false);
             previous = button(32, 32, 3, v -> send("previous", null));
-            play = button(50, 50, 3, onPlay);
+            play = button(50 + 2 * RING_SPACE, 50 + 2 * RING_SPACE, 3, onPlay);
             next = button(32, 32, 3, v -> send("next", null));
             forward = skip(36, 1, true);
             upper.addView(back);
@@ -677,7 +680,7 @@ public class MainActivity extends Activity {
         } else {
             LinearLayout transport = row();
             previous = button(36, 36, 5, v -> send("previous", null));
-            play = button(52, 52, 5, onPlay);
+            play = button(52 + 2 * RING_SPACE, 52 + 2 * RING_SPACE, 5, onPlay);
             next = button(36, 36, 5, v -> send("next", null));
             transport.addView(previous);
             transport.addView(play);
@@ -707,6 +710,8 @@ public class MainActivity extends Activity {
         previous.setIcon(R.drawable.ic_skip_back, 0.5f, null);
         next.setIcon(R.drawable.ic_skip_forward, 0.5f, null);
         play.setColors(0xFF3B82F6, 0xFFFFFFFF);
+        // The progress ring around the blue circle makes play's row a little taller
+        play.setRing(s(RING_WIDTH), s(RING_SPACE - RING_WIDTH));
 
         LinearLayout below = row();
         below.setPadding(0, 0, 0, s(40));
@@ -831,6 +836,9 @@ public class MainActivity extends Activity {
     /** The status line: the clock, or a message, which in layout 2 also replaces the author. */
     private void renderStatus() {
         if (status == null) return;
+        int length = state == null ? 0 : state.optInt("duration");
+        boolean listened = state != null && !state.isNull("item_id") && state.optBoolean("loaded", true) && length > 0;
+        play.setProgress(listened ? shownPosition() / (float) length : 0);
         boolean hasItem = state != null && !state.isNull("item_id");
         boolean loaded = state == null || state.optBoolean("loaded", true);
         String line;

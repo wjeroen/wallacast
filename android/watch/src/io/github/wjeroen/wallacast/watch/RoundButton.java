@@ -24,6 +24,11 @@ public class RoundButton extends View {
     private String label;
     private float iconScale = 0.5f;
     private boolean plain;
+    /** A thin ring around the button that fills clockwise from the top (the play button's progress) */
+    private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF ringBox = new RectF();
+    private float ringSpace;
+    private float progress;
 
     public RoundButton(Context context) {
         super(context);
@@ -64,6 +69,24 @@ public class RoundButton extends View {
         invalidate();
     }
 
+    /** Leaves room for a progress ring of this width around the button, gap pixels out. */
+    public void setRing(float width, float gap) {
+        ring.setStyle(Paint.Style.STROKE);
+        ring.setStrokeWidth(width);
+        ring.setStrokeCap(Paint.Cap.ROUND);
+        ring.setColor(0xFFFFFFFF);
+        ringSpace = width + gap;
+        invalidate();
+    }
+
+    /** 0 draws no ring, 0.99 and up a full one. */
+    public void setProgress(float value) {
+        float p = value >= 0.99f ? 1f : Math.max(0f, Math.min(1f, value));
+        if (Math.abs(p - progress) < 0.001f) return;
+        progress = p;
+        invalidate();
+    }
+
     public void setColors(int background, int foreground) {
         fill.setColor(background);
         ink.setColor(foreground);
@@ -87,14 +110,21 @@ public class RoundButton extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         float w = getWidth(), h = getHeight();
-        float r = Math.min(w, h) / 2f;
+        if (ringSpace > 0 && progress > 0) {
+            float half = ring.getStrokeWidth() / 2f;
+            ringBox.set(half, half, w - half, h - half);
+            canvas.drawArc(ringBox, -90, 360 * progress, false, ring);
+        }
+        // The button itself sits inside the ring's room
+        float in = ringSpace;
+        float r = Math.min(w, h) / 2f - in;
         if (!plain) {
-            box.set(0, 0, w, h);
+            box.set(in, in, w - in, h - in);
             canvas.drawRoundRect(box, r, r, fill);
         }
         float cx = w / 2f, cy = h / 2f;
         if (icon != null) {
-            int half = Math.round(Math.min(w, h) * iconScale / 2f);
+            int half = Math.round((Math.min(w, h) - 2 * in) * iconScale / 2f);
             icon.setBounds(Math.round(cx) - half, Math.round(cy) - half, Math.round(cx) + half, Math.round(cy) + half);
             icon.draw(canvas);
             if (label != null) {
