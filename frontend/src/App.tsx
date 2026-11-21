@@ -495,13 +495,53 @@ function App() {
     return item;
   };
 
-  // Opens the next (or previous) item to play at once from the library list's copy, with the
-  // position saved this session (session-positions.ts), and fetches its full details (text,
-  // transcript, read-along, comments) in the background. Waiting for those first took 41 and
-  // 74 s on a page in the background (2026-11-21), and by then Android let the page start no
-  // sound. The details replace the copy while the same item is still open. Its audio address
-  // is the same, so AudioPlayer goes on playing without a reload.
-  const openFromList = (item: ContentItem) => {
+  // The next item's full details (text, transcript, read-along, comments), fetched while the
+  // current item plays and the page runs normally, so moving on in the background has them at
+  // once. Kept for PREFETCH_FRESH_MS, at most the last 3. When shuffle, the queue or the item
+  // changes, the new next item is fetched (a fetch for an item that then does not come next is
+  // the only extra download).
+  const PREFETCH_FRESH_MS = 15 * 60 * 1000;
+  const prefetchedRef = useRef<Map<number, { item: ContentItem; at: number }>>(new Map());
+  const prefetchNext = () => {
+    const id = currentContent?.id;
+    if (!id) return;
+    const qs = useQueueStore.getState();
+    const next = qs.getNextItem(id) ?? qs.peekNextItem(id);
+    if (!next || !hasPlayableMedia(next)) return;
+    const have = prefetchedRef.current.get(next.id);
+    if (have && Date.now() - have.at < PREFETCH_FRESH_MS) return;
+    contentAPI.getById(next.id)
+      .then((res) => {
+        const map = prefetchedRef.current;
+        map.delete(next.id);
+        map.set(next.id, { item: res.data, at: Date.now() });
+        while (map.size > 3) map.delete(map.keys().next().value as number);
+      })
+      .catch(() => { /* the switch then fetches the details itself */ });
+  };
+  // 10 s after an item opens, and again when shuffle or the queue changes what comes next
+  const queueManualItems = useQueueStore(s => s.manualItems);
+  const queueShuffle = useQueueStore(s => s.shuffleNonManual);
+  useEffect(() => {
+    const timer = setTimeout(prefetchNext, 10_000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentContent?.id, queueShuffle, queueManualItems]);
+
+  // Opens the next (or previous) item to play at once, with the position saved this session
+  // (session-positions.ts): from its prefetched full details when they are there, else from the
+  // library list's copy while its full details load in the background. Waiting for those first
+  // took 41 and 74 s on a page in the background (2026-11-21), and by then Android let the page
+  // start no sound. The details replace the copy while the same item is still open. Its audio
+  // address is the same, so AudioPlayer goes on playing without a reload. Returns which copy
+  // opened, for the [Playback] log.
+  const openFromList = (item: ContentItem): 'prefetched' | 'list' => {
+    const pre = prefetchedRef.current.get(item.id);
+    if (pre && Date.now() - pre.at < PREFETCH_FRESH_MS) {
+      prefetchedRef.current.delete(item.id);
+      setCurrentContent(resetIfNearlyFinished(withSessionPosition(pre.item)));
+      return 'prefetched';
+    }
     setCurrentContent(resetIfNearlyFinished(withSessionPosition(item)));
     const startedAt = Date.now();
     contentAPI.getById(item.id)
@@ -512,6 +552,7 @@ function App() {
         if (ms > 2000) logPlayback('details-late', { id: item.id, load: ms });
       })
       .catch(() => logPlayback('details-failed', { id: item.id }));
+    return 'list';
   };
 
   // Called from LibraryTab when the user clicks a library item. Captures the
@@ -612,8 +653,8 @@ function App() {
       }
       const from = qs.manualItems.some(m => m.id === nextItem.id) ? 'queue' : 'up-next';
       if (hasPlayableMedia(nextItem)) {
-        openFromList(nextItem);
-        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load: 'list', play }, !play);
+        const load = openFromList(nextItem);
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load, play }, !play);
         if (play) setAutoPlayToken(t => t + 1);
         return;
       }
@@ -713,8 +754,8 @@ function App() {
     }
     // Plays only when the audio was playing
     const play = wasPlaying;
-    openFromList(prev);
-    logPlayback('next', { id: currentContent?.id, to: prev.id, from: 'prev', type: prev.type, load: 'list', play }, !play);
+    const load = openFromList(prev);
+    logPlayback('next', { id: currentContent?.id, to: prev.id, from: 'prev', type: prev.type, load, play }, !play);
     if (play) setAutoPlayToken(t => t + 1);
   };
 
