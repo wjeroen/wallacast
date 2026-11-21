@@ -17,9 +17,9 @@ interface LibraryContext {
   capturedFromId: number;
 }
 
-/** Items opened in the player stay reachable with previous for this long, even once they no
- *  longer match the filter (archived), until a library click starts a new run (user choice
- *  2026-11-21). Up next, autoplay and the next button still leave them out. */
+/** Items opened in the player stay in the stream for this long, even once they no longer
+ *  match the filter (archived), until a library click starts a new run (user choice
+ *  2026-11-21): previous reaches them, and after going back, next leads back through them. */
 const PLAYED_REACHABLE_MS = 12 * 60 * 60 * 1000;
 const RUN_KEY = 'wallacast-queue-run';
 
@@ -115,8 +115,13 @@ interface QueueStore {
    * steps back one position in the non-manual library stream.
    */
   getPrevItem: (currentId: number | null) => ContentItem | null;
-  /** Items to render as "Up next from library" in the queue tab. */
+  /** The items autoplay continues into after the manual queue: only those with something to play. */
   getNonManualItems: (currentId: number | null) => ContentItem[];
+  /** The Queue tab's Up next list: every item the next button can reach, audio or not, so
+   *  the list shows where next goes (the rows mark items without audio). */
+  getUpNextItems: (currentId: number | null) => ContentItem[];
+  /** The Queue tab's Previous list: where previous goes, pressed again and again. */
+  getPreviousItems: (currentId: number | null) => ContentItem[];
 }
 
 // Fisher-Yates shuffle (non-mutating)
@@ -195,20 +200,45 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     let pivot = currentId != null ? streamIds.indexOf(currentId) : -1;
     if (pivot < 0) pivot = streamIds.indexOf(libraryContext.capturedFromId);
 
-    // Items that match the captured library filter AND have something to play:
-    // original or summary audio (a summary-audio-only item is playable), or a
-    // YouTube video that plays in the app (user decision 2026-11-08, also with the
-    // screen off). Used by the visible "Up next" list and autoplay continuation.
-    const matches = (item: ContentItem | undefined): item is ContentItem =>
-      !!item && hasPlayableMedia(item) && itemMatchesFilter(item, libraryContext.filter);
+    // An item in the stream: it matches the captured library filter, or it was played this
+    // run, for PLAYED_REACHABLE_MS (user choice 2026-11-21). Played items lie behind the
+    // playing one, so going forward as usual still meets no archived items. After going back,
+    // the items played on the way stay ahead, so next and Up next lead back to where you were.
+    const { played } = get();
+    const now = Date.now();
+    const inStream = (item: ContentItem): boolean =>
+      itemMatchesFilter(item, libraryContext.filter) || (!!played[item.id] && now - played[item.id] < PLAYED_REACHABLE_MS);
 
-    // Filter-only variant for the prev/next BUTTONS: they navigate every
-    // matching item, audio or not, so reading flows item-to-item too
-    // (user decision 2026-07-26). Autoplay and the queue keep `matches`.
+    // In the stream AND something to play: original or summary audio (a summary-audio-only
+    // item is playable), or a YouTube video that plays in the app (user decision 2026-11-08,
+    // also with the screen off). Used by autoplay continuation.
+    const matches = (item: ContentItem | undefined): item is ContentItem =>
+      !!item && hasPlayableMedia(item) && inStream(item);
+
+    // Audio or not, for the prev/next BUTTONS and the Queue tab's lists: they navigate
+    // every item, so reading flows item-to-item too (user decision 2026-07-26).
     const matchesFilter = (item: ContentItem | undefined): item is ContentItem =>
-      !!item && itemMatchesFilter(item, libraryContext.filter);
+      !!item && inStream(item);
 
     return { streamIds, byId, pivot, matches, matchesFilter };
+  };
+
+  // The non-manual items after the playing one, in stream order. playableOnly: autoplay's
+  // list (something to play), else every item the next button reaches (the Up next list).
+  // The pivot is position-based (full id stream), so it survives the current item being
+  // archived or losing audio mid-play. Without a pivot, the whole stream.
+  const upNext = (currentId: number | null, playableOnly: boolean): ContentItem[] => {
+    const stream = getStream(currentId);
+    if (!stream) return [];
+    const manualIds = new Set(get().manualItems.map(m => m.id));
+    const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
+    const keep = playableOnly ? stream.matches : stream.matchesFilter;
+    const result: ContentItem[] = [];
+    for (const id of after) {
+      const item = stream.byId.get(id);
+      if (keep(item) && !manualIds.has(item.id) && item.id !== currentId) result.push(item);
+    }
+    return result;
   };
 
   return {
@@ -420,23 +450,21 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     set({ pendingRequeue: next });
   },
 
-  getNonManualItems: (currentId) => {
-    const stream = getStream(currentId);
-    if (!stream) return [];
+  getNonManualItems: (currentId) => upNext(currentId, true),
 
-    const manualIds = new Set(get().manualItems.map(m => m.id));
+  getUpNextItems: (currentId) => upNext(currentId, false),
 
-    // "Up next" starts from the position AFTER the playing item. The pivot
-    // is position-based (full id stream), so it survives the current item
-    // being archived / losing audio mid-play. If there's no pivot at all,
-    // fall back to the whole stream. Never silently drop everything.
-    const after = stream.pivot >= 0 ? stream.streamIds.slice(stream.pivot + 1) : stream.streamIds;
+  getPreviousItems: (currentId) => {
+    // Pressing previous again and again: the list the Queue tab shows under Previous
     const result: ContentItem[] = [];
-    for (const id of after) {
-      const item = stream.byId.get(id);
-      if (stream.matches(item) && !manualIds.has(item.id) && item.id !== currentId) {
-        result.push(item);
-      }
+    const seen = new Set<number>(currentId != null ? [currentId] : []);
+    let at = currentId;
+    while (result.length < 50) {
+      const prev = get().getPrevItem(at);
+      if (!prev || seen.has(prev.id)) break;
+      seen.add(prev.id);
+      result.push(prev);
+      at = prev.id;
     }
     return result;
   },
@@ -498,18 +526,12 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     if (manualIdx > 0) return manualItems[manualIdx - 1];
 
     // Step back through the non-manual stream to the nearest item, audio
-    // or not (same navigate-everything rule as peekNextItem). An item played
-    // this run stays reachable for PLAYED_REACHABLE_MS even when it no longer
-    // matches the filter, so previous shows an item just archived.
+    // or not (same navigate-everything rule as peekNextItem). Items played this
+    // run are in the stream (getStream), so previous shows an item just archived.
     const stream = getStream(currentId);
     if (!stream || stream.pivot <= 0) return null;
-    const { played } = get();
-    const now = Date.now();
     for (let i = stream.pivot - 1; i >= 0; i--) {
-      const id = stream.streamIds[i];
-      const item = stream.byId.get(id);
-      const playedRecently = !!played[id] && now - played[id] < PLAYED_REACHABLE_MS;
-      if (item && playedRecently) return item;
+      const item = stream.byId.get(stream.streamIds[i]);
       if (stream.matchesFilter(item)) return item;
     }
     return null;

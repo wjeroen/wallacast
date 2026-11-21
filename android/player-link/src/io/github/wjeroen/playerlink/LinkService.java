@@ -91,8 +91,11 @@ public class LinkService extends NotificationListenerService {
     static final String PREF_SITE_CONFIRMED = "wallacast_site_confirmed";
 
     /** A change must last this long before it is copied: a web player pauses for a moment
-     *  while it loads its next item, an app while it skips. */
-    private static final long SETTLE_CHROME_PAUSE_MS = 1500;
+     *  while it loads its next item, an app while it skips. Wallacast's switch from 'ended' to
+     *  'playing' took 50 to 490 ms for articles and up to 1.1 s for a podcast in the background
+     *  ([Playback] logs, 2026-11-20 and 21), so 1 s copies a real pause sooner and only a slow
+     *  podcast load may still pause Spotify for a moment (user choice 2026-11-21). */
+    private static final long SETTLE_CHROME_PAUSE_MS = 1000;
     private static final long SETTLE_MS = 500;
     /** A copied command that has not taken effect by then is sent once more: Chrome sometimes
      *  drops the first command after a pause, as it drops the first headphone press. */

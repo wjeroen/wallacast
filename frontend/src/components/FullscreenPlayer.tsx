@@ -52,6 +52,10 @@ import {
   FoldVertical,
   ChevronLeft,
   ChevronRight,
+  Newspaper,
+  NotebookPen,
+  Podcast,
+  FileText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { pageZoom } from '../desktop-fit';
@@ -59,7 +63,7 @@ import { contentAPI, userSettingsAPI } from '../api';
 import { htmlToMarkdown, markdownToHtml, contentToMarkdown } from '../markdown';
 import { safeHtml, safeArticleHtml } from '../sanitize';
 import { linkDescriptionTimestamps, youtubeLinkSeconds } from '../timestamps';
-import { cleanHtml, compactCount, displayUrl, formatTime, getDomainFromUrl, hasPlayableMedia } from '../format';
+import { cleanHtml, compactCount, displayUrl, formatTime, getDomainFromUrl, hasAudioBadge, hasPlayableMedia } from '../format';
 import { useContentStore } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { TagEditor } from './TagEditor';
@@ -389,6 +393,8 @@ interface QueueRowProps {
   canMoveUp?: boolean;
   canMoveDown?: boolean;
 }
+const TYPE_NAMES: Record<string, string> = { article: 'Article', text: 'Text', podcast_episode: 'Podcast', video: 'Video', pdf: 'PDF' };
+
 function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: QueueRowProps) {
   // Two-tap remove: first tap arms the button with a visible warning state,
   // a second tap within the timeout actually removes. Guards against stray
@@ -427,10 +433,37 @@ function QueueRow({ item, isCurrent, onPlay, onRemove, onMoveUp, onMoveDown, can
             {item.title}
           </div>
           <div className="queue-row-meta">
-            {item.type === 'podcast_episode' && item.podcast_show_name
-              ? item.podcast_show_name
-              : (item.author || '')}
-            {!hasPlayableMedia(item) && <span className="queue-row-noaudio"> • no audio</span>}
+            <span className="queue-row-author">
+              {item.type === 'podcast_episode' && item.podcast_show_name
+                ? item.podcast_show_name
+                : (item.author || '')}
+            </span>
+            {/* The library card's chips, thinner and mostly icons: the type, Audio (or No
+                audio when nothing plays), the summary (with the speaker when it has audio),
+                and archived */}
+            <span className="queue-row-chips">
+              <span className={`queue-chip type-${item.type}`} title={TYPE_NAMES[item.type] ?? item.type}>
+                {item.type === 'article' && <Newspaper size={11} />}
+                {item.type === 'text' && <NotebookPen size={11} />}
+                {item.type === 'podcast_episode' && <Podcast size={11} />}
+                {item.type === 'video' && <TvMinimalPlay size={11} />}
+                {item.type === 'pdf' && <FileText size={11} />}
+              </span>
+              {hasAudioBadge(item) ? (
+                <span className="queue-chip audio"><Volume2 size={10} /> Audio</span>
+              ) : !hasPlayableMedia(item) && (
+                <span className="queue-chip no-audio">No audio</span>
+              )}
+              {item.summary_generated_at && (
+                <span className="queue-chip summary" title={item.summary_audio_url ? 'Summary with audio' : 'Summary'}>
+                  <MessageSquareText size={10} />
+                  {item.summary_audio_url && <Volume2 size={10} />}
+                </span>
+              )}
+              {item.is_archived && (
+                <span className="queue-chip archived" title="Archived"><Archive size={10} /></span>
+              )}
+            </span>
           </div>
         </div>
       </div>
@@ -528,12 +561,26 @@ export function FullscreenPlayer({
   const moveUp = useQueueStore(s => s.moveUp);
   const moveDown = useQueueStore(s => s.moveDown);
   const clearQueue = useQueueStore(s => s.clearQueue);
-  const getNonManualItems = useQueueStore(s => s.getNonManualItems);
-  // Re-derive non-manual items when queue/context/shuffle changes OR current item changes
+  const getUpNextItems = useQueueStore(s => s.getUpNextItems);
+  const getPreviousItems = useQueueStore(s => s.getPreviousItems);
+  const played = useQueueStore(s => s.played);
+  const allItems = useContentStore(s => s.allItems);
+  // Re-derive the lists when queue/context/shuffle, the library (an archive) or the current
+  // item changes
   const nonManualItems = useMemo(
-    () => getNonManualItems(content.id),
-    [getNonManualItems, content.id, manualItems, libraryContext, shuffleNonManual]
+    () => getUpNextItems(content.id),
+    // The store getters read this state themselves, so it is listed only to recompute
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [getUpNextItems, content.id, manualItems, libraryContext, shuffleNonManual, allItems]
   );
+  const previousItems = useMemo(
+    () => getPreviousItems(content.id),
+    // The store getters read this state themselves, so it is listed only to recompute
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [getPreviousItems, content.id, manualItems, libraryContext, shuffleNonManual, allItems, played]
+  );
+  // The Queue tab's lower section shows Up next, or Previous (where the previous button goes)
+  const [showPrevious, setShowPrevious] = useState(false);
   // Default tab: 'description' for podcasts and videos, 'read-along' (labeled "Transcript")
   // for everything else
   const [activeTab, setActiveTab] = useState<TabType>(defaultTabFor(content));
@@ -2217,10 +2264,13 @@ export function FullscreenPlayer({
           const facetLabel = facetLabels.length > 0 ? `${facetLabels.join(' ')} ` : '';
           const tagLabel = f.tags.length > 0 ? ` • ${f.tags.map(t => '#' + t).join(' ')}` : '';
           const searchLabel = f.searchQuery.trim() ? ` • “${f.searchQuery.trim()}”` : '';
+          // The whole library needs no "from": just "Up next"
+          if (!facetLabel && f.typeFilter === 'all' && !tagLabel && !searchLabel) return 'Up next';
           return `Up next from ${facetLabel}${typeLabel}${tagLabel}${searchLabel}`;
         })() : 'Up next';
 
-        const isEmpty = manualItems.length === 0 && nonManualItems.length === 0;
+        const isEmpty = manualItems.length === 0 && nonManualItems.length === 0 && previousItems.length === 0;
+        const streamList = showPrevious ? previousItems : nonManualItems;
 
         return (
           <div className="tab-queue-display">
@@ -2263,16 +2313,25 @@ export function FullscreenPlayer({
                   </div>
                 )}
 
-                {manualItems.length > 0 && nonManualItems.length > 0 && (
+                {manualItems.length > 0 && (nonManualItems.length > 0 || previousItems.length > 0) && (
                   <div className="queue-divider" />
                 )}
 
-                {nonManualItems.length > 0 && (
+                {(nonManualItems.length > 0 || previousItems.length > 0) && (
                   <div className="queue-section">
                     <div className="queue-section-header">
                       <h3>
-                        {nonManualLabel} ({nonManualItems.length})
+                        {showPrevious ? 'Previous' : nonManualLabel} ({streamList.length})
                       </h3>
+                      {/* Switches the list to where the previous button goes, most recent
+                          first. Not "History": the player's History tab lists text versions. */}
+                      <button
+                        className={`queue-shuffle-btn ${showPrevious ? 'active' : ''}`}
+                        onClick={() => setShowPrevious(!showPrevious)}
+                        title={showPrevious ? 'Show Up next' : 'Show where previous goes'}
+                      >
+                        <SkipBack size={14} /> Previous
+                      </button>
                       <button
                         className={`queue-shuffle-btn ${autoplay ? 'active' : ''}`}
                         onClick={() => setAutoplay(!autoplay)}
@@ -2288,24 +2347,27 @@ export function FullscreenPlayer({
                         <Shuffle size={14} />
                       </button>
                     </div>
-                    {!autoplay && (
+                    {!autoplay && !showPrevious && (
                       <p className="queue-hint">
                         Autoplay is off. These items won't play automatically when the queue ends.
                         Tap the loop icon above to turn it on.
                       </p>
                     )}
+                    {streamList.length === 0 && (
+                      <p className="queue-hint">{showPrevious ? 'Nothing before this item.' : 'Nothing after this item.'}</p>
+                    )}
                     <div className="queue-list">
-                      {nonManualItems.slice(0, 50).map(item => (
+                      {streamList.slice(0, 50).map(item => (
                         <QueueRow
-                          key={`n-${item.id}`}
+                          key={`${showPrevious ? 'p' : 'n'}-${item.id}`}
                           item={item}
                           isCurrent={false}
                           onPlay={() => onPlayQueueItem?.(item)}
                         />
                       ))}
-                      {nonManualItems.length > 50 && (
+                      {streamList.length > 50 && (
                         <p className="queue-hint" style={{ textAlign: 'center' }}>
-                          …and {nonManualItems.length - 50} more
+                          …and {streamList.length - 50} more
                         </p>
                       )}
                     </div>
