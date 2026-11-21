@@ -1,6 +1,6 @@
 import { query } from '../database/db.js';
 import { deleteAudioFile } from './audio-storage.js';
-import { evictCachedPodcastAudio } from './podcast-cache.js';
+import { evictCachedPodcastAudio, cachedPodcastIds } from './podcast-cache.js';
 
 /**
  * Archiving, and the delayed removal of archived audio.
@@ -11,8 +11,9 @@ import { evictCachedPodcastAudio } from './podcast-cache.js';
  * ARCHIVED_AUDIO_GRACE_DAYS: unarchiving within that time (the app, or Undo on a token's change)
  * keeps it. After that, the hourly purgeArchivedAudio() deletes it to free the volume. Starred
  * items keep their audio, starred at the time of the purge, so starring an archived item within
- * the 7 days also saves it. Podcast episodes and videos have no generated audio, only a
- * transient cached copy of a podcast file, which goes at archive time.
+ * the 7 days also saves it. A podcast episode's cached copy (podcast-cache.ts: a host that
+ * seeks badly or inserts ads, or a raised copy of a quiet episode) follows the same rule, so an
+ * episode archived while it plays goes on from the same bytes. Videos have neither.
  */
 
 export const ARCHIVED_AUDIO_GRACE_DAYS = 7;
@@ -23,11 +24,9 @@ export async function archiveItems(userId: number, ids: number[]): Promise<numbe
   const r = await query(
     `UPDATE content_items SET is_archived = true, updated_at = NOW(), wallabag_needs_push = TRUE
       WHERE user_id = $1 AND id = ANY($2::int[])
-      RETURNING id, is_starred`,
+      RETURNING id`,
     [userId, ids]
   );
-  // A cached podcast copy is a disposable download, the episode streams from its feed without it
-  for (const row of r.rows) if (!row.is_starred) evictCachedPodcastAudio(row.id).catch(() => {});
   return r.rows.map((row: any) => row.id);
 }
 
@@ -67,9 +66,26 @@ export async function purgeArchivedAudio(): Promise<number> {
   return r.rows.length;
 }
 
+/** Delete the cached copies of podcast episodes archived more than ARCHIVED_AUDIO_GRACE_DAYS
+ *  ago that are not starred. Only the episodes that have a copy are looked up. */
+export async function purgeArchivedPodcastCopies(): Promise<number> {
+  const ids = await cachedPodcastIds();
+  if (ids.length === 0) return 0;
+  const r = await query(
+    `SELECT id FROM content_items
+      WHERE id = ANY($1::int[]) AND is_archived = true AND is_starred = false
+        AND archived_at IS NOT NULL
+        AND archived_at < NOW() - make_interval(days => ${ARCHIVED_AUDIO_GRACE_DAYS})`,
+    [ids]
+  );
+  for (const row of r.rows) await evictCachedPodcastAudio(row.id);
+  return r.rows.length;
+}
+
 async function runPurge(): Promise<void> {
   try {
     await purgeArchivedAudio();
+    await purgeArchivedPodcastCopies();
   } catch (error) {
     // A database without migration 033 has no archived_at: nothing is removed, nothing breaks
     console.error('🗄️ [Archive] Removing old archived audio failed:', error);

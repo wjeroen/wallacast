@@ -79,7 +79,7 @@ router.post('/content/:id', async (req, res) => {
 
     // Start transcription in background (don't await)
     transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt,
-      content.type === 'podcast_episode' && shouldCachePodcastHost(content.audio_url) ? Number(id) : undefined)
+      content.type === 'podcast_episode' ? { id: Number(id), cacheHost: shouldCachePodcastHost(content.audio_url) } : undefined)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 

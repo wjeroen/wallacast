@@ -167,6 +167,14 @@ export function AudioPlayer({
   // guard every refresh resets audio.src, interrupts playback, and leaves the
   // user unable to resume without closing and re-opening the player.
   const lastAudioSrcRef = useRef<string>('');
+  // A podcast episode plays the server's copy (has_audio_copy) or its own file, chosen once per
+  // item opened: a copy made while it plays (a transcript, or a quiet episode raised) must not
+  // change the audio address, and with it the bytes, under the playing audio (index.ts `copy=0`).
+  const audioCopyChoiceRef = useRef<{ id: number; copy: boolean } | null>(null);
+  const playsAudioCopy = (c: ContentItem): boolean => {
+    if (audioCopyChoiceRef.current?.id !== c.id) audioCopyChoiceRef.current = { id: c.id, copy: !!c.has_audio_copy };
+    return audioCopyChoiceRef.current.copy;
+  };
   // The saved position we still owe the audio element. Proxied podcast streams are
   // often not seek-ready at loadedmetadata, so the browser silently ignores the
   // initial currentTime assignment and the track sits at 0:00; the auto-save then
@@ -561,7 +569,7 @@ export function AudioPlayer({
       audioSrc = `${content.summary_audio_url}${separator}v=${cacheBuster}`;
     } else if (content.type === 'podcast_episode') {
       const apiBase = import.meta.env.VITE_API_URL as string || 'http://localhost:3001/api';
-      audioSrc = `${apiBase}/content/${content.id}/audio`;
+      audioSrc = `${apiBase}/content/${content.id}/audio?copy=${playsAudioCopy(content) ? 1 : 0}`;
     } else if (content.audio_url) {
       const cacheBuster = `${content.file_size || 0}`;
       const separator = content.audio_url.includes('?') ? '&' : '?';
@@ -1050,6 +1058,20 @@ export function AudioPlayer({
       audio.removeEventListener('seeked', remoteStateChanged);
     };
   }, []);
+
+  // A podcast episode louder than -14 plays turned down to -16, as loud as our TTS (the server's
+  // playback_gain_db, backend services/loudness.ts), while it plays its own file. The server's
+  // copy (a quiet episode raised, or a problem host's clean copy) is normalized already.
+  // Everything else, an episode's summary audio included, plays at full volume. The browser's
+  // volume only goes down, which is all this needs.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const ownFile = content?.type === 'podcast_episode' && effectiveVariant !== 'summary' && !playsAudioCopy(content);
+    const gainDb = ownFile ? (content.playback_gain_db ?? 0) : 0;
+    audio.volume = Math.min(1, Math.max(0, Math.pow(10, Math.min(0, gainDb) / 20)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content?.id, content?.type, content?.playback_gain_db, effectiveVariant]);
 
   // Auto-save position every 10s during playback
   // Depends on content?.id (not content) to prevent duplicate save/teardown

@@ -5,17 +5,23 @@ import ffmpeg from 'fluent-ffmpeg';
 import { getAudioDir, freeVolumeBytes } from '../config/storage.js';
 
 /**
- * Transient podcast-audio cache. Some hosts (SoundCloud) serve VBR files with
- * coarse seek tables, so the browser's clock drifts seconds after far seeks
- * (read-along desync) and resume-seeks abort. When a transcript is generated for
- * an episode from such a host (the file is already fully downloaded for Whisper
- * at that moment, and ONLY then), we re-encode it CBR mono with clean headers
- * (loudness-normalized like article audio) and keep it on the volume. The audio
- * route serves the cached file with exact byte ranges when present, else falls
- * back to the proxy, so uncached episodes work exactly as before.
+ * Transient podcast-audio cache: a re-encoded copy of an episode, CBR mono with clean headers,
+ * loudness-normalized to -19 mono like article audio (-16 in stereo terms, services/loudness.ts),
+ * kept on the volume. Two kinds of episodes get one, from a file already fully downloaded:
+ *  - Hosts that seek badly or insert ads (CACHEABLE_HOSTS): some serve VBR files with coarse
+ *    seek tables, so the browser's clock drifts seconds after far seeks (read-along desync) and
+ *    resume-seeks abort, and some stitch other ads into every download. Copied when a
+ *    transcript is made, from the very bytes Whisper hears.
+ *  - Quiet episodes (quieter than QUIET_BELOW in loudness.ts): the raised copy plays as loud as
+ *    our TTS. Copied when the loudness is measured (a transcript's download, or one download
+ *    after the episode is added).
+ * A later transcript replaces or removes the copy, so it always matches the transcript
+ * (settlePodcastFile in transcription.ts). The audio route serves the cached file with exact
+ * byte ranges when present, else falls back to the proxy, so uncached episodes work as before.
  *
- * Bounded on purpose: evicted when the episode is archived, plus a size-capped
- * LRU (oldest mtime deleted first; serving touches mtime).
+ * Bounded on purpose: removed 7 days after the episode is archived unless it is starred
+ * (services/archive.ts, like generated audio), plus a size-capped LRU (oldest mtime deleted
+ * first; serving touches mtime).
  */
 
 // Suffix-matched hosts whose files are known to seek badly OR to serve
@@ -63,6 +69,14 @@ export async function getCachedPodcastAudioSize(contentId: number | string): Pro
   } catch {
     return null;
   }
+}
+
+/** The ids of the episodes that have a cached copy. Empty when the cache dir does not exist yet. */
+export async function cachedPodcastIds(): Promise<number[]> {
+  const files = await cachedFilesOldestFirst();
+  return files
+    .map((f) => Number(path.basename(f.p, '.mp3')))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 export async function evictCachedPodcastAudio(contentId: number | string): Promise<void> {

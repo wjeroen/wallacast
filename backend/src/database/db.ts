@@ -312,6 +312,16 @@ export async function initializeDatabase() {
       console.error('❌ Migration 034 (heard check) failed:', error);
     }
 
+    // Run migration adding a podcast episode's measured loudness. Guarded: if it fails, the
+    // app still starts, nothing is measured and every episode plays at its own level.
+    try {
+      const loudnessMigrationPath = path.join(__dirname, 'migrations', '035_loudness.sql');
+      const loudnessMigration = await fs.readFile(loudnessMigrationPath, 'utf-8');
+      await client.query(loudnessMigration);
+    } catch (error) {
+      console.error('❌ Migration 035 (podcast loudness) failed:', error);
+    }
+
     // Reset any stuck generation statuses (server restart during generation).
     // generation_status and current_operation say what was interrupted: a refetch
     // ('fetching'), a transcript ('generating_transcript', or the read-along step after audio)

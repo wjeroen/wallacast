@@ -1,6 +1,7 @@
 import express from 'express';
 import { query } from '../database/db.js';
 import { withAudioToken } from '../services/audio-token.js';
+import { withPlaybackGain, audioCopyIds } from '../services/loudness.js';
 
 const router = express.Router();
 
@@ -21,14 +22,15 @@ router.get('/', async (req, res) => {
               c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
               c.summary_error, c.summary_audio_url, c.summary_audio_duration, c.summary_audio_status,
               c.summary_audio_generated_at, c.summary_playback_position,
-              COALESCE(c.comment_count_total, 0) AS comment_count, c.view_count::float8 AS view_count, c.embed_blocked
+              COALESCE(c.comment_count_total, 0) AS comment_count, c.view_count::float8 AS view_count, c.embed_blocked, c.loudness_lufs
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id AND c.user_id = q.user_id
        WHERE q.user_id = $1
        ORDER BY q.position ASC`,
       [req.user!.userId]
     );
-    res.json(result.rows.map(withAudioToken));
+    const copies = await audioCopyIds();
+    res.json(result.rows.map((row: any) => withPlaybackGain(withAudioToken(row), copies)));
   } catch (error) {
     console.error('Error fetching queue:', error);
     res.status(500).json({ error: 'Failed to fetch queue' });

@@ -217,9 +217,11 @@ app.get('/api/content/:id/audio', requireDatabaseReady, async (req, res) => {
     // the requested bytes are fetched upstream, never the full file.
     // -------------------------------------------------------------------------
     if (type === 'podcast_episode' && audioUrl) {
-      // Transient cache first (SoundCloud-class hosts, see podcast-cache.ts):
-      // a clean CBR local file gives exact byte-range seeking, no proxy fragility.
-      const cachedSize = await getCachedPodcastAudioSize(req.params.id);
+      // Transient cache first (SoundCloud-class hosts and quiet episodes, see podcast-cache.ts):
+      // a clean CBR local file gives exact byte-range seeking, no proxy fragility. `copy=0`: the
+      // player opened the episode before a copy existed, and keeps its own file to the end, so
+      // a copy made meanwhile never swaps the bytes under the playing audio.
+      const cachedSize = req.query.copy === '0' ? null : await getCachedPodcastAudioSize(req.params.id);
       if (cachedSize !== null) {
         const cachedPath = cachedPodcastAudioPath(req.params.id);
         const onCacheError = (err: Error) => {
