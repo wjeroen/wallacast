@@ -108,7 +108,7 @@ interface UserRemote {
 export const COMMAND_TTL_MS = 30_000;
 /** A long poll is answered empty after this time, so proxies never cut it. */
 export const LONG_POLL_MS = 25_000;
-/** A device that has not polled for this long counts as gone (the page closed or slept). */
+/** A device that has not started a poll for this long counts as gone (the page closed or slept). */
 const DEVICE_ONLINE_MS = LONG_POLL_MS + 15_000;
 /** Devices unseen for this long are forgotten. */
 const DEVICE_FORGET_MS = 24 * 60 * 60 * 1000;
@@ -357,7 +357,9 @@ export function waitForCommands(userId: number, deviceId: string, onClose: (canc
       done = true;
       clearTimeout(timer);
       u.waiters = u.waiters.filter((w) => w !== waiter);
-      device(u, deviceId).polledAt = Date.now();
+      // polledAt is not renewed here: a page that stopped (Chrome froze it) still lets its last
+      // poll run out, and renewing it then kept the page "listening" for about 65 s, so
+      // commands went to it and were dropped unseen (2026-11-21). Only a new poll renews it.
       resolve(commands);
     };
     const waiter: Waiter = { device: deviceId, resolve: finish };
