@@ -1605,6 +1605,19 @@ export function AudioPlayer({
   // Remote control by the watch app (remote.ts). The registered handlers call through a ref
   // that every render refreshes, so a command always acts on the item and state shown now.
   const shuffleOn = useQueueStore(s => s.shuffleNonManual);
+  // An archive or star from the watch names the item the watch showed. When the player moved
+  // on in the meantime, that item changes and the playing one stays as it is.
+  const setOtherItem = async (id: number, field: 'is_archived' | 'is_starred', value: boolean) => {
+    const store = useContentStore.getState();
+    const item = store.allItems.find(i => i.id === id);
+    if (!item) {
+      await contentAPI.update(id, { [field]: value });
+      return;
+    }
+    if (!!item[field] === value) return;
+    if (field === 'is_archived') await store.toggleArchived(id);
+    else await store.toggleStarred(id);
+  };
   const remoteRef = useRef<{ run: (command: RemoteCommand) => Promise<void>; state: () => Record<string, unknown> | null }>({
     run: async () => {},
     state: () => null,
@@ -1634,6 +1647,10 @@ export function AudioPlayer({
         case 'unarchive': {
           // Like the player's archive button: the item goes on playing (its audio stays 7 days)
           const archive = command.action === 'archive';
+          if (command.item_id && command.item_id !== content.id) {
+            await setOtherItem(command.item_id, 'is_archived', archive);
+            break;
+          }
           if (!!content.is_archived === archive) break;
           const store = useContentStore.getState();
           if (store.allItems.some(i => i.id === content.id)) await store.toggleArchived(content.id);
@@ -1647,6 +1664,10 @@ export function AudioPlayer({
         case 'star':
         case 'unstar': {
           const star = command.action === 'star';
+          if (command.item_id && command.item_id !== content.id) {
+            await setOtherItem(command.item_id, 'is_starred', star);
+            break;
+          }
           if (!!content.is_starred === star) break;
           const store = useContentStore.getState();
           if (store.allItems.some(i => i.id === content.id)) await store.toggleStarred(content.id);

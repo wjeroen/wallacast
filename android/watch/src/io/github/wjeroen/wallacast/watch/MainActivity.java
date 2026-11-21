@@ -519,11 +519,18 @@ public class MainActivity extends Activity {
     }
 
     private void send(String action, Object value) {
+        send(action, value, -1);
+    }
+
+    /** itemId: archive and star name the item shown, so the phone changes that one even when
+     *  its player moved on in the meantime */
+    private void send(String action, Object value, long itemId) {
         if (!isSetUp()) return;
         JSONObject body = new JSONObject();
         try {
             body.put("action", action);
             if (value != null) body.put("value", value);
+            if (itemId > 0) body.put("item_id", itemId);
         } catch (Exception ignored) {
             return;
         }
@@ -772,7 +779,7 @@ public class MainActivity extends Activity {
         wantItem = currentItem();
         wantArchived = !now;
         wantArchivedUntil = System.currentTimeMillis() + WANT_MS;
-        send(now ? "unarchive" : "archive", null);
+        send(now ? "unarchive" : "archive", null, wantItem);
         render();
     }
 
@@ -782,7 +789,7 @@ public class MainActivity extends Activity {
         wantItem = currentItem();
         wantStarred = !now;
         wantStarredUntil = System.currentTimeMillis() + WANT_MS;
-        send(now ? "unstar" : "star", null);
+        send(now ? "unstar" : "star", null, wantItem);
         render();
     }
 

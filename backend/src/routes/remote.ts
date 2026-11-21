@@ -17,7 +17,7 @@ import {
  *   GET  /api/remote/commands?device=  the app's long poll for commands (app sessions only)
  *   POST /api/remote/state             the app reports its player { device, state } (app sessions only)
  *   GET  /api/remote/state             what the player is doing (the watch, a token with `remote`)
- *   POST /api/remote/command           { action, value? } for the player (the watch)
+ *   POST /api/remote/command           { action, value?, item_id? } for the player (the watch)
  *   GET  /api/remote/fallback?playing=  Player Link's long poll, while the page may sleep
  * Tokens reach only the last three (TOKEN_ROUTES in services/api-tokens.ts).
  */
@@ -67,7 +67,7 @@ router.post('/command', (req, res) => {
   if (!sent) {
     return res.status(409).json({ code: 'closed', error: 'No open Wallacast app is listening. Open Wallacast on your phone.' });
   }
-  console.log(`[Remote] user=${req.user!.userId} ${req.apiToken ? `token=${req.apiToken.id} ` : ''}command ${sent.id} ${sent.action}${sent.value !== undefined ? `=${sent.value}` : ''}`);
+  console.log(`[Remote] user=${req.user!.userId} ${req.apiToken ? `token=${req.apiToken.id} ` : ''}command ${sent.id} ${sent.action}${sent.value !== undefined ? `=${sent.value}` : ''}${sent.item_id !== undefined ? ` item=${sent.item_id}` : ''}`);
   res.status(202).json({ id: sent.id, action: sent.action });
 });
 

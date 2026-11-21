@@ -399,6 +399,8 @@ export interface RemoteCommand {
   id: number;
   action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'forward' | 'back' | 'shuffle' | 'speed' | 'archive' | 'unarchive' | 'star' | 'unstar';
   value?: boolean | number;
+  /** archive, unarchive, star, unstar: the item the watch showed */
+  item_id?: number;
 }
 
 export const remoteAPI = {

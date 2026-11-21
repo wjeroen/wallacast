@@ -106,7 +106,7 @@ const server = http.createServer((req, res) => {
       let command;
       try { command = JSON.parse(raw); } catch { return send(400, { error: 'bad JSON' }); }
       const id = nextId++;
-      console.log(`command ${id} ${command.action}${command.value !== undefined ? `=${command.value}` : ''}`);
+      console.log(`command ${id} ${command.action}${command.value !== undefined ? `=${command.value}` : ''}${command.item_id !== undefined ? ` item=${command.item_id}` : ''}`);
       setTimeout(() => run(command), 500);
       send(202, { id, action: command.action });
     });

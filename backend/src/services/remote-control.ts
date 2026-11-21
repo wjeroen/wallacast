@@ -49,8 +49,14 @@ export interface RemoteCommand {
   action: RemoteAction;
   /** shuffle: true/false (absent: flip), speed: the new rate */
   value?: boolean | number;
+  /** archive, unarchive, star, unstar: the item the watch showed, which the page changes even
+   *  when its player moved on to another item in the meantime */
+  item_id?: number;
   created_at: number;
 }
+
+/** The actions that change one item, so they may name it */
+const ITEM_ACTIONS: readonly RemoteAction[] = ['archive', 'unarchive', 'star', 'unstar'];
 
 /** What a device's player reports. Every field is optional, the app sends what it knows. */
 export interface PlayerState {
@@ -263,7 +269,7 @@ export function waitAsFallback(userId: number, seen: FallbackSeen, onClose: (can
   return waitForCommands(userId, FALLBACK_DEVICE, onClose);
 }
 
-export function parseCommand(raw: unknown): { action: RemoteAction; value?: boolean | number } | { error: string } {
+export function parseCommand(raw: unknown): { action: RemoteAction; value?: boolean | number; item_id?: number } | { error: string } {
   const b = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const action = b.action;
   if (typeof action !== 'string' || !(REMOTE_ACTIONS as readonly string[]).includes(action)) {
@@ -277,12 +283,16 @@ export function parseCommand(raw: unknown): { action: RemoteAction; value?: bool
     if (typeof b.value !== 'boolean') return { error: 'shuffle takes true, false, or no value to flip it' };
     return { action, value: b.value };
   }
+  if (ITEM_ACTIONS.includes(action as RemoteAction) && b.item_id !== undefined) {
+    if (!(Number.isInteger(b.item_id) && (b.item_id as number) > 0)) return { error: 'item_id must be a positive whole number' };
+    return { action: action as RemoteAction, item_id: b.item_id as number };
+  }
   return { action: action as RemoteAction };
 }
 
 /** Queue a command for the open app, or for Player Link while the page sleeps. Returns it,
  *  'asleep' when only Link listens and it cannot do this command, or null when nothing listens. */
-export function sendCommand(userId: number, command: { action: RemoteAction; value?: boolean | number }): RemoteCommand | 'asleep' | null {
+export function sendCommand(userId: number, command: { action: RemoteAction; value?: boolean | number; item_id?: number }): RemoteCommand | 'asleep' | null {
   const u = forUser(userId);
   prune(u);
   let target = targetDevice(u);
