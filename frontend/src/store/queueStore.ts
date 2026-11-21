@@ -9,12 +9,50 @@ import type { ContentItem, QueueItem } from '../types';
  * Acts like Spotify's "play context", the non-manual queue (items that play
  * after manual ones if autoplay is on) is derived from this filter.
  * The snapshot includes type, status AND search query, frozen at click time.
- * We intentionally do NOT persist this: if the user reloads, auto-queue is
- * recaptured when they click their next library item.
+ * It is kept in the browser with the shuffle order and the played items (RUN_KEY), so a
+ * reload keeps the same order and previous. Clicking a library item starts a new one.
  */
 interface LibraryContext {
   filter: LibraryFilter;
   capturedFromId: number;
+}
+
+/** Items opened in the player stay reachable with previous for this long, even once they no
+ *  longer match the filter (archived), until a library click starts a new run (user choice
+ *  2026-11-21). Up next, autoplay and the next button still leave them out. */
+const PLAYED_REACHABLE_MS = 12 * 60 * 60 * 1000;
+const RUN_KEY = 'wallacast-queue-run';
+
+interface StoredRun {
+  libraryContext: LibraryContext | null;
+  shuffleOrder: number[];
+  played: Record<number, number>;
+}
+
+function loadRun(): StoredRun {
+  try {
+    const raw = localStorage.getItem(RUN_KEY);
+    if (raw) {
+      const run = JSON.parse(raw) as Partial<StoredRun>;
+      return {
+        libraryContext: run.libraryContext ?? null,
+        shuffleOrder: Array.isArray(run.shuffleOrder) ? run.shuffleOrder : [],
+        played: run.played && typeof run.played === 'object' ? run.played : {},
+      };
+    }
+  } catch { /* no storage, or a broken entry: start empty */ }
+  return { libraryContext: null, shuffleOrder: [], played: {} };
+}
+
+function saveRun(run: StoredRun): void {
+  const now = Date.now();
+  const played: Record<number, number> = {};
+  for (const [id, at] of Object.entries(run.played)) {
+    if (now - at < PLAYED_REACHABLE_MS) played[Number(id)] = at;
+  }
+  try {
+    localStorage.setItem(RUN_KEY, JSON.stringify({ ...run, played }));
+  } catch { /* no storage: the run lasts until the page reloads */ }
 }
 
 interface QueueStore {
@@ -37,9 +75,13 @@ interface QueueStore {
   pendingRequeue: Set<number>;
 
   // Stable shuffle order (content IDs) captured when the user turns shuffle
-  // on. We don't reshuffle on every render. Otherwise the "next" item would
-  // change every time the player re-renders.
+  // on or clicks a library item with shuffle on. We don't reshuffle on every
+  // render. Otherwise the "next" item would change every time the player re-renders.
   shuffleOrder: number[];
+
+  // Items opened in the player this run, with when (ms), for previous (PLAYED_REACHABLE_MS)
+  played: Record<number, number>;
+  markPlayed: (contentId: number) => void;
 
   // --- Actions ---
   fetchQueue: () => Promise<void>;
@@ -88,6 +130,12 @@ function shuffled<T>(arr: T[]): T[] {
 }
 
 export const useQueueStore = create<QueueStore>((set, get) => {
+  const stored = loadRun();
+  const persist = () => {
+    const { libraryContext, shuffleOrder, played } = get();
+    saveRun({ libraryContext, shuffleOrder, played });
+  };
+
   // Snapshot a stable random order over the full library, rotated so the
   // currently-playing item sits at position 0. Rotation keeps items that
   // landed before current in the random order playable (they move to the
@@ -112,7 +160,10 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     const { shuffleOrder } = get();
     if (shuffleOrder.length > 0) return shuffleOrder;
     const order = buildShuffleOrder(currentId);
-    if (order.length > 0) set({ shuffleOrder: order });
+    if (order.length > 0) {
+      set({ shuffleOrder: order });
+      persist();
+    }
     return order;
   };
 
@@ -163,12 +214,18 @@ export const useQueueStore = create<QueueStore>((set, get) => {
   return {
   manualItems: [],
   loading: false,
-  libraryContext: null,
+  libraryContext: stored.libraryContext,
   autoplay: false,
   shuffleNonManual: false,
   manualAlwaysAutoplay: true,
   pendingRequeue: new Set<number>(),
-  shuffleOrder: [],
+  shuffleOrder: stored.shuffleOrder,
+  played: stored.played,
+
+  markPlayed: (contentId) => {
+    set({ played: { ...get().played, [contentId]: Date.now() } });
+    persist();
+  },
 
   fetchQueue: async () => {
     set({ loading: true });
@@ -312,11 +369,15 @@ export const useQueueStore = create<QueueStore>((set, get) => {
   },
 
   setLibraryContext: (filter, capturedFromId) => {
-    set({ libraryContext: { filter, capturedFromId } });
-    // If shuffle was hydrated from settings before the library loaded, the
-    // order doesn't exist yet, build it now (rotated to the clicked item)
-    // so render-time getters find it ready.
-    if (get().shuffleNonManual) ensureShuffleOrder(capturedFromId);
+    // A library click starts a new run: with shuffle on, a fresh order with the clicked item
+    // first, so previous has nothing before it (an older order kept it somewhere in the
+    // middle, and previous went to an item never heard). Played items start over too.
+    set({
+      libraryContext: { filter, capturedFromId },
+      played: { [capturedFromId]: Date.now() },
+      shuffleOrder: get().shuffleNonManual ? buildShuffleOrder(capturedFromId) : [],
+    });
+    persist();
   },
 
   setAutoplay: async (v) => {
@@ -334,6 +395,7 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     } else {
       set({ shuffleNonManual: false, shuffleOrder: [] });
     }
+    persist();
     userSettingsAPI.set('queue_shuffle', String(v)).catch(() => {});
   },
 
@@ -436,11 +498,18 @@ export const useQueueStore = create<QueueStore>((set, get) => {
     if (manualIdx > 0) return manualItems[manualIdx - 1];
 
     // Step back through the non-manual stream to the nearest item, audio
-    // or not (same navigate-everything rule as peekNextItem).
+    // or not (same navigate-everything rule as peekNextItem). An item played
+    // this run stays reachable for PLAYED_REACHABLE_MS even when it no longer
+    // matches the filter, so previous shows an item just archived.
     const stream = getStream(currentId);
     if (!stream || stream.pivot <= 0) return null;
+    const { played } = get();
+    const now = Date.now();
     for (let i = stream.pivot - 1; i >= 0; i--) {
-      const item = stream.byId.get(stream.streamIds[i]);
+      const id = stream.streamIds[i];
+      const item = stream.byId.get(id);
+      const playedRecently = !!played[id] && now - played[id] < PLAYED_REACHABLE_MS;
+      if (item && playedRecently) return item;
       if (stream.matchesFilter(item)) return item;
     }
     return null;

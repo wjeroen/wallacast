@@ -724,6 +724,12 @@ function App() {
   const hasPrevTrack = !!useQueueStore.getState().getPrevItem(currentContent?.id ?? null);
   const hasNextTrack = !!useQueueStore.getState().peekNextItem(currentContent?.id ?? null);
 
+  // Every item opened in the player stays reachable with previous for a while, also once
+  // archived (queueStore PLAYED_REACHABLE_MS)
+  useEffect(() => {
+    if (currentContent?.id) useQueueStore.getState().markPlayed(currentContent.id);
+  }, [currentContent?.id]);
+
   // Shared "fire an operation, then refresh once it finishes" helper. Polls the LEAN
   // status endpoint every 2s (getStatuses, a few hundred bytes) until generation
   // leaves its in-progress state, THEN fetches the full item exactly once via getById and
