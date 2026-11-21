@@ -241,6 +241,8 @@ assert.deepEqual(next.map((c) => c.action), ['next']);
 // The device that reported last gets the command
 const w1 = remote.waitForCommands(USER, 'phone-1', (cancel) => { cancelPoll = cancel; });
 const w2 = remote.waitForCommands(USER, 'laptop-1', () => {});
+// A report in the same millisecond as phone-1's would tie, so laptop-1 reports a moment later
+await new Promise((resolve) => setTimeout(resolve, 5));
 remote.reportState(USER, 'laptop-1', remote.cleanState({ item_id: 8, playing: true }));
 remote.sendCommand(USER, { action: 'pause' });
 assert.deepEqual((await w2).map((c) => c.action), ['pause'], 'the newest player is the target');

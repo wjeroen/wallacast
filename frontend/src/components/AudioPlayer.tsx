@@ -504,9 +504,12 @@ export function AudioPlayer({
     logPlayback('play-refused', { id, error: err instanceof Error ? err.name : String(err) }, true);
   };
   // Android gives a page in the background no turn to play sound, so an autoplay there can
-  // stay silent. When the audio has not moved 2 s after the autoplay, the page asks the server
-  // to let Player Link press Chrome's play button (remote.ts), once per start, and only
-  // while remote control is on.
+  // stay silent. When the audio is paused 2 s after the autoplay, or stands still although it
+  // has data to play, the page asks the server to let Player Link press Chrome's play button
+  // (remote.ts), once per start, and only while remote control is on. Audio that is still
+  // loading never asks: Player Link could not help it, and when pressing play does not work it
+  // brings Wallacast to the front, over the app in use. The check repeats every 2 s while it
+  // loads, at most 6 times.
   const assistedStartRef = useRef('');
   const helpIfSilent = (id: number) => {
     const audio = audioRef.current;
@@ -515,13 +518,18 @@ export function AudioPlayer({
     if (assistedStartRef.current === start) return;
     assistedStartRef.current = start;
     const from = audio.currentTime;
-    setTimeout(() => {
+    const check = (round: number) => setTimeout(() => {
       if (contentRef.current?.id !== id || document.visibilityState !== 'hidden') return;
       if (!audio.paused && audio.currentTime > from + 0.5) return;
+      if (!audio.paused && audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        if (round < 6) check(round + 1);
+        return;
+      }
       void askPlayerLinkToPlay().then((status) => {
-        if (status !== null) logPlayback('assist', { id, paused: audio.paused, t: Math.round(audio.currentTime), status });
+        if (status !== null) logPlayback('assist', { id, paused: audio.paused, t: Math.round(audio.currentTime), ready: audio.readyState, status });
       });
     }, 2000);
+    check(1);
   };
 
   // ---------------------------------------------------------------------------
