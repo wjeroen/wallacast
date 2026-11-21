@@ -407,6 +407,8 @@ export const remoteAPI = {
   commands: (device: string) =>
     api.get<{ enabled: boolean; commands: RemoteCommand[]; report?: boolean }>('/remote/commands', { params: { device }, timeout: 40000 }),
   reportState: (device: string, state: Record<string, unknown>) => api.post('/remote/state', { device, state }),
+  // A command as the watch sends it. The page itself sends only a play, for Player Link to press
+  command: (body: { action: 'play' }) => api.post<{ id: number; action: string }>('/remote/command', body),
 };
 
 export const userSettingsAPI = {

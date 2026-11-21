@@ -9,7 +9,8 @@ import { logPlayback, playbackChainOpen, screenRecentlyOff, setPlayerProbe } fro
 import { useAuthStore } from '../store/authStore';
 import { useQueueStore } from '../store/queueStore';
 import { useContentStore } from '../store/contentStore';
-import { setRemoteHandlers, remoteStateChanged } from '../remote';
+import { setRemoteHandlers, remoteStateChanged, askPlayerLinkToPlay } from '../remote';
+import { rememberPosition } from '../session-positions';
 
 function getStoredSpeed(): number {
   try {
@@ -502,6 +503,26 @@ export function AudioPlayer({
     autoPlayStartingRef.current = false;
     logPlayback('play-refused', { id, error: err instanceof Error ? err.name : String(err) }, true);
   };
+  // Android gives a page in the background no turn to play sound, so an autoplay there can
+  // stay silent. When the audio has not moved 2 s after the autoplay, the page asks the server
+  // to let Player Link press Chrome's play button (remote.ts), once per start, and only
+  // while remote control is on.
+  const assistedStartRef = useRef('');
+  const helpIfSilent = (id: number) => {
+    const audio = audioRef.current;
+    if (!audio || document.visibilityState !== 'hidden') return;
+    const start = `${id}:${lastAutoPlayTokenRef.current}`;
+    if (assistedStartRef.current === start) return;
+    assistedStartRef.current = start;
+    const from = audio.currentTime;
+    setTimeout(() => {
+      if (contentRef.current?.id !== id || document.visibilityState !== 'hidden') return;
+      if (!audio.paused && audio.currentTime > from + 0.5) return;
+      void askPlayerLinkToPlay().then((status) => {
+        if (status !== null) logPlayback('assist', { id, paused: audio.paused, t: Math.round(audio.currentTime), status });
+      });
+    }, 2000);
+  };
 
   // ---------------------------------------------------------------------------
   // AUDIO SETUP
@@ -672,6 +693,7 @@ export function AudioPlayer({
           appPlayRef.current = false;
           if (autoplay) refusedAutoplay(content.id, err);
         });
+        if (autoplay) helpIfSilent(content.id);
       }
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
     };
@@ -693,6 +715,7 @@ export function AudioPlayer({
           appPlayRef.current = false;
           refusedAutoplay(content.id, err);
         });
+        helpIfSilent(content.id);
         return;
       }
       // The item's details were replaced before its audio loaded, and the cleanup of the
@@ -807,6 +830,7 @@ export function AudioPlayer({
       return;
     }
     lastSavedPositionRef.current = floored;
+    rememberPosition(c.id, positionFieldRef.current, floored);
     try {
       await contentAPI.update(c.id, {
         [positionFieldRef.current]: floored,
@@ -1075,6 +1099,7 @@ export function AudioPlayer({
       if (isVideoItem && positionFieldRef.current === 'playback_position') {
         const dur = content.duration || durationRef.current;
         const nearEnd = dur > 0 && dur - videoTimeRef.current < 10;
+        rememberPosition(content.id, 'playback_position', nearEnd ? 0 : Math.floor(videoTimeRef.current));
         contentAPI.update(content.id, {
           playback_position: nearEnd ? 0 : Math.floor(videoTimeRef.current),
           last_played_at: new Date().toISOString(),
@@ -1098,6 +1123,7 @@ export function AudioPlayer({
         const nearEnd = isFinite(dur) && dur > 0 && dur - audio.currentTime < threshold;
         // Force save on unmount regardless of debounce
         const floored = nearEnd ? 0 : Math.floor(audio.currentTime);
+        rememberPosition(content.id, positionFieldRef.current, floored);
         contentAPI.update(content.id, {
           [positionFieldRef.current]: floored,
           last_played_at: new Date().toISOString(),

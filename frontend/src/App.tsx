@@ -14,6 +14,7 @@ import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type Tok
 import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
 import { setRemoteIdle, startRemote } from './remote';
+import { withSessionPosition } from './session-positions';
 import type { ContentItem } from './types';
 import './App.css';
 
@@ -494,6 +495,25 @@ function App() {
     return item;
   };
 
+  // Opens the next (or previous) item to play at once from the library list's copy, with the
+  // position saved this session (session-positions.ts), and fetches its full details (text,
+  // transcript, read-along, comments) in the background. Waiting for those first took 41 and
+  // 74 s on a page in the background (2026-11-21), and by then Android let the page start no
+  // sound. The details replace the copy while the same item is still open. Its audio address
+  // is the same, so AudioPlayer goes on playing without a reload.
+  const openFromList = (item: ContentItem) => {
+    setCurrentContent(resetIfNearlyFinished(withSessionPosition(item)));
+    const startedAt = Date.now();
+    contentAPI.getById(item.id)
+      .then((res) => {
+        const fresh = resetIfNearlyFinished(withSessionPosition(res.data));
+        setCurrentContent(current => (current && current.id === item.id ? fresh : current));
+        const ms = Date.now() - startedAt;
+        if (ms > 2000) logPlayback('details-late', { id: item.id, load: ms });
+      })
+      .catch(() => logPlayback('details-failed', { id: item.id }));
+  };
+
   // Called from LibraryTab when the user clicks a library item. Captures the
   // current filter as a "play context" (Spotify-style) so the non-manual
   // auto-queue can be derived from it. By default the first click loads the
@@ -592,17 +612,8 @@ function App() {
       }
       const from = qs.manualItems.some(m => m.id === nextItem.id) ? 'queue' : 'up-next';
       if (hasPlayableMedia(nextItem)) {
-        // How long loading the next item took, or 'failed' (the list's copy opens then)
-        const loadStartedAt = Date.now();
-        let load: number | string = 'failed';
-        try {
-          const res = await contentAPI.getById(nextItem.id);
-          load = Date.now() - loadStartedAt;
-          setCurrentContent(resetIfNearlyFinished(res.data));
-        } catch {
-          setCurrentContent(resetIfNearlyFinished(nextItem));
-        }
-        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load, play }, !play);
+        openFromList(nextItem);
+        logPlayback('next', { id: currentId, to: nextItem.id, from, type: nextItem.type, load: 'list', play }, !play);
         if (play) setAutoPlayToken(t => t + 1);
         return;
       }
@@ -687,19 +698,23 @@ function App() {
       logPlayback('stop', { id: currentContent?.id, reason: 'nothing before' }, true);
       return;
     }
-    let item: ContentItem;
-    try {
-      const res = await contentAPI.getById(prev.id);
-      item = res.data;
-    } catch {
-      item = prev;
+    // An item without audio just opens for reading, with its full details, as it always did
+    if (!hasPlayableMedia(prev)) {
+      let item: ContentItem;
+      try {
+        const res = await contentAPI.getById(prev.id);
+        item = res.data;
+      } catch {
+        item = prev;
+      }
+      setCurrentContent(resetIfNearlyFinished(item));
+      logPlayback('next', { id: currentContent?.id, to: item.id, from: 'prev', type: item.type, play: false }, true);
+      return;
     }
-    item = resetIfNearlyFinished(item);
-    setCurrentContent(item);
-    // Only play when the audio was playing and there is something to play (prev can now
-    // land on an audio-less item, which just opens for reading).
-    const play = wasPlaying && hasPlayableMedia(item);
-    logPlayback('next', { id: currentContent?.id, to: item.id, from: 'prev', type: item.type, play }, !play);
+    // Plays only when the audio was playing
+    const play = wasPlaying;
+    openFromList(prev);
+    logPlayback('next', { id: currentContent?.id, to: prev.id, from: 'prev', type: prev.type, load: 'list', play }, !play);
     if (play) setAutoPlayToken(t => t + 1);
   };
 

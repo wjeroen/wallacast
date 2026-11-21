@@ -90,6 +90,25 @@ export function setRemoteIdle(next: RemoteHandlers | null): void {
   remoteStateChanged();
 }
 
+/**
+ * Asks the server to start this page's player for it: AudioPlayer calls this when an autoplay
+ * in the background stayed silent, since Android gives a page in the background no turn to
+ * play sound. The page reports first, so the server sees it as hidden and passes the play to
+ * Player Link, which presses Chrome's play button (or, without Player Link, back to this page,
+ * which then plays when it comes to the front). Returns the server's answer code, -1 without
+ * an answer, or null while remote control is off (no token, or the demo).
+ */
+export async function askPlayerLinkToPlay(): Promise<number | null> {
+  if (!enabled) return null;
+  try {
+    await sendReportNow();
+    const res = await remoteAPI.command({ action: 'play' });
+    return res.status;
+  } catch (error) {
+    return (error as { response?: { status?: number } })?.response?.status ?? -1;
+  }
+}
+
 /** Ask the server again at once whether remote control is on (after a token change). */
 export function pokeRemote(): void {
   wake?.();
