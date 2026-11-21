@@ -1,6 +1,7 @@
 package io.github.wjeroen.wallacast.watch;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
@@ -9,11 +10,13 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -52,13 +55,29 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends Activity {
     private static final long POLL_MS = 2000;
-    private static final long ARCHIVE_CONFIRM_MS = 3000;
+    /** How often the clock moves on while audio plays */
+    private static final long TICK_MS = 250;
+    /** How long a tapped archive or star shows its new state before the phone confirms it */
+    private static final long WANT_MS = 8000;
+    /** An update that has not finished by then is given up, so the button works again */
+    private static final long INSTALL_TIMEOUT_MS = 120_000;
+
+    /**
+     * The screen layouts, chosen with --ei layout N in the start command:
+     *   1: title, author and clock on their own lines, the buttons in three rows
+     *   2: the author shares the clock's line, the buttons in three rows
+     *   3: title, author and clock on their own lines, the 15-second skips beside previous and
+     *      next, and shuffle, speed, archive and star in one row
+     */
+    private static final int DEFAULT_LAYOUT = 3;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor();
     private SharedPreferences prefs;
 
-    private TextView title, subtitle, status;
+    private int layout;
+    private TickerText title;
+    private TextView author, status;
     private RoundButton play, previous, next, back, forward, shuffle, speed, archive, star, update;
 
     private static final String RELEASE = "https://github.com/wjeroen/wallacast/releases/download/android-latest/";
@@ -66,6 +85,9 @@ public class MainActivity extends Activity {
     private long newerVersion;
     private long lastUpdateCheck;
     private boolean installing;
+    private int installSession = -1;
+    /** What the update does now, shown on the status line while it runs */
+    private String installStep;
 
     private JSONObject state;
     private boolean online;
@@ -73,11 +95,33 @@ public class MainActivity extends Activity {
      *  Player Link opens Wallacast on a play, "none" */
     private String mode = "none";
     private boolean polling;
-    private long archiveArmedUntil;
     private String message;
     private long messageUntil;
 
+    /** The clock: the page reports its position only every 15 seconds while it plays, so the
+     *  watch moves it on itself from the last report (basePosition at baseAt) */
+    private double basePosition;
+    private long baseAt;
+    private String reportKey = "";
+
+    /** A tapped archive or star shows its new state at once, until the phone's report agrees */
+    private long wantItem = -1;
+    private Boolean wantArchived, wantStarred;
+    private long wantArchivedUntil, wantStarredUntil;
+
     private final Runnable pollTask = this::poll;
+    private final Runnable tickTask = new Runnable() {
+        @Override
+        public void run() {
+            renderStatus();
+            if (polling) main.postDelayed(this, TICK_MS);
+        }
+    };
+    private final Runnable installTimeout = () -> {
+        if (!installing) return;
+        abandonInstallSession();
+        finishInstall("The update did not finish. Tap Update to try again.");
+    };
 
     interface Done {
         void done(int code, String body);
@@ -100,6 +144,10 @@ public class MainActivity extends Activity {
             return;
         }
         applySetup(intent);
+        if (prefs.getInt("layout", DEFAULT_LAYOUT) != layout) {
+            setContentView(buildUi());
+            if (polling) title.setRunning(true);
+        }
         render();
     }
 
@@ -108,10 +156,22 @@ public class MainActivity extends Activity {
         super.onResume();
         polling = true;
         main.removeCallbacks(pollTask);
+        main.removeCallbacks(tickTask);
         poll();
+        main.postDelayed(tickTask, TICK_MS);
+        title.setRunning(true);
         // every time the app comes to the front (at most once a minute): reopening it from the
         // watch face reuses the same screen, so a check only at start would miss new versions
         if (System.currentTimeMillis() - lastUpdateCheck > 60 * 1000) checkForUpdate();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        polling = false;
+        main.removeCallbacks(pollTask);
+        main.removeCallbacks(tickTask);
+        title.setRunning(false);
     }
 
     // ---- updates from the GitHub release ----------------------------------------------------
@@ -145,18 +205,24 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Downloads the new APK into an install session and asks the watch to install it. */
+    /** Downloads the new APK into an install session and asks the watch to install it. The
+     *  screen stays on meanwhile: Android shows the confirmation only over an app in front. */
     private void installUpdate() {
         if (installing) return;
         installing = true;
-        flash("Downloading the update…");
+        installStep = "Downloading the update…";
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        main.postDelayed(installTimeout, INSTALL_TIMEOUT_MS);
         render();
         net.execute(() -> {
             String problem = null;
+            PackageInstaller installer = getPackageManager().getPackageInstaller();
+            int id = -1;
             try {
-                PackageInstaller installer = getPackageManager().getPackageInstaller();
                 PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-                int id = installer.createSession(params);
+                id = installer.createSession(params);
+                final int created = id;
+                main.post(() -> installSession = created);
                 PackageInstaller.Session session = installer.openSession(id);
                 HttpURLConnection c = (HttpURLConnection) new URL(RELEASE + "wallacast-watch.apk").openConnection();
                 c.setConnectTimeout(10000);
@@ -168,20 +234,36 @@ public class MainActivity extends Activity {
                     session.fsync(out);
                 }
                 c.disconnect();
+                main.post(() -> {
+                    installStep = "Installing…";
+                    renderStatus();
+                });
                 Intent back = new Intent(this, MainActivity.class).setAction(INSTALL_STATUS);
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
-                session.commit(PendingIntent.getActivity(this, 0, back, flags).getIntentSender());
+                PendingIntent answer;
+                if (Build.VERSION.SDK_INT >= 34) {
+                    // Android 15 starts an activity from this app's PendingIntent only when the app says so
+                    ActivityOptions options = ActivityOptions.makeBasic();
+                    options.setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                    answer = PendingIntent.getActivity(this, 0, back, flags, options.toBundle());
+                } else {
+                    answer = PendingIntent.getActivity(this, 0, back, flags);
+                }
+                session.commit(answer.getIntentSender());
                 session.close();
             } catch (Exception e) {
                 problem = e.getMessage() == null ? "Update failed" : e.getMessage();
+                if (id >= 0) {
+                    try {
+                        installer.abandonSession(id);
+                    } catch (Exception ignored) {
+                        // already gone
+                    }
+                }
             }
             final String shown = problem;
             main.post(() -> {
-                if (shown != null) {
-                    installing = false;
-                    flash(shown);
-                    render();
-                }
+                if (shown != null) finishInstall(shown);
             });
         });
     }
@@ -191,31 +273,56 @@ public class MainActivity extends Activity {
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
-            if (confirm != null) startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if (confirm == null) {
+                finishInstall("The watch did not ask to confirm the update");
+                return;
+            }
+            installStep = "Confirm the update";
+            renderStatus();
+            try {
+                startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                abandonInstallSession();
+                finishInstall("Could not ask to confirm: " + e.getMessage());
+            }
             return;
         }
-        installing = false;
-        if (status != PackageInstaller.STATUS_SUCCESS) {
-            String why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-            flash("Update not installed" + (why != null ? ": " + why : ""));
+        installSession = -1;
+        if (status == PackageInstaller.STATUS_SUCCESS) {
+            finishInstall(null);
+            return;
         }
-        render();
+        String why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+        finishInstall("Update not installed" + (why != null ? ": " + why : ""));
     }
 
-    @Override
-    protected void onPause() {
-        super.onPause();
-        polling = false;
-        main.removeCallbacks(pollTask);
+    private void abandonInstallSession() {
+        if (installSession < 0) return;
+        try {
+            getPackageManager().getPackageInstaller().abandonSession(installSession);
+        } catch (Exception ignored) {
+            // already gone
+        }
+        installSession = -1;
+    }
+
+    private void finishInstall(String problem) {
+        installing = false;
+        installStep = null;
+        main.removeCallbacks(installTimeout);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (problem != null) flash(problem);
+        render();
     }
 
     // ---- setup ---------------------------------------------------------------------------
 
-    /** The server address and token arrive as extras of the start command (adb shell am start). */
+    /** The server address, token and layout arrive as extras of the start command (adb shell am start). */
     private void applySetup(Intent intent) {
         if (intent == null) return;
         String server = intent.getStringExtra("server");
         String token = intent.getStringExtra("token");
+        int wantedLayout = intent.getIntExtra("layout", 0);
         SharedPreferences.Editor edit = prefs.edit();
         boolean changed = false;
         if (server != null && server.trim().matches("https?://.+")) {
@@ -227,10 +334,9 @@ public class MainActivity extends Activity {
             edit.putString("token", token.trim());
             changed = true;
         }
-        if (changed) {
-            edit.apply();
-            flash("Set up");
-        }
+        if (wantedLayout >= 1 && wantedLayout <= 3) edit.putInt("layout", wantedLayout);
+        edit.commit();
+        if (changed) flash("Set up");
     }
 
     private String server() {
@@ -313,6 +419,7 @@ public class MainActivity extends Activity {
                     online = json.optBoolean("online", false);
                     mode = json.optString("mode", online ? "app" : "none");
                     state = json.optJSONObject("state");
+                    followReport(json.isNull("age_seconds") ? 0 : json.optDouble("age_seconds", 0));
                 } catch (Exception e) {
                     flash("Unexpected answer");
                 }
@@ -341,15 +448,44 @@ public class MainActivity extends Activity {
             if (code == 202) {
                 main.removeCallbacks(pollTask);
                 main.postDelayed(pollTask, 700);
-            } else if (code == 409) {
-                flash(errorOf(text, "Open Wallacast on your phone"));
-            } else if (code == -1) {
-                flash("No connection");
             } else {
-                flash(errorOf(text, "Not sent (" + code + ")"));
+                // Nothing changes on the phone, so a tapped archive or star goes back
+                wantArchived = null;
+                wantStarred = null;
+                if (code == 409) flash(errorOf(text, "Open Wallacast on your phone"));
+                else if (code == -1) flash("No connection");
+                else flash(errorOf(text, "Not sent (" + code + ")"));
             }
             render();
         });
+    }
+
+    // ---- the clock -------------------------------------------------------------------------
+
+    private boolean playingNow() {
+        return state != null && state.optBoolean("playing") && online && "app".equals(mode);
+    }
+
+    /** A new report moves the clock to the reported position plus the time since the report.
+     *  The same report seen again by a later poll changes nothing, so the clock never jumps back. */
+    private void followReport(double ageSeconds) {
+        if (state == null) {
+            reportKey = "";
+            return;
+        }
+        String key = state.optLong("item_id") + "/" + state.optInt("position") + "/" + state.optBoolean("playing") + "/" + state.optDouble("speed", 1) + "/" + mode;
+        if (key.equals(reportKey)) return;
+        reportKey = key;
+        basePosition = state.optInt("position") + (playingNow() ? Math.max(0, ageSeconds) * state.optDouble("speed", 1) : 0);
+        baseAt = SystemClock.elapsedRealtime();
+    }
+
+    private int shownPosition() {
+        if (state == null) return 0;
+        double position = basePosition;
+        if (playingNow()) position += (SystemClock.elapsedRealtime() - baseAt) / 1000.0 * state.optDouble("speed", 1);
+        int duration = state.optInt("duration");
+        return (int) Math.floor(duration > 0 ? Math.min(duration, position) : position);
     }
 
     // ---- interface -----------------------------------------------------------------------
@@ -369,8 +505,15 @@ public class MainActivity extends Activity {
         t.setGravity(Gravity.CENTER);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.END);
+        t.setIncludeFontPadding(false);
         if (bold) t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
         return t;
+    }
+
+    private LinearLayout.LayoutParams centered(float width) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(s(width), ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        return lp;
     }
 
     private RoundButton button(int width, int height, int margin, View.OnClickListener click) {
@@ -389,9 +532,17 @@ public class MainActivity extends Activity {
         return r;
     }
 
+    private RoundButton skip(int size, int margin, boolean forwards) {
+        RoundButton b = button(size, size, margin, v -> send(forwards ? "forward" : "back", null));
+        b.setPlain(true);
+        b.setIcon(forwards ? R.drawable.ic_rotate_cw : R.drawable.ic_rotate_ccw, 0.9f, "15");
+        return b;
+    }
+
     private View buildUi() {
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         unit = Math.max(0.75f, Math.min(1.4f, (Math.min(dm.widthPixels, dm.heightPixels) / dm.density) / 225f));
+        layout = prefs.getInt("layout", DEFAULT_LAYOUT);
 
         // The controls fill exactly one screen, centered. The Update button peeks in below them
         // at the bottom edge, and a scroll shows it whole.
@@ -400,57 +551,84 @@ public class MainActivity extends Activity {
         col.setGravity(Gravity.CENTER);
         col.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dm.heightPixels));
 
-        // Two lines of text where the round screen is still narrow: the title and a status line
-        title = label(13, 0xFFF1F5F9, true);
-        LinearLayout.LayoutParams textWidth = new LinearLayout.LayoutParams(s(150), ViewGroup.LayoutParams.WRAP_CONTENT);
-        textWidth.gravity = Gravity.CENTER_HORIZONTAL;
-        title.setLayoutParams(textWidth);
-        subtitle = label(10, 0xFF94A3B8, false);
-        subtitle.setVisibility(View.GONE);
+        // The text lines sit where the round screen is still narrow
+        title = new TickerText(this);
+        title.setTextSizePx(s(13));
+        title.setColor(0xFFF1F5F9);
+        title.setBold(true);
+        title.setLayoutParams(centered(layout == 3 ? 156 : 150));
+        author = label(9.5f, 0xFF94A3B8, false);
+        author.setLayoutParams(centered(layout == 3 ? 168 : 160));
         status = label(10, 0xFF94A3B8, false);
-        LinearLayout.LayoutParams statusWidth = new LinearLayout.LayoutParams(s(160), ViewGroup.LayoutParams.WRAP_CONTENT);
-        statusWidth.gravity = Gravity.CENTER_HORIZONTAL;
-        statusWidth.bottomMargin = s(3);
-        status.setLayoutParams(statusWidth);
+        LinearLayout.LayoutParams statusLp = centered(layout == 2 ? 170 : 172);
+        statusLp.topMargin = s(1);
+        statusLp.bottomMargin = s(3);
+        status.setLayoutParams(statusLp);
         col.addView(title);
+        if (layout != 2) col.addView(author);
         col.addView(status);
 
-        LinearLayout transport = row();
-        previous = button(36, 36, 5, v -> send("previous", null));
+        View.OnClickListener onPlay = v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null);
+        LinearLayout upper, last;
+        if (layout == 3) {
+            // 15 back, previous, play, next, 15 forward in one row through the middle, where the
+            // round screen is widest
+            upper = row();
+            back = skip(36, 1, false);
+            previous = button(32, 32, 3, v -> send("previous", null));
+            play = button(50, 50, 3, onPlay);
+            next = button(32, 32, 3, v -> send("next", null));
+            forward = skip(36, 1, true);
+            upper.addView(back);
+            upper.addView(previous);
+            upper.addView(play);
+            upper.addView(next);
+            upper.addView(forward);
+            col.addView(upper);
+
+            last = row();
+            shuffle = button(32, 32, 4, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
+            speed = button(40, 32, 4, v -> send("speed", nextSpeed()));
+            archive = button(32, 32, 4, v -> onArchive());
+            star = button(32, 32, 4, v -> onStar());
+            last.addView(shuffle);
+            last.addView(speed);
+            last.addView(archive);
+            last.addView(star);
+            col.addView(last);
+        } else {
+            LinearLayout transport = row();
+            previous = button(36, 36, 5, v -> send("previous", null));
+            play = button(52, 52, 5, onPlay);
+            next = button(36, 36, 5, v -> send("next", null));
+            transport.addView(previous);
+            transport.addView(play);
+            transport.addView(next);
+            col.addView(transport);
+
+            // 15 seconds back and forward (the app's circular arrows with the 15 inside) around
+            // shuffle and speed
+            upper = row();
+            back = skip(40, 2, false);
+            shuffle = button(32, 32, 3, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
+            speed = button(40, 32, 3, v -> send("speed", nextSpeed()));
+            forward = skip(40, 2, true);
+            upper.addView(back);
+            upper.addView(shuffle);
+            upper.addView(speed);
+            upper.addView(forward);
+            col.addView(upper);
+
+            last = row();
+            archive = button(32, 32, 4, v -> onArchive());
+            star = button(32, 32, 4, v -> onStar());
+            last.addView(archive);
+            last.addView(star);
+            col.addView(last);
+        }
         previous.setIcon(R.drawable.ic_skip_back, 0.5f, null);
-        play = button(52, 52, 5, v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null));
-        play.setColors(0xFF3B82F6, 0xFFFFFFFF);
-        next = button(36, 36, 5, v -> send("next", null));
         next.setIcon(R.drawable.ic_skip_forward, 0.5f, null);
-        transport.addView(previous);
-        transport.addView(play);
-        transport.addView(next);
-        col.addView(transport);
-
-        // 15 seconds back and forward (the app's circular arrows with the 15 inside) around
-        // shuffle and speed
-        LinearLayout middle = row();
-        back = button(40, 40, 2, v -> send("back", null));
-        back.setPlain(true);
-        back.setIcon(R.drawable.ic_rotate_ccw, 0.9f, "15");
-        shuffle = button(32, 32, 3, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
-        shuffle.setIcon(R.drawable.ic_shuffle, 0.55f, null);
-        speed = button(40, 32, 3, v -> send("speed", nextSpeed()));
-        forward = button(40, 40, 2, v -> send("forward", null));
-        forward.setPlain(true);
-        forward.setIcon(R.drawable.ic_rotate_cw, 0.9f, "15");
-        middle.addView(back);
-        middle.addView(shuffle);
-        middle.addView(speed);
-        middle.addView(forward);
-        col.addView(middle);
-
-        LinearLayout last = row();
-        archive = button(32, 32, 4, v -> onArchive());
-        star = button(32, 32, 4, v -> send(state != null && state.optBoolean("is_starred") ? "unstar" : "star", null));
-        last.addView(archive);
-        last.addView(star);
-        col.addView(last);
+        play.setColors(0xFF3B82F6, 0xFFFFFFFF);
 
         LinearLayout below = row();
         below.setPadding(0, 0, 0, s(40));
@@ -463,11 +641,13 @@ public class MainActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         page.addView(col);
         page.addView(below);
-        // Pull the Update row up over the empty bottom of the screen: below archive and star by
-        // the same gap as theirs below shuffle
+        // Pull the Update row up over the empty bottom of the screen, below the last row by the
+        // same gap as between the last two rows, so part of its blue always shows
         col.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> below.post(() -> {
-            int gap = (last.getTop() + archive.getTop()) - (middle.getTop() + shuffle.getBottom());
-            int top = last.getTop() + archive.getBottom() + gap - s(2) - col.getHeight();
+            View lastButton = last.getChildAt(0);
+            View above = upper.getChildAt(layout == 3 ? 2 : 1);
+            int gap = (last.getTop() + lastButton.getTop()) - (upper.getTop() + above.getBottom());
+            int top = last.getTop() + lastButton.getBottom() + Math.max(gap, s(4)) - s(2) - col.getHeight();
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) below.getLayoutParams();
             if (lp.topMargin != top) {
                 lp.topMargin = top;
@@ -486,22 +666,49 @@ public class MainActivity extends Activity {
         return scroll;
     }
 
+    private long currentItem() {
+        return state == null || state.isNull("item_id") ? -1 : state.optLong("item_id");
+    }
+
+    /** One tap archives or unarchives: the item goes on playing, and its audio stays 7 days. */
     private void onArchive() {
-        if (state != null && state.optBoolean("is_archived")) {
-            send("unarchive", null);
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now < archiveArmedUntil) {
-            archiveArmedUntil = 0;
-            send("archive", null);
-        } else {
-            archiveArmedUntil = now + ARCHIVE_CONFIRM_MS;
-            message = "Tap again to archive";
-            messageUntil = archiveArmedUntil;
-            main.postDelayed(this::render, ARCHIVE_CONFIRM_MS + 50);
-        }
+        if (state == null) return;
+        boolean now = shownArchived();
+        wantItem = currentItem();
+        wantArchived = !now;
+        wantArchivedUntil = System.currentTimeMillis() + WANT_MS;
+        send(now ? "unarchive" : "archive", null);
         render();
+    }
+
+    private void onStar() {
+        if (state == null) return;
+        boolean now = shownStarred();
+        wantItem = currentItem();
+        wantStarred = !now;
+        wantStarredUntil = System.currentTimeMillis() + WANT_MS;
+        send(now ? "unstar" : "star", null);
+        render();
+    }
+
+    private boolean shownArchived() {
+        boolean reported = state != null && state.optBoolean("is_archived");
+        if (wantArchived == null) return reported;
+        if (wantArchived == reported || wantItem != currentItem() || System.currentTimeMillis() > wantArchivedUntil) {
+            wantArchived = null;
+            return reported;
+        }
+        return wantArchived;
+    }
+
+    private boolean shownStarred() {
+        boolean reported = state != null && state.optBoolean("is_starred");
+        if (wantStarred == null) return reported;
+        if (wantStarred == reported || wantItem != currentItem() || System.currentTimeMillis() > wantStarredUntil) {
+            wantStarred = null;
+            return reported;
+        }
+        return wantStarred;
     }
 
     /** The speed after the current one in the app's speed cycle, wrapping around. */
@@ -530,6 +737,39 @@ public class MainActivity extends Activity {
         return t + "×";
     }
 
+    private String subtitle() {
+        return state == null || state.isNull("subtitle") ? "" : state.optString("subtitle", "");
+    }
+
+    /** The status line: the clock, or a message, which in layout 2 also replaces the author. */
+    private void renderStatus() {
+        if (status == null) return;
+        boolean hasItem = state != null && !state.isNull("item_id");
+        boolean loaded = state == null || state.optBoolean("loaded", true);
+        String line;
+        if (!isSetUp()) line = "See android/README.md";
+        else if (installing && installStep != null) line = installStep;
+        else if (System.currentTimeMillis() < messageUntil && message != null) line = message;
+        else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
+        else if ("link".equals(mode)) line = "Asleep on the phone: play, pause and skips only";
+        else if ("open".equals(mode)) line = "Closed on the phone: play opens it";
+        else if (hasItem && loaded) {
+            String time = clock(shownPosition()) + " / " + clock(state.optInt("duration"));
+            line = layout == 2 ? withAuthor(time) : time;
+        } else line = layout == 2 && hasItem ? subtitle() : "";
+        if (!line.contentEquals(status.getText())) status.setText(line);
+    }
+
+    /** "Author · 1:34 / 30:33", the author shortened so the clock always fits. */
+    private String withAuthor(String time) {
+        String who = subtitle();
+        if (who.isEmpty()) return time;
+        String joint = " · " + time;
+        float room = status.getLayoutParams().width - status.getPaint().measureText(joint);
+        if (room < s(20)) return time;
+        return TextUtils.ellipsize(who, status.getPaint(), room, TextUtils.TruncateAt.END) + joint;
+    }
+
     private void render() {
         if (title == null) return;
         boolean playing = state != null && state.optBoolean("playing");
@@ -538,32 +778,15 @@ public class MainActivity extends Activity {
         boolean loaded = state == null || state.optBoolean("loaded", true);
         play.setIcon(playing ? R.drawable.ic_pause : R.drawable.ic_play, 0.46f, null);
 
-        if (!isSetUp()) {
-            title.setText("Not set up");
-            subtitle.setText("");
-            status.setText("See android/README.md");
-        } else if (hasItem) {
-            title.setText(state.optString("title", ""));
-            subtitle.setText(state.isNull("subtitle") ? "" : state.optString("subtitle", ""));
-        } else {
-            title.setText("Nothing playing");
-            subtitle.setText("");
-        }
+        if (!isSetUp()) title.setText("Not set up");
+        else if (hasItem) title.setText(state.optString("title", ""));
+        else title.setText("Nothing playing");
+        author.setText(isSetUp() && hasItem ? subtitle() : "");
+        renderStatus();
 
         boolean appMode = online && "app".equals(mode);
         boolean linkMode = online && "link".equals(mode);
         boolean openMode = online && "open".equals(mode);
-        if (isSetUp()) {
-            String line;
-            if (System.currentTimeMillis() < messageUntil && message != null) line = message;
-            else if (!online) line = "Wallacast sleeps or is closed. Play it with the watch's media controls.";
-            else if (linkMode) line = "Asleep on the phone: play, pause and skips only";
-            else if (openMode) line = "Closed on the phone: play opens it";
-            else if (hasItem && loaded) line = clock(state.optInt("position")) + " / " + clock(state.optInt("duration"));
-            else line = "";
-            status.setText(line);
-        }
-
         // Play, pause and the skips also work through Player Link, the rest needs the page
         boolean transport = isSetUp() && (appMode && hasItem && loaded || linkMode);
         boolean full = isSetUp() && appMode && hasItem && loaded;
@@ -578,15 +801,16 @@ public class MainActivity extends Activity {
         star.setEnabled(full);
 
         boolean shuffleOn = state != null && state.optBoolean("shuffle");
+        shuffle.setIcon(R.drawable.ic_shuffle, 0.55f, null);
         shuffle.setColors(shuffleOn ? 0xFF3B82F6 : 0xFF1E293B, 0xFFF1F5F9);
         speed.setText(speedText(state != null ? state.optDouble("speed", 1) : 1));
-        boolean starred = state != null && state.optBoolean("is_starred");
+        // The app's colors: a starred item's star is yellow, an archived item's icon blue
+        boolean starred = shownStarred();
         star.setIcon(starred ? R.drawable.ic_star_filled : R.drawable.ic_star, 0.5f, null);
-        // Archive asks for a second tap: red while it waits for it
-        boolean armed = System.currentTimeMillis() < archiveArmedUntil;
-        boolean archived = state != null && state.optBoolean("is_archived");
+        star.setColors(0xFF1E293B, starred ? 0xFFFBBF24 : 0xFFF1F5F9);
+        boolean archived = shownArchived();
         archive.setIcon(archived ? R.drawable.ic_archive_restore : R.drawable.ic_archive, 0.5f, null);
-        archive.setColors(armed ? 0xFFB91C1C : 0xFF1E293B, 0xFFF1F5F9);
+        archive.setColors(0xFF1E293B, archived ? 0xFF60A5FA : 0xFFF1F5F9);
         // the whole row below the screen, so without an update there is nothing to scroll to
         ((View) update.getParent()).setVisibility(newerVersion > 0 || installing ? View.VISIBLE : View.GONE);
         update.setEnabled(!installing);

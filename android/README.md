@@ -51,17 +51,28 @@ If pairing fails with "protocol fault (couldn't read status message)": the watch
 
 **How it behaves**
 
-- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others. When a new version exists, an Update button peeks in below them: scroll down to see it whole.
-- The watch asks for the player's state every 2 seconds while its screen is on.
+- Every button fits on one screen, sized for a round Galaxy Watch screen and scaled to others. A title too long for its line scrolls like an iPod's: it waits at the start, scrolls to the end, and jumps back. The author or show sits on a small line below it. When a new version exists, an Update button peeks in below the buttons: scroll down to see it whole.
+- Three layouts, chosen by adding `--ei layout N` to the setup command (the default is 3): 1 puts title, author and clock on their own lines with the buttons in three rows, 2 puts the author on the clock's line, 3 puts the 15-second skips beside previous and next and shuffle, speed, archive and star in one row.
+- The watch asks for the player's state every 2 seconds while its screen is on. The page reports its position only every 15 seconds while it plays, so the watch moves the clock on itself in between.
 - Wallacast must be open on the phone (in the background is fine). Since Android 15 an app in the background gets no turn to play sound, so with Player Link's watch bridge a play from the watch goes through Player Link: it presses Chrome's own play button, and when Wallacast still does not play after 2 seconds, it brings Wallacast to the front and presses play again. Without the bridge, a play for Wallacast in the background stops after a moment.
 - When Wallacast's player is empty (it started fresh, or the player was closed), the watch shows the last item, and play loads it into the mini player and plays it, as Spotify continues its last song. The other buttons wait until it plays. While audio plays, Chrome keeps the page running. After about 5 minutes of pause in the background, Chrome freezes the page, and only Chrome's own player still answers. Then:
   - With Player Link's watch bridge set up (below), play, pause and the skips still work: Player Link presses them on Chrome's player, which wakes the page. The watch shows "Asleep on the phone" and greys out the other buttons until the page runs again.
   - Chrome drops its player (and its notification) soon after a pause in the background. With the bridge and **Display over other apps** allowed for Player Link, the watch then shows "Closed on the phone: play opens it": play opens Wallacast in front of the other apps, and it plays where it stopped.
   - Without the bridge, the watch says "Wallacast sleeps or is closed". Press play in the watch's own media controls, which reach Chrome's player while it is there.
   - A command nobody takes is dropped after 30 seconds.
-- Archive works like the player's archive button: the item goes on playing. It asks for a second tap within 3 seconds (the button turns red). Once archived, the button shows the unarchive icon (one tap). The audio stays 7 days. The star button needs **Star and unstar** on the token.
-- **Updates:** an Update button shows when the GitHub release `android-latest` holds a newer version (`android/release.sh` builds both apps and puts them there). Tap it and confirm on the watch. If the watch asks first, allow the Wallacast app to install apps. Only the first install needs adb.
+- Archive works like the player's archive button: the item goes on playing, and its audio stays 7 days. One tap archives, and the button shows the unarchive icon in blue, as in the app. The star turns yellow. Both change at once, before the phone confirms, and go back when the phone does not take the command. The star button needs **Star and unstar** on the token.
+- **Updates:** an Update button shows when the GitHub release `android-latest` holds a newer version (`android/release.sh` builds both apps and puts them there). Tap it, and the status line shows each step. The first time, Wear OS says the watch "isn't allowed to install unknown apps from this source": tap **Settings**, switch on **Install unknown apps**, and confirm. Then it asks "Do you want to update this app?": scroll down and tap **Update** (tested on the Wear OS 6 emulator, 2026-11-21). The screen stays on until the update ends. When nothing ends it within 2 minutes, the button works again. Only the first install needs adb.
 - The phone's own media controls on the watch keep working as before: play, pause and the two skip buttons (15 seconds back and forward).
+
+**Trying it on an emulator** (no token, no phone): create a Wear OS emulator with a 450 x 450 round screen at density 320, like a Galaxy Watch. Build the app with a test key of its own (`WALLACAST_KEYSTORE` and `WALLACAST_KEYSTORE_PASS`), never for the real watch. Then run `node android/tools/fake-remote.mjs`, which plays made-up items and answers like the server, and:
+
+```bash
+adb reverse tcp:8790 tcp:8790
+adb install -r android/build/wallacast-watch.apk
+adb shell am start -n io.github.wjeroen.wallacast.watch/.MainActivity --es server http://localhost:8790 --es token wcr_fake --ei layout 3
+```
+
+The watch allows plain http only to localhost (`watch/res/xml/network_security_config.xml`). To see the Update button, build with a low `VERSION_CODE=100`.
 
 ## Player Link
 

@@ -21,8 +21,9 @@ ANDROID_JAR="${ANDROID_JAR:-$HOME/.android-build/android-35.jar}"
 KEYSTORE="${WALLACAST_KEYSTORE:-$HOME/.android-keys/wallacast.jks}"
 KEYPASS="${WALLACAST_KEYSTORE_PASS:-$HOME/.android-keys/wallacast.pass}"
 VERSION_NAME="1.0"
-# Every commit raises the version, so an update always installs over the old app
-VERSION_CODE="$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)"
+# Every commit raises the version, so an update always installs over the old app. A test build
+# can set VERSION_CODE lower, for example to try the Update button on an emulator.
+VERSION_CODE="${VERSION_CODE:-$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)}"
 
 [ -f "$ANDROID_JAR" ] || { echo "android.jar not found at $ANDROID_JAR (see android/README.md)"; exit 1; }
 
