@@ -57,7 +57,7 @@ public class MainActivity extends Activity {
     private static final long POLL_MS = 2000;
     /** How often the clock moves on while audio plays */
     private static final long TICK_MS = 250;
-    /** How long a tapped archive or star shows its new state before the phone confirms it */
+    /** How long a tapped archive or star waits, dimmed, for the phone to confirm it */
     private static final long WANT_MS = 8000;
     /** An update is given up, so the button works again, when its download gets no data for
      *  DOWNLOAD_STALL_MS (a slow download that moves goes on), when the watch does not ask to
@@ -120,7 +120,7 @@ public class MainActivity extends Activity {
     private long baseAt;
     private String reportKey = "";
 
-    /** A tapped archive or star shows its new state at once, until the phone's report agrees */
+    /** A tapped archive or star waits, dimmed, until the phone's report shows the new state */
     private long wantItem = -1;
     private Boolean wantArchived, wantStarred;
     private long wantArchivedUntil, wantStarredUntil;
@@ -129,7 +129,9 @@ public class MainActivity extends Activity {
     private final Runnable tickTask = new Runnable() {
         @Override
         public void run() {
-            renderStatus();
+            // A wait for the phone that ran out shows at once, not at the next poll
+            if (wantArchived != null || wantStarred != null) render();
+            else renderStatus();
             if (polling) main.postDelayed(this, TICK_MS);
         }
     };
@@ -762,10 +764,11 @@ public class MainActivity extends Activity {
         return state == null || state.isNull("item_id") ? -1 : state.optLong("item_id");
     }
 
-    /** One tap archives or unarchives: the item goes on playing, and its audio stays 7 days. */
+    /** One tap archives or unarchives: the item goes on playing, and its audio stays 7 days.
+     *  The button is dimmed until the phone confirms, so its color is always the real state. */
     private void onArchive() {
-        if (state == null) return;
-        boolean now = shownArchived();
+        if (state == null || archiveWaiting()) return;
+        boolean now = state.optBoolean("is_archived");
         wantItem = currentItem();
         wantArchived = !now;
         wantArchivedUntil = System.currentTimeMillis() + WANT_MS;
@@ -774,8 +777,8 @@ public class MainActivity extends Activity {
     }
 
     private void onStar() {
-        if (state == null) return;
-        boolean now = shownStarred();
+        if (state == null || starWaiting()) return;
+        boolean now = state.optBoolean("is_starred");
         wantItem = currentItem();
         wantStarred = !now;
         wantStarredUntil = System.currentTimeMillis() + WANT_MS;
@@ -783,24 +786,30 @@ public class MainActivity extends Activity {
         render();
     }
 
-    private boolean shownArchived() {
+    /** True while a tapped archive waits for the phone. Ends when the report shows the new
+     *  state, when another item plays, or after WANT_MS with a message. */
+    private boolean archiveWaiting() {
+        if (wantArchived == null) return false;
         boolean reported = state != null && state.optBoolean("is_archived");
-        if (wantArchived == null) return reported;
-        if (wantArchived == reported || wantItem != currentItem() || System.currentTimeMillis() > wantArchivedUntil) {
+        if (wantArchived == reported || wantItem != currentItem()) {
             wantArchived = null;
-            return reported;
+        } else if (System.currentTimeMillis() > wantArchivedUntil) {
+            wantArchived = null;
+            flash("The phone did not confirm the archive. Tap again.");
         }
-        return wantArchived;
+        return wantArchived != null;
     }
 
-    private boolean shownStarred() {
+    private boolean starWaiting() {
+        if (wantStarred == null) return false;
         boolean reported = state != null && state.optBoolean("is_starred");
-        if (wantStarred == null) return reported;
-        if (wantStarred == reported || wantItem != currentItem() || System.currentTimeMillis() > wantStarredUntil) {
+        if (wantStarred == reported || wantItem != currentItem()) {
             wantStarred = null;
-            return reported;
+        } else if (System.currentTimeMillis() > wantStarredUntil) {
+            wantStarred = null;
+            flash("The phone did not confirm the star. Tap again.");
         }
-        return wantStarred;
+        return wantStarred != null;
     }
 
     /** The speed after the current one in the app's speed cycle, wrapping around. */
@@ -892,18 +901,19 @@ public class MainActivity extends Activity {
         shuffle.setEnabled(isSetUp() && appMode);
         previous.setEnabled(full && state.optBoolean("has_previous"));
         next.setEnabled(full && state.optBoolean("has_next"));
-        archive.setEnabled(full);
-        star.setEnabled(full);
+        // Dimmed, like the Update button while it works, until the phone confirms
+        archive.setEnabled(full && !archiveWaiting());
+        star.setEnabled(full && !starWaiting());
 
         boolean shuffleOn = state != null && state.optBoolean("shuffle");
         shuffle.setIcon(R.drawable.ic_shuffle, 0.55f, null);
         shuffle.setColors(shuffleOn ? 0xFF3B82F6 : 0xFF1E293B, 0xFFF1F5F9);
         speed.setText(speedText(state != null ? state.optDouble("speed", 1) : 1));
         // The app's colors: a starred item's star is yellow, an archived item's icon blue
-        boolean starred = shownStarred();
+        boolean starred = state != null && state.optBoolean("is_starred");
         star.setIcon(starred ? R.drawable.ic_star_filled : R.drawable.ic_star, 0.5f, null);
         star.setColors(0xFF1E293B, starred ? 0xFFFBBF24 : 0xFFF1F5F9);
-        boolean archived = shownArchived();
+        boolean archived = state != null && state.optBoolean("is_archived");
         archive.setIcon(archived ? R.drawable.ic_archive_restore : R.drawable.ic_archive, 0.5f, null);
         archive.setColors(0xFF1E293B, archived ? 0xFF60A5FA : 0xFFF1F5F9);
         // the whole row below the screen, so without an update there is nothing to scroll to

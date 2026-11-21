@@ -13,9 +13,11 @@ import android.view.View;
  * One line of text that scrolls when it is too long, as an iPod shows a title: it waits at the
  * start, scrolls to the end, waits, jumps back to the start and begins again. Text that fits
  * stands still in the middle. While it scrolls, the edge the text runs past fades out.
+ * Android's own scrolling text (TextView, Compose's basicMarquee) moves at 30 dp/s and waits
+ * 1.2 s. This one waits a little longer at the start, so the start can be read.
  */
 public class TickerText extends View {
-    private static final long WAIT_START_MS = 2500;
+    private static final long WAIT_START_MS = 2000;
     private static final long WAIT_END_MS = 1200;
     private static final float SPEED_DP_PER_SECOND = 30;
     private static final float FADE_DP = 10;
