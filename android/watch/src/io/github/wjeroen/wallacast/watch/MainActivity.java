@@ -30,9 +30,12 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.BooleanSupplier;
 
 /**
  * The Wallacast remote for a watch. It shows what the Wallacast app on the phone plays and
@@ -59,6 +62,13 @@ public class MainActivity extends Activity {
     private static final long TICK_MS = 250;
     /** How long a tapped archive or star waits, dimmed, for the phone to confirm it */
     private static final long WANT_MS = 8000;
+    /** How long play, pause, next, previous, shuffle and speed wait, dimmed, for the phone (a play
+     *  through Player Link can take a few seconds) */
+    private static final long PRESS_CONFIRM_MS = 10_000;
+    /** A 15-second skip shows at once, and counts as carried out once a report lands within
+     *  SKIP_MATCH_S of it, or is undone after SKIP_WAIT_MS */
+    private static final long SKIP_WAIT_MS = 8000;
+    private static final double SKIP_MATCH_S = 3;
     /** An update is given up, so the button works again, when its download gets no data for
      *  DOWNLOAD_STALL_MS (a slow download that moves goes on), when the watch does not ask to
      *  confirm within ANSWER_MS of the download, or when nobody answers that question in CONFIRM_MS */
@@ -119,6 +129,10 @@ public class MainActivity extends Activity {
     private double basePosition;
     private long baseAt;
     private String reportKey = "";
+    private long baseItem = -1;
+    /** A 15-second skip shown before the phone confirms it: the position, NaN when none */
+    private double skipTarget = Double.NaN;
+    private long skipAt;
 
     /** A tapped archive or star waits, dimmed, until the phone's report shows the new state */
     private long wantItem = -1;
@@ -130,7 +144,7 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             // A wait for the phone that ran out shows at once, not at the next poll
-            if (wantArchived != null || wantStarred != null) render();
+            if (wantArchived != null || wantStarred != null || !waits.isEmpty()) render();
             else renderStatus();
             if (polling) main.postDelayed(this, TICK_MS);
         }
@@ -539,9 +553,11 @@ public class MainActivity extends Activity {
                 main.removeCallbacks(pollTask);
                 main.postDelayed(pollTask, 700);
             } else {
-                // Nothing changes on the phone, so a tapped archive or star goes back
+                // Nothing changes on the phone, so every waiting button and a shown skip go back
                 wantArchived = null;
                 wantStarred = null;
+                waits.clear();
+                skipTarget = Double.NaN;
                 if (code == 409) flash(errorOf(text, "Open Wallacast on your phone"));
                 else if (code == -1) flash("No connection");
                 else flash(errorOf(text, "Not sent (" + code + ")"));
@@ -566,16 +582,122 @@ public class MainActivity extends Activity {
         String key = state.optLong("item_id") + "/" + state.optInt("position") + "/" + state.optBoolean("playing") + "/" + state.optDouble("speed", 1) + "/" + mode;
         if (key.equals(reportKey)) return;
         reportKey = key;
+        long item = state.optLong("item_id");
         basePosition = state.optInt("position") + (playingNow() ? Math.max(0, ageSeconds) * state.optDouble("speed", 1) : 0);
         baseAt = SystemClock.elapsedRealtime();
+        // A report that includes the skips (it lands where the watch showed them) or another item
+        // ends the shown skip. An older report, from before the phone carried the skip out, does not.
+        if (!Double.isNaN(skipTarget) && (item != baseItem || Math.abs(basePosition - skippedNow()) <= SKIP_MATCH_S)) {
+            skipTarget = Double.NaN;
+        }
+        baseItem = item;
     }
 
-    private int shownPosition() {
+    /** Where a 15-second skip put the clock, moved on while playing */
+    private double skippedNow() {
+        double moved = playingNow() ? (SystemClock.elapsedRealtime() - skipAt) / 1000.0 * state.optDouble("speed", 1) : 0;
+        return skipTarget + moved;
+    }
+
+    private double exactPosition() {
         if (state == null) return 0;
         double position = basePosition;
         if (playingNow()) position += (SystemClock.elapsedRealtime() - baseAt) / 1000.0 * state.optDouble("speed", 1);
+        if (!Double.isNaN(skipTarget)) {
+            // A skip the phone did not carry out within SKIP_WAIT_MS falls back to its report
+            if (SystemClock.elapsedRealtime() - skipAt > SKIP_WAIT_MS) skipTarget = Double.NaN;
+            else position = skippedNow();
+        }
         int duration = state.optInt("duration");
-        return (int) Math.floor(duration > 0 ? Math.min(duration, position) : position);
+        position = Math.max(0, position);
+        return duration > 0 ? Math.min(duration, position) : position;
+    }
+
+    private int shownPosition() {
+        return (int) Math.floor(exactPosition());
+    }
+
+    /** A 15-second skip shows on the clock at once, so a second press adds to it instead of
+     *  repeating a press that seemed lost. The next reports confirm it or, after SKIP_WAIT_MS,
+     *  undo it. */
+    private void onSkip(boolean forwards) {
+        if (state == null) return;
+        double target = exactPosition() + (forwards ? 15 : -15);
+        int duration = state.optInt("duration");
+        skipTarget = Math.max(0, duration > 0 ? Math.min(duration, target) : target);
+        skipAt = SystemClock.elapsedRealtime();
+        send(forwards ? "forward" : "back", null);
+        renderStatus();
+    }
+
+    // ---- waiting for the phone -------------------------------------------------------------
+
+    /** A button pressed and not yet confirmed by the phone's report: dimmed meanwhile, so a
+     *  second press does not overshoot. Ends when `confirmed` holds, or after PRESS_CONFIRM_MS with
+     *  `failure` on the status line. */
+    private static final class Wait {
+        final long until;
+        final BooleanSupplier confirmed;
+        final String failure;
+
+        Wait(long until, BooleanSupplier confirmed, String failure) {
+            this.until = until;
+            this.confirmed = confirmed;
+            this.failure = failure;
+        }
+    }
+
+    private final Map<String, Wait> waits = new HashMap<>();
+
+    private void waitFor(String button, BooleanSupplier confirmed, String failure) {
+        waits.put(button, new Wait(System.currentTimeMillis() + PRESS_CONFIRM_MS, confirmed, failure));
+    }
+
+    private boolean waiting(String button) {
+        Wait w = waits.get(button);
+        if (w == null) return false;
+        if (state != null && w.confirmed.getAsBoolean()) {
+            waits.remove(button);
+            return false;
+        }
+        if (System.currentTimeMillis() > w.until) {
+            waits.remove(button);
+            if (w.failure != null) flash(w.failure);
+            return false;
+        }
+        return true;
+    }
+
+    private void onPlayPause() {
+        if (waiting("play")) return;
+        boolean target = !(state != null && state.optBoolean("playing"));
+        waitFor("play", () -> state.optBoolean("playing") == target, target ? "The phone did not start playing" : "The phone did not pause");
+        send(target ? "play" : "pause", null);
+        render();
+    }
+
+    private void onTrack(String action) {
+        if (waiting("track")) return;
+        long from = currentItem();
+        waitFor("track", () -> currentItem() != from, "The phone did not move to another item");
+        send(action, null);
+        render();
+    }
+
+    private void onShuffle() {
+        if (waiting("shuffle")) return;
+        boolean target = !(state != null && state.optBoolean("shuffle"));
+        waitFor("shuffle", () -> state.optBoolean("shuffle") == target, "The phone did not confirm shuffle");
+        send("shuffle", target);
+        render();
+    }
+
+    private void onSpeed() {
+        if (waiting("speed")) return;
+        double target = nextSpeed();
+        waitFor("speed", () -> Math.abs(state.optDouble("speed", 1) - target) < 0.01, "The phone did not confirm the speed");
+        send("speed", target);
+        render();
     }
 
     // ---- interface -----------------------------------------------------------------------
@@ -623,7 +745,7 @@ public class MainActivity extends Activity {
     }
 
     private RoundButton skip(int size, int margin, boolean forwards) {
-        RoundButton b = button(size, size, margin, v -> send(forwards ? "forward" : "back", null));
+        RoundButton b = button(size, size, margin, v -> onSkip(forwards));
         b.setPlain(true);
         b.setIcon(forwards ? R.drawable.ic_rotate_cw : R.drawable.ic_rotate_ccw, 0.9f, "15");
         return b;
@@ -658,16 +780,16 @@ public class MainActivity extends Activity {
         if (layout != 2) col.addView(author);
         col.addView(status);
 
-        View.OnClickListener onPlay = v -> send(state != null && state.optBoolean("playing") ? "pause" : "play", null);
+        View.OnClickListener onPlay = v -> onPlayPause();
         LinearLayout upper, last;
         if (layout == 3) {
             // 15 back, previous, play, next, 15 forward in one row through the middle, where the
             // round screen is widest
             upper = row();
             back = skip(36, 1, false);
-            previous = button(32, 32, 3, v -> send("previous", null));
+            previous = button(32, 32, 3, v -> onTrack("previous"));
             play = button(50 + 2 * RING_SPACE, 50 + 2 * RING_SPACE, 3, onPlay);
-            next = button(32, 32, 3, v -> send("next", null));
+            next = button(32, 32, 3, v -> onTrack("next"));
             forward = skip(36, 1, true);
             upper.addView(back);
             upper.addView(previous);
@@ -677,8 +799,8 @@ public class MainActivity extends Activity {
             col.addView(upper);
 
             last = row();
-            shuffle = button(32, 32, 4, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
-            speed = button(40, 32, 4, v -> send("speed", nextSpeed()));
+            shuffle = button(32, 32, 4, v -> onShuffle());
+            speed = button(40, 32, 4, v -> onSpeed());
             archive = button(32, 32, 4, v -> onArchive());
             star = button(32, 32, 4, v -> onStar());
             last.addView(shuffle);
@@ -688,9 +810,9 @@ public class MainActivity extends Activity {
             col.addView(last);
         } else {
             LinearLayout transport = row();
-            previous = button(36, 36, 5, v -> send("previous", null));
+            previous = button(36, 36, 5, v -> onTrack("previous"));
             play = button(52 + 2 * RING_SPACE, 52 + 2 * RING_SPACE, 5, onPlay);
-            next = button(36, 36, 5, v -> send("next", null));
+            next = button(36, 36, 5, v -> onTrack("next"));
             transport.addView(previous);
             transport.addView(play);
             transport.addView(next);
@@ -700,8 +822,8 @@ public class MainActivity extends Activity {
             // shuffle and speed
             upper = row();
             back = skip(40, 2, false);
-            shuffle = button(32, 32, 3, v -> send("shuffle", !(state != null && state.optBoolean("shuffle"))));
-            speed = button(40, 32, 3, v -> send("speed", nextSpeed()));
+            shuffle = button(32, 32, 3, v -> onShuffle());
+            speed = button(40, 32, 3, v -> onSpeed());
             forward = skip(40, 2, true);
             upper.addView(back);
             upper.addView(shuffle);
@@ -921,13 +1043,15 @@ public class MainActivity extends Activity {
         // Play, pause and the skips also work through Player Link, the rest needs the page
         boolean transport = isSetUp() && (appMode && hasItem && loaded || linkMode);
         boolean full = isSetUp() && appMode && hasItem && loaded;
-        play.setEnabled(transport || isSetUp() && (openMode || appMode && hasItem));
+        // Dimmed while a press waits for the phone (waiting()), so a second press does not overshoot
+        play.setEnabled((transport || isSetUp() && (openMode || appMode && hasItem)) && !waiting("play"));
         back.setEnabled(transport);
         forward.setEnabled(transport);
-        speed.setEnabled(full);
-        shuffle.setEnabled(isSetUp() && appMode);
-        previous.setEnabled(full && state.optBoolean("has_previous"));
-        next.setEnabled(full && state.optBoolean("has_next"));
+        speed.setEnabled(full && !waiting("speed"));
+        shuffle.setEnabled(isSetUp() && appMode && !waiting("shuffle"));
+        boolean trackWait = waiting("track");
+        previous.setEnabled(full && state.optBoolean("has_previous") && !trackWait);
+        next.setEnabled(full && state.optBoolean("has_next") && !trackWait);
         // Dimmed, like the Update button while it works, until the phone confirms
         archive.setEnabled(full && !archiveWaiting());
         star.setEnabled(full && !starWaiting());
