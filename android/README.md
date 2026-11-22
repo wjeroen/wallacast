@@ -91,6 +91,7 @@ Android lets several apps play at once, but a headphone press, the lock screen, 
 - **Quick settings tile:** add the Player Link tile to the pull-down menu (edit the tiles, drag it in). One tap turns linking off, for example to play only Wallacast for a while. Turning it on (tile or switch) while a ticked player plays starts the other ticked players at once, so they are tied again. Turned on while nothing plays, they tie once two ticked ones play at the same moment.
 - The ticked players are remembered: through restarts and updates of Player Link, and while their apps are closed (they stay in the list as "not open").
 - The screen lists the last 8 things Player Link did. `adb shell dumpsys activity service io.github.wjeroen.playerlink/.LinkService` prints the same and what it sees right now.
+- **Log:** Player Link keeps a log of what it did, every change of Wallacast's player in Chrome (playing, paused, buffering, with the screen on or off and locked or not), and the screen going off, on and unlocked. With the watch bridge set up, it also sends the log to the Wallacast server every 15 seconds, which prints it as `[PlayerLink]` lines in its log. **Save log to Downloads** copies it to the phone's Downloads folder as a text file (the last 1 MB or so).
 - A Chrome player's site comes from Chrome's media notification. When it cannot be read, the player shows as "Chrome (site unknown)", and ticking it links every Chrome player.
 
 ### The Wallacast watch bridge

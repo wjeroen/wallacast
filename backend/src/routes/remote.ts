@@ -19,7 +19,8 @@ import {
  *   GET  /api/remote/state             what the player is doing (the watch, a token with `remote`)
  *   POST /api/remote/command           { action, value?, item_id? } for the player (the watch)
  *   GET  /api/remote/fallback?playing=  Player Link's long poll, while the page may sleep
- * Tokens reach only the last three (TOKEN_ROUTES in services/api-tokens.ts).
+ *   POST /api/remote/link-log           Player Link's event log, printed as [PlayerLink] lines
+ * Tokens reach only the last four (TOKEN_ROUTES in services/api-tokens.ts).
  */
 const router = express.Router();
 
@@ -69,6 +70,20 @@ router.post('/command', (req, res) => {
   }
   console.log(`[Remote] user=${req.user!.userId} ${req.apiToken ? `token=${req.apiToken.id} ` : ''}command ${sent.id} ${sent.action}${sent.value !== undefined ? `=${sent.value}` : ''}${sent.item_id !== undefined ? ` item=${sent.item_id}` : ''}`);
   res.status(202).json({ id: sent.id, action: sent.action });
+});
+
+// Player Link's event log (android/player-link LinkLog.java): what it did, Wallacast's player
+// in Chrome changing state, and the screen going off, on or unlocked, sent in batches, so the
+// [PlayerLink] lines show what happened on the phone while nobody watched. At most 100 events
+// per request, each cut to 300 characters, `at` the phone's clock in ms.
+router.post('/link-log', (req, res) => {
+  const events = Array.isArray(req.body?.events) ? req.body.events.slice(0, 100) : [];
+  for (const e of events) {
+    const at = typeof e?.at === 'number' && Number.isFinite(e.at) ? new Date(e.at).toISOString() : '?';
+    const text = typeof e?.text === 'string' ? e.text.replace(/\s+/g, ' ').slice(0, 300) : '';
+    if (text) console.log(`[PlayerLink] user=${req.user!.userId} at=${at} ${text}`);
+  }
+  res.status(204).end();
 });
 
 // Player Link's long poll (android/player-link). `playing` is what it sees of Wallacast's player in

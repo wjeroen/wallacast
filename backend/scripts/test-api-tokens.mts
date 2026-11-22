@@ -87,6 +87,8 @@ assert.ok(!allowed(['subscribe'], 'GET', '/api/podcasts/search?q=x'));
 assert.ok(allowed(['remote'], 'GET', '/api/remote/state'));
 assert.ok(allowed(['remote'], 'POST', '/api/remote/command'));
 assert.ok(allowed(['remote'], 'GET', '/api/remote/fallback?playing=false'), 'Player Link polls with a remote token');
+assert.ok(allowed(['remote'], 'POST', '/api/remote/link-log'), 'Player Link sends its log with a remote token');
+assert.ok(!allowed(['read_library'], 'POST', '/api/remote/link-log'));
 // Refetch and the generate permissions each open their own route only
 assert.ok(allowed(['refetch'], 'POST', '/api/content/12/refetch'));
 assert.ok(!allowed(['add_any'], 'POST', '/api/content/12/refetch'), 'adding is not refetching');

@@ -1,10 +1,14 @@
 package io.github.wjeroen.playerlink;
 
+import android.app.KeyguardManager;
 import android.app.Notification;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.app.ActivityOptions;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -18,6 +22,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
@@ -151,6 +156,7 @@ public class LinkService extends NotificationListenerService {
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
             updateSeen();
+            logWallacast();
             schedule();
         }
 
@@ -167,6 +173,20 @@ public class LinkService extends NotificationListenerService {
     private volatile Boolean seenPlaying;
     private volatile String bridgeStatus = "";
     private volatile String bridgeError = "";
+
+    /** Wallacast's player in Chrome as last logged (LinkLog), so only a change is logged */
+    private String loggedWallacast = "";
+    /** The screen going off, on and unlocked, for the log: with Wallacast's player states it
+     *  shows whether a failure happened with the phone locked */
+    private final BroadcastReceiver screenEvents = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            String what = Intent.ACTION_SCREEN_OFF.equals(action) ? "screen off"
+                : Intent.ACTION_SCREEN_ON.equals(action) ? "screen on" : "unlocked";
+            LinkLog.add(LinkService.this, "Phone: " + what);
+        }
+    };
 
     @Override
     public void onListenerConnected() {
@@ -188,6 +208,15 @@ public class LinkService extends NotificationListenerService {
             // the list is not available yet, the next notification fills it
         }
         sessions.addOnActiveSessionsChangedListener(sessionsChanged, self, main);
+        IntentFilter screen = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        screen.addAction(Intent.ACTION_SCREEN_ON);
+        screen.addAction(Intent.ACTION_USER_PRESENT);
+        try {
+            registerReceiver(screenEvents, screen);
+        } catch (Exception ignored) {
+            // the log then has no screen events
+        }
+        LinkLog.add(this, "Player Link started");
         refreshSessions();
         startBridge();
     }
@@ -199,6 +228,11 @@ public class LinkService extends NotificationListenerService {
         players.clear();
         main.removeCallbacks(evaluateTask);
         stopBridge();
+        try {
+            unregisterReceiver(screenEvents);
+        } catch (Exception ignored) {
+            // it was not registered
+        }
         instance = null;
     }
 
@@ -302,6 +336,7 @@ public class LinkService extends NotificationListenerService {
         // A player that goes away (Chrome may drop its player while paused) stays in the link:
         // when it comes back, it follows again.
         updateSeen();
+        logWallacast();
         schedule();
     }
 
@@ -411,6 +446,7 @@ public class LinkService extends NotificationListenerService {
 
     private void note(String event) {
         lastEvent = event;
+        LinkLog.add(this, event);
         history.addFirst(new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new java.util.Date()) + " " + event);
         while (history.size() > 8) history.removeLast();
     }
@@ -572,6 +608,62 @@ public class LinkService extends NotificationListenerService {
         if (c != null) new Thread(c::disconnect).start();
     }
 
+    /** Logs Wallacast's player in Chrome when its state or item (its length) changes, with the
+     *  screen's state, so the log shows what Chrome and Android did while nobody watched. */
+    private void logWallacast() {
+        Player w = wallacast();
+        String state;
+        String where = "";
+        long length = 0;
+        if (w == null) {
+            state = "no player";
+        } else {
+            PlaybackState st = w.controller.getPlaybackState();
+            state = stateName(st);
+            MediaMetadata md = w.controller.getMetadata();
+            length = md != null ? md.getLong(MediaMetadata.METADATA_KEY_DURATION) / 1000 : 0;
+            if (st != null) where = " at " + clock(st.getPosition() / 1000) + (length > 0 ? " of " + clock(length) : "");
+        }
+        String key = state + "|" + length;
+        if (key.equals(loggedWallacast)) return;
+        loggedWallacast = key;
+        LinkLog.add(this, "Wallacast in Chrome: " + state + where + ", " + screenState());
+    }
+
+    private static String stateName(PlaybackState st) {
+        if (st == null) return "no state";
+        switch (st.getState()) {
+            case PlaybackState.STATE_PLAYING: return "playing";
+            case PlaybackState.STATE_PAUSED: return "paused";
+            case PlaybackState.STATE_BUFFERING: return "buffering";
+            case PlaybackState.STATE_STOPPED: return "stopped";
+            case PlaybackState.STATE_NONE: return "none";
+            case PlaybackState.STATE_ERROR: return "error";
+            case PlaybackState.STATE_CONNECTING: return "connecting";
+            default: return "state " + st.getState();
+        }
+    }
+
+    private String screenState() {
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        KeyguardManager km = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        boolean on = pm != null && pm.isInteractive();
+        boolean locked = km != null && km.isKeyguardLocked();
+        return (on ? "screen on" : "screen off") + (locked ? ", locked" : "");
+    }
+
+    private static String clock(long seconds) {
+        long h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60;
+        return h > 0 ? String.format(Locale.ROOT, "%d:%02d:%02d", h, m, s) : String.format(Locale.ROOT, "%d:%02d", m, s);
+    }
+
+    /** The bridge's line on the settings screen. A change also goes to the log. */
+    private void setBridgeStatus(String status) {
+        if (status.equals(bridgeStatus)) return;
+        bridgeStatus = status;
+        if (!status.isEmpty()) LinkLog.add(this, status + (status.endsWith("no connection") && !bridgeError.isEmpty() ? " (" + bridgeError + ")" : ""));
+    }
+
     private void startBridge() {
         if (bridgeRunning) return;
         bridgeRunning = true;
@@ -610,13 +702,13 @@ public class LinkService extends NotificationListenerService {
             String token = prefs.getString(PREF_TOKEN, "");
             Boolean seen = seenPlaying;
             if (server.isEmpty() || token.isEmpty()) {
-                bridgeStatus = "";
+                setBridgeStatus("");
                 rest(5000);
                 continue;
             }
             boolean canOpen = seen == null && openIntent() != null;
             if (seen == null && !canOpen) {
-                bridgeStatus = "Watch bridge: waiting for Wallacast's player";
+                setBridgeStatus("Watch bridge: waiting for Wallacast's player");
                 rest(5000);
                 continue;
             }
@@ -631,14 +723,14 @@ public class LinkService extends NotificationListenerService {
                 c.setRequestProperty("Authorization", "Bearer " + token);
                 int code = c.getResponseCode();
                 if (code == 401 || code == 403) {
-                    bridgeStatus = "Watch bridge: the token was refused (" + code + "). It needs \"Control playback\".";
+                    setBridgeStatus("Watch bridge: the token was refused (" + code + "). It needs \"Control playback\".");
                     rest(5 * 60 * 1000);
                     continue;
                 }
                 if (code != 200) throw new IOException("HTTP " + code);
                 JSONArray commands = new JSONObject(read(c.getInputStream())).optJSONArray("commands");
                 failures = 0;
-                bridgeStatus = canOpen ? "Watch bridge: on, a play opens Wallacast" : "Watch bridge: on";
+                setBridgeStatus(canOpen ? "Watch bridge: on, a play opens Wallacast" : "Watch bridge: on");
                 if (commands != null) {
                     for (int i = 0; i < commands.length(); i++) {
                         String action = commands.getJSONObject(i).optString("action", "");
@@ -653,7 +745,7 @@ public class LinkService extends NotificationListenerService {
                 if (now == null ? seen != null : !now.equals(seen)) continue; // cut on purpose, the player changed
                 failures++;
                 bridgeError = e.getClass().getSimpleName() + ": " + e.getMessage();
-                bridgeStatus = "Watch bridge: no connection";
+                setBridgeStatus("Watch bridge: no connection");
                 rest(Math.min(60000, 5000L * failures));
             } finally {
                 bridgeConnection = null;

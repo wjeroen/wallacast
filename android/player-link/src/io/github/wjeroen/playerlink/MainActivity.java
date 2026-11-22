@@ -142,6 +142,19 @@ public class MainActivity extends Activity {
         allowOpen.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))));
         col.addView(allowOpen);
 
+        // The event log (LinkLog): it also goes to the Wallacast server while the bridge is set up
+        TextView logTitle = text(16);
+        logTitle.setText("Log");
+        logTitle.setPadding(0, dp(16), 0, dp(4));
+        col.addView(logTitle);
+        TextView logState = text(14);
+        logState.setText("What Player Link did and what Wallacast's player in Chrome did, with the screen's state. With the watch bridge set up it also reaches the Wallacast server's log.");
+        col.addView(logState);
+        Button saveLog = new Button(this);
+        saveLog.setText("Save log to Downloads");
+        saveLog.setOnClickListener(v -> LinkLog.saveToDownloads(this, result -> main.post(() -> logState.setText(result))));
+        col.addView(saveLog);
+
         ScrollView scroll = new ScrollView(this);
         scroll.addView(col);
         // Android 15 and later draw the app under the status and navigation bars, so the column

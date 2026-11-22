@@ -293,6 +293,7 @@ export const TOKEN_ROUTES: readonly TokenRoute[] = [
   { method: 'GET', path: /^\/api\/remote\/state$/, anyOf: ['remote'] },
   { method: 'POST', path: /^\/api\/remote\/command$/, anyOf: ['remote'] },
   { method: 'GET', path: /^\/api\/remote\/fallback$/, anyOf: ['remote'] },
+  { method: 'POST', path: /^\/api\/remote\/link-log$/, anyOf: ['remote'] },
   { method: 'POST', path: /^\/api\/content\/\d+\/refetch$/, anyOf: ['refetch'] },
   { method: 'POST', path: /^\/api\/content\/\d+\/generate-audio$/, anyOf: ['generate_audio'] },
   { method: 'POST', path: /^\/api\/content\/\d+\/generate-summary$/, anyOf: ['generate_summary'] },
