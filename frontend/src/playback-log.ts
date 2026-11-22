@@ -108,8 +108,18 @@ document.addEventListener('resume', () => {
   logScreen('page-resumed', { frozen });
 });
 
+// The app file this page runs (index-<hash> in a build, which changes with every deploy), so
+// the log shows whether a phone runs the current version or a stored older one
+const BUILD = (() => {
+  try {
+    return new URL(import.meta.url).pathname.split('/').pop()?.replace(/\.js$/, '') || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
 // Once per app start, after login
 export function logPageStart(): void {
   const discarded = (document as Document & { wasDiscarded?: boolean }).wasDiscarded;
-  logPlayback('page-start', { discarded: !!discarded });
+  logPlayback('page-start', { discarded: !!discarded, build: BUILD });
 }
