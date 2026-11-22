@@ -156,7 +156,7 @@ Each limit hit shows a notice in the app. The Reset button in Settings counts us
 
 ## What is generated for added items
 
-Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles", the two automatic summary boxes (articles and texts when added, podcasts and videos once transcribed), "Auto-generate audio for summaries", "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own six switches, the same as those settings: audio for articles, transcript for podcasts, transcript for YouTube videos, summary for articles and texts, summary for podcasts and videos once transcribed, summary audio. Either way every generation must fit the minute limits.
+Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles" (with its "Only under N characters" cap), the two automatic summary boxes (articles and texts when added, podcasts and videos once transcribed), "Auto-generate audio for summaries", "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own six switches, the same as those settings: audio for articles, transcript for podcasts, transcript for YouTube videos, summary for articles and texts, summary for podcasts and videos once transcribed, summary audio. Either way every generation must fit the minute limits.
 
 ## Errors
 

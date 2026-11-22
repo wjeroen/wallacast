@@ -14,7 +14,7 @@ import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
-import { isEAForumUrl } from './article-fetcher.js';
+import { settingsNarrateComments } from './auto-audio.js';
 import { logMemory } from './memory-log.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
@@ -1241,20 +1241,10 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
               const isLessWrong = content.comment_source === 'lesswrong' || (content.url ? content.url.includes('lesswrong.com') : false);
-              const isEAForum = content.comment_source === 'ea_forum' || isEAForumUrl(content.url);
               const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
-              // Check user setting for whether to narrate comments
-              let shouldNarrate = true;
-              if (isLessWrong || isEAForum) {
-                const setting = await getUserSetting(content.user_id, 'narrate_ea_forum_comments');
-                shouldNarrate = setting !== 'false'; // Default: true (narrate)
-              } else if (isSubstack) {
-                const setting = await getUserSetting(content.user_id, 'narrate_substack_comments');
-                shouldNarrate = setting !== 'false'; // Default: true (narrate)
-              }
-
-              if (shouldNarrate) {
+              // The same rule the automatic audio's length cap counts comments by
+              if (await settingsNarrateComments(content)) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
                 commentsInAudio = true;

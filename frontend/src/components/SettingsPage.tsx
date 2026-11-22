@@ -255,6 +255,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     auto_transcribe_podcasts: 'true',
     auto_transcribe_videos: 'true',
     auto_generate_audio_for_articles: 'false',
+    auto_audio_cap_enabled: 'false',
+    auto_audio_max_chars: '30000',
     generate_read_along: 'true',
     // Summaries
     auto_generate_summary: 'false',
@@ -404,6 +406,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
+        auto_audio_cap_enabled: loaded.auto_audio_cap_enabled === 'true' ? 'true' : 'false',
+        auto_audio_max_chars: loaded.auto_audio_max_chars || '30000',
         manual_queue_always_autoplay: loaded.manual_queue_always_autoplay !== undefined && loaded.manual_queue_always_autoplay !== null ? loaded.manual_queue_always_autoplay : 'true',
         show_continue_listening: loaded.show_continue_listening !== undefined && loaded.show_continue_listening !== null ? loaded.show_continue_listening : 'true',
         warn_archive_removes_audio: loaded.warn_archive_removes_audio !== undefined && loaded.warn_archive_removes_audio !== null ? loaded.warn_archive_removes_audio : 'true',
@@ -568,7 +572,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Per-job config + the "same as narration" toggles must save even when empty/false
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
-        'auto_transcribe_podcasts', 'auto_transcribe_videos', 'auto_generate_audio_for_articles', 'auto_generate_summary', 'auto_generate_summary_on_transcript',
+        'auto_transcribe_podcasts', 'auto_transcribe_videos', 'auto_generate_audio_for_articles', 'auto_audio_cap_enabled', 'auto_generate_summary', 'auto_generate_summary_on_transcript',
         'auto_generate_summary_audio',
         'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_include_comment_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
@@ -1214,6 +1218,28 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 Auto-generate audio for articles
               </label>
            </div>
+
+           {formData.auto_generate_audio_for_articles === 'true' && (
+             <div className="form-group checkbox-group settings-indent">
+               <label>
+                 <input
+                   type="checkbox"
+                   checked={formData.auto_audio_cap_enabled === 'true'}
+                   onChange={(e) => handleChange('auto_audio_cap_enabled', e.target.checked ? 'true' : 'false')}
+                 />
+                 Only under
+                 <input
+                   type="number"
+                   min="1"
+                   max="10000000"
+                   value={formData.auto_audio_max_chars}
+                   onChange={(e) => handleChange('auto_audio_max_chars', e.target.value)}
+                   style={{ marginLeft: '0.5rem', marginRight: '0.5rem', width: '6rem' }}
+                 />
+                 characters
+               </label>
+             </div>
+           )}
 
            <div className="form-group checkbox-group">
               <label>
