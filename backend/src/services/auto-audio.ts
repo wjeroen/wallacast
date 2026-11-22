@@ -39,7 +39,7 @@ export async function narratedChars(item: NarratedItem): Promise<number> {
 
 /** The length cap on automatic article audio (auto_audio_cap_enabled with
  *  auto_audio_max_chars): `{ chars, max }` when the item is over it, null when it fits or
- *  the cap is off. Manual generation never checks it. */
+ *  the cap is off. Manual generation checks neither this nor the comment cutoff below. */
 export async function overAutoAudioCap(item: NarratedItem): Promise<{ chars: number; max: number } | null> {
   const [on, maxSetting] = await Promise.all([
     getUserSetting(item.user_id, 'auto_audio_cap_enabled'),
@@ -50,4 +50,23 @@ export async function overAutoAudioCap(item: NarratedItem): Promise<{ chars: num
   const max = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_AUTO_AUDIO_MAX_CHARS;
   const chars = await narratedChars(item);
   return chars > max ? { chars, max } : null;
+}
+
+/** Why automatic audio skips this article, or null when it may run: more comments than
+ *  max_narrated_comments (default 50, replies included, only when its comments are
+ *  narrated), or, with `lengthCap`, over the length cap above. */
+export async function autoAudioSkipReason(
+  item: NarratedItem & { comment_count_total?: number | null },
+  lengthCap = true,
+): Promise<string | null> {
+  const count = Number(item.comment_count_total) || 0;
+  if (count > 0 && (await settingsNarrateComments(item))) {
+    const max = parseInt((await getUserSetting(item.user_id, 'max_narrated_comments')) || '', 10) || 50;
+    if (count > max) return `${count} comments is more than your maximum of ${max} narrated comments`;
+  }
+  if (lengthCap) {
+    const over = await overAutoAudioCap(item);
+    if (over) return `${over.chars} characters is more than your maximum of ${over.max} for automatic audio`;
+  }
+  return null;
 }

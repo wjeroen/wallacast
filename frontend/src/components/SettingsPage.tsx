@@ -1238,6 +1238,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                  />
                  characters
                </label>
+               <small className="settings-hint indent">
+                 Comments count only when they are narrated.
+               </small>
              </div>
            )}
 

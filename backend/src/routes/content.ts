@@ -27,7 +27,7 @@ import { fetchYouTubeComments, fetchYouTubeMetadata, youtubeApiKey, YouTubeUnava
 import { refreshVideoDetails } from '../services/youtube-refresh.js';
 import { transcribeYouTubeVideo } from '../services/video-transcript.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal, existingItemIdForUrl } from '../services/token-actions.js';
-import { overAutoAudioCap } from '../services/auto-audio.js';
+import { autoAudioSkipReason } from '../services/auto-audio.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
@@ -1257,19 +1257,13 @@ router.post('/', async (req, res) => {
         : (await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles')) === 'true';
 
       if (shouldAutoGenerate) {
-        // Check max comment limit. Skip auto-generation if article has too many comments
-        const maxCommentsStr = await getUserSetting(req.user!.userId, 'max_narrated_comments');
-        const maxComments = maxCommentsStr ? parseInt(maxCommentsStr, 10) || 50 : 50;
-        const articleCommentCount = createdItem.comment_count_total || 0;
-        // The length cap belongs to the app's setting, so a token with its own audio switch skips it
-        const overCap = !token || token.generation.follow ? await overAutoAudioCap(createdItem) : null;
+        // The comment cutoff and the length cap. The cap belongs to the app's setting, so a
+        // token with its own audio switch skips it.
+        const skipReason = await autoAudioSkipReason(createdItem, !token || token.generation.follow);
 
-        if (articleCommentCount > maxComments) {
-          console.log(`Skipping auto-generation for ${createdItem.id}: ${articleCommentCount} comments exceeds max ${maxComments}`);
-          if (token) tokenReport.skipped.push({ what: 'audio', reason: `${articleCommentCount} comments is more than your maximum of ${maxComments} narrated comments` });
-        } else if (overCap) {
-          console.log(`Skipping auto-generation for ${createdItem.id}: ${overCap.chars} characters exceeds max ${overCap.max}`);
-          if (token) tokenReport.skipped.push({ what: 'audio', reason: `${overCap.chars} characters is more than your maximum of ${overCap.max} for automatic audio` });
+        if (skipReason) {
+          console.log(`Skipping auto-generation for ${createdItem.id}: ${skipReason}`);
+          if (token) tokenReport.skipped.push({ what: 'audio', reason: skipReason });
         } else if (!(await fitsTokenBudget('audio', itemMinutes))) {
           console.log(`Skipping auto-generation for ${createdItem.id}: over the token's minute limit`);
         } else {
@@ -1833,7 +1827,7 @@ router.patch('/:id', async (req, res) => {
 
     if (updates.is_archived === false) {
       const contentResult = await query(
-        'SELECT user_id, url, content, audio_url, type, html_content, comments, comment_source FROM content_items WHERE id = $1 AND user_id = $2',
+        'SELECT user_id, url, content, audio_url, type, html_content, comments, comment_source, comment_count_total FROM content_items WHERE id = $1 AND user_id = $2',
         [id, req.user!.userId]
       );
 
@@ -1843,9 +1837,9 @@ router.patch('/:id', async (req, res) => {
         if (!audio_url && (type === 'article' || type === 'text') && html_content) {
           // Only auto-generate if user has the setting enabled
           const autoGenerateAudio = await getUserSetting(req.user!.userId, 'auto_generate_audio_for_articles');
-          const overCap = autoGenerateAudio === 'true' ? await overAutoAudioCap(contentResult.rows[0]) : null;
-          const shouldAutoGenerate = autoGenerateAudio === 'true' && !overCap;
-          if (overCap) console.log(`Un-archiving article ${id}: skipping audio regeneration (${overCap.chars} characters exceeds max ${overCap.max})`);
+          const skipReason = autoGenerateAudio === 'true' ? await autoAudioSkipReason(contentResult.rows[0]) : null;
+          const shouldAutoGenerate = autoGenerateAudio === 'true' && !skipReason;
+          if (skipReason) console.log(`Un-archiving article ${id}: skipping audio regeneration (${skipReason})`);
 
           if (shouldAutoGenerate) {
             console.log(`Un-archiving article ${id}: triggering audio regeneration`);
@@ -1866,7 +1860,7 @@ router.patch('/:id', async (req, res) => {
             updates.generation_status = 'starting';
             updates.generation_progress = 0;
             allowedFields.push('generation_status', 'generation_progress');
-          } else if (!overCap) {
+          } else if (!skipReason) {
             console.log(`Un-archiving article ${id}: skipping audio regeneration (auto_generate_audio_for_articles is off)`);
           }
         }
