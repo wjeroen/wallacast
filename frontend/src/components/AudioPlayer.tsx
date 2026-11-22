@@ -1713,7 +1713,11 @@ export function AudioPlayer({
     state: () => content ? {
       item_id: content.id,
       title: content.title,
-      subtitle: content.podcast_show_name || content.author || null,
+      // The watch's author line: the author first, then the show or feed. subtitle joins them
+      // for watch versions from before 2026-11-22
+      subtitle: [content.author, content.podcast_show_name].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ') || null,
+      author: content.author || null,
+      source: content.podcast_show_name || null,
       type: content.type,
       playing: isPlaying,
       position: Math.floor(currentTime),

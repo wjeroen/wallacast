@@ -17,8 +17,8 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
 const items = [
   { item_id: 3369, title: '[AI Narration] Can the US Afford to Pace the Frontier?', subtitle: 'ForeCast', duration: 1833 },
-  { item_id: 3370, title: 'Short title', subtitle: 'Astral Codex Ten', duration: 111 },
-  { item_id: 3371, title: 'Why the next decade of AI policy will be decided by a handful of very long committee meetings', subtitle: 'Some Author With A Rather Long Name, Another Co-Author', duration: 7322 },
+  { item_id: 3370, title: 'Short title', subtitle: 'Scott Alexander', source: 'Astral Codex Ten', duration: 111 },
+  { item_id: 3371, title: 'Why the next decade of AI policy will be decided by a handful of very long committee meetings', subtitle: 'Some Author With A Rather Long Name, Another Co-Author', source: 'LessWrong', duration: 7322 },
   { item_id: 3372, title: 'A title without an author', subtitle: null, duration: 640 },
 ];
 
@@ -38,6 +38,8 @@ function report() {
   const item = items[index];
   snapshot = {
     ...item,
+    author: item.subtitle,
+    source: item.source ?? null,
     type: 'podcast_episode',
     playing: player.playing,
     position: Math.floor(livePosition()),

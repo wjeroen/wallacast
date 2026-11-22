@@ -845,8 +845,28 @@ public class MainActivity extends Activity {
         return t + "×";
     }
 
-    private String subtitle() {
-        return state == null || state.isNull("subtitle") ? "" : state.optString("subtitle", "");
+    private String stateText(String key) {
+        return state == null || state.isNull(key) ? "" : state.optString(key, "").trim();
+    }
+
+    /** The author line: "Author · Show" when both fit on the line, else the author alone (the
+     *  show or feed only when there is no author). A page from before 2026-11-22 sends only
+     *  `subtitle`. */
+    private String byline() {
+        String who = stateText("author"), from = stateText("source");
+        if (who.isEmpty() && from.isEmpty()) return stateText("subtitle");
+        if (who.isEmpty()) return from;
+        if (from.isEmpty() || from.equalsIgnoreCase(who)) return who;
+        String both = who + " · " + from;
+        return author.getPaint().measureText(both) <= author.getLayoutParams().width ? both : who;
+    }
+
+    /** Only the author (or else the show), for layout 2, where it shares the line with the clock. */
+    private String authorOnly() {
+        String who = stateText("author");
+        if (!who.isEmpty()) return who;
+        String from = stateText("source");
+        return from.isEmpty() ? stateText("subtitle") : from;
     }
 
     /** The status line: the clock, or a message, which in layout 2 also replaces the author. */
@@ -867,13 +887,13 @@ public class MainActivity extends Activity {
         else if (hasItem && loaded) {
             String time = clock(shownPosition()) + " / " + clock(state.optInt("duration"));
             line = layout == 2 ? withAuthor(time) : time;
-        } else line = layout == 2 && hasItem ? subtitle() : "";
+        } else line = layout == 2 && hasItem ? authorOnly() : "";
         if (!line.contentEquals(status.getText())) status.setText(line);
     }
 
     /** "Author · 1:34 / 30:33", the author shortened so the clock always fits. */
     private String withAuthor(String time) {
-        String who = subtitle();
+        String who = authorOnly();
         if (who.isEmpty()) return time;
         String joint = " · " + time;
         float room = status.getLayoutParams().width - status.getPaint().measureText(joint);
@@ -892,7 +912,7 @@ public class MainActivity extends Activity {
         if (!isSetUp()) title.setText("Not set up");
         else if (hasItem) title.setText(state.optString("title", ""));
         else title.setText("Nothing playing");
-        author.setText(isSetUp() && hasItem ? subtitle() : "");
+        author.setText(isSetUp() && hasItem ? byline() : "");
         renderStatus();
 
         boolean appMode = online && "app".equals(mode);

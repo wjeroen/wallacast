@@ -63,6 +63,9 @@ export interface PlayerState {
   item_id: number | null;
   title: string | null;
   subtitle: string | null;
+  /** The author, and the show or feed it came from (the watch shows the author first) */
+  author: string | null;
+  source: string | null;
   type: string | null;
   playing: boolean;
   position: number;
@@ -185,6 +188,8 @@ export function cleanState(raw: unknown): PlayerState {
     item_id: Number.isInteger(itemId) && itemId > 0 ? itemId : null,
     title: text(s.title, 300),
     subtitle: text(s.subtitle, 200),
+    author: text(s.author, 200),
+    source: text(s.source, 200),
     type: text(s.type, 30),
     playing: s.playing === true,
     position: Math.max(0, num(s.position, 0)),
