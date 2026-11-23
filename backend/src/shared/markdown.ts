@@ -128,10 +128,9 @@ function buildTurndown(): TurndownService {
       const rawHref = el.getAttribute('href') || '';
       // The ordinary case: a link whose content is a phrase, or a single image.
       if (!/\n/.test(body) && !el.querySelector(BLOCK_LEVEL_SELECTOR)) {
-        const href = rawHref.replace(/([()])/g, '\$1');
         const rawTitle = (el.getAttribute('title') || '').replace(/(\n+\s*)+/g, '\n');
         const title = rawTitle ? ` "${rawTitle.replace(/"/g, '\\"')}"` : '';
-        return `[${body}](${href}${title})`;
+        return `[${body}](${rawHref}${title})`;
       }
       const scope = el.closest('blockquote, figure, li, section, article, aside, table, div') || el.parentElement;
       const linkedNearby = !!scope && Array.from(scope.querySelectorAll('a[href]'))

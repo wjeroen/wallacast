@@ -267,8 +267,10 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
       setUploadedContent('');
       setUploadedFileName('');
       setImportMeta(null);
-    } catch (error: any) {
-      if (fromShare && error?.response?.status === 409) {
+    } catch (error: unknown) {
+      // The server's answer to a refused save
+      const answer = (error as { response?: { status?: number; data?: { error?: string; archive_submit_url?: string } } })?.response;
+      if (fromShare && answer?.status === 409) {
         rememberShare(link);
         setMessage('Already in your library.');
         setMessageIsGood(true);
@@ -276,9 +278,9 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
         return;
       }
       console.error('Failed to save content:', error);
-      const errorMsg = error?.response?.data?.error || 'Failed to save content. Please try again.';
+      const errorMsg = answer?.data?.error || 'Failed to save content. Please try again.';
       setMessage(errorMsg);
-      setArchiveLink(error?.response?.data?.archive_submit_url || null);
+      setArchiveLink(answer?.data?.archive_submit_url || null);
     } finally {
       window.clearInterval(progressPoll);
       setProgressText(null);

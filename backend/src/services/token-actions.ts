@@ -332,7 +332,7 @@ async function shapeTokenText(token: TokenRequestContext, raw: Record<string, un
     return refuse(400, `A text add may send only ${TOKEN_TEXT_KEYS.join(', ')} (not: ${extra.join(', ')})`);
   }
   if (!token.permissions.includes('add_any')) {
-    return refuse(403, 'This token may only add items from your feed. Adding text needs "Any URL" under Add items.');
+    return refuse(403, 'This token may only add items from your feed. Adding text needs "Any URL or text" under Add items.');
   }
   const read = readTokenText(raw);
   if ('error' in read) return refuse(read.status, read.error);

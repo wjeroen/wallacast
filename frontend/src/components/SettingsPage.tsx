@@ -170,7 +170,7 @@ const TOKEN_GENERATION_FLAGS: Array<{ key: Exclude<keyof TokenGeneration, 'follo
 const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: string }> = [
   { mode: 'none', label: 'No' },
   { mode: 'add_feed', label: 'From the feed only' },
-  { mode: 'add_any', label: 'Any URL' },
+  { mode: 'add_any', label: 'Any URL or text' },
 ];
 const formatTokenTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });

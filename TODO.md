@@ -192,7 +192,7 @@
 
 ## Completed Recently ✅
 
-- [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags are left out with a warning, a source already in the library answers 409
+- [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL or text"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags are left out with a warning, a source already in the library answers 409
 - [x] **Summaries failed on emoji and bold tweet letters** (2026-11-23): a cut at 50,000 characters kept half a letter and OpenAI refused the request. Cuts for AI services now keep whole letters, and a failed comment summary keeps the article summary
 - [x] **Automatic audio only under N characters** (2026-11-22): a box under "Auto-generate audio for articles", off by default (30,000). Comments count only when their narration toggle is on. Applies to adds, unarchiving, and tokens that follow the app. The max-comments cutoff now also skips only narrated comments, and applies on unarchive too
 - [x] **Tokens can refetch and generate** (2026-11-20): five new permissions, off for every token (refetch, audio, summaries, summary audio, transcripts). A refetch counts as an item, a generation its minutes and one of the new generations per hour and per 2 days (three per item: 60 and 300 for a new token, from the saved item limits for older tokens)
