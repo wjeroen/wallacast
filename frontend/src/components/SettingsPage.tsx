@@ -172,6 +172,9 @@ const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: str
   { mode: 'add_feed', label: 'From the feed only' },
   { mode: 'add_any', label: 'Any URL or text' },
 ];
+// The server's error text for a failed request, else the fallback
+const serverError = (err: unknown, fallback: string): string =>
+  (err as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback;
 const formatTokenTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 
@@ -726,8 +729,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const response = await contentAPI.renameTag(tag, to);
       alert(`Renamed on ${response.data.affected} item(s). The change syncs to Wallabag on the next sync.`);
       await loadTagList();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Rename failed');
+    } catch (err) {
+      alert(serverError(err, 'Rename failed'));
     } finally {
       setTagBusy(false);
     }
@@ -739,8 +742,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await contentAPI.removeTag(tag);
       await loadTagList();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Delete failed');
+    } catch (err) {
+      alert(serverError(err, 'Delete failed'));
     } finally {
       setTagBusy(false);
     }
@@ -790,8 +793,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setTokenCopied(false);
       setNewTokenName('');
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not create the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not create the token'));
     } finally {
       setTokenBusy(false);
     }
@@ -815,8 +818,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       await authAPI.revokeToken(token.id);
       pokeRemote();
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not revoke the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not revoke the token'));
     } finally {
       setTokenBusy(false);
     }
@@ -838,8 +841,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setApiTokens(list => list && list.map(t => (t.id === token.id ? { ...t, ...response.data } : t)));
       pokeRemote();
       return true;
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not change the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not change the token'));
       return false;
     } finally {
       setTokenEditBusy(null);
@@ -879,8 +882,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await authAPI.resetTokenUsage(token.id);
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not reset the usage');
+    } catch (err) {
+      alert(serverError(err, 'Could not reset the usage'));
     } finally {
       setTokenEditBusy(null);
     }
@@ -914,8 +917,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await authAPI.undoTokenChanges(token.id, body);
       await Promise.all([loadTokenChanges(token), loadApiTokens()]);
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not undo the changes');
+    } catch (err) {
+      alert(serverError(err, 'Could not undo the changes'));
     } finally {
       setTokenEditBusy(null);
     }
