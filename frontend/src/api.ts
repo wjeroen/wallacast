@@ -79,6 +79,30 @@ api.interceptors.response.use(
   }
 );
 
+/** What PATCH /content/:id takes besides item fields: null removes the audio or the summary,
+ *  and the flags are one-shot actions the server carries out. */
+export type ContentUpdate = Omit<Partial<ContentItem>, 'audio_url' | 'summary'> & {
+  audio_url?: string | null;
+  audio_data?: null;
+  summary?: string | null;
+  dismiss_generation_error?: boolean;
+  dismiss_summary_error?: boolean;
+  dismiss_summary_audio_error?: boolean;
+  regenerate_transcript?: boolean;
+};
+
+type ErrorAnswer = { status?: number; data?: { error?: string; archive_submit_url?: string } };
+
+/** The server's answer to a failed request: its status and JSON body, when it sent one */
+export function errorAnswer(err: unknown): ErrorAnswer | undefined {
+  return (err as { response?: ErrorAnswer } | null)?.response;
+}
+
+/** The server's error text for a failed request, else the fallback */
+export function serverError(err: unknown, fallback: string): string {
+  return errorAnswer(err)?.data?.error || fallback;
+}
+
 export const contentAPI = {
   getAll: (params?: { type?: string; archived?: boolean; starred?: boolean }) =>
     api.get<ContentItem[]>('/content', { params }),
@@ -112,7 +136,7 @@ export const contentAPI = {
   // played to its end. Answers when the part last counted as heard.
   listened: (id: number, data: { variant: 'audio' | 'summary'; seconds: number; ended: boolean; duration: number }) =>
     api.post<{ variant: 'audio' | 'summary'; listened_seconds: number; heard_at: string | null }>(`/content/${id}/listened`, data),
-  update: (id: number, data: Partial<ContentItem>) =>
+  update: (id: number, data: ContentUpdate) =>
     api.patch<ContentItem>(`/content/${id}`, data),
 
   // Save a Markdown/HTML edit of an article/text body. The backend snapshots the previous

@@ -10,7 +10,7 @@ import { SettingsPage } from './components/SettingsPage';
 import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
-import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
+import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, serverError, type TokenAlert, type ContentUpdate } from './api';
 import { isVeryLongArticle, textLength, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
 import { setRemoteIdle, startRemote } from './remote';
@@ -613,10 +613,10 @@ function App() {
     try {
       await contentAPI.generateAudio(item.id, false);
       refreshItem(item.id);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to start audio generation:', err);
       qs.clearPendingRequeue(item.id);
-      alert(err?.response?.data?.error || 'Failed to start audio generation');
+      alert(serverError(err, 'Failed to start audio generation'));
       return;
     }
     advanceToNextTrack('skip');
@@ -837,9 +837,9 @@ function App() {
     try {
       await contentAPI.refetch(currentContent.id);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to refetch content:', error);
-      alert(error?.response?.data?.error || 'Failed to refetch content');
+      alert(serverError(error, 'Failed to refetch content'));
     }
   };
 
@@ -848,9 +848,9 @@ function App() {
     try {
       await contentAPI.generateAudio(currentContent.id, regenerate, excludeComments);
       pollOperationThenRefresh(currentContent.id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate audio:', error);
-      alert(error?.response?.data?.error || 'Failed to generate audio');
+      alert(serverError(error, 'Failed to generate audio'));
     }
   };
 
@@ -877,7 +877,7 @@ function App() {
   const handleRemoveAudio = async () => {
     if (!currentContent) return;
     try {
-      await contentAPI.update(currentContent.id, { audio_data: null, audio_url: null } as any);
+      await contentAPI.update(currentContent.id, { audio_data: null, audio_url: null });
       const response = await contentAPI.getById(currentContent.id);
       setCurrentContent(response.data);
     } catch (error) {
@@ -929,9 +929,9 @@ function App() {
         }
       };
       setTimeout(poll, 3000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate summary:', error);
-      alert(error?.response?.data?.error || 'Failed to generate summary');
+      alert(serverError(error, 'Failed to generate summary'));
     }
   };
 
@@ -966,9 +966,9 @@ function App() {
         }
       };
       setTimeout(poll, 3000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate summary audio:', error);
-      alert(error?.response?.data?.error || 'Failed to generate summary audio');
+      alert(serverError(error, 'Failed to generate summary audio'));
     }
   };
 
@@ -1004,7 +1004,10 @@ function App() {
     setCurrentContent(prev => (prev && prev.id === id ? { ...prev, ...cleared } : prev));
     useContentStore.getState().updateItem(id, cleared);
     try {
-      await contentAPI.update(id, { [`dismiss_${kind}_error`]: true } as any);
+      const dismiss: ContentUpdate = kind === 'summary_audio'
+        ? { dismiss_summary_audio_error: true }
+        : kind === 'summary' ? { dismiss_summary_error: true } : { dismiss_generation_error: true };
+      await contentAPI.update(id, dismiss);
     } catch (error) {
       console.error('Failed to dismiss error:', error);
       refreshItem(id);
@@ -1071,7 +1074,7 @@ function App() {
     if (!currentContent) return;
     const id = currentContent.id;
     try {
-      await contentAPI.update(id, { summary: null } as any);
+      await contentAPI.update(id, { summary: null });
       const response = await contentAPI.getById(id);
       setCurrentContent(prev => (prev && prev.id === id ? response.data : prev));
     } catch (error) {
@@ -1083,11 +1086,11 @@ function App() {
   const handleRegenerateTranscript = async () => {
     if (!currentContent) return;
     try {
-      await contentAPI.update(currentContent.id, { regenerate_transcript: true } as any);
+      await contentAPI.update(currentContent.id, { regenerate_transcript: true });
       pollOperationThenRefresh(currentContent.id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to regenerate transcript:', error);
-      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
+      alert(serverError(error, 'Failed to regenerate transcript'));
     }
   };
 

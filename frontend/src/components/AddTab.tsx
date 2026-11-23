@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
-import { contentAPI } from '../api';
+import { contentAPI, errorAnswer } from '../api';
 import { noteProperties, parseFrontmatter, readNoteBody, splitExportedComments, splitExportedSummary } from '../markdown';
 import { parseTagInput } from '../tags';
 import { rememberShare } from '../share';
@@ -268,8 +268,7 @@ export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps)
       setUploadedFileName('');
       setImportMeta(null);
     } catch (error: unknown) {
-      // The server's answer to a refused save
-      const answer = (error as { response?: { status?: number; data?: { error?: string; archive_submit_url?: string } } })?.response;
+      const answer = errorAnswer(error);
       if (fromShare && answer?.status === 409) {
         rememberShare(link);
         setMessage('Already in your library.');

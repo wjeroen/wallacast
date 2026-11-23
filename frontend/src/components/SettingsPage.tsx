@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
-import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission, type TokenGeneration } from '../api';
+import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, serverError, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission, type TokenGeneration } from '../api';
 import { useAuthStore } from '../store/authStore';
 import { pokeRemote } from '../remote';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
@@ -172,9 +172,6 @@ const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: str
   { mode: 'add_feed', label: 'From the feed only' },
   { mode: 'add_any', label: 'Any URL or text' },
 ];
-// The server's error text for a failed request, else the fallback
-const serverError = (err: unknown, fallback: string): string =>
-  (err as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback;
 const formatTokenTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 

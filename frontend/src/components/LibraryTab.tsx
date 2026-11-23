@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactElement } from 'react';
 import { Star, StarOff, Archive, ArchiveRestore, Trash2, MoreVertical, Newspaper, NotebookPen, Podcast, TvMinimalPlay, X, Search, Inbox, ChevronDown, Check, Circle, FunnelX, Volume2, VolumeOff, MessageSquareText, MessageSquareOff, Captions, CaptionsOff, ListChecks, ArrowDownWideNarrow, ArrowUpNarrowWide, Tag, Square, SquareCheck, SquareMinus, ArrowLeft } from 'lucide-react';
-import { contentAPI, userSettingsAPI } from '../api';
+import { contentAPI, userSettingsAPI, serverError } from '../api';
 import { useContentStore, itemMatchesFilter, DEFAULT_FACETS, type FacetDim, type FacetValue } from '../store/contentStore';
 import { useQueueStore } from '../store/queueStore';
 import { ContentCard } from './ContentCard';
@@ -103,9 +103,14 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   // Paged drawing of the list (see LIST_PAGE_SIZE): a new filter starts at the first page
   const [shownCount, setShownCount] = useState(LIST_PAGE_SIZE);
   const listEndRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  // Reset while rendering when the filter changes (React's pattern for state that follows
+  // props), instead of in an effect that would draw the old page count once more first
+  const filterKey = JSON.stringify([typeFilter, facets, tagFilter, searchQuery, sortDir]);
+  const [shownForFilter, setShownForFilter] = useState(filterKey);
+  if (shownForFilter !== filterKey) {
+    setShownForFilter(filterKey);
     setShownCount(LIST_PAGE_SIZE);
-  }, [typeFilter, facets, tagFilter, searchQuery, sortDir]);
+  }
   useEffect(() => {
     const end = listEndRef.current;
     if (!end) return;
@@ -677,9 +682,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       setOpenDropdown(null);
       await contentAPI.generateAudio(id, regenerate, excludeComments);
       refreshItem(id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate audio:', error);
-      const errorMsg = error?.response?.data?.error || 'Failed to generate audio';
+      const errorMsg = serverError(error, 'Failed to generate audio');
       alert(errorMsg);
     }
   };
@@ -705,7 +710,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleRemoveAudio = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { audio_data: null, audio_url: null } as any);
+      await contentAPI.update(id, { audio_data: null, audio_url: null });
       refreshItem(id);
     } catch (error) {
       console.error('Failed to remove audio:', error);
@@ -727,9 +732,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       // Mark as generating immediately so the badge/poll kick in without waiting for a refetch
       updateItem(id, { summary_status: 'generating' });
       refreshItem(id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate summary:', error);
-      alert(error?.response?.data?.error || 'Failed to generate summary');
+      alert(serverError(error, 'Failed to generate summary'));
     }
   };
 
@@ -762,7 +767,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleRemoveSummary = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { summary: null } as any);
+      await contentAPI.update(id, { summary: null });
       refreshItem(id);
     } catch (error) {
       console.error('Failed to remove summary:', error);
@@ -776,9 +781,9 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       await contentAPI.generateSummaryAudio(id);
       // Mark as generating immediately so the poll kicks in without waiting for a refetch
       updateItem(id, { summary_audio_status: 'generating' });
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to generate summary audio:', error);
-      alert(error?.response?.data?.error || 'Failed to generate summary audio');
+      alert(serverError(error, 'Failed to generate summary audio'));
     }
   };
 
@@ -788,13 +793,13 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
     try {
       if (kind === 'summary_audio') {
         updateItem(id, { summary_audio_status: 'idle', summary_audio_error: undefined });
-        await contentAPI.update(id, { dismiss_summary_audio_error: true } as any);
+        await contentAPI.update(id, { dismiss_summary_audio_error: true });
       } else if (kind === 'summary') {
         updateItem(id, { summary_status: 'idle', summary_error: undefined });
-        await contentAPI.update(id, { dismiss_summary_error: true } as any);
+        await contentAPI.update(id, { dismiss_summary_error: true });
       } else {
         updateItem(id, { generation_status: 'idle', generation_error: undefined, current_operation: undefined, generation_progress: 0 });
-        await contentAPI.update(id, { dismiss_generation_error: true } as any);
+        await contentAPI.update(id, { dismiss_generation_error: true });
       }
     } catch (error) {
       console.error('Failed to dismiss error:', error);
@@ -810,20 +815,20 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
       // Two refreshes: first at 3s for fast sites, second at 8s for slower ones (e.g. Substack /comments fetch)
       setTimeout(() => refreshItem(id), 3000);
       setTimeout(() => refreshItem(id), 8000);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to refetch content:', error);
-      alert(error?.response?.data?.error || 'Failed to refetch content');
+      alert(serverError(error, 'Failed to refetch content'));
     }
   };
 
   const handleRegenerateTranscript = async (id: number) => {
     try {
       setOpenDropdown(null);
-      await contentAPI.update(id, { regenerate_transcript: true } as any);
+      await contentAPI.update(id, { regenerate_transcript: true });
       refreshItem(id);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to regenerate transcript:', error);
-      alert(error?.response?.data?.error || 'Failed to regenerate transcript');
+      alert(serverError(error, 'Failed to regenerate transcript'));
     }
   };
 
