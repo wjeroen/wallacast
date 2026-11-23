@@ -21,6 +21,7 @@ import { getChatClientForJob, getUserSetting, chatCreateWithRetry } from './ai-p
 import { query } from '../database/db.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { isEAForumUrl } from './article-fetcher.js';
+import { cutText } from './text-cut.js';
 
 // Default read-along alignment rules/examples block (user-editable via Settings -> prompt-registry.ts).
 // This is the stable instruction portion of the alignment prompt; the element list and transcript are
@@ -187,7 +188,7 @@ function splitQuoteIntoParts(
       parts.push({
         type: 'image',
         html: `<blockquote class="quote-part">${child.outerHTML}</blockquote>`,
-        text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
+        text: description ? `[Image: ${cutText(description, IMAGE_MATCH_CHARS)}]` : '[Image]',
       });
     } else if (childText) {
       parts.push({
@@ -373,7 +374,7 @@ export function extractContentElements(
       elements.push({
         type: 'image',
         html: (el as Element).outerHTML,
-        text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
+        text: description ? `[Image: ${cutText(description, IMAGE_MATCH_CHARS)}]` : '[Image]',
       });
     } else if (tagName === 'figure') {
       const img = el.querySelector('img');
@@ -385,7 +386,7 @@ export function extractContentElements(
         elements.push({
           type: 'image',
           html: (el as Element).outerHTML,
-          text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
+          text: description ? `[Image: ${cutText(description, IMAGE_MATCH_CHARS)}]` : '[Image]',
         });
       } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });
@@ -447,11 +448,11 @@ export function extractContentElements(
       }
     } else if (tagName === 'pre') {
       if (text) {
-        elements.push({ type: 'code-block', html: (el as Element).outerHTML, text: text.slice(0, 200) });
+        elements.push({ type: 'code-block', html: (el as Element).outerHTML, text: cutText(text, 200) });
       }
     } else if (tagName === 'table') {
       if (text) {
-        elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text: text.slice(0, 300) });
+        elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text: cutText(text, 300) });
       }
     } else if ((el as Element).classList?.contains('llm-content-block')) {
       // LessWrong/EA Forum LLM Content Block, AI-generated section with model attribution
@@ -496,7 +497,7 @@ export function extractContentElements(
         elements.push({
           type: 'image',
           html: (el as Element).outerHTML,
-          text: description ? `[Image: ${description.slice(0, IMAGE_MATCH_CHARS)}]` : '[Image]',
+          text: description ? `[Image: ${cutText(description, IMAGE_MATCH_CHARS)}]` : '[Image]',
         });
       } else if (text) {
         elements.push({ type: 'paragraph', html: (el as Element).outerHTML, text });
@@ -609,7 +610,7 @@ function extractCommentElements(comments: any[], depth: number = 0, parentUserna
     elements.push({
       type: 'comment',
       html: commentHtml,
-      text: llmText.slice(0, 500),
+      text: cutText(llmText, 500),
       commentMeta: {
         username,
         date: comment.date,
@@ -821,7 +822,7 @@ export async function generateLLMAlignment(
       ? `comment by ${el.commentMeta?.username || 'Unknown'}`
       : el.type;
     const maxLen = el.type === 'comment' ? 300 : 200;
-    const displayText = el.text.length > maxLen ? el.text.slice(0, maxLen) + '...' : el.text;
+    const displayText = el.text.length > maxLen ? cutText(el.text, maxLen) + '...' : el.text;
     return `${i}. (${typeLabel}) ${displayText}`;
   }).join('\n');
 
@@ -907,7 +908,7 @@ export async function generateLLMAlignment(
         ? `comment by ${el.commentMeta?.username || 'Unknown'}`
         : el.type;
       const maxLen = el.type === 'comment' ? 300 : 200;
-      const displayText = el.text.length > maxLen ? el.text.slice(0, maxLen) + '...' : el.text;
+      const displayText = el.text.length > maxLen ? cutText(el.text, maxLen) + '...' : el.text;
       return `${i}. (${typeLabel}) ${displayText}`;
     }).join('\n');
 

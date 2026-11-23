@@ -16,6 +16,7 @@ import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
 import { settingsNarrateComments } from './auto-audio.js';
 import { logMemory } from './memory-log.js';
+import { cutText, wholeEnd } from './text-cut.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
 // turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
@@ -145,6 +146,8 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
         chunkEnd = currentPos + lastSpace;
       }
     }
+    // A hard cut keeps both halves of an emoji together (text-cut.ts)
+    chunkEnd = wholeEnd(text, chunkEnd);
 
     chunks.push(text.slice(currentPos, chunkEnd).trim());
     currentPos = chunkEnd;
@@ -688,7 +691,7 @@ async function scriptHtmlOnce(
         role: 'user',
         // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
         // larger for big-context models (see chatInputCharCap).
-        content: html.slice(0, chatInputCharCap(modelId))
+        content: cutText(html, chatInputCharCap(modelId))
       }
     ],
   });
@@ -717,7 +720,7 @@ async function scriptHtmlOnce(
       messages: [
         { role: 'system', content: systemPrompt + partAddendum + retryAddendum },
         // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
-        { role: 'user', content: html.slice(0, chatInputCharCap(modelId)) }
+        { role: 'user', content: cutText(html, chatInputCharCap(modelId)) }
       ],
     });
 

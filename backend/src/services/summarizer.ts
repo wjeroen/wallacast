@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 import { query } from '../database/db.js';
 import { getChatClientForJob, getUserSetting, chatCreateWithRetry, chatInputCharCap } from './ai-providers.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
+import { cutText } from './text-cut.js';
 import { clearSummaryAudio, generateSummaryAudioForContent } from './summary-audio.js';
 
 /**
@@ -337,7 +338,7 @@ export async function generateSummaryForContent(contentId: number, options: { ge
     // the tier lookup and is never summarized itself.
     // A video gets its YouTube description the same way.
     const descriptionContext = isSpoken && item.description
-      ? htmlToPlainText(item.description).slice(0, 2000)
+      ? cutText(htmlToPlainText(item.description), 2000)
       : '';
     const articleInputCap = chatInputCharCap(chat.model);
     if (articleText.length > articleInputCap) {
@@ -348,8 +349,8 @@ export async function generateSummaryForContent(contentId: number, options: { ge
         (descriptionContext
           ? `${isVideo ? 'VIDEO' : 'EPISODE'} DESCRIPTION (context only, do not summarize; names here are spelled correctly):\n${descriptionContext}\n\n`
           : '') +
-        `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${articleText.slice(0, articleInputCap)}`
-      : metaHeader + articleText.slice(0, articleInputCap);
+        `TRANSCRIPT (auto-generated, may contain transcription mistakes, especially in names):\n${cutText(articleText, articleInputCap)}`
+      : metaHeader + cutText(articleText, articleInputCap);
 
     const articleResponse = await chatCreateWithRetry(chat.client, {
       model: chat.model,
@@ -386,22 +387,28 @@ export async function generateSummaryForContent(contentId: number, options: { ge
         const commentChars = commentsText.length;
         const maxTweetsComments = maxTweetsForChars(commentChars, tiers);
         console.log(`[Summary] commentChars=${commentChars} -> maxTweetsComments=${maxTweetsComments}`);
-        const commentResponse = await chatCreateWithRetry(chat.client, {
-          model: chat.model,
-          ...chat.extraParams,
-          messages: [
-            { role: 'system', content: await buildSummaryPrompt(userId, 'comment', maxTweetsComments, maxWords) },
-            {
-              role: 'user',
-              content:
-                metaHeader +
-                `ARTICLE (context only, do not summarize this):\n${articleText.slice(0, ARTICLE_CONTEXT_CAP)}\n\n` +
-                `COMMENTS TO SUMMARIZE:\n${commentsText.slice(0, Math.max(150000, chatInputCharCap(chat.model) - ARTICLE_CONTEXT_CAP))}`,
-            },
-          ],
-        }, '[Summary] comments');
-        commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
-        logTweetLengths('comments', commentSummary, maxWords);
+        try {
+          const commentResponse = await chatCreateWithRetry(chat.client, {
+            model: chat.model,
+            ...chat.extraParams,
+            messages: [
+              { role: 'system', content: await buildSummaryPrompt(userId, 'comment', maxTweetsComments, maxWords) },
+              {
+                role: 'user',
+                content:
+                  metaHeader +
+                  `ARTICLE (context only, do not summarize this):\n${cutText(articleText, ARTICLE_CONTEXT_CAP)}\n\n` +
+                  `COMMENTS TO SUMMARIZE:\n${cutText(commentsText, Math.max(150000, chatInputCharCap(chat.model) - ARTICLE_CONTEXT_CAP))}`,
+              },
+            ],
+          }, '[Summary] comments');
+          commentSummary = (commentResponse.choices[0]?.message?.content || '').trim() || null;
+          logTweetLengths('comments', commentSummary, maxWords);
+        } catch (error: any) {
+          // The article summary is made and paid for, so a failed comment summary only leaves
+          // the comments out. Regenerate summary tries both again.
+          console.error(`[Summary] Comment summary failed for content ${contentId}, keeping the article summary:`, error?.message || error);
+        }
       }
     } else {
       console.log(`[Summary] Skipping comment summary (enabled=${summarizeComments}, comments=${Array.isArray(comments) ? comments.length : 0})`);

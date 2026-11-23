@@ -11,6 +11,7 @@ import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTempDir } from '../config/storage.js';
 import { cachePodcastAudio, evictCachedPodcastAudio, getCachedPodcastAudioSize, makeRoomOnVolume } from './podcast-cache.js';
 import { measureLoudness, saveLoudness, QUIET_BELOW } from './loudness.js';
+import { cutText, tailText } from './text-cut.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -424,7 +425,7 @@ export async function transcribeWithTimestamps(
     
     // Hint for Whisper to improve accuracy.
     // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
-    let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
+    let previousTranscript = initialPrompt ? cutText(initialPrompt, 1000) : '';
 
     if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
       console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
@@ -455,9 +456,9 @@ export async function transcribeWithTimestamps(
           currentPrompt = previousTranscript;
           if (i > 0) {
             // Take the Metadata (Title, Author, Comments) from the start
-            const metadataPart = initialPrompt ? initialPrompt.slice(0, 600) : '';
+            const metadataPart = initialPrompt ? cutText(initialPrompt, 600) : '';
             // Take the Continuity (last few sentences) from the actual previous text
-            const continuityPart = previousTranscript.slice(-200);
+            const continuityPart = tailText(previousTranscript, 200);
             currentPrompt = metadataPart ? `${metadataPart} ... ${continuityPart}` : continuityPart;
           }
         }
