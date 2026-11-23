@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import { devNull } from 'os';
 import ffmpeg from 'fluent-ffmpeg';
 import { getAudioDir, freeVolumeBytes } from '../config/storage.js';
+import { SPEECH_BITRATE } from '../config/processing.js';
 
 /**
  * Transient podcast-audio cache: a re-encoded copy of an episode, CBR mono with clean headers,
@@ -145,7 +146,7 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
         .audioFilters(loudnormFilter(stats))
         .audioFrequency(44100)
         .audioChannels(1)
-        .audioBitrate('96k')
+        .audioBitrate(SPEECH_BITRATE)
         .format('mp3')
         .on('end', () => resolve())
         .on('error', (err) => reject(err))
@@ -153,7 +154,7 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
     });
     await fs.rename(tmp, out);
     const size = (await fs.stat(out)).size;
-    console.log(`[PodcastCache] Cached ${contentId}: ${(size / 1024 / 1024).toFixed(1)} MB (CBR 96k mono, normalized)`);
+    console.log(`[PodcastCache] Cached ${contentId}: ${(size / 1024 / 1024).toFixed(1)} MB (CBR ${SPEECH_BITRATE} mono, normalized)`);
     await enforceCacheCap();
   } catch (e) {
     console.error(`[PodcastCache] Failed to cache ${contentId}:`, e);

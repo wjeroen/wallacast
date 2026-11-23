@@ -51,7 +51,7 @@ Deploy it yourself to try it out, or reach out to me for a link.
 | Narration / alignment / summary LLMs | Per-feature provider + model choice (OpenAI, DeepInfra, OpenRouter, Anthropic, Gemini) |
 | Image descriptions | Gemini, DeepInfra, OpenAI, or OpenRouter vision (optional, per-user key) |
 | Article fetching | GraphQL for EA Forum/LessWrong, Substack comment extraction, standard scraper elsewhere |
-| Audio processing | FFmpeg (24kHz, 96kbps MP3, optimized for speech) |
+| Audio processing | FFmpeg (24kHz mono, 64kbps MP3, optimized for speech) |
 | RSS/Atom parsing | Custom parser for podcasts and newsletters |
 | Deployment | Railway (backend, frontend, PostgreSQL as separate services) |
 

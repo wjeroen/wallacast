@@ -53,7 +53,7 @@ export async function unarchiveItems(userId: number, ids: number[]): Promise<num
 export async function purgeArchivedAudio(): Promise<number> {
   const r = await query(
     `UPDATE content_items
-        SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
+        SET audio_data = NULL, audio_url = NULL, duration = NULL, file_size = NULL, content_alignment = NULL,
             transcript = NULL, transcript_words = NULL, tts_chunks = NULL
       WHERE is_archived = true AND is_starred = false
         AND type IN ('article', 'text')

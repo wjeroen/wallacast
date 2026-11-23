@@ -28,6 +28,7 @@ import { refreshVideoDetails } from '../services/youtube-refresh.js';
 import { transcribeYouTubeVideo } from '../services/video-transcript.js';
 import { shapeTokenAdd, tokenBulk, lookupFeedItem, parseHttpUrl, parsePositiveInt, limitRefusal, existingItemIdForUrl } from '../services/token-actions.js';
 import { autoAudioSkipReason } from '../services/auto-audio.js';
+import { LIST_TEXT_CHARS } from '../config/processing.js';
 import { resolveGeneration, reserveMinutes, reserveItem, logChanges, textMinutes, summaryMinutes, episodeSummaryMinutes, commentChars, episodeMinutes, SUMMARY_AUDIO_MINUTES } from '../services/token-limits.js';
 import { MARKDOWN_ITEM_COLUMNS, loadCopyContentOptions, renderItemMarkdown, shortDescription, markdownFileName, uniqueFileName } from '../services/markdown-export.js';
 
@@ -58,9 +59,10 @@ router.get('/', async (req, res) => {
     // Exclude large columns (html_content, comments, transcript) for performance. Word timings
     // are sent only as has_word_timings: the full transcript_words of every item (23 MB stored,
     // several times that as objects) was read and serialized on every library load, twice per
-    // load (2026-10-18). Opening an item fetches the full item, timings included (GET /:id).
+    // load (2026-10-18). The text is cut to LIST_TEXT_CHARS, its full length in content_chars.
+    // Opening an item fetches the full item, timings included (GET /:id).
     // Use stored comment_count_total (includes nested replies)
-    let sql = 'SELECT id, type, title, url, content, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, loudness_lufs FROM content_items WHERE user_id = $1';
+    let sql = `SELECT id, type, title, url, LEFT(content, ${LIST_TEXT_CHARS}) AS content, length(content) AS content_chars, author, description, preview_picture, audio_url, duration, file_size, podcast_id, podcast_show_name, episode_number, published_at, is_starred, is_archived, tags, playback_position, playback_speed, last_played_at, created_at, updated_at, generation_status, generation_progress, generation_error, current_operation, tts_chunks, (transcript_words IS NOT NULL) AS has_word_timings, karma, agree_votes, disagree_votes, summary, summary_status, summary_generated_at, summary_error, summary_audio_url, summary_audio_duration, summary_audio_status, summary_audio_error, summary_audio_generated_at, summary_playback_position, heard_at, summary_heard_at, COALESCE(comment_count_total, 0) AS comment_count, view_count::float8 AS view_count, embed_blocked, loudness_lufs FROM content_items WHERE user_id = $1`;
     const params: any[] = [req.user!.userId];
     let paramCount = 2;
 
@@ -542,7 +544,7 @@ router.post('/bulk', async (req, res) => {
       // episodes are never touched. Their audio_url is the source media, not generated.
       const r = await query(
         `UPDATE content_items
-         SET audio_data = NULL, audio_url = NULL, duration = NULL, content_alignment = NULL,
+         SET audio_data = NULL, audio_url = NULL, duration = NULL, file_size = NULL, content_alignment = NULL,
              transcript = NULL, transcript_words = NULL, tts_chunks = NULL,
              generation_status = 'idle', generation_progress = 0,
              generation_error = NULL, current_operation = NULL, updated_at = NOW()
@@ -1605,6 +1607,7 @@ router.patch('/:id', async (req, res) => {
         if (type === 'article' || type === 'text') {
           console.log(`Manually removing audio for ${type} ${id}`);
           updates.duration = null;
+          updates.file_size = null;
           updates.content_alignment = null;
           updates.transcript = null;
           updates.transcript_words = null;
@@ -1615,7 +1618,7 @@ router.patch('/:id', async (req, res) => {
           updates.generation_progress = 0;
           updates.generation_error = null;
           updates.current_operation = null;
-          allowedFields.push('audio_data', 'audio_url', 'duration', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress', 'generation_error', 'current_operation');
+          allowedFields.push('audio_data', 'audio_url', 'duration', 'file_size', 'content_alignment', 'transcript', 'transcript_words', 'tts_chunks', 'generation_status', 'generation_progress', 'generation_error', 'current_operation');
           await deleteAudioFile(id); // audio now lives on disk, delete the file too
         }
       }

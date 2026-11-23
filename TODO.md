@@ -146,7 +146,6 @@
 - [ ] **[P4]** A token's skipped article audio or transcript is only in the add answer and the limit notice, not on the item. Summaries and summary audio show 'skipped' on the card since 2026-10-09. The same for audio would need a 'skipped' generation status, which many places read.
 - [ ] **[P5]** The startup line "You can now run VACUUM FULL to reclaim disk" (`index.ts`, audio blob cleanup) prints on every boot while `CLEAR_AUDIO_BLOBS=true` is set, even when 0 blobs were cleared. Removing that env var (see the item below) stops it, or print it only when blobs were cleared (found 2026-10-22, not fixed)
 - [ ] **[P2]** `POSTGRES_CONFIG=low`: the `feliperosenek/postgres-any-version-railway` template supports low/normal/high presets, but Railway's default Postgres image ignores the var. Check the `🧠 [Postgres]` startup log. If `shared_buffers` is still the stock default, redeploy Postgres from that template or `ALTER SYSTEM SET shared_buffers=...`.
-- [ ] **[P3]** Audio file-size optimization, remaining part: convert TTS output to mono (`-ac 1`, ~50% smaller, fine for speech) and consider dropping the bitrate from 96k toward 64k. TEST QUALITY FIRST. The 96k + 24kHz halves are already live. Location: `concatenateAudioFiles()` in `openai-tts.ts`.
 - [ ] **[P3]** Optional cleanup: the `CLEAR_AUDIO_BLOBS=true` env var can be removed now (harmless if left, each boot it finds 0 blobs).
 - [ ] **[P4]** Batch audio generation (queue multiple articles). NOTE: a prior queuing attempt went badly and was abandoned (see the "Abandon the queuing attempt" / "Give up on queue generation" commits). Still wanted, just needs proper implementation.
 - [ ] **[P4]** Add compression for stored audio (consider Opus codec).
@@ -193,6 +192,9 @@
 
 ## Completed Recently ✅
 
+- [x] **Speech audio at 64 kbps** (2026-11-23): narration, summary audio and saved podcast copies, all mono, a third smaller than 96. The user heard no difference on good headphones, 48 was clearly worse for a podcast. Starred items' existing narration converted too
+- [x] **Library loads send 50,000 characters of each text** (2026-11-23): 22.9 MB instead of 34.9, 94% of texts still whole, full length as content_chars. Search misses words further into the longest texts
+- [x] **Removed audio clears its file size** (2026-11-23): the leftover sizes (501 items) skewed measurements, and the size is the player's cache buster
 - [x] **Archived items lose their summary audio after 7 days too** (2026-11-23): like the full audio, unless starred, and at once for items archived before migration 033 (652 items, about 0.7 GB on a 95% full volume)
 - [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL or text"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags and a mismatched type tag are left out with a warning, a source already in the library answers 409. A token refused the app's item or list route is told the token route
 - [x] **Summaries failed on emoji and bold tweet letters** (2026-11-23): a cut at 50,000 characters kept half a letter and OpenAI refused the request. Cuts for AI services now keep whole letters, and a failed comment summary keeps the article summary

@@ -11,7 +11,7 @@ import { useContentStore } from './store/contentStore';
 import { useAuthStore } from './store/authStore';
 import { useQueueStore } from './store/queueStore';
 import { wallabagAPI, contentAPI, podcastAPI, userSettingsAPI, authAPI, type TokenAlert } from './api';
-import { isVeryLongArticle, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
+import { isVeryLongArticle, textLength, hasPlayableMedia, videoPlaysHere, getEffectiveAudio, hasWordTimings, transcriptItemsLabel } from './format';
 import { logPageStart, logPlayback, playbackChainOpen } from './playback-log';
 import { setRemoteIdle, startRemote } from './remote';
 import { withSessionPosition } from './session-positions';
@@ -604,7 +604,7 @@ function App() {
     if (!queueRow) return; // defensive, should not happen
     const askedAt = Date.now();
     const proceed = confirm(
-      `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${(item.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
+      `"${item.title}" has no audio yet.${isVeryLongArticle(item) ? ` Note: it is very long (${textLength(item).toLocaleString('en-US')} characters).` : ''} Generate it now? Your queue will continue to the next item, and this one will move to the top of the queue once audio is ready.`
     );
     logPlayback('asked', { to: item.id, generate: proceed, open: Date.now() - askedAt }, !proceed);
     if (!proceed) return;
@@ -694,7 +694,7 @@ function App() {
       }
       const askedAt = Date.now();
       const shouldGenerate = confirm(
-        `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${(nextItem.content || '').length.toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
+        `"${nextItem.title}" has no audio yet.${isVeryLongArticle(nextItem) ? ` Note: it is very long (${textLength(nextItem).toLocaleString('en-US')} characters).` : ''} Generate it now? We'll continue to the next item, and this one will move to the top of the queue when audio is ready.`
       );
       logPlayback('asked', { to: nextItem.id, generate: shouldGenerate, open: Date.now() - askedAt });
       if (shouldGenerate) {

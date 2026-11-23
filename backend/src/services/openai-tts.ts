@@ -8,7 +8,7 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
-import { PROCESSING_CONFIG } from '../config/processing.js';
+import { PROCESSING_CONFIG, SPEECH_BITRATE } from '../config/processing.js';
 import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice, chatInputCharCap } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
@@ -246,7 +246,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
       .complexFilter(`${concatGraph},${loudnormFilter(stats)}[out]`)
       .map('[out]')
       .audioFrequency(24000)
-      .audioBitrate('96k')
+      .audioBitrate(SPEECH_BITRATE)
       .format('mp3')
       .on('end', () => resolve())
       .on('error', (err) => {
@@ -909,7 +909,7 @@ export async function generateArticleAudio(
             ffmpeg(tempFile)
               .audioFilters(loudnormFilter(loudStats))
               .audioFrequency(24000)
-              .audioBitrate('96k')
+              .audioBitrate(SPEECH_BITRATE)
               .format('mp3')
               .on('end', () => resolve())
               .on('error', (err) => reject(err))

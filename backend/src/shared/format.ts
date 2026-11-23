@@ -24,8 +24,14 @@ export function cleanHtml(text: string): string {
 // LONG article (~8-10k words ≈ 50k chars of plain text), so it fires rarely.
 // Mirrors the backend scriptwriter chunking threshold in spirit (openai-tts.ts).
 export const VERY_LONG_ARTICLE_CHARS = 100_000;
-export function isVeryLongArticle(item: { content?: string | null }): boolean {
-  return (item.content || '').length > VERY_LONG_ARTICLE_CHARS;
+export function isVeryLongArticle(item: { content?: string | null; content_chars?: number | null }): boolean {
+  return textLength(item) > VERY_LONG_ARTICLE_CHARS;
+}
+
+// An item's full text length: the library list sends only the start of the text, with the
+// full length in content_chars
+export function textLength(item: { content?: string | null; content_chars?: number | null }): number {
+  return item.content_chars ?? (item.content || '').length;
 }
 
 // Playback-speed toggle: the full set selectable in Settings, and the default cycle.

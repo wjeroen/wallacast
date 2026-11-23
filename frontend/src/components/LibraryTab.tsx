@@ -8,7 +8,7 @@ import { TagEditor } from './TagEditor';
 import { collectTagCounts } from '../tags';
 import { contentToMarkdown } from '../markdown';
 import { loadCopyContentOptions } from '../copy-settings';
-import { isVeryLongArticle, hasWordTimings, transcriptItemsLabel } from '../format';
+import { isVeryLongArticle, textLength, hasWordTimings, transcriptItemsLabel } from '../format';
 import type { ContentItem, Comment } from '../types';
 
 interface LibraryTabProps {
@@ -687,7 +687,7 @@ export function LibraryTab({ onPlayContent }: LibraryTabProps) {
   const handleGenerateAudio = async (id: number, regenerate: boolean = false) => {
     setOpenDropdown(null);
     const item = content.find(c => c.id === id);
-    if (item && isVeryLongArticle(item) && !confirm(`This article is very long (${(item.content || '').length.toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
+    if (item && isVeryLongArticle(item) && !confirm(`This article is very long (${textLength(item).toLocaleString('en-US')} characters). Generate audio anyway?`)) return;
     if (item && item.comment_count && item.comment_count > 0) {
       let maxComments = 50;
       try {

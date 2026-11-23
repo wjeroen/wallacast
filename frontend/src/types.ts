@@ -13,7 +13,10 @@ export interface ContentItem {
   type: 'article' | 'podcast_episode' | 'pdf' | 'text' | 'video';
   title: string;
   url?: string;
+  // The library list and the queue send only the start of the text (LIST_TEXT_CHARS in the
+  // backend) and its full length in content_chars. Read the length with textLength().
   content?: string;
+  content_chars?: number;
   html_content?: string;
   author?: string;
   description?: string;

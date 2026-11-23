@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../database/db.js';
 import { withAudioToken } from '../services/audio-token.js';
 import { withPlaybackGain, audioCopyIds } from '../services/loudness.js';
+import { LIST_TEXT_CHARS } from '../config/processing.js';
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ router.get('/', async (req, res) => {
   try {
     const result = await query(
       `SELECT q.id AS queue_id, q.position AS queue_position, q.added_at AS queue_added_at,
-              c.id, c.type, c.title, c.url, c.content, c.author, c.description, c.preview_picture,
+              c.id, c.type, c.title, c.url, LEFT(c.content, ${LIST_TEXT_CHARS}) AS content, length(c.content) AS content_chars, c.author, c.description, c.preview_picture,
               c.audio_url, c.duration, c.file_size, c.podcast_id, c.podcast_show_name, c.episode_number,
               c.published_at, c.is_starred, c.is_archived, c.tags, c.playback_position, c.playback_speed,
               c.last_played_at, c.created_at, c.updated_at, c.generation_status, c.generation_progress,
