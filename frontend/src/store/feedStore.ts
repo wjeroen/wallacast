@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { podcastAPI, type FeedRefreshStatus } from '../api';
+import { podcastAPI, type FeedRefreshStatus, type CachedFeedItem } from '../api';
 import type { Podcast } from '../types';
 import type { FeedEpisode } from '../components/FeedCards';
 
@@ -66,7 +66,6 @@ export function findSubscription(podcasts: Podcast[], feedUrl: string): Podcast 
 }
 
 // Recent Updates rows come from the feed_items cache (feed_id, podcast_show_name).
-type CachedFeedItem = FeedEpisode & { feed_id: number; podcast_show_name?: string };
 
 function toRecentEpisode(item: CachedFeedItem): FeedEpisode {
   return { ...item, podcast_id: item.feed_id, podcast_title: item.podcast_show_name };

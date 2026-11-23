@@ -1,5 +1,9 @@
 import axios from 'axios';
 import type { ContentItem, ContentVersion, Podcast, QueueItem, User, AuthTokens } from './types';
+import type { FeedEpisode } from './components/FeedCards';
+
+/** One item of the cached feed list (GET /podcasts/feed-items): an episode or article with its feed */
+export type CachedFeedItem = FeedEpisode & { feed_id: number; podcast_show_name?: string };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -236,20 +240,20 @@ export const podcastAPI = {
   // refresh: (id: number) => api.post(`/podcasts/${id}/refresh`), // Removed - auto-added episodes to library
 
   getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
-    api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
+    api.get<{ episodes: FeedEpisode[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
 
   getPreviewByUrl: (feedUrl: string, limit?: number, offset?: number, signal?: AbortSignal) =>
-    api.get<{ episodes: any[]; hasMore: boolean }>('/podcasts/preview-by-url', {
+    api.get<{ episodes: FeedEpisode[]; hasMore: boolean }>('/podcasts/preview-by-url', {
       params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}), ...(offset ? { offset } : {}) },
       signal,
     }),
 
   searchFeed: (feedUrl: string, query: string) =>
-    api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
+    api.get<FeedEpisode[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
 
   // Feed caching endpoints
   getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
-    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
+    api.get<CachedFeedItem[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
   // Starts a refresh of every subscribed feed in the background and answers at once. Poll
   // getRefreshStatus until `running` is false.
