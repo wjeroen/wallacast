@@ -193,6 +193,7 @@
 
 ## Completed Recently ✅
 
+- [x] **Archived items lose their summary audio after 7 days too** (2026-11-23): like the full audio, unless starred, and at once for items archived before migration 033 (652 items, about 0.7 GB on a 95% full volume)
 - [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL or text"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags and a mismatched type tag are left out with a warning, a source already in the library answers 409. A token refused the app's item or list route is told the token route
 - [x] **Summaries failed on emoji and bold tweet letters** (2026-11-23): a cut at 50,000 characters kept half a letter and OpenAI refused the request. Cuts for AI services now keep whole letters, and a failed comment summary keeps the article summary
 - [x] **Automatic audio only under N characters** (2026-11-22): a box under "Auto-generate audio for articles", off by default (30,000). Comments count only when their narration toggle is on. Applies to adds, unarchiving, and tokens that follow the app. The max-comments cutoff now also skips only narrated comments, and applies on unarchive too

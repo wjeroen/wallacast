@@ -1,6 +1,7 @@
 import { query } from '../database/db.js';
 import { deleteAudioFile } from './audio-storage.js';
 import { evictCachedPodcastAudio, cachedPodcastIds } from './podcast-cache.js';
+import { summaryAudioKey } from './summary-audio.js';
 
 /**
  * Archiving, and the delayed removal of archived audio.
@@ -13,7 +14,9 @@ import { evictCachedPodcastAudio, cachedPodcastIds } from './podcast-cache.js';
  * items keep their audio, starred at the time of the purge, so starring an archived item within
  * the 7 days also saves it. A podcast episode's cached copy (podcast-cache.ts: a host that
  * seeks badly or inserts ads, or a raised copy of a quiet episode) follows the same rule, so an
- * episode archived while it plays goes on from the same bytes. Videos have neither.
+ * episode archived while it plays goes on from the same bytes. Videos have neither. Summary
+ * audio (every type) follows the same rule too, and also goes for an item archived before
+ * migration 033 (no archived_at), which held about 0.7 GB of it on 2026-11-23.
  */
 
 export const ARCHIVED_AUDIO_GRACE_DAYS = 7;
@@ -66,6 +69,26 @@ export async function purgeArchivedAudio(): Promise<number> {
   return r.rows.length;
 }
 
+/** Delete the summary audio of items archived more than ARCHIVED_AUDIO_GRACE_DAYS ago, or
+ *  before migration 033, that are not starred. "Generate summary audio" makes it again. */
+export async function purgeArchivedSummaryAudio(): Promise<number> {
+  const r = await query(
+    `UPDATE content_items
+        SET summary_audio_url = NULL, summary_audio_duration = NULL, summary_audio_status = 'idle',
+            summary_audio_error = NULL, summary_audio_generated_at = NULL, summary_playback_position = 0
+      WHERE is_archived = true AND is_starred = false
+        AND (archived_at IS NULL OR archived_at < NOW() - make_interval(days => ${ARCHIVED_AUDIO_GRACE_DAYS}))
+        AND summary_audio_url IS NOT NULL
+        AND summary_audio_status IS DISTINCT FROM 'generating'
+      RETURNING id`
+  );
+  for (const row of r.rows) await deleteAudioFile(summaryAudioKey(row.id));
+  if (r.rows.length > 0) {
+    console.log(`🗄️ [Archive] Removed the summary audio of ${r.rows.length} archived item(s)`);
+  }
+  return r.rows.length;
+}
+
 /** Delete the cached copies of podcast episodes archived more than ARCHIVED_AUDIO_GRACE_DAYS
  *  ago that are not starred. Only the episodes that have a copy are looked up. */
 export async function purgeArchivedPodcastCopies(): Promise<number> {
@@ -85,6 +108,7 @@ export async function purgeArchivedPodcastCopies(): Promise<number> {
 async function runPurge(): Promise<void> {
   try {
     await purgeArchivedAudio();
+    await purgeArchivedSummaryAudio();
     await purgeArchivedPodcastCopies();
   } catch (error) {
     // A database without migration 033 has no archived_at: nothing is removed, nothing breaks

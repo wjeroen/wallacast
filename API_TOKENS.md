@@ -113,7 +113,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 
 `POST /api/content/bulk` with `{ "action": "add_tags", "ids": [1, 2], "tags": ["ai-safety"] }`, `{ "action": "star", "ids": [...] }`, `{ "action": "unstar", "ids": [...] }`, `{ "action": "archive", "ids": [...] }` or `{ "action": "unarchive", "ids": [...] }` (at most 500 ids). Answers `{ "affected": 2, "changes": 3 }`. Only real changes count: a tag an item already has, or a star it already has, is skipped. Every change is logged, and Settings can undo one change or all of them.
 
-Archiving works as in the app: the generated audio of an article or text stays 7 days and is removed after that, unless the item is starred. Undoing an archive within those 7 days brings the item back with its audio.
+Archiving works as in the app: the generated audio of an article or text, and any item's summary audio, stays 7 days and is removed after that, unless the item is starred. Undoing an archive within those 7 days brings the item back with its audio.
 
 ### Feeds
 
