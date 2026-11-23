@@ -120,7 +120,12 @@ assert.match(
   /add_any or add_feed/,
   'a missing permission is named'
 );
-assert.match((tokenRouteDecision(all as any, 'GET', '/api/users/settings') as any).error, /cannot use this route/);
+assert.match((tokenRouteDecision(all as any, 'GET', '/api/users/settings') as any).error, /cannot use this route$/);
+// A tool that only knows the app's routes is pointed at the token's own
+assert.match((tokenRouteDecision(all as any, 'GET', '/api/content/3431') as any).error, /use GET \/api\/content\/3431\/markdown/);
+assert.match((tokenRouteDecision(all as any, 'GET', '/api/content/3431/') as any).error, /use GET \/api\/content\/3431\/markdown/);
+assert.match((tokenRouteDecision(all as any, 'GET', '/api/content?archived=false') as any).error, /use GET \/api\/content\/index/);
+assert.match((tokenRouteDecision(all as any, 'DELETE', '/api/content/3431') as any).error, /cannot use this route$/);
 console.log('✅ every permission opens exactly its own routes, rename, delete, settings and token management never');
 
 // ---- 3. validators ---------------------------------------------------------------------------

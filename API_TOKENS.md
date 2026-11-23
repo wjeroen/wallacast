@@ -46,7 +46,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 | `generate_summary_audio` | `POST /api/content/:id/generate-summary-audio`, and `generate_audio: true` with a summary |
 | `generate_transcript` | `POST /api/transcription/content/:id`, and `generate_transcript: true` with a summary |
 
-`add_any` and `add_feed` exclude each other. Any other route answers `403`.
+`add_any` and `add_feed` exclude each other. Any other route answers `403`. The app's own routes for a whole item (`GET /api/content/:id`) and the library list (`GET /api/content`) answer it with the token route to use instead.
 
 ### Reading the library
 
@@ -105,7 +105,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 - From the properties: `title`, `author`, `published`, `tags`, `description`, and `source` (else `alt-source`). A `source` link makes the item an article with that link, which is never fetched (Refetch in the app still works), and a link already in the library answers `409` with its `id`. Without one, the item is a text.
 - From the body: the summary blocks a Copy content export opens with become the item's summary (no new one is made), a first `# Title` that repeats the title is dropped, and a `# Comments` section in the export's format becomes the item's comments.
 - Optional fields next to `markdown` win over the note's properties: `title`, `author`, `published` (a date), `source` (an http or https link), `description`, `tags`. Without a title anywhere, the note's first `# Heading` is the title, else the add answers `400`.
-- Tags: type tags (`article`, `text`, ...) are dropped. Tags your library does not have yet, and a note's tags when the token lacks `tag`, are left out with a line in `warnings`. A `tags` field without `tag` answers `403`.
+- Tags: type tags (`article`, `text`, ...) are dropped and never set the type. One that differs from the type the note gets is named in `warnings`. Tags your library does not have yet, and a note's tags when the token lacks `tag`, are left out with a line in `warnings`. A `tags` field without `tag` answers `403`.
 - At most 5,000,000 characters (`413` above). A note with nothing besides its properties answers `400`.
 - It counts as one item, and generation follows the token's generation choice and minute limits, as for any add.
 

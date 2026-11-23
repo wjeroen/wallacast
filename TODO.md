@@ -140,6 +140,7 @@
 - [ ] **[P3]** Read-along list splitting: a sub-list nested inside a list item, and the footnote section `<ol>`, are still one chunk each (could split the same way per-`<li>` splitting already works). Inter-item spacing not tuned yet.
 
 ### Performance & Optimization
+- [ ] Library loads send every item's full text (`content` in `GET /api/content`, for body-text search and the very-long-article warning), so a 300,000-character book made loads take 0.5 to 0.6 s (2026-11-23, options proposed, not chosen)
 - [ ] **[P3]** The volume slowly fills up with article audio (2026-10-23: 2.6 GB in 703 files, podcast cache 0.5 GB, 1.4 of 4.5 GB free, see the startup `💽 [Volume]` line). Options: a bigger volume in Railway (check what the plan allows), a log warning when less than 1 GB is free, smaller audio files (lower sound quality)
 - [ ] **[P3]** Read fetched pages in a worker thread with a time limit, so one read can never block the backend. Since 2026-10-09 pages are read without their scripts and styles and refused above 5 MB, which took CNN's 5.8 MB page from more than 10 minutes to 0.3 seconds, and other copies are only tried for 2 minutes. The 448 KB technologyreview.com page that needed 57 s (2026-10-06) was not measured again.
 - [ ] **[P4]** A token's skipped article audio or transcript is only in the add answer and the limit notice, not on the item. Summaries and summary audio show 'skipped' on the card since 2026-10-09. The same for audio would need a 'skipped' generation status, which many places read.
@@ -192,7 +193,7 @@
 
 ## Completed Recently ✅
 
-- [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL or text"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags are left out with a warning, a source already in the library answers 409
+- [x] **Tokens can add text** (2026-11-23): `markdown` in a token's add ("Any URL or text"), read like the Add tab reads a note: properties, summaries and comments come along, unknown tags and a mismatched type tag are left out with a warning, a source already in the library answers 409. A token refused the app's item or list route is told the token route
 - [x] **Summaries failed on emoji and bold tweet letters** (2026-11-23): a cut at 50,000 characters kept half a letter and OpenAI refused the request. Cuts for AI services now keep whole letters, and a failed comment summary keeps the article summary
 - [x] **Automatic audio only under N characters** (2026-11-22): a box under "Auto-generate audio for articles", off by default (30,000). Comments count only when their narration toggle is on. Applies to adds, unarchiving, and tokens that follow the app. The max-comments cutoff now also skips only narrated comments, and applies on unarchive too
 - [x] **Tokens can refetch and generate** (2026-11-20): five new permissions, off for every token (refetch, audio, summaries, summary audio, transcripts). A refetch counts as an item, a generation its minutes and one of the new generations per hour and per 2 days (three per item: 60 and 300 for a new token, from the saved item limits for older tokens)

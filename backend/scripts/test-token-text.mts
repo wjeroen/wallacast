@@ -93,7 +93,22 @@ assert.equal(r4b.body.type, 'text', 'a source that is not a web address is left 
 assert.match(r4b.warnings[0], /not a web address/);
 console.log('✅ alt-source, and warnings for a bad date or source');
 
-// ---- 5. refusals ----------------------------------------------------------------------------
+// ---- 5. a type tag that differs from the type the note gets is named ----------------------
+const r5 = read({ markdown: '---\ntitle: A book\nsource: "https://www.gutenberg.org/ebooks/1"\ntags:\n  - text\n  - reading\n---\nChapter one.\n' });
+assert.equal(r5.body.type, 'article', 'a source link still makes an article');
+assert.deepEqual(r5.tags, ['reading']);
+assert.equal(r5.warnings.length, 1);
+assert.match(r5.warnings[0], /"text" was not used/);
+const r5b = read({ markdown: '---\ntitle: Notes\ntags: [article]\n---\nSome notes.\n' });
+assert.equal(r5b.body.type, 'text');
+assert.match(r5b.warnings[0], /"article" was not used/);
+const textExport = contentToMarkdown({ ...item, type: 'text', url: undefined, summary: undefined, comment_summary: undefined }, [], {});
+const r5c = read({ markdown: textExport });
+assert.equal(r5c.body.type, 'text');
+assert.deepEqual(r5c.warnings, [], 'an exported text has its own type tag, no warning');
+console.log('✅ a type tag that differs from the type the note gets is named in the warnings');
+
+// ---- 6. refusals ----------------------------------------------------------------------------
 assert.equal(refused({ markdown: '' }).status, 400);
 assert.equal(refused({ markdown: 42 }).status, 400);
 assert.equal(refused({ markdown: 'Just text, no title anywhere.' }).status, 400);

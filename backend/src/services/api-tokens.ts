@@ -306,11 +306,21 @@ export type TokenRouteDecision =
   | { allowed: true }
   | { allowed: false; error: string };
 
+/** The token route that does what a refused request most likely wanted: a tool that knows
+ *  only the app's routes tries the whole item or the whole library first. */
+function tokenRouteHint(method: string, path: string): string {
+  if (method !== 'GET') return '';
+  const item = path.match(/^\/api\/content\/(\d+)$/);
+  if (item) return `. To read an item, use GET /api/content/${item[1]}/markdown (permission read_library)`;
+  if (path === '/api/content') return '. To list the library, use GET /api/content/index (permission read_library)';
+  return '';
+}
+
 export function tokenRouteDecision(permissions: readonly TokenPermission[], method: string, originalUrl: string): TokenRouteDecision {
   const m = method === 'HEAD' ? 'GET' : method;
   const path = (originalUrl || '').split('?')[0].replace(/\/+$/, '');
   const route = TOKEN_ROUTES.find((r) => r.method === m && r.path.test(path));
-  if (!route) return { allowed: false, error: 'API tokens cannot use this route' };
+  if (!route) return { allowed: false, error: `API tokens cannot use this route${tokenRouteHint(m, path)}` };
   if (route.anyOf === 'any' || route.anyOf.some((p) => permissions.includes(p))) return { allowed: true };
   return { allowed: false, error: `This token needs the ${route.anyOf.join(' or ')} permission for this route` };
 }

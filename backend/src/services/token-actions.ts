@@ -3,7 +3,7 @@ import { normalizeTagList, findReservedTags } from './tags.js';
 import { findItem } from './url-match.js';
 import { normalizeEAForumUrl } from './article-fetcher.js';
 import { youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
-import { parseTagInput } from '../shared/tags.js';
+import { normalizeTag, parseTagInput, TYPE_TAGS } from '../shared/tags.js';
 import { parseFrontmatter, noteProperties, noteHeading, readNoteBody } from './markdown-export.js';
 import {
   reserveItem,
@@ -305,12 +305,20 @@ export function readTokenText(raw: Record<string, unknown>): TokenText | { statu
       return { status: 400, error: `tags must be a non-empty list of strings (max ${MAX_ADD_TAGS})` };
     }
   }
-  // Type tags (an export's first tag) and nosync are dropped, as in the Add tab
-  const tags = parseTagInput((tagsFromField ? (raw.tags as string[]) : props?.tags ?? []).join(','));
+  // Type tags (an export's first tag) and nosync are dropped, as in the Add tab. A type tag
+  // never sets the type, so one that differs from the type this note gets is named.
+  const rawTags = tagsFromField ? (raw.tags as string[]) : props?.tags ?? [];
+  const tags = parseTagInput(rawTags.join(','));
+  const type = source ? 'article' : 'text';
+  for (const tag of new Set(rawTags.map(normalizeTag))) {
+    if ((TYPE_TAGS as readonly string[]).includes(tag) && tag !== type) {
+      warnings.push(`The tag "${tag}" was not used: Wallacast picks the type itself. A note with a source link becomes an article, one without becomes a text.`);
+    }
+  }
 
   const note = readNoteBody(markdown, title);
   if (!note.html.trim()) return { status: 400, error: 'The note holds no text besides its properties' };
-  const body: Record<string, unknown> = { type: source ? 'article' : 'text', title, content: note.html };
+  const body: Record<string, unknown> = { type, title, content: note.html };
   if (source) body.url = source;
   const author = field('author') || props?.author;
   if (author) body.author = author;
