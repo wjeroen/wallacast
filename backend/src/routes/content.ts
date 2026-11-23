@@ -822,12 +822,14 @@ const GENERATION_WORDS: Record<string, string> = {
 // Create new content item
 router.post('/', async (req, res) => {
   try {
-    // An API token sends only a url or a feed_item_id, plus existing tags. shapeTokenAdd turns
-    // that into the body the app itself would send, refuses what the token may not do (a free
-    // url without add_any, an address already in the library), and counts the add against the
-    // token's item limits. The rest of this route then runs as for the app.
+    // An API token sends only a url, a feed_item_id or a Markdown note, plus existing tags.
+    // shapeTokenAdd turns that into the body the app itself would send, refuses what the token
+    // may not do (a free url or a note without add_any, an address already in the library), and
+    // counts the add against the token's item limits. The rest of this route then runs as for
+    // the app.
     const token = req.apiToken;
     let tokenTags: string[] = [];
+    let tokenWarnings: string[] = [];
     if (token) {
       const shaped = await shapeTokenAdd(token, req.body);
       if (!shaped.ok) {
@@ -835,6 +837,7 @@ router.post('/', async (req, res) => {
       }
       req.body = shaped.body;
       tokenTags = shaped.tags;
+      tokenWarnings = shaped.warnings;
     }
     const {
       type: requestedType,
@@ -1434,9 +1437,10 @@ router.post('/', async (req, res) => {
         tags: createdItem.tags,
         comment_count: createdItem.comment_count_total || 0,
         generation: tokenReport,
-        // One plain sentence per skipped generation, so a caller that reads nothing else still
-        // sees that a limit was reached
+        // One plain sentence per thing left out (a note's tag or source, a generation over a
+        // limit), so a caller that reads nothing else still sees it
         warnings: [
+          ...tokenWarnings,
           ...tokenReport.skipped.map((s) => `${GENERATION_WORDS[s.what] ?? s.what} skipped: ${s.reason}`),
           ...(shortTextChars !== undefined
             ? [`Only ${shortTextChars} characters of article text were found, so the page may not have been read fully. Check the item before relying on it.`]

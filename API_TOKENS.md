@@ -34,7 +34,7 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 | `read_library` | `GET /api/content/index`, `GET /api/content/markdown?url=`, `GET /api/content/:id/markdown`, `GET /api/content/summaries?ids=`, `GET /api/content/tags/all` |
 | `feed` | `GET /api/podcasts`, `GET /api/podcasts/feed-items`, `POST /api/podcasts/refresh-feeds`, `GET /api/podcasts/refresh-status` |
 | `subscribe` | `POST /api/podcasts/subscribe`, `DELETE /api/podcasts/:id`, `GET /api/podcasts` |
-| `add_any` | `POST /api/content` with `url` or `feed_item_id`, `GET /api/content/preview` with `url` or `feed_item_id` |
+| `add_any` | `POST /api/content` with `url`, `feed_item_id` or `markdown` (a text), `GET /api/content/preview` with `url` or `feed_item_id` |
 | `add_feed` | the same two routes, but only with `feed_item_id`: items from your own feeds, never a free address |
 | `tag` | `POST /api/content/bulk` with `add_tags` (tags that already exist), and `tags` when adding. `GET /api/content/tags/all` |
 | `star` | `POST /api/content/bulk` with `star` or `unstar` |
@@ -73,9 +73,10 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 ```json
 { "feed_item_id": 123, "tags": ["ai-safety"] }
 { "url": "https://example.com/post", "tags": ["ai-safety"] }
+{ "markdown": "---\ntitle: My notes\nauthor: Me\n---\nThe text...", "tags": ["ai-safety"] }
 ```
 
-`tags` is optional, needs `tag`, and every tag must already exist in the library. Any other field is refused. A feed item is added exactly as the Feed tab's plus button adds it. The answer is `201`:
+`tags` is optional, needs `tag`, and every tag must already exist in the library. Any other field is refused, except the text fields below. A feed item is added exactly as the Feed tab's plus button adds it. The answer is `201`:
 
 ```json
 {
@@ -96,6 +97,17 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 ```
 
 `generation` (one word, no "s") lists what started for the item (`audio`, `summary`, `summary_audio`, `transcript`) and what was skipped and why. `warnings` says the same in one plain sentence per skip, and is empty when nothing was skipped. It also warns when the stored article holds under 500 characters of text, which usually means the page was not read fully. A skipped summary or summary audio is also marked on the item: its `summary_status` or `summary_audio_status` is `skipped`, the reason is in `summary_error` or `summary_audio_error`, and the app shows it on the card with a Generate button. A skipped article audio or transcript is only in the answer and in the app's limit notice. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
+
+#### Adding text
+
+`markdown` (needs `add_any`) adds a text, read exactly as the app's Add tab reads a note pasted into its Text form, so a note with Obsidian properties, such as one the Wallacast import wrote, comes back whole:
+
+- From the properties: `title`, `author`, `published`, `tags`, `description`, and `source` (else `alt-source`). A `source` link makes the item an article with that link, which is never fetched (Refetch in the app still works), and a link already in the library answers `409` with its `id`. Without one, the item is a text.
+- From the body: the summary blocks a Copy content export opens with become the item's summary (no new one is made), a first `# Title` that repeats the title is dropped, and a `# Comments` section in the export's format becomes the item's comments.
+- Optional fields next to `markdown` win over the note's properties: `title`, `author`, `published` (a date), `source` (an http or https link), `description`, `tags`. Without a title anywhere, the note's first `# Heading` is the title, else the add answers `400`.
+- Tags: type tags (`article`, `text`, ...) are dropped. Tags your library does not have yet, and a note's tags when the token lacks `tag`, are left out with a line in `warnings`. A `tags` field without `tag` answers `403`.
+- At most 5,000,000 characters (`413` above). A note with nothing besides its properties answers `400`.
+- It counts as one item, and generation follows the token's generation choice and minute limits, as for any add.
 
 ### Tags, stars and archive
 

@@ -3,6 +3,8 @@ import { normalizeTagList, findReservedTags } from './tags.js';
 import { findItem } from './url-match.js';
 import { normalizeEAForumUrl } from './article-fetcher.js';
 import { youtubeVideoId, youtubeWatchUrl } from '../shared/format.js';
+import { parseTagInput } from '../shared/tags.js';
+import { parseFrontmatter, noteProperties, noteHeading, readNoteBody } from './markdown-export.js';
 import {
   reserveItem,
   reserveSubscription,
@@ -107,16 +109,22 @@ export async function existingTagsOnly(userId: number, raw: unknown): Promise<{ 
   }
   const tags = normalizeTagList(raw);
   if (tags.length === 0) return { error: 'No valid tags given' };
+  const known = await knownTags(userId, tags);
+  const unknown = tags.filter((t) => !known.includes(t));
+  if (unknown.length > 0) {
+    return { error: `Unknown tag(s): ${unknown.join(', ')}. An API token may only use tags that already exist in your library.` };
+  }
+  return { tags };
+}
+
+/** The given (normalized) tags that some item in the user's library already has, in order. */
+async function knownTags(userId: number, tags: string[]): Promise<string[]> {
   const r = await query(
     `SELECT DISTINCT t FROM content_items, unnest(tags) AS t WHERE user_id = $1 AND t = ANY($2::text[])`,
     [userId, tags]
   );
   const known = new Set(r.rows.map((row: any) => row.t));
-  const unknown = tags.filter((t) => !known.has(t));
-  if (unknown.length > 0) {
-    return { error: `Unknown tag(s): ${unknown.join(', ')}. An API token may only use tags that already exist in your library.` };
-  }
-  return { tags };
+  return tags.filter((t) => known.has(t));
 }
 
 /** The library item that already has this address, if any. */
@@ -137,28 +145,34 @@ export async function existingItemIdForUrl(userId: number, url: string): Promise
 }
 
 const TOKEN_ADD_KEYS = ['url', 'feed_item_id', 'tags'];
+/** What a text add may send: the note, and fields that win over its properties */
+const TOKEN_TEXT_KEYS = ['markdown', 'title', 'author', 'published', 'source', 'description', 'tags'];
+/** The longest note a token may add, the 5 MB a fetched page may hold (GET /preview) */
+export const MAX_TOKEN_TEXT_CHARS = 5_000_000;
+/** The most tags one add takes */
+const MAX_ADD_TAGS = 20;
+
+type TokenAddResult = { ok: true; body: Record<string, unknown>; tags: string[]; warnings: string[] } | Refusal;
 
 /**
  * Turn what a token sends to POST /content into the body the app itself would send, or a
- * refusal. A token sends `{ url }` (needs add_any) or `{ feed_item_id }` (add_any or
- * add_feed), plus optional `tags` (needs tag, existing tags only). Nothing else: no content,
- * no comments, no summary, no type. A feed item is rebuilt from the user's own cached feed,
- * the same fields the Feed tab's plus button sends. An address already in the library is a
- * 409 with its id. Only then does the add count against the token's item limits.
+ * refusal. A token sends `{ url }` (needs add_any), `{ feed_item_id }` (add_any or add_feed)
+ * or `{ markdown }` (add_any, see readTokenText), plus optional `tags` (needs tag). A feed item
+ * is rebuilt from the user's own cached feed, the same fields the Feed tab's plus button sends.
+ * An address already in the library is a 409 with its id. Only then does the add count
+ * against the token's item limits.
  */
-export async function shapeTokenAdd(
-  token: TokenRequestContext,
-  raw: unknown
-): Promise<{ ok: true; body: Record<string, unknown>; tags: string[] } | Refusal> {
+export async function shapeTokenAdd(token: TokenRequestContext, raw: unknown): Promise<TokenAddResult> {
   const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  if (body.markdown !== undefined) return shapeTokenText(token, body);
   const extra = Object.keys(body).filter((k) => !TOKEN_ADD_KEYS.includes(k));
   if (extra.length > 0) {
-    return refuse(400, `An API token may send only url, feed_item_id and tags (not: ${extra.join(', ')})`);
+    return refuse(400, `An API token may send url, feed_item_id or markdown, plus tags (not: ${extra.join(', ')})`);
   }
   const hasUrl = body.url !== undefined && body.url !== null && body.url !== '';
   const hasFeedItem = body.feed_item_id !== undefined && body.feed_item_id !== null && body.feed_item_id !== '';
   if (hasUrl === hasFeedItem) {
-    return refuse(400, 'Send either url or feed_item_id');
+    return refuse(400, 'Send one of url, feed_item_id or markdown');
   }
 
   let tags: string[] = [];
@@ -228,7 +242,129 @@ export async function shapeTokenAdd(
   }
   const reserved = await reserveItem(token, 'add', hasUrl ? 'url' : 'feed_item');
   if (!reserved.ok) return limitRefusal(reserved);
-  return { ok: true, body: shaped, tags };
+  return { ok: true, body: shaped, tags, warnings: [] };
+}
+
+export interface TokenText {
+  /** The body the Add tab sends for this note */
+  body: Record<string, unknown>;
+  /** Normalized, type tags dropped, not yet checked against the library */
+  tags: string[];
+  /** The tags came from the `tags` field rather than the note */
+  tagsFromField: boolean;
+  warnings: string[];
+}
+
+/**
+ * A token's text add, read the way the Add tab reads a note pasted into its Text form
+ * (noteProperties and readNoteBody in shared/markdown.ts): the properties give the title,
+ * author, published date, source (else alt-source), description and tags, an export's summary
+ * blocks become the item's summary and its "# Comments" section its comments. A field sent
+ * next to `markdown` wins over the note's property, as a typed field does in the Add tab. The
+ * title falls back to the note's first `# Heading`. A source link makes the item an article
+ * with that link (nothing is fetched), else it is a text. No database here.
+ */
+export function readTokenText(raw: Record<string, unknown>): TokenText | { status: number; error: string } {
+  const markdown = raw.markdown;
+  if (typeof markdown !== 'string' || !markdown.trim()) return { status: 400, error: 'markdown must be a non-empty string' };
+  if (markdown.length > MAX_TOKEN_TEXT_CHARS) return { status: 413, error: `markdown is longer than ${MAX_TOKEN_TEXT_CHARS} characters` };
+  for (const key of ['title', 'author', 'published', 'source', 'description']) {
+    if (raw[key] !== undefined && raw[key] !== null && typeof raw[key] !== 'string') {
+      return { status: 400, error: `${key} must be a string` };
+    }
+  }
+  const field = (key: string) => (typeof raw[key] === 'string' ? (raw[key] as string).trim() : '');
+  const fm = parseFrontmatter(markdown);
+  const props = fm ? noteProperties(fm.meta) : null;
+  const warnings: string[] = [];
+
+  const title = field('title') || props?.title || noteHeading(markdown);
+  if (!title) return { status: 400, error: 'Send a title, or a note with a title property or a "# Title" first line' };
+
+  let source: string | undefined;
+  if (field('source')) {
+    source = parseHttpUrl(field('source')) ?? undefined;
+    if (!source) return { status: 400, error: 'source must be an http or https address' };
+  } else if (props?.source) {
+    source = parseHttpUrl(props.source) ?? undefined;
+    if (!source) warnings.push(`The note's source "${props.source}" is not a web address and was left out`);
+  }
+
+  let publishedAt: string | undefined;
+  const published = field('published') || props?.published || '';
+  if (published) {
+    const date = new Date(published);
+    if (isNaN(date.getTime())) warnings.push(`published "${published}" is not a date and was left out`);
+    else publishedAt = date.toISOString();
+  }
+
+  const tagsFromField = raw.tags !== undefined;
+  if (tagsFromField) {
+    const t = raw.tags;
+    if (!Array.isArray(t) || t.length === 0 || t.length > MAX_ADD_TAGS || !t.every((x) => typeof x === 'string')) {
+      return { status: 400, error: `tags must be a non-empty list of strings (max ${MAX_ADD_TAGS})` };
+    }
+  }
+  // Type tags (an export's first tag) and nosync are dropped, as in the Add tab
+  const tags = parseTagInput((tagsFromField ? (raw.tags as string[]) : props?.tags ?? []).join(','));
+
+  const note = readNoteBody(markdown, title);
+  if (!note.html.trim()) return { status: 400, error: 'The note holds no text besides its properties' };
+  const body: Record<string, unknown> = { type: source ? 'article' : 'text', title, content: note.html };
+  if (source) body.url = source;
+  const author = field('author') || props?.author;
+  if (author) body.author = author;
+  if (publishedAt) body.published_at = publishedAt;
+  const description = field('description') || props?.description;
+  if (description) body.description = description;
+  if (note.comments.length > 0) body.comments = note.comments;
+  if (note.summary) body.summary = note.summary;
+  if (note.comment_summary) body.comment_summary = note.comment_summary;
+  return { body, tags, tagsFromField, warnings };
+}
+
+/** shapeTokenAdd for a note (`markdown`): needs add_any. Tags the library does not have yet,
+ *  or a note's tags when the token may not tag, are left out with a warning. A source link
+ *  that is already in the library is a 409 with the item's id. */
+async function shapeTokenText(token: TokenRequestContext, raw: Record<string, unknown>): Promise<TokenAddResult> {
+  const extra = Object.keys(raw).filter((k) => !TOKEN_TEXT_KEYS.includes(k));
+  if (extra.length > 0) {
+    return refuse(400, `A text add may send only ${TOKEN_TEXT_KEYS.join(', ')} (not: ${extra.join(', ')})`);
+  }
+  if (!token.permissions.includes('add_any')) {
+    return refuse(403, 'This token may only add items from your feed. Adding text needs "Any URL" under Add items.');
+  }
+  const read = readTokenText(raw);
+  if ('error' in read) return refuse(read.status, read.error);
+  const { body, warnings } = read;
+
+  if (typeof body.url === 'string') {
+    const existing = await existingItemIdForUrl(token.userId, body.url);
+    if (existing) return refuse(409, 'This article is already in your library', { id: existing });
+  }
+
+  let tags: string[] = [];
+  if (read.tags.length > 0) {
+    if (!token.permissions.includes('tag')) {
+      if (read.tagsFromField) return refuse(403, 'This token needs the tag permission to add tags');
+      warnings.push(`Tags left out because this token may not tag: ${read.tags.join(', ')}`);
+    } else {
+      const known = await knownTags(token.userId, read.tags);
+      const unknown = read.tags.filter((t) => !known.includes(t));
+      if (unknown.length > 0) warnings.push(`Tags left out because your library does not have them yet: ${unknown.join(', ')}`);
+      if (known.length > MAX_ADD_TAGS) warnings.push(`Only the first ${MAX_ADD_TAGS} tags were added`);
+      tags = known.slice(0, MAX_ADD_TAGS);
+    }
+  }
+  if (tags.length > 0) {
+    const room = await checkChanges(token, tags.length);
+    if (!room.ok) return limitRefusal(room);
+    body.tags = tags;
+  }
+
+  const reserved = await reserveItem(token, 'add', 'text');
+  if (!reserved.ok) return limitRefusal(reserved);
+  return { ok: true, body, tags, warnings };
 }
 
 /**

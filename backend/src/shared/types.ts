@@ -81,6 +81,14 @@ export interface ContentItem {
   summary_audio_error?: string; // Error message when summary_audio_status === 'failed', the reason when 'skipped'
   summary_audio_generated_at?: string; // Also the cache-buster for the summary audio URL
   summary_playback_position?: number; // Separate saved position, never mixed with playback_position
+  heard_at?: string | null; // When the audio last counted as heard (the heard check, AudioPlayer)
+  summary_heard_at?: string | null; // The same for the summary audio
+  // A podcast episode's own loudness in stereo terms (LUFS, the server measures the whole file),
+  // and how many dB the player turns it down (0, or negative when louder than -14)
+  loudness_lufs?: number | null;
+  playback_gain_db?: number;
+  // The server keeps a normalized copy of this podcast episode (backend podcast-cache.ts)
+  has_audio_copy?: boolean;
   versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 

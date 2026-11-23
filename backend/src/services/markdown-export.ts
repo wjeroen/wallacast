@@ -27,6 +27,10 @@ import type { ContentItem, Comment } from '../shared/types.js';
 // pages, because one window keeps memory for every page it parses (html-parser.ts).
 setHtmlParser(renewingHtmlParser());
 
+// The Add tab's Markdown import, for an API token's text add (token-actions.ts). Taken from
+// here rather than from shared/markdown.ts, so the parser above is installed before they run.
+export { parseFrontmatter, noteProperties, noteHeading, readNoteBody } from '../shared/markdown.js';
+
 /** The four "Copy & export" settings, with the same defaults as frontend/src/copy-settings.ts. */
 export const COPY_SETTING_KEYS = [
   'copy_include_summary',

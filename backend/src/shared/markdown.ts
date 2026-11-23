@@ -903,6 +903,64 @@ export function splitExportedComments(markdown: string): { body: string; comment
   return { body: markdown.slice(0, idx).trimEnd(), comments };
 }
 
+/** What a Markdown import reads from a note's properties. The Add tab and an API token's
+ *  text add (backend token-actions.ts) both read a note through these, so they agree. */
+export interface NoteProperties {
+  title: string;
+  author: string;
+  published: string; // as written: an ISO date in an export
+  tags: string[]; // as written, the type tag included
+  source?: string; // http(s) only: `source`, else `alt-source` (an archive mirror), else `url`
+  description: string;
+}
+
+function metaText(v: string | string[] | undefined): string {
+  if (Array.isArray(v)) return v.join(', ');
+  return (v || '').trim();
+}
+
+export function noteProperties(meta: Record<string, string | string[]>): NoteProperties {
+  const rawTags = meta.tags ?? meta.tag;
+  const src = metaText(meta.source || meta['alt-source'] || meta.url);
+  return {
+    title: metaText(meta.title),
+    author: metaText(meta.author),
+    published: metaText(meta.published || meta.date || meta.published_at),
+    tags: Array.isArray(rawTags) ? rawTags : rawTags ? String(rawTags).split(',') : [],
+    source: /^https?:\/\//i.test(src) ? src : undefined,
+    description: metaText(meta.description),
+  };
+}
+
+/** A note's first-line `# Heading`, after its properties and summary blocks, or ''. */
+export function noteHeading(markdown: string): string {
+  const fm = parseFrontmatter(markdown);
+  const body = fm ? splitExportedSummary(fm.body).body : markdown;
+  return body.match(/^\s*#\s+(.+?)\s*\r?\n/)?.[1].trim() || '';
+}
+
+/**
+ * A note's body as the item stores it: without its properties, the summary blocks an export
+ * opens with (read only after a properties block, which makes a leading code block
+ * unambiguous), a first-line `# Title` that repeats `title`, and an exported `# Comments`
+ * section, which comes back as structured comments. The rest becomes HTML.
+ */
+export function readNoteBody(markdown: string, title: string): { html: string; comments: Comment[]; summary?: string; comment_summary?: string } {
+  const fm = parseFrontmatter(markdown);
+  let body = fm ? fm.body : markdown;
+  let summary: string | undefined;
+  let commentSummary: string | undefined;
+  if (fm) {
+    const s = splitExportedSummary(body);
+    body = s.body;
+    summary = s.summary;
+    commentSummary = s.comment_summary;
+  }
+  body = stripLeadingTitle(body, title);
+  const { body: rest, comments } = splitExportedComments(body);
+  return { html: markdownToHtml(rest), comments, summary, comment_summary: commentSummary };
+}
+
 // Readable Markdown export of an item: Obsidian properties, title, body, comments.
 // What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
 // "Copy content" action in both the fullscreen player and the library dropdown.
