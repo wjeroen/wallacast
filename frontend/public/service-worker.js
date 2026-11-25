@@ -83,7 +83,9 @@ self.addEventListener('fetch', (event) => {
             const responseToCache = response.clone();
             const indexShellCopy = response.clone();
             caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseToCache);
+              // A share from another app (/share?text=..., see share_target in manifest.json)
+              // is not kept under its own address, which carries the shared link.
+              if (url.pathname !== '/share') cache.put(request, responseToCache);
               // Also store under a stable '/index.html' key so the offline
               // fallback below can always find a shell to serve, regardless of
               // which SPA route the user first visited.

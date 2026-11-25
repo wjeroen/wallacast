@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Save, Eye, EyeOff, Key, KeyRound, Globe, Check, AlertCircle, Mic, FileText, Copy, Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, Volume2, Square, Tag } from 'lucide-react';
-import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission } from '../api';
+import { authAPI, contentAPI, userSettingsAPI, wallabagAPI, serverError, type PromptDef, type ApiToken, type ApiTokenPatch, type TokenChange, type TokenLimits, type TokenPermission, type TokenGeneration } from '../api';
 import { useAuthStore } from '../store/authStore';
+import { pokeRemote } from '../remote';
 import { SPEED_CATALOG, DEFAULT_SPEEDS, parseSpeedOptions } from '../format';
 
 interface SettingsPageProps {
@@ -100,9 +101,9 @@ function parseVoices(raw: string | null | undefined): TTSVoiceChoice[] {
 // Hints show the app's default model per provider. A blank model field uses that default
 // (CHAT_DEFAULT_MODELS in backend ai-providers.ts, keep the two lists in sync).
 const CHAT_PROVIDERS: Array<{ id: string; label: string; hint: string }> = [
-  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-5-mini' },
+  { id: 'openai', label: 'OpenAI', hint: 'default = gpt-6-luna' },
   { id: 'deepinfra', label: 'DeepInfra', hint: 'default = openai/gpt-oss-120b' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-5-mini' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'default = openai/gpt-6-luna' },
   { id: 'anthropic', label: 'Anthropic (Claude)', hint: 'default = claude-haiku-4-5' },
   { id: 'gemini', label: 'Google Gemini', hint: 'default = gemini-3-flash-preview' },
 ];
@@ -123,14 +124,14 @@ const chatHintFor = (provider: string) => CHAT_PROVIDERS.find(p => p.id === prov
 const IMAGE_MODEL_DEFAULTS: Record<string, string> = {
   gemini: 'gemini-3-flash-preview',
   deepinfra: 'google/gemma-4-26B-A4B-it',
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   openrouter: 'google/gemini-3-flash-preview',
 };
 // Default chat model per provider (mirror of CHAT_DEFAULT_MODELS in backend ai-providers.ts).
 const CHAT_MODEL_DEFAULTS: Record<string, string> = {
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   deepinfra: 'openai/gpt-oss-120b',
-  openrouter: 'openai/gpt-5-mini',
+  openrouter: 'openai/gpt-6-luna',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
 };
@@ -141,17 +142,35 @@ const TOKEN_LIMIT_FIELDS: Array<{ key: keyof TokenLimits; label: string }> = [
   { key: 'items_2d', label: 'Items per 2 days' },
   { key: 'minutes_hour', label: 'Generation minutes per hour' },
   { key: 'minutes_2d', label: 'Generation minutes per 2 days' },
+  { key: 'generations_hour', label: 'Generations per hour' },
+  { key: 'generations_2d', label: 'Generations per 2 days' },
+  { key: 'subscriptions_hour', label: 'Subscriptions per hour' },
 ];
-const TOKEN_GENERATION_FLAGS: Array<{ key: 'audio' | 'summary' | 'summary_audio' | 'transcribe'; label: string }> = [
+// Limits that count items, and limits that count generations
+const TOKEN_ITEM_LIMITS: Array<keyof TokenLimits> = ['items_hour', 'items_2d'];
+const TOKEN_GENERATION_LIMITS: Array<keyof TokenLimits> = ['minutes_hour', 'minutes_2d', 'generations_hour', 'generations_2d'];
+const TOKEN_GENERATE_PERMISSIONS: TokenPermission[] = ['generate_audio', 'generate_summary', 'generate_summary_audio', 'generate_transcript'];
+const TOKEN_CHANGE_WORDS: Record<string, string> = {
+  star: 'Starred',
+  unstar: 'Unstarred',
+  archive: 'Archived',
+  unarchive: 'Unarchived',
+  subscribe: 'Subscribed',
+  unsubscribe: 'Unsubscribed',
+};
+// The same six as the app's automatic settings, in the order Settings shows them
+const TOKEN_GENERATION_FLAGS: Array<{ key: Exclude<keyof TokenGeneration, 'follow'>; label: string }> = [
   { key: 'audio', label: 'Audio for articles' },
-  { key: 'summary', label: 'Summary' },
-  { key: 'summary_audio', label: 'Summary audio' },
   { key: 'transcribe', label: 'Transcript for podcasts' },
+  { key: 'transcribe_video', label: 'Transcript for YouTube videos' },
+  { key: 'summary', label: 'Summary for articles and texts' },
+  { key: 'summary_on_transcript', label: 'Summary for podcasts and videos once transcribed' },
+  { key: 'summary_audio', label: 'Summary audio' },
 ];
 const TOKEN_ADD_MODES: Array<{ mode: 'none' | 'add_feed' | 'add_any'; label: string }> = [
   { mode: 'none', label: 'No' },
   { mode: 'add_feed', label: 'From the feed only' },
-  { mode: 'add_any', label: 'Any URL' },
+  { mode: 'add_any', label: 'Any URL or text' },
 ];
 const formatTokenTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
@@ -220,20 +239,28 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     summary_same_as_narration: 'true', summary_provider: 'openai', summary_model: '', summary_reasoning_effort: '',
     // Transcription (Whisper): provider deepinfra | openai | openrouter
     transcription_provider: 'deepinfra', transcription_model: '',
+    // Gemini model for YouTube video transcripts (blank = backend default, services/video-transcript.ts)
+    video_transcript_model: '',
     // Route Kokoro TTS voices via DeepInfra (default) or via OpenRouter (same voices).
     kokoro_tts_provider: 'deepinfra',
 
     // Image alt-text: provider gemini | deepinfra | openai | openrouter
     gemini_api_key: '',
+    // YouTube Data API: a video's description, date, length, counts and comments (backend services/youtube.ts)
+    youtube_api_key: '',
     image_alt_text_enabled: 'true',
     image_alt_text_provider: 'gemini',
     image_alt_text_model: '',
 
     auto_transcribe_podcasts: 'true',
+    auto_transcribe_videos: 'true',
     auto_generate_audio_for_articles: 'false',
+    auto_audio_cap_enabled: 'false',
+    auto_audio_max_chars: '30000',
     generate_read_along: 'true',
     // Summaries
     auto_generate_summary: 'false',
+    auto_generate_summary_on_transcript: 'true',
     auto_generate_summary_audio: 'false',
     summarize_comments: 'true',
     summary_max_words: '40',
@@ -301,7 +328,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const deriveLegacy = (llm: string) => {
         if (llm === 'openai-mini' || llm === 'openai') return { provider: 'openai', model: CHAT_MODEL_DEFAULTS.openai };
         if (llm === 'deepseek') return { provider: 'deepinfra', model: 'deepseek-ai/DeepSeek-V3.2' };
-        // 'auto': first provider with a configured key, in recommendation order (GPT-5 Mini first).
+        // 'auto': first provider with a configured key, in recommendation order (GPT-6 Luna first).
         const keyByProvider: Array<[string, unknown]> = [
           ['openai', loaded.openai_api_key], ['deepinfra', loaded.deepinfra_api_key],
           ['anthropic', loaded.anthropic_api_key], ['gemini', loaded.gemini_api_key],
@@ -352,17 +379,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         summary_reasoning_effort: loaded.summary_reasoning_effort || '',
         transcription_provider: transProvider,
         transcription_model: loaded.transcription_model || '',
+        video_transcript_model: loaded.video_transcript_model || '',
         kokoro_tts_provider: loaded.kokoro_tts_provider || 'deepinfra',
 
         gemini_api_key: loaded.gemini_api_key === '••••••••' ? '' : (loaded.gemini_api_key || ''),
+        youtube_api_key: loaded.youtube_api_key === '••••••••' ? '' : (loaded.youtube_api_key || ''),
         image_alt_text_enabled: loaded.image_alt_text_enabled !== undefined && loaded.image_alt_text_enabled !== null ? loaded.image_alt_text_enabled : 'true',
         image_alt_text_provider: loaded.image_alt_text_provider || defaultImageProvider,
         image_alt_text_model: loaded.image_alt_text_model || '',
 
         auto_transcribe_podcasts: loaded.auto_transcribe_podcasts !== undefined && loaded.auto_transcribe_podcasts !== null ? loaded.auto_transcribe_podcasts : 'true',
+        auto_transcribe_videos: loaded.auto_transcribe_videos !== undefined && loaded.auto_transcribe_videos !== null ? loaded.auto_transcribe_videos : 'true',
         auto_generate_audio_for_articles: loaded.auto_generate_audio_for_articles !== undefined && loaded.auto_generate_audio_for_articles !== null ? loaded.auto_generate_audio_for_articles : 'false',
         generate_read_along: loaded.generate_read_along !== undefined && loaded.generate_read_along !== null ? loaded.generate_read_along : 'true',
         auto_generate_summary: loaded.auto_generate_summary !== undefined && loaded.auto_generate_summary !== null ? loaded.auto_generate_summary : 'false',
+        auto_generate_summary_on_transcript: loaded.auto_generate_summary_on_transcript !== undefined && loaded.auto_generate_summary_on_transcript !== null ? loaded.auto_generate_summary_on_transcript : 'true',
         auto_generate_summary_audio: loaded.auto_generate_summary_audio !== undefined && loaded.auto_generate_summary_audio !== null ? loaded.auto_generate_summary_audio : 'false',
         summarize_comments: loaded.summarize_comments !== undefined && loaded.summarize_comments !== null ? loaded.summarize_comments : 'true',
         summary_max_words: loaded.summary_max_words || '40',
@@ -375,6 +406,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         narrate_ea_forum_comments: loaded.narrate_ea_forum_comments !== undefined && loaded.narrate_ea_forum_comments !== null ? loaded.narrate_ea_forum_comments : 'true',
         narrate_substack_comments: loaded.narrate_substack_comments !== undefined && loaded.narrate_substack_comments !== null ? loaded.narrate_substack_comments : 'true',
         max_narrated_comments: loaded.max_narrated_comments || '50',
+        auto_audio_cap_enabled: loaded.auto_audio_cap_enabled === 'true' ? 'true' : 'false',
+        auto_audio_max_chars: loaded.auto_audio_max_chars || '30000',
         manual_queue_always_autoplay: loaded.manual_queue_always_autoplay !== undefined && loaded.manual_queue_always_autoplay !== null ? loaded.manual_queue_always_autoplay : 'true',
         show_continue_listening: loaded.show_continue_listening !== undefined && loaded.show_continue_listening !== null ? loaded.show_continue_listening : 'true',
         warn_archive_removes_audio: loaded.warn_archive_removes_audio !== undefined && loaded.warn_archive_removes_audio !== null ? loaded.warn_archive_removes_audio : 'true',
@@ -539,7 +572,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       // Per-job config + the "same as narration" toggles must save even when empty/false
       // (so clearing a model or unticking a box actually takes effect).
       const alwaysSave = new Set([
-        'auto_transcribe_podcasts', 'auto_generate_audio_for_articles', 'auto_generate_summary',
+        'auto_transcribe_podcasts', 'auto_transcribe_videos', 'auto_generate_audio_for_articles', 'auto_audio_cap_enabled', 'auto_generate_summary', 'auto_generate_summary_on_transcript',
         'auto_generate_summary_audio',
         'summarize_comments', 'library_show_summary', 'copy_include_summary', 'copy_include_comment_summary', 'copy_summary_code_label', 'copy_include_comments', 'wallabag_sync_enabled', 'image_alt_text_enabled',
         'narrate_ea_forum_comments', 'narrate_substack_comments', 'manual_queue_always_autoplay', 'autoplay_on_open',
@@ -547,7 +580,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         'narration_provider', 'narration_model', 'narration_reasoning_effort',
         'alignment_same_as_narration', 'alignment_provider', 'alignment_model', 'alignment_reasoning_effort',
         'summary_same_as_narration', 'summary_provider', 'summary_model', 'summary_reasoning_effort',
-        'transcription_provider', 'transcription_model', 'kokoro_tts_provider',
+        'transcription_provider', 'transcription_model', 'video_transcript_model', 'kokoro_tts_provider',
         'image_alt_text_provider', 'image_alt_text_model',
       ]);
 
@@ -693,8 +726,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       const response = await contentAPI.renameTag(tag, to);
       alert(`Renamed on ${response.data.affected} item(s). The change syncs to Wallabag on the next sync.`);
       await loadTagList();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Rename failed');
+    } catch (err) {
+      alert(serverError(err, 'Rename failed'));
     } finally {
       setTagBusy(false);
     }
@@ -706,8 +739,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await contentAPI.removeTag(tag);
       await loadTagList();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Delete failed');
+    } catch (err) {
+      alert(serverError(err, 'Delete failed'));
     } finally {
       setTagBusy(false);
     }
@@ -757,8 +790,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setTokenCopied(false);
       setNewTokenName('');
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not create the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not create the token'));
     } finally {
       setTokenBusy(false);
     }
@@ -780,9 +813,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setTokenBusy(true);
     try {
       await authAPI.revokeToken(token.id);
+      pokeRemote();
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not revoke the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not revoke the token'));
     } finally {
       setTokenBusy(false);
     }
@@ -802,9 +836,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       const response = await authAPI.updateToken(token.id, patch);
       setApiTokens(list => list && list.map(t => (t.id === token.id ? { ...t, ...response.data } : t)));
+      pokeRemote();
       return true;
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not change the token');
+    } catch (err) {
+      alert(serverError(err, 'Could not change the token'));
       return false;
     } finally {
       setTokenEditBusy(null);
@@ -844,8 +879,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await authAPI.resetTokenUsage(token.id);
       await loadApiTokens();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not reset the usage');
+    } catch (err) {
+      alert(serverError(err, 'Could not reset the usage'));
     } finally {
       setTokenEditBusy(null);
     }
@@ -879,18 +914,30 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     try {
       await authAPI.undoTokenChanges(token.id, body);
       await Promise.all([loadTokenChanges(token), loadApiTokens()]);
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Could not undo the changes');
+    } catch (err) {
+      alert(serverError(err, 'Could not undo the changes'));
     } finally {
       setTokenEditBusy(null);
     }
   };
 
-  // The editor panel under a token row. Limits and generation only apply to a token that may
-  // add items, the change log only to one that may tag or star.
+  // The editor panel under a token row. Item and minute limits and generation only apply to a
+  // token that may add items, the subscription limit to one that may subscribe, the change log
+  // to one that may change items or feeds.
   const renderTokenEditor = (t: ApiToken) => {
     const busy = tokenEditBusy === t.id;
     const canAdd = t.permissions.includes('add_any') || t.permissions.includes('add_feed');
+    const canSubscribe = t.permissions.includes('subscribe');
+    const canRefetch = t.permissions.includes('refetch');
+    const canGenerate = TOKEN_GENERATE_PERMISSIONS.some(p => t.permissions.includes(p));
+    // Which limits apply: items for adds and refetches, generations for adds and generate
+    // permissions, subscriptions for subscribing
+    const limitShown = (key: keyof TokenLimits) =>
+      key === 'subscriptions_hour' ? canSubscribe
+        : TOKEN_ITEM_LIMITS.includes(key) ? canAdd || canRefetch
+          : TOKEN_GENERATION_LIMITS.includes(key) ? canAdd || canGenerate
+            : canAdd;
+    const canChange = (['tag', 'star', 'archive', 'subscribe'] as TokenPermission[]).some(p => t.permissions.includes(p));
     const addMode = t.permissions.includes('add_any') ? 'add_any' : t.permissions.includes('add_feed') ? 'add_feed' : 'none';
     const permissionBox = (permission: TokenPermission, label: string) => (
       <label>
@@ -926,13 +973,21 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
           {permissionBox('tag', 'Add existing tags')}
           {permissionBox('star', 'Star and unstar')}
+          {permissionBox('archive', 'Archive and unarchive')}
+          {permissionBox('subscribe', 'Subscribe to feeds')}
+          {permissionBox('remote', 'Control playback')}
+          {permissionBox('refetch', 'Refetch items')}
+          {permissionBox('generate_audio', 'Generate audio')}
+          {permissionBox('generate_summary', 'Generate summaries')}
+          {permissionBox('generate_summary_audio', 'Generate summary audio')}
+          {permissionBox('generate_transcript', 'Generate transcripts')}
         </div>
 
-        {canAdd && (
+        {(canAdd || canSubscribe || canRefetch || canGenerate) && (
           <div className="settings-token-editor-group">
             <span className="settings-token-editor-title">Limits</span>
             <div className="settings-token-limits">
-              {TOKEN_LIMIT_FIELDS.map(({ key, label }) => (
+              {TOKEN_LIMIT_FIELDS.filter(({ key }) => limitShown(key)).map(({ key, label }) => (
                 <div key={key} className="settings-token-limit">
                   <label htmlFor={`token-${t.id}-${key}`}>{label}</label>
                   <input
@@ -951,7 +1006,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </div>
               ))}
             </div>
-            <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>
+            {(canAdd || canGenerate) && <p className="settings-hint">Audio and transcripts count their full length in minutes, a summary a tenth of its article's minutes.</p>}
             <button type="button" disabled={busy} onClick={() => handleResetTokenUsage(t)}>Reset usage</button>
           </div>
         )}
@@ -986,7 +1041,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           </div>
         )}
 
-        {(t.permissions.includes('tag') || t.permissions.includes('star')) && (
+        {canChange && (
           <div className="settings-token-editor-group">
             <span className="settings-token-editor-title">Changes</span>
             <button type="button" disabled={busy} onClick={() => toggleTokenChanges(t)} aria-expanded={showTokenChanges}>
@@ -1002,7 +1057,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   {tokenChanges.map((c) => (
                     <div key={c.id} className={c.undone_at ? 'settings-token-change undone' : 'settings-token-change'}>
                       <span className="settings-token-change-when">{formatTokenTime(c.created_at)}</span>
-                      <span>{c.kind === 'tag_add' ? `Added tag "${c.tag}"` : c.kind === 'star' ? 'Starred' : 'Unstarred'}</span>
+                      <span>{c.kind === 'tag_add' ? `Added tag "${c.tag}"` : TOKEN_CHANGE_WORDS[c.kind]}</span>
                       <span className="settings-token-change-item">{c.title ?? 'Deleted item'}</span>
                       {c.undone_at ? (
                         <span>Undone</span>
@@ -1059,9 +1114,19 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     { name: 'Narration scripts, read-along alignment and summaries', ok: hasOpenAIKey || hasDeepInfraKey || hasOpenRouterKey || hasAnthropicKey || hasGeminiKey, needs: 'any API key' },
     { name: 'Audio narration (TTS voices)', ok: hasOpenAIKey || canUseKokoroVoices, needs: 'an OpenAI, DeepInfra, or OpenRouter key' },
     { name: 'Podcast transcription', ok: hasDeepInfraKey || hasOpenAIKey, needs: 'a DeepInfra or OpenAI key' },
+    { name: 'Video transcription', ok: hasGeminiKey, needs: 'a Gemini key' },
     { name: 'Image descriptions', ok: hasDeepInfraKey || hasGeminiKey || hasOpenRouterKey || hasOpenAIKey, needs: 'a DeepInfra, OpenAI, Gemini, or OpenRouter key' },
   ];
   const allFeaturesAvailable = featureAccess.every(f => f.ok);
+
+  // "Paragraphs shown" on library cards: 1 up to one less than the longest summary the length
+  // settings allow (that many is what "All" shows), plus a saved number above that, so a
+  // shortened tier list never hides the current choice.
+  const longestSummary = Math.max(...summaryTiers.map(t => t.maxTweets));
+  const paragraphChoices = Array.from({ length: Math.max(0, longestSummary - 1) }, (_, i) => String(i + 1));
+  if (formData.library_summary_paragraphs !== 'all' && !paragraphChoices.includes(formData.library_summary_paragraphs)) {
+    paragraphChoices.push(formData.library_summary_paragraphs);
+  }
 
   return (
     <div className="settings-page">
@@ -1154,6 +1219,31 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </label>
            </div>
 
+           {formData.auto_generate_audio_for_articles === 'true' && (
+             <div className="form-group checkbox-group settings-indent">
+               <label>
+                 <input
+                   type="checkbox"
+                   checked={formData.auto_audio_cap_enabled === 'true'}
+                   onChange={(e) => handleChange('auto_audio_cap_enabled', e.target.checked ? 'true' : 'false')}
+                 />
+                 Only under
+                 <input
+                   type="number"
+                   min="1"
+                   max="10000000"
+                   value={formData.auto_audio_max_chars}
+                   onChange={(e) => handleChange('auto_audio_max_chars', e.target.value)}
+                   style={{ marginLeft: '0.5rem', marginRight: '0.5rem', width: '6rem' }}
+                 />
+                 characters
+               </label>
+               <small className="settings-hint indent">
+                 Comments count only when they are narrated.
+               </small>
+             </div>
+           )}
+
            <div className="form-group checkbox-group">
               <label>
                 <input
@@ -1162,6 +1252,17 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   onChange={(e) => handleChange('auto_transcribe_podcasts', e.target.checked ? 'true' : 'false')}
                 />
                 Auto-transcribe podcasts
+              </label>
+           </div>
+
+           <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={formData.auto_transcribe_videos === 'true'}
+                  onChange={(e) => handleChange('auto_transcribe_videos', e.target.checked ? 'true' : 'false')}
+                />
+                Auto-transcribe YouTube videos
               </label>
            </div>
 
@@ -1308,7 +1409,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 checked={formData.auto_generate_summary === 'true'}
                 onChange={(e) => handleChange('auto_generate_summary', e.target.checked ? 'true' : 'false')}
               />
-              Auto-generate a summary when an article is added
+              Auto-generate a summary when an article or text is added
+            </label>
+          </div>
+
+          <div className="form-group checkbox-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={formData.auto_generate_summary_on_transcript === 'true'}
+                onChange={(e) => handleChange('auto_generate_summary_on_transcript', e.target.checked ? 'true' : 'false')}
+              />
+              Auto-generate a summary when a podcast or video is transcribed
             </label>
           </div>
 
@@ -1363,9 +1475,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   value={formData.library_summary_paragraphs}
                   onChange={(e) => handleChange('library_summary_paragraphs', e.target.value)}
                 >
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
+                  {paragraphChoices.map(n => <option key={n} value={n}>{n}</option>)}
                   <option value="all">All</option>
                 </select>
               </div>
@@ -1585,7 +1695,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <p className="section-description">
             Add a key for each service you want to use. Each one lists the features it can power.
             <br />
-            Recommended: GPT-5 Mini (OpenAI) for narration and read-along, DeepInfra for transcription and TTS.
+            Recommended: GPT-6 Luna (OpenAI) for narration and read-along, DeepInfra for podcast transcripts and TTS.
             <br />
             <a href="https://openrouter.ai/compare/" target="_blank" rel="noopener noreferrer" style={{color: '#4a90e2'}}>Compare model pricing across providers</a>.
           </p>
@@ -1615,7 +1725,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, podcast transcripts, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -1643,7 +1753,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, TTS, transcription, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, TTS, podcast transcripts, image descriptions.</small>
           </div>
 
           <div className="form-group">
@@ -1727,7 +1837,35 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 </button>
               )}
             </div>
-            <small className="settings-hint">Narration, read-along, summaries, image descriptions.</small>
+            <small className="settings-hint">Narration, read-along, summaries, video transcripts, image descriptions.</small>
+          </div>
+
+          <div className="form-group">
+            <label>
+              <Key size={16} /> YouTube API Key
+              {isSecretSet('youtube_api_key')
+                ? <span className="secret-set">(configured)</span>
+                : <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" className="get-key-link">(get a key)</a>}
+            </label>
+            <div className="input-row">
+              <div className="input-with-toggle">
+                <input
+                  type={showSecrets['youtube_api_key'] ? 'text' : 'password'}
+                  value={formData.youtube_api_key}
+                  onChange={(e) => handleChange('youtube_api_key', e.target.value)}
+                  placeholder={isSecretSet('youtube_api_key') ? '••••••••' : 'YouTube Data API v3 key...'}
+                />
+                <button type="button" onClick={() => toggleShowSecret('youtube_api_key')} className="toggle-visibility">
+                  {showSecrets['youtube_api_key'] ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {isSecretSet('youtube_api_key') && (
+                <button type="button" onClick={() => removeApiKey('youtube_api_key', 'YouTube API key')} className="key-remove-button" title="Remove this key">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
+            <small className="settings-hint">Video descriptions, dates, lengths, views, comment counts and comments.</small>
           </div>
         </section>
 
@@ -1771,6 +1909,22 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   value={formData.transcription_model}
                   onChange={(e) => handleChange('transcription_model', e.target.value)}
                   placeholder={TRANSCRIPTION_PROVIDERS.find(p => p.id === formData.transcription_provider)?.hint || 'model name'}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="form-group ai-job">
+            <label>Video transcripts</label>
+            <small className="settings-hint" style={{ marginBottom: '0.5rem' }}>Turns YouTube videos into text (Gemini).</small>
+            <div className="ai-job-fields">
+              <div className="ai-field">
+                <span className="ai-field-label">Model</span>
+                <input
+                  type="text"
+                  value={formData.video_transcript_model}
+                  onChange={(e) => handleChange('video_transcript_model', e.target.value)}
+                  placeholder="default = gemini-3.8-flash"
                 />
               </div>
             </div>

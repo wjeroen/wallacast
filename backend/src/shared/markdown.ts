@@ -128,10 +128,9 @@ function buildTurndown(): TurndownService {
       const rawHref = el.getAttribute('href') || '';
       // The ordinary case: a link whose content is a phrase, or a single image.
       if (!/\n/.test(body) && !el.querySelector(BLOCK_LEVEL_SELECTOR)) {
-        const href = rawHref.replace(/([()])/g, '\$1');
         const rawTitle = (el.getAttribute('title') || '').replace(/(\n+\s*)+/g, '\n');
         const title = rawTitle ? ` "${rawTitle.replace(/"/g, '\\"')}"` : '';
-        return `[${body}](${href}${title})`;
+        return `[${body}](${rawHref}${title})`;
       }
       const scope = el.closest('blockquote, figure, li, section, article, aside, table, div') || el.parentElement;
       const linkedNearby = !!scope && Array.from(scope.querySelectorAll('a[href]'))
@@ -216,6 +215,13 @@ const RAW_FIGURE_MAX_CHARS = 1500;
 //   (inline sizing styles dropped), and its caption; when nothing displayable survives, a
 //   short note marks the omission.
 function preprocessForExport(doc: Document): string[] {
+  // What the Content tab never shows: scripts and stylesheets (their code would come out as
+  // text), the text a page has for browsers without scripts ("This website requires
+  // javascript"), and inert <template> content. The sanitizer drops the first three and a
+  // browser never renders the last, so Copy content and the editor leave them out too and
+  // every view holds the same text (backend/scripts/test-views-match.mts).
+  doc.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+
   const mathTexts: string[] = [];
   doc.querySelectorAll('math').forEach((math) => {
     const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
@@ -610,7 +616,7 @@ function isoDate(value?: string | null): string | null {
 /**
  * The Obsidian-properties block for an item. Only keys Obsidian understands natively get
  * special treatment (`tags` is a real tag list, ISO dates become Date properties); the rest
- * are plain text. The first tag is always the item's type tag (article / text / podcast).
+ * are plain text. The first tag is always the item's type tag (article / text / podcast / video).
  * `source` is the human URL (the EA Forum bot mirror is rewritten back), never a synthetic
  * `wallacast://` one. No internal ids: an import creates a NEW item, it never overwrites.
  */
@@ -643,12 +649,13 @@ export function buildFrontmatter(item: ContentItem, comments: Comment[]): string
   }
   out.push('tags:');
   for (const t of tags) out.push(`  - ${t}`);
-  // A podcast's description IS the body (see contentToMarkdown), so no property for it.
-  if (item.type !== 'podcast_episode' && item.description) {
+  // A podcast's or video's description IS the body (see contentToMarkdown), so no property for it.
+  const descriptionIsBody = item.type === 'podcast_episode' || item.type === 'video';
+  if (!descriptionIsBody && item.description) {
     const d = cleanHtml(item.description).replace(/\s+/g, ' ').trim();
     if (d) out.push(`description: ${yamlStr(d)}`);
   }
-  if (item.type === 'podcast_episode' && item.duration) {
+  if (descriptionIsBody && item.duration) {
     out.push(`duration: ${yamlStr(formatDuration(item.duration))}`);
   }
   if (item.karma !== undefined && item.karma !== null) out.push(`upvotes: ${item.karma}`);
@@ -895,6 +902,64 @@ export function splitExportedComments(markdown: string): { body: string; comment
   return { body: markdown.slice(0, idx).trimEnd(), comments };
 }
 
+/** What a Markdown import reads from a note's properties. The Add tab and an API token's
+ *  text add (backend token-actions.ts) both read a note through these, so they agree. */
+export interface NoteProperties {
+  title: string;
+  author: string;
+  published: string; // as written: an ISO date in an export
+  tags: string[]; // as written, the type tag included
+  source?: string; // http(s) only: `source`, else `alt-source` (an archive mirror), else `url`
+  description: string;
+}
+
+function metaText(v: string | string[] | undefined): string {
+  if (Array.isArray(v)) return v.join(', ');
+  return (v || '').trim();
+}
+
+export function noteProperties(meta: Record<string, string | string[]>): NoteProperties {
+  const rawTags = meta.tags ?? meta.tag;
+  const src = metaText(meta.source || meta['alt-source'] || meta.url);
+  return {
+    title: metaText(meta.title),
+    author: metaText(meta.author),
+    published: metaText(meta.published || meta.date || meta.published_at),
+    tags: Array.isArray(rawTags) ? rawTags : rawTags ? String(rawTags).split(',') : [],
+    source: /^https?:\/\//i.test(src) ? src : undefined,
+    description: metaText(meta.description),
+  };
+}
+
+/** A note's first-line `# Heading`, after its properties and summary blocks, or ''. */
+export function noteHeading(markdown: string): string {
+  const fm = parseFrontmatter(markdown);
+  const body = fm ? splitExportedSummary(fm.body).body : markdown;
+  return body.match(/^\s*#\s+(.+?)\s*\r?\n/)?.[1].trim() || '';
+}
+
+/**
+ * A note's body as the item stores it: without its properties, the summary blocks an export
+ * opens with (read only after a properties block, which makes a leading code block
+ * unambiguous), a first-line `# Title` that repeats `title`, and an exported `# Comments`
+ * section, which comes back as structured comments. The rest becomes HTML.
+ */
+export function readNoteBody(markdown: string, title: string): { html: string; comments: Comment[]; summary?: string; comment_summary?: string } {
+  const fm = parseFrontmatter(markdown);
+  let body = fm ? fm.body : markdown;
+  let summary: string | undefined;
+  let commentSummary: string | undefined;
+  if (fm) {
+    const s = splitExportedSummary(body);
+    body = s.body;
+    summary = s.summary;
+    commentSummary = s.comment_summary;
+  }
+  body = stripLeadingTitle(body, title);
+  const { body: rest, comments } = splitExportedComments(body);
+  return { html: markdownToHtml(rest), comments, summary, comment_summary: commentSummary };
+}
+
 // Readable Markdown export of an item: Obsidian properties, title, body, comments.
 // What Ctrl+A/Ctrl+C *should* give you without the app chrome. Powers the
 // "Copy content" action in both the fullscreen player and the library dropdown.
@@ -1024,7 +1089,7 @@ function timestampedTranscript(raw: unknown): string | null {
  * Wallabag sync store an empty value instead), so there a non-empty value is enough.
  */
 export function exportHasTranscript(item: Pick<ContentItem, 'type' | 'transcript'>): boolean {
-  return item.type === 'podcast_episode' && !!item.transcript?.trim();
+  return (item.type === 'podcast_episode' || item.type === 'video') && !!item.transcript?.trim();
 }
 
 export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: CopyContentOptions = {}): string {
@@ -1037,10 +1102,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
 
   lines.push('', `# ${item.title}`);
 
-  // Podcasts: description first, then the transcript, each only when present
-  // (the `content` field is deliberately not used for podcasts). Articles/texts
-  // keep the html_content body with the plain-content fallback.
-  const body = item.type === 'podcast_episode'
+  // Podcasts and videos: description first, then the transcript, each only when present
+  // (the `content` field is deliberately not used for them). Articles/texts keep the
+  // html_content body with the plain-content fallback.
+  const body = item.type === 'podcast_episode' || item.type === 'video'
     ? [
         item.description ? htmlToMarkdown(item.description) : '',
         exportHasTranscript(item)
@@ -1065,7 +1130,9 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
     const renderComment = (c: Comment, depth: number): string => {
       const head: string[] = [c.username];
       if (c.karma !== undefined && c.karma !== null) head.push(`${c.karma} points`);
-      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB'));
+      // In UTC, like the published date above (isoDate), so the browser's Copy content and the
+      // server's (the Obsidian import) give the same day wherever they run
+      if (c.date) head.push(new Date(c.date).toLocaleDateString('en-GB', { timeZone: 'UTC' }));
       const block = `**${head.join(' • ')}**\n\n${htmlToMarkdown(c.content)}`;
       // Replies become nested Markdown quotes
       const prefixed = depth > 0
@@ -1074,7 +1141,10 @@ export function contentToMarkdown(item: ContentItem, comments: Comment[], opts: 
       const replies = (c.replies || []).map(r => renderComment(r, depth + 1));
       return [prefixed, ...replies].join('\n\n');
     };
-    lines.push('', `# Comments (${item.comment_count || comments.length})`, '');
+    // A video lists only YouTube's most relevant comments, while its comment_count is
+    // YouTube's total, so its heading counts the listed ones
+    const listed = (list: Comment[]): number => list.reduce((n, c) => n + 1 + listed(c.replies || []), 0);
+    lines.push('', `# Comments (${item.type === 'video' ? listed(comments) : (item.comment_count || comments.length)})`, '');
     lines.push(comments.map(c => renderComment(c, 0)).join('\n\n---\n\n'));
   }
 

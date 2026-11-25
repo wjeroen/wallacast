@@ -1,15 +1,28 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Newspaper, NotebookPen, Upload, Podcast } from 'lucide-react';
-import { contentAPI } from '../api';
-import { markdownToHtml, parseFrontmatter, splitExportedComments, splitExportedSummary, stripLeadingTitle } from '../markdown';
+import { contentAPI, errorAnswer } from '../api';
+import { noteProperties, parseFrontmatter, readNoteBody, splitExportedComments, splitExportedSummary } from '../markdown';
 import { parseTagInput } from '../tags';
+import { rememberShare } from '../share';
 import type { ContentItem } from '../types';
 
 type ContentType = 'article' | 'text' | 'upload' | 'podcast_episode';
 type TextFormat = 'markdown' | 'html';
 
+// Something shared to Wallacast from another app through the Android share menu (see
+// takeSharedContent() in App.tsx). A link is saved at once as an article (a YouTube link
+// becomes a video on the server), plain text fills in the Text form.
+export interface SharedContent {
+  key: number;
+  url?: string;
+  text?: string;
+  title?: string;
+}
+
 interface AddTabProps {
   onContentAdded: (item: ContentItem) => void;
+  shared?: SharedContent | null;
+  onSharedHandled?: () => void;
 }
 
 // What a leading Obsidian-properties block (YAML frontmatter) contributed: shown as a
@@ -29,12 +42,7 @@ function toDateInput(value: string): string {
   return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 
-function metaString(v: string | string[] | undefined): string {
-  if (Array.isArray(v)) return v.join(', ');
-  return (v || '').trim();
-}
-
-export function AddTab({ onContentAdded }: AddTabProps) {
+export function AddTab({ onContentAdded, shared, onSharedHandled }: AddTabProps) {
   const [contentType, setContentType] = useState<ContentType>('article');
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -45,6 +53,8 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   const [textFormat, setTextFormat] = useState<TextFormat>('markdown');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  // A shared link that is already in the library is good news, not an error
+  const [messageIsGood, setMessageIsGood] = useState(false);
   // archive.ph address that makes a copy of an article the server could not fetch (see
   // ArticleUnavailableError in article-fetcher.ts). Adding the article again finds that copy.
   const [archiveLink, setArchiveLink] = useState<string | null>(null);
@@ -76,7 +86,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       // Auto-fill title from filename (strip extension), unless the file carries an
       // Obsidian-properties title, which the frontmatter effect below fills in instead.
       const fm = parseFrontmatter(content);
-      const fmTitle = fm ? metaString(fm.meta.title) : '';
+      const fmTitle = fm ? noteProperties(fm.meta).title : '';
       if (!fmTitle) {
         setTitle(prev => prev || file.name.replace(/\.(html|htm|md|markdown|txt)$/i, ''));
       }
@@ -105,28 +115,20 @@ export function AddTab({ onContentAdded }: AddTabProps) {
     const key = markdownSource.slice(0, markdownSource.length - fm.body.length);
     if (importMeta?.key === key) return;
 
-    const m = fm.meta;
+    const props = noteProperties(fm.meta);
     const detected: string[] = [];
-    const t = metaString(m.title);
-    if (t && !title) { setTitle(t); detected.push('title'); }
-    const a = metaString(m.author);
-    if (a && !author) { setAuthor(a); detected.push('author'); }
-    const p = metaString(m.published || m.date || m.published_at);
-    const pd = p ? toDateInput(p) : '';
+    if (props.title && !title) { setTitle(props.title); detected.push('title'); }
+    if (props.author && !author) { setAuthor(props.author); detected.push('author'); }
+    const pd = props.published ? toDateInput(props.published) : '';
     if (pd && !publishedDate) { setPublishedDate(pd); detected.push('date'); }
-    const rawTags = m.tags ?? m.tag;
-    const tagList = Array.isArray(rawTags) ? rawTags : rawTags ? String(rawTags).split(',') : [];
-    const cleaned = parseTagInput(tagList.join(','));  // type tags (article/text/podcast) are dropped
+    const cleaned = parseTagInput(props.tags.join(','));  // type tags (article/text/podcast/video) are dropped
     if (cleaned.length > 0 && !tagsInput) {
       setTagsInput(cleaned.join(', '));
       detected.push(`${cleaned.length} tag${cleaned.length === 1 ? '' : 's'}`);
     }
-    // `alt-source` is the export's second address for the same article (an archive mirror),
-    // used only when the note carries no `source`.
-    const src = metaString(m.source || m['alt-source'] || m.url);
-    const source = /^https?:\/\//i.test(src) ? src : undefined;
+    const source = props.source;
     if (source) detected.push('source URL');
-    const description = metaString(m.description) || undefined;
+    const description = props.description || undefined;
     if (description) detected.push('description');
     if (splitExportedSummary(fm.body).summary) detected.push('summary');
     if (splitExportedComments(fm.body).comments.length > 0) detected.push('comments');
@@ -138,54 +140,75 @@ export function AddTab({ onContentAdded }: AddTabProps) {
   // back into structured comments, convert the rest to HTML. A source URL makes it an
   // article (kept for provenance, nothing is fetched; "Refetch from web" still works).
   const applyMarkdownImport = (data: Record<string, unknown>, md: string) => {
+    const note = readNoteBody(md, title);
+    if (note.summary) data.summary = note.summary;
+    if (note.comment_summary) data.comment_summary = note.comment_summary;
+    data.content = note.html;
+    if (note.comments.length > 0) data.comments = note.comments;
     const fm = parseFrontmatter(md);
-    let body = fm ? fm.body : md;
     if (fm) {
-      // Summary blocks sit between the properties and the title in an export
-      const s = splitExportedSummary(body);
-      body = s.body;
-      if (s.summary) data.summary = s.summary;
-      if (s.comment_summary) data.comment_summary = s.comment_summary;
-    }
-    body = stripLeadingTitle(body, title);
-    const { body: bodyWithoutComments, comments } = splitExportedComments(body);
-    data.content = markdownToHtml(bodyWithoutComments);
-    if (comments.length > 0) data.comments = comments;
-    if (fm) {
-      const src = metaString(fm.meta.source || fm.meta['alt-source'] || fm.meta.url);
-      if (/^https?:\/\//i.test(src)) {
+      const props = noteProperties(fm.meta);
+      if (props.source) {
         data.type = 'article';
-        data.url = src;
+        data.url = props.source;
       }
-      const desc = metaString(fm.meta.description);
-      if (desc && !data.description) data.description = desc;
+      if (props.description && !data.description) data.description = props.description;
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    void save(contentType, url, title);
+  };
+
+  // A shared link saves at once, shared text waits in the Text form for a title.
+  // handledShareRef keeps a share from being saved twice (React runs effects twice in dev).
+  const handledShareRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!shared || handledShareRef.current === shared.key) return;
+    handledShareRef.current = shared.key;
+    onSharedHandled?.();
+    if (shared.url) {
+      setContentType('article');
+      setUrl(shared.url);
+      setTitle('');
+      void save('article', shared.url, '', true);
+    } else if (shared.text) {
+      setContentType('text');
+      setTextFormat('markdown');
+      setText(shared.text);
+      setTitle(shared.title || '');
+    }
+  }, [shared]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // fromShare: a link from the share menu, which the server adds only when it is not in the
+  // library yet, and which is remembered so Android handing it over again is ignored
+  // (rememberShare / takeSharedContent in App.tsx)
+  const save = async (type: ContentType, link: string, itemTitle: string, fromShare = false) => {
     setLoading(true);
     setMessage('');
+    setMessageIsGood(false);
     setArchiveLink(null);
     let progressPoll: number | undefined;
 
     try {
       const data: Record<string, unknown> = {
-        type: contentType,
+        type,
       };
 
       // Only send title if user provided one (allow backend to auto-detect)
-      if (title) {
-        data.title = title;
+      if (itemTitle) {
+        data.title = itemTitle;
       }
 
-      if (contentType === 'article') {
-        if (!url) {
+      if (type === 'article') {
+        if (!link) {
           setMessage('URL is required for articles');
           setLoading(false);
           return;
         }
-        data.url = url;
+        data.url = link;
+        if (fromShare) data.unless_in_library = true;
         // The server reports each slow step under this id, asked for every 1.5 seconds.
         // randomUUID needs HTTPS, so a dev server over plain http gets a time-based id.
         const progressId = typeof crypto.randomUUID === 'function'
@@ -197,7 +220,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
             .then(res => { if (res.data.text) setProgressText(res.data.text); })
             .catch(() => { /* the next ask tries again */ });
         }, 1500);
-      } else if (contentType === 'text') {
+      } else if (type === 'text') {
         // Markdown is the friendly default. Convert it to the HTML we store/display.
         // HTML mode passes the text straight through (backend cleans it).
         if (textFormat === 'markdown') applyMarkdownImport(data, text);
@@ -205,31 +228,32 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         if (author) data.author = author;
         if (publishedDate) data.published_at = publishedDate;
         data.tags = parseTagInput(tagsInput);
-      } else if (contentType === 'upload') {
-        if (!uploadedContent || !title) {
+      } else if (type === 'upload') {
+        if (!uploadedContent || !itemTitle) {
           setMessage('Please select a file and enter a title');
           setLoading(false);
           return;
         }
         data.type = 'text';
-        data.title = title;
+        data.title = itemTitle;
         if (isMarkdownUpload) applyMarkdownImport(data, uploadedContent);
         else data.content = uploadedContent;
         if (author) data.author = author;
         if (publishedDate) data.published_at = publishedDate;
         data.tags = parseTagInput(tagsInput);
-      } else if (contentType === 'podcast_episode') {
-        if (!url) {
+      } else if (type === 'podcast_episode') {
+        if (!link) {
           setMessage('Audio URL is required for podcasts');
           setLoading(false);
           return;
         }
         // Backend stores the episode's source media under audio_url (see content.ts POST handler).
-        data.audio_url = url;
+        data.audio_url = link;
       }
 
       const response = await contentAPI.create(data as Partial<ContentItem>);
       setMessage('Content saved successfully!');
+      if (fromShare) rememberShare(link);
 
       // Add the new item to the store
       onContentAdded(response.data);
@@ -243,11 +267,19 @@ export function AddTab({ onContentAdded }: AddTabProps) {
       setUploadedContent('');
       setUploadedFileName('');
       setImportMeta(null);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const answer = errorAnswer(error);
+      if (fromShare && answer?.status === 409) {
+        rememberShare(link);
+        setMessage('Already in your library.');
+        setMessageIsGood(true);
+        setUrl('');
+        return;
+      }
       console.error('Failed to save content:', error);
-      const errorMsg = error?.response?.data?.error || 'Failed to save content. Please try again.';
+      const errorMsg = answer?.data?.error || 'Failed to save content. Please try again.';
       setMessage(errorMsg);
-      setArchiveLink(error?.response?.data?.archive_submit_url || null);
+      setArchiveLink(answer?.data?.archive_submit_url || null);
     } finally {
       window.clearInterval(progressPoll);
       setProgressText(null);
@@ -490,7 +522,7 @@ export function AddTab({ onContentAdded }: AddTabProps) {
         )}
 
         {message && (
-          <div className={`message ${message.includes('success') ? 'success' : 'error'}`}>
+          <div className={`message ${messageIsGood || message.includes('success') ? 'success' : 'error'}`}>
             {message}
             {archiveLink && (
               <>

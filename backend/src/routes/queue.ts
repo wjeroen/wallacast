@@ -1,6 +1,8 @@
 import express from 'express';
 import { query } from '../database/db.js';
 import { withAudioToken } from '../services/audio-token.js';
+import { withPlaybackGain, audioCopyIds } from '../services/loudness.js';
+import { LIST_TEXT_CHARS } from '../config/processing.js';
 
 const router = express.Router();
 
@@ -13,7 +15,7 @@ router.get('/', async (req, res) => {
   try {
     const result = await query(
       `SELECT q.id AS queue_id, q.position AS queue_position, q.added_at AS queue_added_at,
-              c.id, c.type, c.title, c.url, c.content, c.author, c.description, c.preview_picture,
+              c.id, c.type, c.title, c.url, LEFT(c.content, ${LIST_TEXT_CHARS}) AS content, length(c.content) AS content_chars, c.author, c.description, c.preview_picture,
               c.audio_url, c.duration, c.file_size, c.podcast_id, c.podcast_show_name, c.episode_number,
               c.published_at, c.is_starred, c.is_archived, c.tags, c.playback_position, c.playback_speed,
               c.last_played_at, c.created_at, c.updated_at, c.generation_status, c.generation_progress,
@@ -21,14 +23,15 @@ router.get('/', async (req, res) => {
               c.agree_votes, c.disagree_votes, c.summary, c.summary_status, c.summary_generated_at,
               c.summary_error, c.summary_audio_url, c.summary_audio_duration, c.summary_audio_status,
               c.summary_audio_generated_at, c.summary_playback_position,
-              COALESCE(c.comment_count_total, 0) AS comment_count
+              COALESCE(c.comment_count_total, 0) AS comment_count, c.view_count::float8 AS view_count, c.embed_blocked, c.loudness_lufs
        FROM queue_items q
        JOIN content_items c ON q.content_item_id = c.id AND c.user_id = q.user_id
        WHERE q.user_id = $1
        ORDER BY q.position ASC`,
       [req.user!.userId]
     );
-    res.json(result.rows.map(withAudioToken));
+    const copies = await audioCopyIds();
+    res.json(result.rows.map((row: any) => withPlaybackGain(withAudioToken(row), copies)));
   } catch (error) {
     console.error('Error fetching queue:', error);
     res.status(500).json({ error: 'Failed to fetch queue' });

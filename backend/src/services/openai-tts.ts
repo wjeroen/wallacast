@@ -8,14 +8,15 @@ import { query } from '../database/db.js';
 import { getTempDir } from '../config/storage.js';
 import { saveAudioFile } from './audio-storage.js';
 import { getAudioDuration } from './audio-utils.js';
-import { PROCESSING_CONFIG } from '../config/processing.js';
+import { PROCESSING_CONFIG, SPEECH_BITRATE } from '../config/processing.js';
 import { getTTSClientForUser, getTTSOptionsForUser, getChatClientForJob, getUserSetting, pickRandomTTSVoice, chatInputCharCap } from './ai-providers.js';
 import { transcribeWithTimestamps } from './transcription.js';
 import { ImageAltTextService } from './image-alt-text.js';
 import { generateLLMAlignment } from './llm-alignment.js';
 import { resolveCustomPrompt } from './prompt-resolver.js';
-import { isEAForumUrl } from './article-fetcher.js';
+import { settingsNarrateComments } from './auto-audio.js';
 import { logMemory } from './memory-log.js';
+import { cutText, wholeEnd } from './text-cut.js';
 
 // Default scriptwriter prompts (user-editable via Settings -> prompt-registry.ts). The main prompt
 // turns article HTML into a TTS script; the retry addendum is appended when the first pass drops
@@ -145,6 +146,8 @@ function splitTextIntoChunks(text: string, maxLength: number): string[] {
         chunkEnd = currentPos + lastSpace;
       }
     }
+    // A hard cut keeps both halves of an emoji together (text-cut.ts)
+    chunkEnd = wholeEnd(text, chunkEnd);
 
     chunks.push(text.slice(currentPos, chunkEnd).trim());
     currentPos = chunkEnd;
@@ -243,7 +246,7 @@ async function concatenateAudioFiles(inputFiles: string[], outputFile: string): 
       .complexFilter(`${concatGraph},${loudnormFilter(stats)}[out]`)
       .map('[out]')
       .audioFrequency(24000)
-      .audioBitrate('96k')
+      .audioBitrate(SPEECH_BITRATE)
       .format('mp3')
       .on('end', () => resolve())
       .on('error', (err) => {
@@ -314,6 +317,13 @@ export function buildNarrationIntro(content: NarrationIntroSource, mode: 'full' 
   const author = (content.author || '')
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
     .trim();
+
+  // A video's summary names the channel that made it
+  if (mode === 'summary' && content.type === 'video') {
+    let videoIntro = author ? `Summary of ${content.title}, a video by ${author}. ` : `Summary of ${content.title}. `;
+    if (content.published_at) videoIntro += `Published on ${formatDateForNarration(content.published_at)}. `;
+    return videoIntro + '\n\n';
+  }
 
   if (mode === 'summary' && content.type === 'podcast_episode') {
     let podcastIntro = content.podcast_show_name
@@ -681,7 +691,7 @@ async function scriptHtmlOnce(
         role: 'user',
         // Model-aware input cap: baseline 400k chars (~100k tokens) fits every model,
         // larger for big-context models (see chatInputCharCap).
-        content: html.slice(0, chatInputCharCap(modelId))
+        content: cutText(html, chatInputCharCap(modelId))
       }
     ],
   });
@@ -710,7 +720,7 @@ async function scriptHtmlOnce(
       messages: [
         { role: 'system', content: systemPrompt + partAddendum + retryAddendum },
         // Model-aware input cap (see chatInputCharCap): baseline 400k chars, larger for big-context models.
-        { role: 'user', content: html.slice(0, chatInputCharCap(modelId)) }
+        { role: 'user', content: cutText(html, chatInputCharCap(modelId)) }
       ],
     });
 
@@ -738,7 +748,7 @@ async function scriptHtmlOnce(
   return scriptBody;
 }
 
-async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string = 'gpt-5-nano', extraParams: Record<string, any> = {}): Promise<string> {
+async function scriptArticleForListening(userId: number, htmlContent: string, openai: any, modelId: string, extraParams: Record<string, any> = {}): Promise<string> {
   try {
     // ADDED: Pre-clean HTML to remove massive technical bloat (scripts, styles, SVGs)
     // This reduces token count significantly before sending to LLM
@@ -785,6 +795,37 @@ async function scriptArticleForListening(userId: number, htmlContent: string, op
   }
 }
 
+// What generateArticleAudio throws: the same message as before, plus the provider that failed
+// and whether it was only too busy, so a caller can explain it and try again later.
+export class TTSError extends Error {
+  provider: string | null;
+  busy: boolean;
+  constructor(message: string, provider: string | null, busy: boolean, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'TTSError';
+    this.provider = provider;
+    this.busy = busy;
+  }
+}
+
+function ttsProviderName(baseURL: string): string {
+  if (baseURL.includes('deepinfra')) return 'DeepInfra';
+  if (baseURL.includes('openrouter')) return 'OpenRouter';
+  return 'OpenAI';
+}
+
+// True when the provider was overloaded, not broken: a 429 (DeepInfra also sends it when one
+// model is very busy), a 503, or no answer in time ("terminated" is a 5-minute body timeout).
+// The original error can sit a few causes deep.
+function isProviderBusy(error: any): boolean {
+  for (let e = error, depth = 0; e && depth < 4; e = e.cause, depth++) {
+    if (e.status === 429 || e.status === 503) return true;
+    if (e.code === 'UND_ERR_BODY_TIMEOUT' || e.code === 'UND_ERR_HEADERS_TIMEOUT') return true;
+    if (e.name === 'APIConnectionTimeoutError') return true;
+  }
+  return false;
+}
+
 export async function generateArticleAudio(
   articleText: string,
   userId: number,
@@ -792,8 +833,11 @@ export async function generateArticleAudio(
     voice?: string;
     instructions?: string;
     contentId?: number;
+    maxAttempts?: number;
   } = {}
 ): Promise<{ buffer: Buffer; chunks: number; chunkMetadata: ChunkMetadata[] }> {
+  const maxAttempts = options.maxAttempts ?? PROCESSING_CONFIG.retry.maxAttempts;
+  let provider: string | null = null;
   try {
     const userSettings = await getTTSOptionsForUser(userId);
     let targetModel = userSettings.model || 'gpt-4o-mini-tts';
@@ -817,6 +861,7 @@ export async function generateArticleAudio(
       throw new Error('No AI API key set. Please configure OpenAI, DeepInfra, or OpenRouter in Settings.');
     }
     const openai = tts.client;
+    provider = ttsProviderName(openai.baseURL);
     // The router may rewrite the model id (e.g. 'openai/gpt-4o-mini-tts' when routed via
     // OpenRouter). Use it for the API calls below.
     targetModel = tts.model;
@@ -831,7 +876,7 @@ export async function generateArticleAudio(
     // --- CASE A: Single Chunk ---
     if (textChunks.length === 1) {
       console.log(`Single chunk (${textChunks[0].length} chars)`);
-      let retries = PROCESSING_CONFIG.retry.maxAttempts;
+      let retries = maxAttempts;
       let delay = PROCESSING_CONFIG.retry.baseDelayMs;
       let finalBuffer: Buffer | null = null;
       let finalDuration = 0;
@@ -864,7 +909,7 @@ export async function generateArticleAudio(
             ffmpeg(tempFile)
               .audioFilters(loudnormFilter(loudStats))
               .audioFrequency(24000)
-              .audioBitrate('96k')
+              .audioBitrate(SPEECH_BITRATE)
               .format('mp3')
               .on('end', () => resolve())
               .on('error', (err) => reject(err))
@@ -933,7 +978,7 @@ export async function generateArticleAudio(
           );
         }
 
-        let retries = PROCESSING_CONFIG.retry.maxAttempts;
+        let retries = maxAttempts;
         let delay = PROCESSING_CONFIG.retry.baseDelayMs;
         let success = false;
         const chunkFile = path.join(tempDir, `chunk_${timestamp}_${i}.mp3`);
@@ -980,7 +1025,7 @@ export async function generateArticleAudio(
               delay = Math.min(delay * 2, PROCESSING_CONFIG.retry.maxDelayMs);
               retries--;
             } else {
-              throw new Error(`Failed to generate valid chunk ${i + 1}: ${error.message}`);
+              throw new Error(`Failed to generate valid chunk ${i + 1}: ${error.message}`, { cause: error });
             }
           }
         }
@@ -1014,7 +1059,7 @@ export async function generateArticleAudio(
     if (message.includes('cancelled')) {
       throw error;
     }
-    throw new Error('Failed to generate audio: ' + message);
+    throw new TTSError('Failed to generate audio: ' + message, provider, isProviderBusy(error), { cause: error });
   }
 }
 
@@ -1199,20 +1244,10 @@ export async function generateAudioForContent(contentId: number, regenerate: boo
           if (comments && comments.length > 0) {
               const totalCount = countAllComments(comments);
               const isLessWrong = content.comment_source === 'lesswrong' || (content.url ? content.url.includes('lesswrong.com') : false);
-              const isEAForum = content.comment_source === 'ea_forum' || isEAForumUrl(content.url);
               const isSubstack = content.comment_source === 'substack' || (!content.comment_source && (content.url?.includes('substack.com') || content.html_content?.includes('substackcdn.com')));
 
-              // Check user setting for whether to narrate comments
-              let shouldNarrate = true;
-              if (isLessWrong || isEAForum) {
-                const setting = await getUserSetting(content.user_id, 'narrate_ea_forum_comments');
-                shouldNarrate = setting !== 'false'; // Default: true (narrate)
-              } else if (isSubstack) {
-                const setting = await getUserSetting(content.user_id, 'narrate_substack_comments');
-                shouldNarrate = setting !== 'false'; // Default: true (narrate)
-              }
-
-              if (shouldNarrate) {
+              // The same rule the automatic audio's length cap counts comments by
+              if (await settingsNarrateComments(content)) {
                 console.log(`[TTS] Formatting ${comments.length} top-level comments (${totalCount} total with replies) for narration`);
                 fullScript += `\n\nNow, let's move on to the comments section, where thoughts are shared in ${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}.\n\n` + formatCommentsForNarration(comments, false, undefined, isLessWrong, isSubstack);
                 commentsInAudio = true;

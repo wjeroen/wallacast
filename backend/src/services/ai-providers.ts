@@ -281,13 +281,15 @@ export const CHAT_PROVIDERS: Record<string, ChatProviderDef> = {
 // Model-aware input character cap for scriptwriter/chat prompts. Baseline 400000 chars
 // (~100k tokens) fits every supported model, larger caps for known big-context models so
 // long articles are not needlessly truncated on models that can handle them.
-// - /gpt-5/ -> 1200000 (400k-token context)
+// - /gpt-[56]/ -> 800000 (~200k tokens). gpt-5-mini and gpt-5.4-mini accept at most
+//   272,000 input tokens, and gpt-6-luna accepts 922,000 but bills a prompt over 272,000
+//   tokens at 2x input and 1.5x output for the whole request (OpenAI model pages, 2026-10-22)
 // - /gemini/ -> 1500000
 // - /claude-(sonnet-5|sonnet-4-6|opus-4|fable)/ -> 1500000 (1M-token contexts)
 // claude-haiku is deliberately NOT matched (200k context, baseline is right).
 export function chatInputCharCap(model: string): number {
   const m = (model || '').toLowerCase();
-  if (/gpt-5/.test(m)) return 1200000;
+  if (/gpt-[56]/.test(m)) return 800000;
   if (/gemini/.test(m)) return 1500000;
   if (/claude-(sonnet-5|sonnet-4-6|opus-4|fable)/.test(m)) return 1500000;
   return 400000;
@@ -307,7 +309,7 @@ export interface ChatClientConfig {
 
 // Legacy `narration_llm` routing → concrete {provider, model}. Doubles as the key-aware
 // default for unconfigured accounts: 'auto' picks the first provider with a configured key
-// in recommendation order, with GPT-5 Mini (OpenAI) first.
+// in recommendation order, with GPT-6 Luna (OpenAI) first.
 const CHAT_PROVIDER_PRIORITY = ['openai', 'deepinfra', 'anthropic', 'gemini', 'openrouter'];
 async function legacyNarrationConfig(userId: number): Promise<{ provider: string; model: string }> {
   const llm = (await getUserSetting(userId, 'narration_llm')) || 'auto';
@@ -326,11 +328,11 @@ async function legacyNarrationConfig(userId: number): Promise<{ provider: string
 // is left blank. The Settings hints advertise these as "default = ..." (keep in sync with
 // CHAT_PROVIDERS in SettingsPage.tsx).
 export const CHAT_DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-5-mini',
+  openai: 'gpt-6-luna',
   // gpt-oss-120b over DeepSeek V3.2: DeepInfra serves DeepSeek at ~20 tok/s (measured
   // 2026-07-02), while gpt-oss runs ~46 tok/s, costs less, and supports reasoning effort.
   deepinfra: 'openai/gpt-oss-120b',
-  openrouter: 'openai/gpt-5-mini',
+  openrouter: 'openai/gpt-6-luna',
   anthropic: 'claude-haiku-4-5',
   gemini: 'gemini-3-flash-preview',
 };

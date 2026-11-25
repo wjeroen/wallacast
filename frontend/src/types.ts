@@ -9,10 +9,14 @@ export interface Comment {
 
 export interface ContentItem {
   id: number;
-  type: 'article' | 'podcast_episode' | 'pdf' | 'text';
+  // 'video' is a YouTube video, played in YouTube's embedded player (url = its watch address)
+  type: 'article' | 'podcast_episode' | 'pdf' | 'text' | 'video';
   title: string;
   url?: string;
+  // The library list and the queue send only the start of the text (LIST_TEXT_CHARS in the
+  // backend) and its full length in content_chars. Read the length with textLength().
   content?: string;
+  content_chars?: number;
   html_content?: string;
   author?: string;
   description?: string;
@@ -38,13 +42,18 @@ export interface ContentItem {
   agree_votes?: number; // EA Forum agree votes
   disagree_votes?: number; // EA Forum disagree votes
   comments?: Comment[]; // Parsed comments with metadata
-  comment_count?: number; // Number of top-level comments (from list endpoint, avoids loading full JSON)
+  comment_count?: number; // All comments, replies included (comment_count_total), so lists need not load the comments. For a video, YouTube's total
   // Where the comments came from (migration 017). Returned only by GET /:id. Null for
   // older items fetched before the column existed, callers fall back to URL detection.
-  comment_source?: 'ea_forum' | 'lesswrong' | 'substack' | null;
+  comment_source?: 'ea_forum' | 'lesswrong' | 'substack' | 'youtube' | null;
+  // Videos only, from the YouTube Data API (null without a YouTube key). comments holds
+  // YouTube's most relevant comment threads.
+  view_count?: number | null;
+  // Why YouTube's embedded player cannot play the video, so it plays only on YouTube
+  embed_blocked?: 'not_embeddable' | 'age_restricted' | null;
   is_starred: boolean;  // Renamed from is_favorite (Wallabag: starred)
   is_archived: boolean;
-  tags?: string[];  // The user's own tags, normalized (lowercase). Type tags (article/text/podcast) are derived from `type`, never stored
+  tags?: string[];  // The user's own tags, normalized (lowercase). Type tags (article/text/podcast/video) are derived from `type`, never stored
   content_source?: 'wallabag' | 'wallacast';  // Who fetched the content
   wallabag_id?: number;  // ID in Wallabag (for sync)
   wallabag_updated_at?: string;  // Last update in Wallabag (for conflict resolution)
@@ -75,6 +84,14 @@ export interface ContentItem {
   summary_audio_error?: string; // Error message when summary_audio_status === 'failed', the reason when 'skipped'
   summary_audio_generated_at?: string; // Also the cache-buster for the summary audio URL
   summary_playback_position?: number; // Separate saved position, never mixed with playback_position
+  heard_at?: string | null; // When the audio last counted as heard (the heard check, AudioPlayer)
+  summary_heard_at?: string | null; // The same for the summary audio
+  // A podcast episode's own loudness in stereo terms (LUFS, the server measures the whole file),
+  // and how many dB the player turns it down (0, or negative when louder than -14)
+  loudness_lufs?: number | null;
+  playback_gain_db?: number;
+  // The server keeps a normalized copy of this podcast episode (backend podcast-cache.ts)
+  has_audio_copy?: boolean;
   versions_count?: number; // Number of history snapshots. GET /:id only; gates the History tab instantly (the version list itself still loads async)
 }
 
@@ -103,10 +120,10 @@ export interface Podcast {
   preview_picture?: string;  // Renamed from thumbnail_url (Wallabag compatibility)
   category?: string;
   language?: string;
-  // RSS feed type. The DB column still permits 'blog', but nothing writes it
-  // (detectFeedType only ever returns 'podcast' or 'newsletter'), so it is left
-  // out of this union.
-  type?: 'podcast' | 'newsletter';
+  // Feed type: 'podcast' (audio enclosures), 'newsletter' (text) or 'youtube' (a
+  // YouTube channel feed, fetchPodcastDetails). The DB column still permits 'blog',
+  // but nothing writes it, so it is left out of this union.
+  type?: 'podcast' | 'newsletter' | 'youtube';
   is_subscribed: boolean;
   last_fetched_at?: string;
   created_at: string;

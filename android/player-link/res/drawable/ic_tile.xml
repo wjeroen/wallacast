@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The quick settings tile: Player Link's two chained play triangles as plain outlines -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M2.5,5 L13.8,12 L2.5,19 Z"
+        android:strokeColor="#FFFFFFFF" android:strokeWidth="2"
+        android:strokeLineJoin="round" android:fillColor="#00000000" />
+    <path android:pathData="M9.8,5 L21.1,12 L9.8,19 Z"
+        android:strokeColor="#FFFFFFFF" android:strokeWidth="2"
+        android:strokeLineJoin="round" android:fillColor="#00000000" />
+</vector>

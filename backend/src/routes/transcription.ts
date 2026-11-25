@@ -3,6 +3,8 @@ import { query } from '../database/db.js';
 import { transcribeWithTimestamps } from '../services/transcription.js';
 import { buildWhisperPrompt } from '../services/whisper-prompt.js';
 import { shouldCachePodcastHost } from '../services/podcast-cache.js';
+import { summarizeAfterTranscript } from '../services/summarizer.js';
+import { reserveMinutes, episodeMinutes } from '../services/token-limits.js';
 
 const router = express.Router();
 
@@ -14,7 +16,7 @@ router.post('/content/:id', async (req, res) => {
 
     // OPTIMIZED: Select necessary columns for prompt generation
     const contentResult = await query(
-      'SELECT id, type, audio_url, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
+      'SELECT id, type, audio_url, duration, transcript, transcript_words, generation_status, generation_progress, title, author, published_at, comments FROM content_items WHERE id = $1 AND user_id = $2',
       [id, req.user!.userId]
     );
 
@@ -53,6 +55,12 @@ router.post('/content/:id', async (req, res) => {
       });
     }
 
+    // A token's transcript counts the episode's length and one generation (generate_transcript)
+    if (req.apiToken) {
+      const r = await reserveMinutes(req.apiToken, episodeMinutes(content.duration), 'transcript', Number(id));
+      if (!r.ok) return res.status(429).json({ error: r.message, limit: r.limit, max: r.max, used: r.used });
+    }
+
     // Set status to generating
     await query(
       'UPDATE content_items SET generation_status = $1, generation_progress = $2, generation_error = NULL, current_operation = $3 WHERE id = $4',
@@ -71,7 +79,7 @@ router.post('/content/:id', async (req, res) => {
 
     // Start transcription in background (don't await)
     transcribeWithTimestamps(content.audio_url, req.user!.userId, whisperPrompt,
-      content.type === 'podcast_episode' && shouldCachePodcastHost(content.audio_url) ? Number(id) : undefined)
+      content.type === 'podcast_episode' ? { id: Number(id), cacheHost: shouldCachePodcastHost(content.audio_url) } : undefined)
       .then(async (result) => {
         console.log('Transcription complete, length:', result.text.length, 'words:', result.words.length);
 
@@ -79,6 +87,8 @@ router.post('/content/:id', async (req, res) => {
           'UPDATE content_items SET transcript = $1, transcript_words = $2, generation_status = $3, generation_progress = $4, current_operation = NULL, updated_at = CURRENT_TIMESTAMP, wallabag_needs_push = TRUE WHERE id = $5 AND user_id = $6',
           [result.text, JSON.stringify(result.words), 'completed', 100, id, req.user!.userId]
         );
+        // A token asks for a summary itself (generate_summary), so its transcript starts none
+        if (content.type === 'podcast_episode' && !req.apiToken) void summarizeAfterTranscript(Number(id), req.user!.userId);
       })
       .catch(async (error) => {
         console.error('Background transcription error:', error);

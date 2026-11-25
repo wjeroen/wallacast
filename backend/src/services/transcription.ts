@@ -9,7 +9,9 @@ import { getAudioDuration } from './audio-utils.js';
 import { getTranscriptionClientForUser, type TranscriptionConfig } from './ai-providers.js';
 import { PROCESSING_CONFIG } from '../config/processing.js';
 import { getTempDir } from '../config/storage.js';
-import { cachePodcastAudio } from './podcast-cache.js';
+import { cachePodcastAudio, evictCachedPodcastAudio, getCachedPodcastAudioSize, makeRoomOnVolume } from './podcast-cache.js';
+import { measureLoudness, saveLoudness, QUIET_BELOW } from './loudness.js';
+import { cutText, tailText } from './text-cut.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +29,9 @@ async function compressAudio(inputPath: string, outputPath: string): Promise<voi
   });
 }
 
-async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: number): Promise<string[]> {
+// Each chunk goes into `tempFiles` before it is written, so a split that fails halfway (a full
+// volume) still has its chunks deleted.
+async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: number, tempFiles: string[]): Promise<string[]> {
   const duration = await getAudioDuration(inputPath);
   const chunkDurationSeconds = chunkDurationMinutes * 60;
   const numChunks = Math.ceil(duration / chunkDurationSeconds);
@@ -36,6 +40,7 @@ async function splitAudioIntoChunks(inputPath: string, chunkDurationMinutes: num
   for (let i = 0; i < numChunks; i++) {
     const startTime = i * chunkDurationSeconds;
     const chunkPath = inputPath.replace('.mp3', `_chunk_${i}.mp3`);
+    tempFiles.push(chunkPath);
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .setStartTime(startTime)
@@ -245,19 +250,136 @@ async function transcribeFile(
   return { text: transcription.text, words: (transcription as any).words || [] };
 }
 
+// At most this many downloaded episodes are transcribed at once. Each one holds the whole
+// episode on the volume, plus its chunks and its cache copy, about 2.5 times the file (150 to
+// 250 MB for a 1 to 2 hour episode). On 2026-10-23 a bulk Summarize started 13 at once, the
+// 5 GB volume filled up, and one transcript and two cache copies failed. The others wait
+// their turn, and their items go on showing that the transcript is being made.
+const MAX_PARALLEL_DOWNLOADS = 3;
+// Free space a download should find on the volume, twice what a 2-hour episode uses (its
+// download, chunks and cache copy, about 300 MB). Cached episodes make way for it.
+const FREE_SPACE_FOR_DOWNLOAD = 600 * 1024 * 1024;
+let downloadsRunning = 0;
+const downloadsWaiting: Array<() => void> = [];
+
+async function takeDownloadSlot(): Promise<void> {
+  if (downloadsRunning < MAX_PARALLEL_DOWNLOADS) {
+    downloadsRunning++;
+    return;
+  }
+  console.log(`[Transcription] ${downloadsRunning} episodes are being transcribed, this one waits its turn (${downloadsWaiting.length} already waiting)`);
+  await new Promise<void>((resolve) => downloadsWaiting.push(resolve));
+}
+
+function releaseDownloadSlot(): void {
+  const next = downloadsWaiting.shift();
+  // The slot goes straight to the next waiting episode, so the count stays the same
+  if (next) next();
+  else downloadsRunning--;
+}
+
+/** Downloads an episode to `dest`. Downloads fail transiently in the wild (2026-07-07: a 163 MB
+ *  episode failed once with a bare "fetch failed" and worked on retry), so it tries up to 3
+ *  times with a short backoff. A 4xx answer is permanent (a dead URL does not heal). */
+async function downloadEpisode(url: string, dest: string): Promise<void> {
+  // Log without the query string: article URLs carry the audio access token.
+  console.log(`[Transcription] Downloading audio from ${url.split('?')[0]}...`);
+  const DOWNLOAD_ATTEMPTS = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await safeFetch(url, {}, AUDIO_REDIRECT_HOPS);
+      if (!response.ok) {
+        const err: any = new Error(`Failed to download audio: HTTP ${response.status} ${response.statusText}`);
+        err.permanentDownload = response.status >= 400 && response.status < 500;
+        throw err;
+      }
+      if (!response.body) throw new Error('No response body');
+      await pipeline(response.body, createWriteStream(dest));
+      return;
+    } catch (error: any) {
+      const cause = error?.cause?.code || error?.cause?.message || '';
+      const causeNote = cause ? ` (cause: ${cause})` : '';
+      if (error?.permanentDownload || attempt >= DOWNLOAD_ATTEMPTS) {
+        console.error(`[Transcription] Download failed after ${attempt} attempt(s): ${error.message}${causeNote}`);
+        throw error;
+      }
+      const delayMs = attempt * 10_000; // 10s, then 20s
+      console.warn(`[Transcription] Download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed: ${error.message}${causeNote}, retrying in ${delayMs / 1000}s...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+/**
+ * Measures a downloaded episode's loudness, stores it, and keeps the cache copy in step with
+ * this very download: a copy when the host is one the cache keeps or the episode is quieter
+ * than QUIET_BELOW (services/loudness.ts), and otherwise no copy at all. A copy from an earlier
+ * download is replaced or removed, never left: some hosts insert other ads in every download,
+ * so a transcript only lines up with the bytes it was made from. Never throws.
+ */
+async function settlePodcastFile(contentId: number, file: string, cacheHost: boolean): Promise<void> {
+  try {
+    const loudness = await measureLoudness(file);
+    if (loudness) {
+      await saveLoudness(contentId, loudness.lufs);
+      console.log(`[Loudness] ${contentId}: ${loudness.lufs} LUFS in stereo terms (${loudness.channels} channel${loudness.channels === 1 ? '' : 's'})`);
+    } else {
+      console.warn(`[Loudness] ${contentId}: could not measure the file`);
+    }
+    const quiet = !!loudness && loudness.lufs < QUIET_BELOW;
+    if (cacheHost || quiet) {
+      if (quiet && !cacheHost) console.log(`[Loudness] ${contentId}: quieter than ${QUIET_BELOW}, keeping a raised copy`);
+      await cachePodcastAudio(contentId, file);
+    } else if ((await getCachedPodcastAudioSize(contentId)) !== null) {
+      await evictCachedPodcastAudio(contentId);
+    }
+  } catch (error) {
+    console.error(`[Loudness] ${contentId}: measuring or caching failed:`, error);
+  }
+}
+
+/**
+ * For an episode added without a transcript: downloads the whole file once (sharing the
+ * download slots with transcripts), measures its loudness and keeps a raised copy when it is
+ * quiet. In the background, never blocks the add, never throws. A transcript made later
+ * measures its own download again and keeps the copy in step with it (settlePodcastFile).
+ */
+export async function measureEpisodeLoudness(contentId: number, audioUrl: string): Promise<void> {
+  const tempFiles: string[] = [];
+  let holdsDownloadSlot = false;
+  try {
+    await takeDownloadSlot();
+    holdsDownloadSlot = true;
+    await makeRoomOnVolume(FREE_SPACE_FOR_DOWNLOAD);
+    const tempDir = getTempDir();
+    await fs.mkdir(tempDir, { recursive: true });
+    const file = path.join(tempDir, `loudness_${contentId}_${Date.now()}.mp3`);
+    tempFiles.push(file);
+    await downloadEpisode(audioUrl, file);
+    await settlePodcastFile(contentId, file, false);
+  } catch (error: any) {
+    console.error(`[Loudness] ${contentId}: download failed, the episode plays at its own level:`, error?.message || error);
+  } finally {
+    for (const f of tempFiles) await fs.unlink(f).catch(() => {});
+    if (holdsDownloadSlot) releaseDownloadSlot();
+  }
+}
+
 export async function transcribeWithTimestamps(
   audioSource: string | Buffer,
   userId: number,
   initialPrompt?: string,
-  // When set, the downloaded episode is re-encoded into the transient podcast
-  // cache (callers gate this on podcast type + shouldCachePodcastHost).
-  cachePodcastForId?: number
+  // A podcast episode: its download is measured for loudness and the cache copy kept in step
+  // with it (settlePodcastFile). cacheHost: the host is one the cache always keeps
+  // (shouldCachePodcastHost), the callers check the stored audio_url.
+  podcast?: { id: number; cacheHost: boolean }
 ): Promise<{
   text: string;
   words: Array<{ word: string; start: number; end: number }>;
 }> {
   // Declare outside try so finally can clean up even if transcription fails
   const tempFiles: string[] = [];
+  let holdsDownloadSlot = false;
 
   try {
     const config = await getTranscriptionClientForUser(userId);
@@ -265,58 +387,37 @@ export async function transcribeWithTimestamps(
 
     const model = config.model;
 
+    if (!Buffer.isBuffer(audioSource)) {
+      await takeDownloadSlot();
+      holdsDownloadSlot = true;
+      await makeRoomOnVolume(FREE_SPACE_FOR_DOWNLOAD);
+    }
+
     const tempDir = getTempDir();
     await fs.mkdir(tempDir, { recursive: true });
 
     const audioFilename = `audio_transcribe_${Date.now()}.mp3`;
     const audioPath = path.join(tempDir, audioFilename);
+    // Listed before it is written, so a download that fails halfway is deleted too
+    tempFiles.push(audioPath);
 
     if (Buffer.isBuffer(audioSource)) {
       // Audio buffer passed directly, write to temp file (avoids HTTP round-trip)
       console.log(`[Transcription] Writing audio buffer (${(audioSource.length / 1024 / 1024).toFixed(1)} MB) to temp file...`);
       await fs.writeFile(audioPath, audioSource);
     } else {
-      // URL passed, download it (legacy path, used for podcast transcription)
-      // Log without the query string: article URLs carry the audio access token.
-      console.log(`[Transcription] Downloading audio from ${audioSource.split('?')[0]}...`);
-      // Downloads fail transiently in the wild (2026-07-07: a 163 MB episode failed once
-      // with a bare "fetch failed" and worked on retry), so try up to 3 times with a short
-      // backoff. A 4xx answer is permanent (a dead URL does not heal) and is not retried.
-      const DOWNLOAD_ATTEMPTS = 3;
-      for (let attempt = 1; ; attempt++) {
-        try {
-          const response = await safeFetch(audioSource, {}, AUDIO_REDIRECT_HOPS);
-          if (!response.ok) {
-            const err: any = new Error(`Failed to download audio: HTTP ${response.status} ${response.statusText}`);
-            err.permanentDownload = response.status >= 400 && response.status < 500;
-            throw err;
-          }
-          if (!response.body) throw new Error('No response body');
-          await pipeline(response.body, createWriteStream(audioPath));
-          break;
-        } catch (error: any) {
-          const cause = error?.cause?.code || error?.cause?.message || '';
-          const causeNote = cause ? ` (cause: ${cause})` : '';
-          if (error?.permanentDownload || attempt >= DOWNLOAD_ATTEMPTS) {
-            console.error(`[Transcription] Download failed after ${attempt} attempt(s): ${error.message}${causeNote}`);
-            throw error;
-          }
-          const delayMs = attempt * 10_000; // 10s, then 20s
-          console.warn(`[Transcription] Download attempt ${attempt}/${DOWNLOAD_ATTEMPTS} failed: ${error.message}${causeNote}, retrying in ${delayMs / 1000}s...`);
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-      }
+      // URL passed, download it (used for podcast transcription and article read-along)
+      await downloadEpisode(audioSource, audioPath);
     }
 
     const fileStats = await fs.stat(audioPath);
     const fileSizeMB = fileStats.size / (1024 * 1024);
-    tempFiles.push(audioPath);
 
-    // The episode is fully on disk right now, the only moment we cache it.
-    // Awaited (adds ~a minute for long episodes) because the temp file is
-    // deleted in finally; cachePodcastAudio never throws.
-    if (cachePodcastForId) {
-      await cachePodcastAudio(cachePodcastForId, audioPath);
+    // The episode is fully on disk right now: measure it and keep the cache copy in step with
+    // these very bytes, the ones Whisper hears. Awaited (adds about a minute for long episodes)
+    // because the temp file is deleted in finally. settlePodcastFile never throws.
+    if (podcast) {
+      await settlePodcastFile(podcast.id, audioPath, podcast.cacheHost);
     }
 
     let transcriptText = '';
@@ -324,12 +425,11 @@ export async function transcribeWithTimestamps(
     
     // Hint for Whisper to improve accuracy.
     // We allow a larger slice (1000 chars) for the initial prompt to capture headers/metadata.
-    let previousTranscript = initialPrompt ? initialPrompt.slice(0, 1000) : '';
+    let previousTranscript = initialPrompt ? cutText(initialPrompt, 1000) : '';
 
     if (fileSizeMB > PROCESSING_CONFIG.whisper.maxFileSizeMB) {
       console.log(`File exceeds ${PROCESSING_CONFIG.whisper.maxFileSizeMB} MB limit (${fileSizeMB.toFixed(2)} MB), splitting...`);
-      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes);
-      tempFiles.push(...chunkFiles);
+      const chunkFiles = await splitAudioIntoChunks(audioPath, PROCESSING_CONFIG.whisper.chunkDurationMinutes, tempFiles);
 
       let timeOffset = 0;
       for (let i = 0; i < chunkFiles.length; i++) {
@@ -356,9 +456,9 @@ export async function transcribeWithTimestamps(
           currentPrompt = previousTranscript;
           if (i > 0) {
             // Take the Metadata (Title, Author, Comments) from the start
-            const metadataPart = initialPrompt ? initialPrompt.slice(0, 600) : '';
+            const metadataPart = initialPrompt ? cutText(initialPrompt, 600) : '';
             // Take the Continuity (last few sentences) from the actual previous text
-            const continuityPart = previousTranscript.slice(-200);
+            const continuityPart = tailText(previousTranscript, 200);
             currentPrompt = metadataPart ? `${metadataPart} ... ${continuityPart}` : continuityPart;
           }
         }
@@ -383,9 +483,9 @@ export async function transcribeWithTimestamps(
       if (fileSizeMB > PROCESSING_CONFIG.whisper.compressionThresholdMB) {
         console.log('Compressing large file...');
         const compressedPath = audioPath.replace('.mp3', '_compressed.mp3');
+        tempFiles.push(compressedPath);
         await compressAudio(audioPath, compressedPath);
         fileToTranscribe = compressedPath;
-        tempFiles.push(compressedPath);
       }
 
       console.log(`Transcribing file using model ${model}...`);
@@ -407,5 +507,6 @@ export async function transcribeWithTimestamps(
   } finally {
     // Cleanup temp files regardless of success or failure
     for (const f of tempFiles) await fs.unlink(f).catch(() => {});
+    if (holdsDownloadSlot) releaseDownloadSlot();
   }
 }

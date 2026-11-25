@@ -32,3 +32,18 @@ export const PROCESSING_CONFIG = {
     maxDelayMs: 30000,
   },
 };
+
+/**
+ * How much of each item's text the library list (GET /api/content) and the queue send. The
+ * app searches it and shows it in the Content tab until the full item arrives. 50,000
+ * characters sends 94% of texts whole and cut a library load from 34.9 to 22.9 MB
+ * (2026-11-23). `content_chars` carries the full length.
+ */
+export const LIST_TEXT_CHARS = 50_000;
+
+/**
+ * MP3 bitrate of generated speech (narration, summary audio) and of saved podcast copies, all
+ * mono. 64 kbps sounded the same as 96 to the user on good headphones, for TTS and a podcast,
+ * while 48 was clearly worse for the podcast (2026-11-23). A third smaller than 96.
+ */
+export const SPEECH_BITRATE = '64k';

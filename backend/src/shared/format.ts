@@ -24,8 +24,14 @@ export function cleanHtml(text: string): string {
 // LONG article (~8-10k words ≈ 50k chars of plain text), so it fires rarely.
 // Mirrors the backend scriptwriter chunking threshold in spirit (openai-tts.ts).
 export const VERY_LONG_ARTICLE_CHARS = 100_000;
-export function isVeryLongArticle(item: { content?: string | null }): boolean {
-  return (item.content || '').length > VERY_LONG_ARTICLE_CHARS;
+export function isVeryLongArticle(item: { content?: string | null; content_chars?: number | null }): boolean {
+  return textLength(item) > VERY_LONG_ARTICLE_CHARS;
+}
+
+// An item's full text length: the library list sends only the start of the text, with the
+// full length in content_chars
+export function textLength(item: { content?: string | null; content_chars?: number | null }): number {
+  return item.content_chars ?? (item.content || '').length;
 }
 
 // Playback-speed toggle: the full set selectable in Settings, and the default cycle.
@@ -193,6 +199,68 @@ export type AudioVariant = 'original' | 'summary';
 
 export function hasAnyAudio(item: { audio_url?: string | null; summary_audio_url?: string | null }): boolean {
   return !!item.audio_url || !!item.summary_audio_url;
+}
+
+// A YouTube video that YouTube's embedded player may play. One the owner keeps off other
+// sites, or an age-restricted one (embed_blocked, known with a YouTube key), plays only on
+// YouTube, so the app treats it like an item without audio.
+export function videoPlaysHere(item: { type?: string; embed_blocked?: string | null }): boolean {
+  return item.type === 'video' && !item.embed_blocked;
+}
+
+// Whether the player has something to play: any audio, or a YouTube video it may play (in
+// YouTube's embedded player). Decides the play flows, the mini player, and which items the
+// queue's "Up next" stream and autoplay continuation hold.
+export function hasPlayableMedia(item: { type?: string; audio_url?: string | null; summary_audio_url?: string | null; embed_blocked?: string | null }): boolean {
+  return hasAnyAudio(item) || videoPlaysHere(item);
+}
+
+// The library card's "Audio" badge and the library's Audio filter: an audio file (generated
+// narration, or a podcast episode's own file) or a YouTube video that plays in the app. Summary
+// audio alone does not count, it has its own icon on the Summary badge.
+export function hasAudioBadge(item: { type?: string; audio_url?: string | null; embed_blocked?: string | null }): boolean {
+  return !!item.audio_url || videoPlaysHere(item);
+}
+
+// A large count the short way YouTube writes it: 950, 12K, 1.2M
+export function compactCount(n: number): string {
+  return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+}
+
+// ---- YouTube videos -------------------------------------------------------------
+// The 11-character id in a YouTube video address, or null for any other address.
+// Watch, youtu.be, Shorts, live and embed addresses on the www, m, music and
+// youtube-nocookie hosts all count. The backend uses the same function (shared copy)
+// to decide that an added address is a video.
+export function youtubeVideoId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  const valid = (id: string | null | undefined) => (id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null);
+  if (host === 'youtu.be') return valid(u.pathname.split('/')[1]);
+  if (host !== 'youtube.com' && host !== 'youtube-nocookie.com') return null;
+  if (u.pathname === '/watch') return valid(u.searchParams.get('v'));
+  const m = u.pathname.match(/^\/(?:shorts|live|embed|v)\/([^/]+)/);
+  return m ? valid(m[1]) : null;
+}
+
+// "2 podcast episodes", "1 video", "2 podcast episodes and 1 video": the items a bulk
+// summary has to transcribe first, in the summary dialogs
+export function transcriptItemsLabel(episodes: number, videos: number): string {
+  const part = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  if (videos === 0) return part(episodes, 'podcast episode', 'podcast episodes');
+  if (episodes === 0) return part(videos, 'video', 'videos');
+  return `${part(episodes, 'podcast episode', 'podcast episodes')} and ${part(videos, 'video', 'videos')}`;
+}
+
+export function youtubeWatchUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
 // Whether an item has word timestamps (a transcript the player can read along with). A full

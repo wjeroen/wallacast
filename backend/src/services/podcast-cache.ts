@@ -2,20 +2,27 @@ import path from 'path';
 import fs from 'fs/promises';
 import { devNull } from 'os';
 import ffmpeg from 'fluent-ffmpeg';
-import { getAudioDir } from '../config/storage.js';
+import { getAudioDir, freeVolumeBytes } from '../config/storage.js';
+import { SPEECH_BITRATE } from '../config/processing.js';
 
 /**
- * Transient podcast-audio cache. Some hosts (SoundCloud) serve VBR files with
- * coarse seek tables, so the browser's clock drifts seconds after far seeks
- * (read-along desync) and resume-seeks abort. When a transcript is generated for
- * an episode from such a host (the file is already fully downloaded for Whisper
- * at that moment, and ONLY then), we re-encode it CBR mono with clean headers
- * (loudness-normalized like article audio) and keep it on the volume. The audio
- * route serves the cached file with exact byte ranges when present, else falls
- * back to the proxy, so uncached episodes work exactly as before.
+ * Transient podcast-audio cache: a re-encoded copy of an episode, CBR mono with clean headers,
+ * loudness-normalized to -19 mono like article audio (-16 in stereo terms, services/loudness.ts),
+ * kept on the volume. Two kinds of episodes get one, from a file already fully downloaded:
+ *  - Hosts that seek badly or insert ads (CACHEABLE_HOSTS): some serve VBR files with coarse
+ *    seek tables, so the browser's clock drifts seconds after far seeks (read-along desync) and
+ *    resume-seeks abort, and some stitch other ads into every download. Copied when a
+ *    transcript is made, from the very bytes Whisper hears.
+ *  - Quiet episodes (quieter than QUIET_BELOW in loudness.ts): the raised copy plays as loud as
+ *    our TTS. Copied when the loudness is measured (a transcript's download, or one download
+ *    after the episode is added).
+ * A later transcript replaces or removes the copy, so it always matches the transcript
+ * (settlePodcastFile in transcription.ts). The audio route serves the cached file with exact
+ * byte ranges when present, else falls back to the proxy, so uncached episodes work as before.
  *
- * Bounded on purpose: evicted when the episode is archived, plus a size-capped
- * LRU (oldest mtime deleted first; serving touches mtime).
+ * Bounded on purpose: removed 7 days after the episode is archived unless it is starred
+ * (services/archive.ts, like generated audio), plus a size-capped LRU (oldest mtime deleted
+ * first; serving touches mtime).
  */
 
 // Suffix-matched hosts whose files are known to seek badly OR to serve
@@ -63,6 +70,14 @@ export async function getCachedPodcastAudioSize(contentId: number | string): Pro
   } catch {
     return null;
   }
+}
+
+/** The ids of the episodes that have a cached copy. Empty when the cache dir does not exist yet. */
+export async function cachedPodcastIds(): Promise<number[]> {
+  const files = await cachedFilesOldestFirst();
+  return files
+    .map((f) => Number(path.basename(f.p, '.mp3')))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 export async function evictCachedPodcastAudio(contentId: number | string): Promise<void> {
@@ -131,7 +146,7 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
         .audioFilters(loudnormFilter(stats))
         .audioFrequency(44100)
         .audioChannels(1)
-        .audioBitrate('96k')
+        .audioBitrate(SPEECH_BITRATE)
         .format('mp3')
         .on('end', () => resolve())
         .on('error', (err) => reject(err))
@@ -139,7 +154,7 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
     });
     await fs.rename(tmp, out);
     const size = (await fs.stat(out)).size;
-    console.log(`[PodcastCache] Cached ${contentId}: ${(size / 1024 / 1024).toFixed(1)} MB (CBR 96k mono, normalized)`);
+    console.log(`[PodcastCache] Cached ${contentId}: ${(size / 1024 / 1024).toFixed(1)} MB (CBR ${SPEECH_BITRATE} mono, normalized)`);
     await enforceCacheCap();
   } catch (e) {
     console.error(`[PodcastCache] Failed to cache ${contentId}:`, e);
@@ -147,22 +162,55 @@ export async function cachePodcastAudio(contentId: number, sourcePath: string): 
   }
 }
 
-/** Delete oldest-touched files until the cache fits the cap. */
-async function enforceCacheCap(): Promise<void> {
+/** The cached files, oldest-touched first. Empty when the cache dir does not exist yet. */
+async function cachedFilesOldestFirst(): Promise<Array<{ p: string; size: number; mtime: number }>> {
+  const dir = cacheDir();
+  const files: Array<{ p: string; size: number; mtime: number }> = [];
   try {
-    const dir = cacheDir();
-    const names = await fs.readdir(dir);
-    const files: Array<{ p: string; size: number; mtime: number }> = [];
-    for (const name of names) {
+    for (const name of await fs.readdir(dir)) {
       if (!name.endsWith('.mp3')) continue;
       try {
         const stat = await fs.stat(path.join(dir, name));
         files.push({ p: path.join(dir, name), size: stat.size, mtime: stat.mtimeMs });
       } catch { /* raced */ }
     }
+  } catch { /* cache dir may not exist yet */ }
+  return files.sort((a, b) => a.mtime - b.mtime);
+}
+
+/**
+ * Deletes the oldest cached episodes while the volume has less than `minFreeBytes` free, so
+ * the cache makes way for the files a transcription is about to write. On a full volume
+ * ffmpeg fails ("exited with code 228", out of space). When deleting the whole cache would
+ * still not reach `minFreeBytes` (other files fill the volume), nothing is deleted: wiping
+ * the cache would not save the job, and it would break the cached episodes' read-along.
+ * Never throws.
+ */
+export async function makeRoomOnVolume(minFreeBytes: number): Promise<void> {
+  let free = await freeVolumeBytes();
+  if (free === null || free >= minFreeBytes) return;
+  const files = await cachedFilesOldestFirst();
+  const cacheBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (free + cacheBytes < minFreeBytes) {
+    console.warn(`[PodcastCache] Only ${(free / 1024 / 1024).toFixed(0)} MB free on the volume, and the cache (${(cacheBytes / 1024 / 1024).toFixed(0)} MB) cannot make enough room, so it stays`);
+    return;
+  }
+  for (const f of files) {
+    if (free >= minFreeBytes) break;
+    try {
+      await fs.unlink(f.p);
+      free += f.size;
+      console.log(`[PodcastCache] Evicted ${path.basename(f.p)} (${(f.size / 1024 / 1024).toFixed(1)} MB) to free space on the volume`);
+    } catch { /* raced */ }
+  }
+}
+
+/** Delete oldest-touched files until the cache fits the cap. */
+async function enforceCacheCap(): Promise<void> {
+  try {
+    const files = await cachedFilesOldestFirst();
     let total = files.reduce((s, f) => s + f.size, 0);
     if (total <= CACHE_MAX_BYTES) return;
-    files.sort((a, b) => a.mtime - b.mtime);
     for (const f of files) {
       if (total <= CACHE_MAX_BYTES) break;
       await fs.unlink(f.p).catch(() => {});

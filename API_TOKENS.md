@@ -1,6 +1,6 @@
 # Wallacast API tokens
 
-An API token lets a tool outside the app work with your Wallacast account: the Obsidian commands, or a cloud Claude Code routine that reads your feed and helps you decide what to add. Create one in Settings → API tokens, then tick what it may do. A token can never read your settings or API keys, change or delete library items, rename or delete tags, or manage tokens.
+An API token lets a tool outside the app work with your Wallacast account: the Obsidian commands, a cloud Claude Code routine that reads your feed and helps you decide what to add, or the watch remote (`android/README.md`). Create one in Settings → API tokens, then tick what it may do. A token can never read your settings or API keys, delete library items or change their text, rename or delete tags, or manage tokens.
 
 Every request sends the token as a Bearer header:
 
@@ -17,11 +17,11 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 ```json
 {
   "name": "Routine",
-  "permissions": ["read_library", "feed", "add_any", "tag", "star"],
-  "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600 },
-  "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80 },
-  "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "changes_hour": 500 },
-  "generation": { "follows_app_settings": true, "audio": false, "summary": true, "summary_audio": false, "transcribe": true },
+  "permissions": ["read_library", "feed", "add_any", "tag", "star", "archive", "subscribe"],
+  "limits": { "items_hour": 20, "items_2d": 100, "minutes_hour": 120, "minutes_2d": 600, "subscriptions_hour": 10 },
+  "usage": { "items_hour": 3, "items_2d": 10, "minutes_hour": 12, "minutes_2d": 80, "subscriptions_hour": 1 },
+  "remaining": { "items_hour": 17, "items_2d": 90, "minutes_hour": 108, "minutes_2d": 520, "subscriptions_hour": 9, "changes_hour": 500 },
+  "generation": { "follows_app_settings": true, "audio": false, "transcribe": true, "transcribe_video": true, "summary": true, "summary_on_transcript": true, "summary_audio": false },
   "refresh_interval_minutes": 15,
   "chars_per_minute": 900
 }
@@ -33,16 +33,24 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 |---|---|
 | `read_library` | `GET /api/content/index`, `GET /api/content/markdown?url=`, `GET /api/content/:id/markdown`, `GET /api/content/summaries?ids=`, `GET /api/content/tags/all` |
 | `feed` | `GET /api/podcasts`, `GET /api/podcasts/feed-items`, `POST /api/podcasts/refresh-feeds`, `GET /api/podcasts/refresh-status` |
-| `add_any` | `POST /api/content` with `url` or `feed_item_id`, `GET /api/content/preview` with `url` or `feed_item_id` |
+| `subscribe` | `POST /api/podcasts/subscribe`, `DELETE /api/podcasts/:id`, `GET /api/podcasts` |
+| `add_any` | `POST /api/content` with `url`, `feed_item_id` or `markdown` (a text), `GET /api/content/preview` with `url` or `feed_item_id` |
 | `add_feed` | the same two routes, but only with `feed_item_id`: items from your own feeds, never a free address |
 | `tag` | `POST /api/content/bulk` with `add_tags` (tags that already exist), and `tags` when adding. `GET /api/content/tags/all` |
 | `star` | `POST /api/content/bulk` with `star` or `unstar` |
+| `archive` | `POST /api/content/bulk` with `archive` or `unarchive`, and `archive` through `remote` |
+| `remote` | `GET /api/remote/state`, `POST /api/remote/command`: the watch remote, see below |
+| `refetch` | `POST /api/content/:id/refetch` |
+| `generate_audio` | `POST /api/content/:id/generate-audio` |
+| `generate_summary` | `POST /api/content/:id/generate-summary` |
+| `generate_summary_audio` | `POST /api/content/:id/generate-summary-audio`, and `generate_audio: true` with a summary |
+| `generate_transcript` | `POST /api/transcription/content/:id`, and `generate_transcript: true` with a summary |
 
-`add_any` and `add_feed` exclude each other. Any other route answers `403`.
+`add_any` and `add_feed` exclude each other. Any other route answers `403`. The app's own routes for a whole item (`GET /api/content/:id`) and the library list (`GET /api/content`) answer it with the token route to use instead.
 
 ### Reading the library
 
-- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, and a few more).
+- `GET /api/content/index`: one small row per item, newest first (`id, type, title, url, alt_url, audio_url, author, published_at, created_at, tags, is_starred, is_archived, summary_status, comment_count, description` cut to 300 characters, `has_transcript`, `heard_at` and `summary_heard_at` (when the audio or the summary audio was last heard to its end, null when never), and a few more). `type` is `article`, `text`, `podcast_episode` or `video` (a YouTube video, its `url` is the `youtube.com/watch?v=` address).
 - `GET /api/content/:id/markdown` and `GET /api/content/markdown?url=<address>`: the item exactly as the app's Copy content button gives it, in `markdown`. 404 when no item has that address.
 - `GET /api/content/summaries?ids=12,40,41`: only the summaries, for judging many items without reading their full text. At most 200 ids, answered in the order asked, ids that are not yours left out: `{ "items": [{ "id", "type", "title", "url", "summary_status", "summary_error", "summary", "comment_summary", "summary_generated_at" }] }`. `summary` is null when the item has none. `summary_status` is `generating` while one is being made, `failed` when making it failed, and `skipped` when a token's minute limit left it out, with the reason in `summary_error`. The index's `summary_status` tells which ids are worth asking for (`completed`).
 - `GET /api/content/tags/all`: `{ "tags": [{ "tag": "ai-safety", "count": 12 }, ...] }`.
@@ -65,9 +73,10 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 ```json
 { "feed_item_id": 123, "tags": ["ai-safety"] }
 { "url": "https://example.com/post", "tags": ["ai-safety"] }
+{ "markdown": "---\ntitle: My notes\nauthor: Me\n---\nThe text...", "tags": ["ai-safety"] }
 ```
 
-`tags` is optional, needs `tag`, and every tag must already exist in the library. Any other field is refused. A feed item is added exactly as the Feed tab's plus button adds it. The answer is `201`:
+`tags` is optional, needs `tag`, and every tag must already exist in the library. Any other field is refused, except the text fields below. A feed item is added exactly as the Feed tab's plus button adds it. The answer is `201`:
 
 ```json
 {
@@ -87,34 +96,79 @@ The backend address is the one the app talks to (for the hosted instance, the Ra
 }
 ```
 
-`generation` (one word, no "s") lists what started for the item (`audio`, `summary`, `summary_audio`, `transcript`) and what was skipped and why. `warnings` says the same in one plain sentence per skip, and is empty when nothing was skipped. A skipped summary or summary audio is also marked on the item: its `summary_status` or `summary_audio_status` is `skipped`, the reason is in `summary_error` or `summary_audio_error`, and the app shows it on the card with a Generate button. A skipped article audio or transcript is only in the answer and in the app's limit notice. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
+`generation` (one word, no "s") lists what started for the item (`audio`, `summary`, `summary_audio`, `transcript`) and what was skipped and why. `warnings` says the same in one plain sentence per skip, and is empty when nothing was skipped. It also warns when the stored article holds under 500 characters of text, which usually means the page was not read fully. A skipped summary or summary audio is also marked on the item: its `summary_status` or `summary_audio_status` is `skipped`, the reason is in `summary_error` or `summary_audio_error`, and the app shows it on the card with a Generate button. A skipped article audio or transcript is only in the answer and in the app's limit notice. Read the item afterwards with `GET /api/content/2801/markdown`. An address that is already in the library answers `409` with its `id`. A page that cannot be fetched answers `502` with the reason.
 
-### Tags and stars
+#### Adding text
 
-`POST /api/content/bulk` with `{ "action": "add_tags", "ids": [1, 2], "tags": ["ai-safety"] }`, `{ "action": "star", "ids": [...] }` or `{ "action": "unstar", "ids": [...] }` (at most 500 ids). Answers `{ "affected": 2, "changes": 3 }`. Only real changes count: a tag an item already has, or a star it already has, is skipped. Every change is logged, and Settings can undo one change or all of them.
+`markdown` (needs `add_any`) adds a text, read exactly as the app's Add tab reads a note pasted into its Text form, so a note with Obsidian properties, such as one the Wallacast import wrote, comes back whole:
+
+- From the properties: `title`, `author`, `published`, `tags`, `description`, and `source` (else `alt-source`). A `source` link makes the item an article with that link, which is never fetched (Refetch in the app still works), and a link already in the library answers `409` with its `id`. Without one, the item is a text.
+- From the body: the summary blocks a Copy content export opens with become the item's summary (no new one is made), a first `# Title` that repeats the title is dropped, and a `# Comments` section in the export's format becomes the item's comments.
+- Optional fields next to `markdown` win over the note's properties: `title`, `author`, `published` (a date), `source` (an http or https link), `description`, `tags`. Without a title anywhere, the note's first `# Heading` is the title, else the add answers `400`.
+- Tags: type tags (`article`, `text`, ...) are dropped and never set the type. One that differs from the type the note gets is named in `warnings`. Tags your library does not have yet, and a note's tags when the token lacks `tag`, are left out with a line in `warnings`. A `tags` field without `tag` answers `403`.
+- At most 5,000,000 characters (`413` above). A note with nothing besides its properties answers `400`.
+- It counts as one item, and generation follows the token's generation choice and minute limits, as for any add.
+
+### Tags, stars and archive
+
+`POST /api/content/bulk` with `{ "action": "add_tags", "ids": [1, 2], "tags": ["ai-safety"] }`, `{ "action": "star", "ids": [...] }`, `{ "action": "unstar", "ids": [...] }`, `{ "action": "archive", "ids": [...] }` or `{ "action": "unarchive", "ids": [...] }` (at most 500 ids). Answers `{ "affected": 2, "changes": 3 }`. Only real changes count: a tag an item already has, or a star it already has, is skipped. Every change is logged, and Settings can undo one change or all of them.
+
+Archiving works as in the app: the generated audio of an article or text, and any item's summary audio, stays 7 days and is removed after that, unless the item is starred. Undoing an archive within those 7 days brings the item back with its audio.
+
+### Feeds
+
+`POST /api/podcasts/subscribe` with `{ "url": "https://..." }`: any address the Feed tab's search box takes, a feed, a YouTube channel, a Substack, or a web page that names its feed. Answers `201` with the feed (its `id` is the feed's id), `409` with `podcast` when you already follow it, `502` when no feed could be read there. Counts against the subscriptions limit only when it succeeds.
+
+`DELETE /api/podcasts/:id` unsubscribes from one of your feeds (`GET /api/podcasts` lists them with their `id`). Counts as a change.
+
+Both are logged, and Undo in Settings unsubscribes from a feed the token added, or follows a feed again that it left.
+
+### Refetching and generating
+
+All five are off for a new token.
+
+- `POST /api/content/:id/refetch` reads an article (or a YouTube video's details) from the web again, as the app's "Refetch from web" does. It counts as one item and answers `{ message }`, or `409` while the item is still being processed. The summary is not renewed by it.
+- `POST /api/content/:id/generate-audio` with `{ "regenerate": true }` to replace existing audio (`exclude_comments` leaves the comments out).
+- `POST /api/content/:id/generate-summary` (`{ "regenerate": true }` to replace one). A podcast episode or video needs its transcript first: add `"generate_transcript": true` (needs `generate_transcript`). Add `"generate_audio": true` for its summary audio too (needs `generate_summary_audio`). The app's own automatic settings never add anything to a token's request.
+- `POST /api/content/:id/generate-summary-audio` reads an existing summary aloud.
+- `POST /api/transcription/content/:id` transcribes a podcast episode (`{ "regenerate": true }` to replace a transcript). No summary follows by itself.
+
+Each counts its minutes and one generation against the limits below. Over a limit it answers `429` with `{ error, limit, max, used }` and nothing starts. Follow the progress with `GET /api/content/index` (`summary_status`) or the item's Markdown.
+
+### The watch remote
+
+`GET /api/remote/state` answers `{ online, mode, age_seconds, state }`: what the player of the open Wallacast app does (`item_id`, `title`, `subtitle`, `playing`, `position`, `duration`, `speed`, `speeds`, `shuffle`, `has_next`, `has_previous`, `is_archived`, `is_starred`). `mode` is `app` while a Wallacast page listens, `link` while Chrome lets the page sleep and Player Link stands in (play, pause, `toggle`, `forward` and `back` only), and `none` with `online` false when neither asked for commands in the last 40 seconds.
+
+`POST /api/remote/command` with `{ "action": "play" }`. Actions: `play`, `pause`, `toggle`, `next`, `previous`, `forward` and `back` (15 seconds), `shuffle` (`value` true or false, none flips it), `speed` (`value`, the nearest speed the app offers), `archive` and `unarchive` (need the `archive` permission too, the item goes on playing), `star` and `unstar` (need the `star` permission too). Answers `202`, or `409` with `code` `closed` when nothing listens, or `asleep` when only Player Link listens and cannot do this one.
+
+`GET /api/remote/fallback?playing=true|false|closed|none` is Player Link's own long poll (`android/player-link`): it says what it sees of Wallacast's player in Chrome (`closed`: none, but a play opens Wallacast) and waits up to 25 seconds for a command. The command waits at most 30 seconds. The app only listens while a token with `remote` exists, and only while Chrome lets the page run.
 
 ## Limits
 
-Each token has four limits, set under the token in Settings. They are rolling windows: the last hour and the last 48 hours.
+Each token has these limits, set under the token in Settings. They are rolling windows: the last hour and the last 48 hours.
 
 | Limit | Default | Highest | Counts |
 |---|---|---|---|
-| Items per hour | 20 | 500 | every add and every preview that passes its checks, also one whose page then cannot be fetched |
+| Items per hour | 20 | 500 | every add, preview and refetch that passes its checks, also one whose page then cannot be fetched |
 | Items per 2 days | 100 | 5,000 | the same |
-| Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds |
+| Generation minutes per hour | 120 | 2,000 | audio, summary, summary audio and transcripts started for items the token adds or asked for with a generate permission |
 | Generation minutes per 2 days | 600 | 10,000 | the same |
+| Generations per hour | 60 | 500 | the same generations, one each, whatever their length. Whichever limit a generation would cross first stops it |
+| Generations per 2 days | 300 | 5,000 | the same |
+| Subscriptions per hour | 10 | 100 | every feed the token subscribed to |
 
-Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
+Minutes are estimated before a generation starts: an article's audio counts its text (plus its comments) at 900 characters a minute, at least one minute. A summary counts a tenth of that, at least one minute, since summarizing costs far less than narrating. The summary of a podcast episode or video counts a tenth of its duration, at least one minute, and starts once its transcript is done. A transcript counts the episode's duration (60 minutes when the feed gives none), summary audio 3 minutes.
 
 - Over an item limit, the request answers `429` with `{ error, limit, max, used }`.
-- Over a minute limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
-- Fixed limits: one feed refresh per 15 minutes, 500 tag and star changes per hour.
+- Over a minute or generation limit, the item is still added, the generation that does not fit is skipped, and `generation.skipped` says so.
+- The generation defaults are three per item (an add often starts two: a summary and its audio). A token whose limits were saved before the generation limits existed gets 3 times its own items per hour and per 2 days, at most the highest value.
+- Fixed limits: one feed refresh per 15 minutes, 500 changes per hour (tags, stars, archive, unarchive, unsubscribe).
 
 Each limit hit shows a notice in the app. The Reset button in Settings counts usage from that moment. Usage is kept in the database, so a deploy does not reset it, and deleting an item does not give back what it used.
 
 ## What is generated for added items
 
-Under each token, Settings has "Same as my auto-generation settings" (on for a new token). Off, the token gets its own four switches: audio for articles, summary, summary audio, transcript for podcasts. Either way every generation must fit the minute limits.
+Under each token, Settings has "Same as my auto-generation settings" (on for a new token). On, it follows the app's "Auto-generate audio for articles" (with its "Only under N characters" cap), the two automatic summary boxes (articles and texts when added, podcasts and videos once transcribed), "Auto-generate audio for summaries", "Auto-transcribe podcasts" and "Auto-transcribe YouTube videos". Off, the token gets its own six switches, the same as those settings: audio for articles, transcript for podcasts, transcript for YouTube videos, summary for articles and texts, summary for podcasts and videos once transcribed, summary audio. Either way every generation must fit the minute limits.
 
 ## Errors
 

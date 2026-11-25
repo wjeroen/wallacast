@@ -7,6 +7,10 @@
 // Usage (run from the backend directory):
 //   BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \
 //   DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo
+// Add INVITE_CODE=... only to create the demo account on an invite-only instance.
+// The podcast episode and the article are kept when they already exist with their audio,
+// transcript and summary, so a run that only updates the guide pays only for the guide.
+// Add REBUILD_ALL=1 to delete and regenerate them too (after a change to narration or models).
 //
 // Node 18+ is assumed (native fetch, no external libraries). Plain ESM.
 //
@@ -16,7 +20,8 @@
 //   3. Saves the demo account settings (models, voice, transcription, keys, toggles).
 //   4. Adds three library items in an order that leaves the onboarding guide NEWEST:
 //        a) an 80,000 Hours podcast episode, b) an EA Forum article, c) the text guide.
-//   5. Generates audio / transcript / summaries for each, polling until each is done.
+//      a) and b) stay as they are when complete (see REBUILD_ALL above), c) is always redone.
+//   5. Generates audio / transcript / summaries for each new item, polling until each is done.
 //   6. Removes all three API keys from the demo account so it holds no usable keys.
 //
 // SECURITY: API key VALUES are never printed. They are referenced by variable name only
@@ -35,6 +40,8 @@ const cfg = {
   openaiKey: process.env.OPENAI_API_KEY,
   deepinfraKey: process.env.DEEPINFRA_API_KEY,
   anthropicKey: process.env.ANTHROPIC_API_KEY,
+  inviteCode: (process.env.INVITE_CODE || '').trim(),
+  rebuildAll: /^(1|true|yes)$/i.test(process.env.REBUILD_ALL || ''),
 };
 
 const missing = [];
@@ -51,7 +58,8 @@ if (missing.length > 0) {
   console.error('  BASE_URL=https://your-instance DEMO_PASSWORD=... OPENAI_API_KEY=... \\');
   console.error('  DEEPINFRA_API_KEY=... ANTHROPIC_API_KEY=... npm run seed:demo');
   console.error('');
-  console.error('DEMO_USERNAME is optional and defaults to "demo".');
+  console.error('DEMO_USERNAME is optional and defaults to "demo". INVITE_CODE is only needed');
+  console.error('to create the demo account on an invite-only instance.');
   process.exit(1);
 }
 
@@ -141,13 +149,15 @@ async function apiFetch(method, path, { body, auth = true, allow = [] } = {}) {
 // ---------------------------------------------------------------------------
 
 async function register() {
-  const { status } = await apiFetch('POST', '/auth/register', {
-    auth: false,
-    allow: [409],
-    body: { username: cfg.username, password: cfg.password, displayName: 'Demo' },
-  });
+  const body = { username: cfg.username, password: cfg.password, displayName: 'Demo' };
+  if (cfg.inviteCode) body.inviteCode = cfg.inviteCode;
+  const { status } = await apiFetch('POST', '/auth/register', { auth: false, allow: [403, 409], body });
   if (status === 409) {
     console.log(`  Account "${cfg.username}" already exists (409). Will log in instead.`);
+  } else if (status === 403) {
+    // An invite-only instance checks the invite code before the username, so an existing
+    // demo account answers 403 instead of 409. The login below tells whether it exists.
+    console.log(`  Registration needs an invite code here (403). Assuming "${cfg.username}" exists, logging in.`);
   } else {
     console.log(`  Registered new account "${cfg.username}".`);
   }
@@ -163,7 +173,7 @@ async function login() {
   } catch (err) {
     throw new Error(
       `Login failed for "${cfg.username}". If this account already exists, DEMO_PASSWORD is ` +
-      `probably wrong for it.\n${err.message}`
+      `probably wrong for it. If it does not exist yet on an invite-only instance, set INVITE_CODE.\n${err.message}`
     );
   }
   accessToken = res.data && res.data.accessToken;
@@ -183,16 +193,16 @@ async function saveSettings(settings) {
 // Every key below is a real entry in VALID_SETTING_KEYS (backend/src/routes/users.ts).
 // Values match the exact shapes the Settings page persists (see frontend SettingsPage.tsx).
 const demoSettings = {
-  // Narration chat job: OpenAI GPT-5 Mini, reasoning effort left at the provider default (blank).
+  // Narration chat job: OpenAI GPT-6 Luna, reasoning effort left at the provider default (blank).
   narration_provider: 'openai',
-  narration_model: 'gpt-5-mini',
+  narration_model: 'gpt-6-luna',
   narration_reasoning_effort: '',
 
-  // Read-along alignment job: OpenAI GPT-5 Mini, reasoning effort high. "Same as narration"
+  // Read-along alignment job: OpenAI GPT-6 Luna, reasoning effort high. "Same as narration"
   // is turned OFF so these explicit values are the ones that apply.
   alignment_same_as_narration: 'false',
   alignment_provider: 'openai',
-  alignment_model: 'gpt-5-mini',
+  alignment_model: 'gpt-6-luna',
   alignment_reasoning_effort: 'high',
 
   // Summary job: Anthropic Claude Sonnet 5, effort at default (blank), same-as-narration OFF.
@@ -221,6 +231,7 @@ const demoSettings = {
   auto_generate_audio_for_articles: 'false',
   auto_transcribe_podcasts: 'false',
   auto_generate_summary: 'false',
+  auto_generate_summary_on_transcript: 'false',
 
   // API keys from the environment. Referenced by name only, values are never logged.
   openai_api_key: cfg.openaiKey,
@@ -249,6 +260,25 @@ async function getLibrary() {
   const { data } = await apiFetch('GET', '/content');
   return Array.isArray(data) ? data : [];
 }
+
+// Re-runnability: subscribing again answers 409 with the existing subscription, which serves.
+async function subscribe(feedUrl) {
+  const { status, data } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: feedUrl }, allow: [409] });
+  return status === 409 ? data.podcast : data;
+}
+
+// An existing item worth keeping: exactly one match, with everything the seed generates for it
+// done. Null when the item must be added (again).
+async function completeMatch(predicate, isComplete, label) {
+  if (cfg.rebuildAll) return null;
+  const matches = (await getLibrary()).filter(predicate);
+  if (matches.length !== 1 || !isComplete(matches[0])) return null;
+  console.log(`  Kept the existing ${label} "${matches[0].title}" (id ${matches[0].id}), it is complete.`);
+  return matches[0];
+}
+
+const generationDone = (it) =>
+  it.generation_status === 'completed' || (it.generation_status === 'ready' && !it.current_operation);
 
 // Re-runnability: delete any existing library items matching `predicate` before adding a fresh copy.
 async function deleteMatching(predicate, label) {
@@ -282,18 +312,41 @@ async function triggerSummary(id, generateTranscript = false) {
 }
 
 // Fetch just the tiny status fields for one item (POST /api/content/status, batched by design).
-async function fetchStatus(id) {
-  const { data } = await apiFetch('POST', '/content/status', { body: { ids: [id] } });
+async function fetchStatus(id, label) {
+  const { data } = await untilServerAnswers(
+    () => apiFetch('POST', '/content/status', { body: { ids: [id] } }),
+    label
+  );
   const rows = Array.isArray(data) ? data : [];
   return rows.find((r) => r.id === id) || null;
 }
+
+// A deploy restarts the server while the seed runs (pushing a change does that). Its requests
+// then fail for a minute or two, and the step it was running ends as failed with "Server
+// restarted ...". The polls wait through such an outage (up to 5 minutes) and start an
+// interrupted step once more.
+const RESTART_WAIT_MS = 10_000;
+const RESTART_ATTEMPTS = 30;
+async function untilServerAnswers(fn, label) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= RESTART_ATTEMPTS) throw err;
+      if (attempt === 1) console.log(`  [${label}] the server does not answer (${err.message}), waiting for it...`);
+      await sleep(RESTART_WAIT_MS);
+    }
+  }
+}
+const interruptedByRestart = (message) => /^Server restarted/.test(message || '');
 
 // Poll generation_status until it reaches a terminal state. Terminal means 'completed' or
 // 'failed'. We also treat 'ready' with a null current_operation as done (the audio pipeline
 // parks at 'ready' before transcription/alignment, but keeps current_operation non-null while
 // those run, so this only fires when there is genuinely nothing left to do). Prints progress
 // as it changes. Throws loudly on 'failed', including generation_error.
-async function pollGeneration(id, label) {
+async function pollGeneration(id, label, restart) {
+  let restarted = false;
   const start = Date.now();
   let lastProgress = -1;
   let lastStatus = '';
@@ -301,7 +354,7 @@ async function pollGeneration(id, label) {
     if (Date.now() - start > ITEM_TIMEOUT_MS) {
       throw new Error(`${label}: generation timed out after 30 minutes (id ${id}).`);
     }
-    const row = await fetchStatus(id);
+    const row = await fetchStatus(id, label);
     if (!row) {
       // The item should exist (we just created it). Keep trying briefly in case of replica lag.
       await sleep(POLL_INTERVAL_MS);
@@ -316,6 +369,13 @@ async function pollGeneration(id, label) {
       lastProgress = progress;
     }
     if (status === 'failed') {
+      if (restart && !restarted && interruptedByRestart(row.generation_error)) {
+        restarted = true;
+        console.log(`  [${label}] the server restarted during this step, starting it again...`);
+        await untilServerAnswers(restart, label);
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
       throw new Error(`${label}: generation FAILED (id ${id}): ${row.generation_error || 'no error message'}`);
     }
     if (status === 'completed') return status;
@@ -326,14 +386,15 @@ async function pollGeneration(id, label) {
 
 // Poll summary_status until terminal ('completed' or 'failed'). The status endpoint does not
 // return summary_error, so on failure we fetch the full item once to surface the message.
-async function pollSummary(id, label) {
+async function pollSummary(id, label, restart) {
+  let restarted = false;
   const start = Date.now();
   let lastStatus = '';
   while (true) {
     if (Date.now() - start > ITEM_TIMEOUT_MS) {
       throw new Error(`${label}: summary timed out after 30 minutes (id ${id}).`);
     }
-    const row = await fetchStatus(id);
+    const row = await fetchStatus(id, label);
     const status = row ? row.summary_status : null;
     if (status !== lastStatus) {
       console.log(`  [${label}] summary_status=${status}`);
@@ -346,6 +407,14 @@ async function pollSummary(id, label) {
         msg = (data && data.summary_error) || msg;
       } catch {
         // Best effort. Fall through with the generic message.
+      }
+      if (restart && !restarted && interruptedByRestart(msg)) {
+        restarted = true;
+        console.log(`  [${label}] the server restarted during this step, starting it again...`);
+        await untilServerAnswers(restart, label);
+        lastStatus = '';
+        await sleep(POLL_INTERVAL_MS);
+        continue;
       }
       throw new Error(`${label}: summary FAILED (id ${id}): ${msg}`);
     }
@@ -401,7 +470,7 @@ async function findTargetEpisode() {
 async function addPodcastEpisode() {
   const t0 = Date.now();
   console.log('\n[add 1/3] Podcast: subscribing to the 80,000 Hours feed...');
-  const { data: podcast } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: FEED_URL } });
+  const podcast = await subscribe(FEED_URL);
   console.log(`  Subscribed to "${podcast.title}" (podcast id ${podcast.id}).`);
 
   console.log('  Searching the feed for the "235 ... Ajeya" episode...');
@@ -414,10 +483,15 @@ async function addPodcastEpisode() {
   }
   console.log(`  Found episode: "${episode.title}".`);
 
-  await deleteMatching(
-    (it) => (episode.audio_url && it.audio_url === episode.audio_url) || it.title === episode.title,
-    'podcast episode'
-  );
+  const isEpisode = (it) => (episode.audio_url && it.audio_url === episode.audio_url) || it.title === episode.title;
+  const kept = await completeMatch(isEpisode, (it) => it.has_word_timings && it.summary_status === 'completed', 'podcast episode');
+  if (kept) {
+    report.podcast.id = kept.id;
+    report.podcast.title = kept.title;
+    report.podcast.kept = true;
+    return kept;
+  }
+  await deleteMatching(isEpisode, 'podcast episode');
 
   const { data: created } = await apiFetch('POST', '/content', {
     body: {
@@ -441,10 +515,15 @@ async function addPodcastEpisode() {
 async function addArticle() {
   const t0 = Date.now();
   console.log('\n[add 2/3] Article: adding by URL from the EA Forum (fetch happens server-side)...');
-  await deleteMatching(
-    (it) => it.type === 'article' && typeof it.url === 'string' && (it.url.includes(ARTICLE_SLUG) || it.url === ARTICLE_URL),
-    'article'
-  );
+  const isArticle = (it) => it.type === 'article' && typeof it.url === 'string' && (it.url.includes(ARTICLE_SLUG) || it.url === ARTICLE_URL);
+  const kept = await completeMatch(isArticle, (it) => !!it.audio_url && generationDone(it) && it.summary_status === 'completed', 'article');
+  if (kept) {
+    report.article.id = kept.id;
+    report.article.title = kept.title;
+    report.article.kept = true;
+    return kept;
+  }
+  await deleteMatching(isArticle, 'article');
   const { data: created } = await apiFetch('POST', '/content', { body: { type: 'article', url: ARTICLE_URL } });
   console.log(`  Added article "${created.title}" (content id ${created.id}).`);
   report.article.id = created.id;
@@ -477,7 +556,7 @@ function printSummary() {
     const r = report[key];
     const genLabel = key === 'podcast' ? 'transcript' : 'audio';
     console.log(`- ${r.label}`);
-    console.log(`    id: ${r.id == null ? '-' : r.id}    title: ${r.title || '-'}`);
+    console.log(`    id: ${r.id == null ? '-' : r.id}    title: ${r.title || '-'}${r.kept ? '    (kept, nothing regenerated)' : ''}`);
     console.log(
       `    add: ${fmtDuration(r.addSec)}   ${genLabel}: ${fmtDuration(r.genSec)}   ` +
       `summary: ${fmtDuration(r.summarySec)}   status: ${r.status || '-'} / summary ${r.summaryStatus || '-'}`
@@ -520,7 +599,7 @@ async function main() {
     // shows the read-only toast), so the seeder populates Recent Updates for them here.
     console.log('\n[feeds] Subscribing to the extra demo feeds...');
     for (const url of EXTRA_FEEDS) {
-      const { data: sub } = await apiFetch('POST', '/podcasts/subscribe', { body: { feed_url: url } });
+      const sub = await subscribe(url);
       console.log(`  Subscribed to "${sub.title}" (${sub.type}).`);
     }
     console.log('  Refreshing the feed cache (Recent Updates)...');
@@ -541,41 +620,49 @@ async function main() {
     console.log('\n[gen 1/6] Text item: generating audio...');
     let t = Date.now();
     await triggerAudio(text.id);
-    report.text.status = await pollGeneration(text.id, 'text audio');
+    report.text.status = await pollGeneration(text.id, 'text audio', () => triggerAudio(text.id));
     report.text.genSec = secsSince(t);
 
-    // 5b. Article audio.
-    console.log('\n[gen 2/6] Article: generating audio...');
-    t = Date.now();
-    await triggerAudio(article.id);
-    report.article.status = await pollGeneration(article.id, 'article audio');
-    report.article.genSec = secsSince(t);
+    // 5b. Article audio (a kept article already has it).
+    if (!report.article.kept) {
+      console.log('\n[gen 2/6] Article: generating audio...');
+      t = Date.now();
+      await triggerAudio(article.id);
+      report.article.status = await pollGeneration(article.id, 'article audio', () => triggerAudio(article.id));
+      report.article.genSec = secsSince(t);
+    }
 
-    // 5c. Podcast transcript.
-    console.log('\n[gen 3/6] Podcast episode: transcribing...');
-    t = Date.now();
-    await triggerTranscript(podcast.id);
-    report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript');
-    report.podcast.genSec = secsSince(t);
+    // 5c. Podcast transcript (a kept episode already has it).
+    if (!report.podcast.kept) {
+      console.log('\n[gen 3/6] Podcast episode: transcribing...');
+      t = Date.now();
+      await triggerTranscript(podcast.id);
+      report.podcast.status = await pollGeneration(podcast.id, 'podcast transcript', () => triggerTranscript(podcast.id));
+      report.podcast.genSec = secsSince(t);
+    }
 
     // 5d. Summaries: text, article, then podcast (podcast only after its transcript exists).
     console.log('\n[gen 4/6] Text item: generating summary...');
     t = Date.now();
     await triggerSummary(text.id);
-    report.text.summaryStatus = await pollSummary(text.id, 'text summary');
+    report.text.summaryStatus = await pollSummary(text.id, 'text summary', () => triggerSummary(text.id));
     report.text.summarySec = secsSince(t);
 
-    console.log('\n[gen 5/6] Article: generating summary...');
-    t = Date.now();
-    await triggerSummary(article.id);
-    report.article.summaryStatus = await pollSummary(article.id, 'article summary');
-    report.article.summarySec = secsSince(t);
+    if (!report.article.kept) {
+      console.log('\n[gen 5/6] Article: generating summary...');
+      t = Date.now();
+      await triggerSummary(article.id);
+      report.article.summaryStatus = await pollSummary(article.id, 'article summary', () => triggerSummary(article.id));
+      report.article.summarySec = secsSince(t);
+    }
 
-    console.log('\n[gen 6/6] Podcast episode: generating summary from the transcript...');
-    t = Date.now();
-    await triggerSummary(podcast.id, false);
-    report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary');
-    report.podcast.summarySec = secsSince(t);
+    if (!report.podcast.kept) {
+      console.log('\n[gen 6/6] Podcast episode: generating summary from the transcript...');
+      t = Date.now();
+      await triggerSummary(podcast.id, false);
+      report.podcast.summaryStatus = await pollSummary(podcast.id, 'podcast summary', () => triggerSummary(podcast.id, false));
+      report.podcast.summarySec = secsSince(t);
+    }
 
     // 6. Cleanup: remove the API keys on success.
     console.log('\nCleanup: removing API keys from the demo account...');

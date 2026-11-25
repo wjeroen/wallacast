@@ -1,5 +1,9 @@
 import axios from 'axios';
 import type { ContentItem, ContentVersion, Podcast, QueueItem, User, AuthTokens } from './types';
+import type { FeedEpisode } from './components/FeedCards';
+
+/** One item of the cached feed list (GET /podcasts/feed-items): an episode or article with its feed */
+export type CachedFeedItem = FeedEpisode & { feed_id: number; podcast_show_name?: string };
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -79,6 +83,30 @@ api.interceptors.response.use(
   }
 );
 
+/** What PATCH /content/:id takes besides item fields: null removes the audio or the summary,
+ *  and the flags are one-shot actions the server carries out. */
+export type ContentUpdate = Omit<Partial<ContentItem>, 'audio_url' | 'summary'> & {
+  audio_url?: string | null;
+  audio_data?: null;
+  summary?: string | null;
+  dismiss_generation_error?: boolean;
+  dismiss_summary_error?: boolean;
+  dismiss_summary_audio_error?: boolean;
+  regenerate_transcript?: boolean;
+};
+
+type ErrorAnswer = { status?: number; data?: { error?: string; archive_submit_url?: string } };
+
+/** The server's answer to a failed request: its status and JSON body, when it sent one */
+export function errorAnswer(err: unknown): ErrorAnswer | undefined {
+  return (err as { response?: ErrorAnswer } | null)?.response;
+}
+
+/** The server's error text for a failed request, else the fallback */
+export function serverError(err: unknown, fallback: string): string {
+  return errorAnswer(err)?.data?.error || fallback;
+}
+
 export const contentAPI = {
   getAll: (params?: { type?: string; archived?: boolean; starred?: boolean }) =>
     api.get<ContentItem[]>('/content', { params }),
@@ -108,7 +136,11 @@ export const contentAPI = {
   fetchProgress: (progressId: string) =>
     api.get<{ text: string | null }>(`/content/fetch-progress/${progressId}`),
 
-  update: (id: number, data: Partial<ContentItem>) =>
+  // The heard check: seconds of normal playback since the last report, and `ended` when the part
+  // played to its end. Answers when the part last counted as heard.
+  listened: (id: number, data: { variant: 'audio' | 'summary'; seconds: number; ended: boolean; duration: number }) =>
+    api.post<{ variant: 'audio' | 'summary'; listened_seconds: number; heard_at: string | null }>(`/content/${id}/listened`, data),
+  update: (id: number, data: ContentUpdate) =>
     api.patch<ContentItem>(`/content/${id}`, data),
 
   // Save a Markdown/HTML edit of an article/text body. The backend snapshots the previous
@@ -179,6 +211,9 @@ export const contentAPI = {
     readyState?: number;
     showName?: string | null;
   }) => api.post('/content/audio-error-log', data),
+
+  logPlayback: (event: string, fields: Record<string, string | number | boolean | null | undefined>) =>
+    api.post('/content/playback-log', { event, fields }),
 };
 
 // Status of the latest feed refresh (backend: startFeedRefresh in podcast-service.ts)
@@ -205,20 +240,20 @@ export const podcastAPI = {
   // refresh: (id: number) => api.post(`/podcasts/${id}/refresh`), // Removed - auto-added episodes to library
 
   getPreviewEpisodes: (id: number, limit?: number, offset?: number) =>
-    api.get<{ episodes: any[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
+    api.get<{ episodes: FeedEpisode[]; hasMore: boolean }>(`/podcasts/${id}/preview-episodes`, { params: { limit, offset } }),
 
   getPreviewByUrl: (feedUrl: string, limit?: number, offset?: number, signal?: AbortSignal) =>
-    api.get<{ episodes: any[]; hasMore: boolean }>('/podcasts/preview-by-url', {
+    api.get<{ episodes: FeedEpisode[]; hasMore: boolean }>('/podcasts/preview-by-url', {
       params: { url: feedUrl, ...(limit !== undefined ? { limit } : {}), ...(offset ? { offset } : {}) },
       signal,
     }),
 
   searchFeed: (feedUrl: string, query: string) =>
-    api.get<any[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
+    api.get<FeedEpisode[]>('/podcasts/search-feed', { params: { url: feedUrl, q: query } }),
 
   // Feed caching endpoints
   getFeedItems: (feedId?: number, limit?: number, offset?: number) =>
-    api.get<any[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
+    api.get<CachedFeedItem[]>('/podcasts/feed-items', { params: { feedId, limit, offset } }),
 
   // Starts a refresh of every subscribed feed in the background and answers at once. Poll
   // getRefreshStatus until `running` is false.
@@ -298,7 +333,7 @@ export const authAPI = {
     api.patch<ApiTokenSettings>(`/auth/tokens/${id}`, patch),
   // Usage counts from now on, and the last limit hit is cleared.
   resetTokenUsage: (id: number) => api.post<{ success: boolean }>(`/auth/tokens/${id}/reset-usage`),
-  // The token's tag and star changes, newest first (max 200).
+  // The token's changes (tags, stars, archive, feeds), newest first (max 200).
   listTokenChanges: (id: number) => api.get<{ changes: TokenChange[] }>(`/auth/tokens/${id}/changes`),
   undoTokenChanges: (id: number, body: { ids: number[] } | { all: true }) =>
     api.post<{ undone: number }>(`/auth/tokens/${id}/changes/undo`, body),
@@ -308,24 +343,31 @@ export const authAPI = {
 };
 
 // What a token may do. add_any and add_feed exclude each other.
-export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star';
+export type TokenPermission = 'read_library' | 'feed' | 'add_any' | 'add_feed' | 'tag' | 'star' | 'archive' | 'subscribe' | 'remote'
+  | 'refetch' | 'generate_audio' | 'generate_summary' | 'generate_summary_audio' | 'generate_transcript';
 
-// Per-token limits on items added and minutes of AI generation started, in rolling windows.
+// Per-token limits on items added, minutes of AI generation started and feeds subscribed to,
+// in rolling windows.
 export interface TokenLimits {
   items_hour: number;
   items_2d: number;
   minutes_hour: number;
   minutes_2d: number;
+  generations_hour: number;
+  generations_2d: number;
+  subscriptions_hour: number;
 }
 
 // What is generated for items a token adds. With follow on, the app's auto-generation
-// settings decide and the four flags are ignored.
+// settings decide and the six flags (the same six as those settings) are ignored.
 export interface TokenGeneration {
   follow: boolean;
   audio: boolean;
-  summary: boolean;
-  summary_audio: boolean;
   transcribe: boolean;
+  transcribe_video: boolean;
+  summary: boolean;
+  summary_on_transcript: boolean;
+  summary_audio: boolean;
 }
 
 // Usage inside the limit windows since the last reset. Minutes may have one decimal.
@@ -347,8 +389,8 @@ export interface ApiTokenSettings {
   limit_hit_at: string | null;
 }
 
-// One live API token as listed by GET /auth/tokens, with its usage and the number of tag and
-// star changes that are not undone.
+// One live API token as listed by GET /auth/tokens, with its usage and the number of its
+// changes that are not undone.
 export interface ApiToken extends ApiTokenSettings {
   usage: TokenUsage;
   open_changes: number;
@@ -360,12 +402,14 @@ export interface ApiTokenPatch {
   generation?: Partial<TokenGeneration>;
 }
 
-// One tag or star change a token made. title is null when the item was deleted since.
+// One change a token made. title is the item's, or the feed's for subscribe and unsubscribe,
+// and null when it was deleted since.
 export interface TokenChange {
   id: number;
-  kind: 'tag_add' | 'star' | 'unstar';
+  kind: 'tag_add' | 'star' | 'unstar' | 'archive' | 'unarchive' | 'subscribe' | 'unsubscribe';
   tag: string | null;
   content_item_id: number | null;
+  podcast_id: number | null;
   title: string | null;
   created_at: string;
   undone_at: string | null;
@@ -377,6 +421,25 @@ export interface TokenAlert {
   limit_hit: string;
   limit_hit_at: string;
 }
+
+// Remote control of this app's player by the watch app (backend services/remote-control.ts)
+export interface RemoteCommand {
+  id: number;
+  action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'forward' | 'back' | 'shuffle' | 'speed' | 'archive' | 'unarchive' | 'star' | 'unstar';
+  value?: boolean | number;
+  /** archive, unarchive, star, unstar: the item the watch showed */
+  item_id?: number;
+}
+
+export const remoteAPI = {
+  // Long poll: answers within about 25 seconds, at once with enabled false when no token has
+  // the remote permission
+  commands: (device: string) =>
+    api.get<{ enabled: boolean; commands: RemoteCommand[]; report?: boolean }>('/remote/commands', { params: { device }, timeout: 40000 }),
+  reportState: (device: string, state: Record<string, unknown>) => api.post('/remote/state', { device, state }),
+  // A command as the watch sends it. The page itself sends only a play, for Player Link to press
+  command: (body: { action: 'play' }) => api.post<{ id: number; action: string }>('/remote/command', body),
+};
 
 export const userSettingsAPI = {
   getAll: () => api.get<{ settings: Record<string, string | null> }>('/users/settings'),

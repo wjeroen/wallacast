@@ -1,3 +1,5 @@
+import { youtubeVideoId } from './format';
+
 // Chapter times in a podcast description, like "(00:36:06) Topic", "12:34 Intro" or
 // "1h02m03s", become buttons that move the episode to that moment (the Description tab in
 // FullscreenPlayer.tsx). The times are the podcast's own show notes, read as written, and
@@ -74,4 +76,24 @@ export function linkDescriptionTimestamps(html: string, maxSeconds: number): str
     node.replaceWith(fragment);
   }
   return template.innerHTML;
+}
+
+/**
+ * The moment a link points to in the given YouTube video, in seconds, or null. YouTube
+ * writes a time in a comment as a link to the video at that moment
+ * (`watch?v=ID&t=83`, also `t=83s` or `t=1m23s`), so the comments under a video can move it
+ * there instead of opening YouTube. A link to another video, or without a time, gives null.
+ */
+export function youtubeLinkSeconds(href: string, videoUrl: string | null | undefined): number | null {
+  const videoId = youtubeVideoId(videoUrl);
+  if (!videoId || youtubeVideoId(href) !== videoId) return null;
+  let t: string | null;
+  try {
+    t = new URL(href).searchParams.get('t');
+  } catch {
+    return null;
+  }
+  const m = (t || '').match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+  if (!t || !m) return null;
+  return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
 }

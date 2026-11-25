@@ -2,6 +2,8 @@ import { query } from '../database/db.js';
 import { WallabagService, WallabagEntry } from './wallabag-service.js';
 import { fetchArticleContent, isEAForumUrl } from './article-fetcher.js';
 import { snapshotContentVersion } from './content-versions.js';
+import { fetchYouTubeMetadata, youtubeApiKey } from './youtube.js';
+import { youtubeVideoId } from '../shared/format.js';
 import {
   TYPE_TAGS,
   hasNosyncTag,
@@ -58,12 +60,17 @@ export interface FullSyncResult {
 /**
  * Determine Wallacast type from Wallabag entry
  */
-function detectTypeFromWallabag(entry: WallabagEntry): 'article' | 'text' | 'podcast_episode' {
+function detectTypeFromWallabag(entry: WallabagEntry): 'article' | 'text' | 'podcast_episode' | 'video' {
   const tagSlugs = (entry.tags || []).map(t => t.slug.toLowerCase());
 
   // Check explicit type tags first
   if (tagSlugs.includes('podcast')) return 'podcast_episode';
   if (tagSlugs.includes('text')) return 'text';
+  if (tagSlugs.includes('video')) return 'video';
+  // A YouTube address is a video even with the 'article' tag, which YouTube items added
+  // before the video type carry. Only new entries take this type, an item that already
+  // exists locally keeps the type it has.
+  if (youtubeVideoId(entry.url)) return 'video';
   if (tagSlugs.includes('article')) return 'article';
 
   // Infer from URL pattern
@@ -479,7 +486,7 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
               ]
             );
           } else {
-            // Articles and texts
+            // Articles, texts and videos
             const insertResult = await query(
               `INSERT INTO content_items
                 (type, title, url, content, html_content, is_starred, is_archived, tags, wallabag_synced_tags,
@@ -509,6 +516,26 @@ export async function syncFromWallabag(userId: number): Promise<SyncResult> {
                 entry.published_at,
               ]
             );
+
+            // A video gets what Wallabag does not store: its length, its YouTube description
+            // and its channel. Fire-and-forget, only empty fields are filled, the body stays.
+            const videoId = type === 'video' ? youtubeVideoId(entry.url) : null;
+            if (videoId && insertResult.rows[0]?.id) {
+              const newId = insertResult.rows[0].id;
+              youtubeApiKey(userId)
+                .then((key) => fetchYouTubeMetadata(videoId, key))
+                .then((video) => query(
+                  `UPDATE content_items SET
+                    duration = COALESCE(duration, $1),
+                    description = COALESCE(description, $2),
+                    author = COALESCE(author, $3),
+                    preview_picture = COALESCE(preview_picture, $4),
+                    published_at = COALESCE(published_at, $5)
+                  WHERE id = $6`,
+                  [video.duration, video.description, video.author, video.preview_picture, video.published_at, newId]
+                ))
+                .catch((err) => console.warn(`[Wallabag Sync] No YouTube details for video ${newId}: ${err.message}`));
+            }
 
             // Auto-refetch EA Forum and LessWrong articles from the web.
             // Wallabag can't handle SPAs well: it misses comments, author, date,
@@ -733,7 +760,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
     // memory just to push text to Wallabag. Only the fields the loop below reads.
     const itemsResult = await query(
       `SELECT id, type, title, url, tags, wallabag_id,
-              transcript, content, html_content,
+              transcript, content, html_content, description,
               is_archived, is_starred, published_at
          FROM content_items
        WHERE user_id = $1
@@ -784,10 +811,15 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
 
         // Determine content to send
         // Podcasts: send transcript
+        // Videos: like podcasts, the transcript once there is one, else the YouTube
+        //   description. With neither, nothing is sent: Wallabag then reads the video page
+        //   itself on create, and an update leaves its copy alone.
         // Articles/texts: send html_content or content
         let contentToSync: string;
         if (item.type === 'podcast_episode') {
           contentToSync = item.transcript || item.content || '';
+        } else if (item.type === 'video') {
+          contentToSync = item.transcript || item.html_content || item.description || '';
         } else {
           contentToSync = item.html_content || item.content || '';
         }
@@ -806,7 +838,7 @@ export async function syncToWallabag(userId: number): Promise<SyncResult> {
           console.log('[Wallabag Sync] Updating Wallabag entry:', item.wallabag_id);
           const result = await wallabag.updateEntry(item.wallabag_id, {
             title: item.title,
-            content: contentToSync,
+            content: item.type === 'video' && !contentToSync ? undefined : contentToSync,
             tags: finalTags,
             archive: item.is_archived,
             starred: item.is_starred,

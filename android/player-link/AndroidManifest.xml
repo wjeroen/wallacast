@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.wjeroen.playerlink">
+
+    <!-- The Wallacast watch bridge talks to the Wallacast server -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Display over other apps": the one way Android lets a background app open another app,
+         used to open Wallacast when play is pressed on the watch and Chrome has no Wallacast player -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- To find the app that opens Wallacast's site, its home screen app: Android shows an app
+         only the apps its queries match, and a home screen app matches only its own site, so
+         the launcher query makes every app with an icon visible -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/PlayerLinkTheme"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Notification access is what lets an app see and control other apps' players -->
+        <service
+            android:name=".LinkService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <!-- The quick settings tile: turns linking on or off with one tap -->
+        <service
+            android:name=".LinkTile"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:icon="@drawable/ic_tile"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />
+        </service>
+    </application>
+</manifest>
